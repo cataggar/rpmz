@@ -335,6 +335,7 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .pic = true,
     });
     transaction_plan_capture_test_mod.addImport(
         "transaction_plan_capture_abi",
@@ -483,11 +484,23 @@ pub fn build(b: *Build) void {
         libsolv_flat_include,
     );
 
-    const repomd_lib = b.addLibrary(.{
-        .name = "tdnfrepomd",
-        .linkage = .static,
-        .root_module = repomd_mod,
+    const transaction_plan_libsolv_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan_libsolv.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
     });
+    transaction_plan_libsolv_mod.addImport(
+        "transaction_plan_capture_abi",
+        transaction_plan_capture_abi_mod,
+    );
+    transaction_plan_libsolv_mod.addImport("tdnf_error", tdnf_error_mod);
+    transaction_plan_libsolv_mod.addImport("repomd", repomd_mod);
+    const transaction_plan_libsolv_test_step = b.step(
+        "transaction-plan-libsolv-test",
+        "Run authoritative libsolv transaction fact capture tests",
+    );
 
     // ----- static libraries ----- //
 
@@ -627,6 +640,36 @@ pub fn build(b: *Build) void {
         });
         break :blk lib;
     };
+
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path(
+                "client/transaction_plan_libsolv_test.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport(
+            "transaction_plan_capture_abi",
+            transaction_plan_capture_abi_mod,
+        );
+        test_mod.addImport(
+            "transaction_plan_libsolv",
+            transaction_plan_libsolv_mod,
+        );
+        test_mod.addImport(
+            "transaction_plan_request_trace",
+            transaction_plan_request_trace_mod,
+        );
+        test_mod.addObjectFile(libsolv.getEmittedBin());
+        test_mod.addObjectFile(libsolvext.getEmittedBin());
+        test_mod.linkLibrary(rpmzig_lib);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        transaction_plan_libsolv_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
 
     const download_zig_lib = blk: {
         const mod = b.createModule(.{
@@ -1125,22 +1168,20 @@ pub fn build(b: *Build) void {
     // ----- libtdnf (shared) ----- //
 
     const tdnf_so_mod = b.createModule(.{
-        .root_source_file = b.path("client/transaction_plan_capture.zig"),
+        .root_source_file = b.path("client/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .pic = true,
     });
     tdnf_so_mod.addImport(
-        "transaction_plan_capture_abi",
-        transaction_plan_capture_abi_mod,
+        "transaction_plan_capture",
+        transaction_plan_capture_test_mod,
     );
     tdnf_so_mod.addImport(
-        "transaction_plan_request_trace",
-        transaction_plan_request_trace_mod,
+        "transaction_plan_libsolv",
+        transaction_plan_libsolv_mod,
     );
-    tdnf_so_mod.addImport("transaction_plan", transaction_plan_mod);
-    tdnf_so_mod.addImport("tdnf_error", tdnf_error_mod);
     tdnf_so_mod.addIncludePath(b.path("include"));
     tdnf_so_mod.addIncludePath(b.path("client"));
     addLibsolvIncludes(
@@ -1183,7 +1224,6 @@ pub fn build(b: *Build) void {
     tdnf_so_mod.linkLibrary(history_lib);
     tdnf_so_mod.linkLibrary(llconf_lib);
     tdnf_so_mod.linkLibrary(rpmzig_lib);
-    tdnf_so_mod.linkLibrary(repomd_lib);
     tdnf_so_mod.linkLibrary(download_zig_lib);
     tdnf_so_mod.addObjectFile(libsolv.getEmittedBin());
     tdnf_so_mod.addObjectFile(libsolvext.getEmittedBin());
@@ -1195,6 +1235,8 @@ pub fn build(b: *Build) void {
     });
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureCreate");
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureDestroy");
+    libtdnf.forceUndefinedSymbol("TDNFTransactionPlanLibsolvCaptureCreate");
+    libtdnf.forceUndefinedSymbol("TDNFTransactionPlanLibsolvCaptureDestroy");
     b.installArtifact(libtdnf);
 
     // ----- libtdnfcli (shared) ----- //

@@ -221,6 +221,7 @@ pub export fn TDNFRepoMdNativeAddRpm(
     const solvid = bridge.addBuiltPackage(
         built,
         if (rpm.main.getU32(.install_time)) |value| value else null,
+        null,
         rpm.bytes,
         header_id,
         arch_override,
@@ -531,6 +532,9 @@ const SolvBuilder = struct {
             }
             if (self.options.set_package_checksum) {
                 try setChecksumSlice(self.arena, data, solvid, c.SOLVABLE_CHECKSUM, pkg.checksum.kind, pkg.checksum.value);
+                if (pkg.checksum.is_pkgid) {
+                    try setChecksumSlice(self.arena, data, solvid, c.SOLVABLE_PKGID, pkg.checksum.kind, pkg.checksum.value);
+                }
             }
 
             inline for ([_]struct { kind: model.DependencyKind, key: c.Id }{
@@ -754,6 +758,7 @@ const NativeRpmBridge = struct {
         self: *NativeRpmBridge,
         built: rpmpkg.BuiltPackage,
         install_time: ?u32,
+        rpmdb_hnum: ?u32,
         file_bytes: ?[]const u8,
         header_id: ?model.PackageChecksum,
         arch_override: ?c.Id,
@@ -792,6 +797,9 @@ const NativeRpmBridge = struct {
         }
         if (install_time) |value| {
             c.repodata_set_num(self.primary_data, solvid, c.SOLVABLE_INSTALLTIME, value);
+        }
+        if (rpmdb_hnum) |value| {
+            c.solvable_set_num(solvable, c.RPM_RPMDBID, value);
         }
         if (pkg.size.installed) |installed_size| {
             c.repodata_set_num(self.primary_data, solvid, c.SOLVABLE_INSTALLSIZE, installed_size);
@@ -904,9 +912,15 @@ fn loadInstalledPackagesIntoBridge(
     defer c.tdnf_rpmdb_iter_close(iter);
 
     while (true) {
+        var hnum: u32 = 0;
         var blob_ptr: ?[*]const u8 = null;
         var blob_len: usize = 0;
-        const rc = c.tdnf_rpmdb_iter_next_header_blob(iter, &blob_ptr, &blob_len);
+        const rc = c.tdnf_rpmdb_iter_next_header_blob_hnum(
+            iter,
+            &hnum,
+            &blob_ptr,
+            &blob_len,
+        );
         if (rc == 0) {
             break;
         }
@@ -938,7 +952,7 @@ fn loadInstalledPackagesIntoBridge(
                 else => error.InvalidRpmHeader,
             };
         };
-        _ = bridge.addBuiltPackage(built, header.getU32(.install_time), null, null, rpmHeaderArchOverride(header)) catch |err| {
+        _ = bridge.addBuiltPackage(built, header.getU32(.install_time), hnum, null, null, rpmHeaderArchOverride(header)) catch |err| {
             setError("failed to bridge rpmdb package into libsolv: {t}", .{err});
             return switch (err) {
                 error.OutOfMemory => error.OutOfMemory,
