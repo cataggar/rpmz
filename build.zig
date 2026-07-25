@@ -373,6 +373,41 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    const repository_metadata_mod = b.createModule(.{
+        .root_source_file = b.path(
+            "repomd/transaction_plan_repository_dependencies.zig",
+        ),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    repository_metadata_mod.addImport("xml", xml_mod);
+    const transaction_plan_repository_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_plan_repository_mod.addImport(
+        "repository_metadata",
+        repository_metadata_mod,
+    );
+    transaction_plan_repository_mod.addImport(
+        "transaction_plan",
+        transaction_plan_mod,
+    );
+    const transaction_plan_repository_test_step = b.step(
+        "transaction-plan-repository-test",
+        "Run repository transaction-plan identity capture tests",
+    );
+    {
+        const tests = b.addTest(.{
+            .root_module = transaction_plan_repository_mod,
+        });
+        const run_tests = b.addRunArtifact(tests);
+        transaction_plan_repository_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
 
     const rpmzig_header_mod = b.createModule(.{
         .root_source_file = b.path("rpmzig/header.zig"),

@@ -45,6 +45,16 @@ pub const CacheOptions = struct {
     include_other: bool = false,
 };
 
+/// Cache metadata loaded under one opened cache root. repomd_bytes is the
+/// exact byte sequence parsed into repository and is never re-read by users
+/// that need to identify this cache snapshot.
+pub const CacheModel = struct {
+    repository: model.RepositoryModel,
+    repomd_bytes: []const u8,
+    /// Parallel to repository.records; Record itself has a stable C ABI.
+    record_xml_bases: []const ?[]const u8,
+};
+
 /// Move-only owner for a repository model and every slice it borrows.
 pub const LoadedRepository = struct {
     arena_state: std.heap.ArenaAllocator,
@@ -191,6 +201,24 @@ pub fn loadCacheModel(
     cache_dir: []const u8,
     options: CacheOptions,
 ) LoadError!model.RepositoryModel {
+    return (try loadCacheModelWithRepomd(
+        allocator,
+        cache_dir,
+        options,
+    )).repository;
+}
+
+/// Load a cache model and return the exact repomd.xml bytes consumed by the
+/// parser. The cache directory is opened once, eliminating a repomd re-open
+/// race for callers that hash the loaded metadata identity. A concurrent
+/// writer can still replace a sidecar before it is opened; each sidecar
+/// loaded by options has its advertised checksum and size verified against
+/// these parsed repomd bytes.
+pub fn loadCacheModelWithRepomd(
+    allocator: std.mem.Allocator,
+    cache_dir: []const u8,
+    options: CacheOptions,
+) LoadError!CacheModel {
     var io_state: std.Io.Threaded = .init(allocator, .{});
     defer io_state.deinit();
     const io = io_state.io();
@@ -247,7 +275,7 @@ pub fn loadCacheModel(
 
     const primary = primary_record orelse
         return error.InvalidRepoMetadata;
-    return parseResolvedModel(allocator, parsed_repomd, .{
+    const repository = try parseResolvedModel(allocator, parsed_repomd, .{
         .primary = try readCacheMetadataFile(
             allocator,
             cache_root,
@@ -286,6 +314,14 @@ pub fn loadCacheModel(
         else
             null,
     });
+    if (parsed_repomd.pRecordXmlBases.len != repository.records.len) {
+        return error.InvalidRepoMetadata;
+    }
+    return .{
+        .repository = repository,
+        .repomd_bytes = repomd_bytes,
+        .record_xml_bases = parsed_repomd.pRecordXmlBases,
+    };
 }
 
 fn validateCacheMetadataPath(
