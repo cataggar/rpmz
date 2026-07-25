@@ -286,6 +286,17 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
+    const transaction_plan_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    {
+        const tests = b.addTest(.{ .root_module = transaction_plan_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
     const repomd_abi_mod = b.createModule(.{
         .root_source_file = b.path("abi/repomd_layout.zig"),
         .target = target,
