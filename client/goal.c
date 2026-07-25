@@ -40,9 +40,8 @@ TDNFGoalBuildNativeSolverJobs(
     PTDNF pTdnf, const Queue *pQueueJobs,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppJobs, uint32_t *pdwJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppEraseJobs, uint32_t *pdwEraseJobCount,
-    int *pnUpdateAll, int *pnDistSyncAll
+    char ***pppszInstallOnlyPkgs, int *pnUpdateAll, int *pnDistSyncAll
 );
-
 static
 void
 TDNFGoalFreeNativeSolverJobs(
@@ -644,7 +643,6 @@ cleanup:
 error:
     goto cleanup;
 }
-
 static
 uint32_t
 TDNFGoalObserveNativeSolver(
@@ -661,24 +659,22 @@ TDNFGoalObserveNativeSolver(
     uint32_t dwHiddenAvailableCount = 0;
     int nUpdateAll = 0, nDistSyncAll = 0;
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY pRepos = NULL;
-    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJobs = NULL, pEraseJobs = NULL;
-    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pHiddenAvailable = NULL;
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJobs = NULL, pEraseJobs = NULL, pHiddenAvailable = NULL;
+    char **ppszInstallOnlyPkgs = NULL;
     const char *pszNativeArch = NULL;
     char *pszNativeArchOwned = NULL;
     TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT comparison = {0};
-
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
        !pTdnf->pSack->pPool || !pTdnf->pRpmConfig || !pQueueJobs || !pInfo)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
-    if(nProblems || nUnresolved || pTdnf->pConf->ppszInstallOnlyPkgs)
+    if(nProblems || nUnresolved)
     {
         dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
         BAIL_ON_TDNF_ERROR(dwError);
     }
-
     if(!IsNullOrEmptyString(pTdnf->pArgs->pszArch))
     {
         pszNativeArch = pTdnf->pArgs->pszArch;
@@ -694,14 +690,13 @@ TDNFGoalObserveNativeSolver(
         dwError = ERROR_TDNF_NO_DATA;
         BAIL_ON_TDNF_ERROR(dwError);
     }
-
     dwError = TDNFGoalBuildNativeSolverRepoInputs(
                   pTdnf, &pRepos, &dwRepoCount);
     BAIL_ON_TDNF_ERROR(dwError);
     dwError = TDNFGoalBuildNativeSolverJobs(
-                  pTdnf, pQueueJobs, &pJobs, &dwJobCount, &pEraseJobs, &dwEraseJobCount, &nUpdateAll, &nDistSyncAll);
+                  pTdnf, pQueueJobs, &pJobs, &dwJobCount, &pEraseJobs, &dwEraseJobCount, &ppszInstallOnlyPkgs, &nUpdateAll, &nDistSyncAll);
     BAIL_ON_TDNF_ERROR(dwError);
-    if((dwEraseJobCount && dwJobCount) ||
+    if((ppszInstallOnlyPkgs && *ppszInstallOnlyPkgs && dwEraseJobCount) || (dwEraseJobCount && dwJobCount) ||
        (!nAllowErasing && dwEraseJobCount) ||
        (nAllowErasing && !dwEraseJobCount &&
         (pInfo->pPkgsToRemove || pInfo->pPkgsToUpgrade || pInfo->pPkgsToDowngrade ||
@@ -713,12 +708,12 @@ TDNFGoalObserveNativeSolver(
     dwError = TDNFGoalBuildNativeSolverHiddenAvailable(
                   pTdnf, &pHiddenAvailable, &dwHiddenAvailableCount);
     BAIL_ON_TDNF_ERROR(dwError);
-    dwError = TDNFRepoMdNativeSolverLiveCompareV12(
+    dwError = TDNFRepoMdNativeSolverLiveCompareV13(
                   pRepos, dwRepoCount, pJobs, dwJobCount,
                   pEraseJobs, dwEraseJobCount, pHiddenAvailable, dwHiddenAvailableCount,
                   pTdnf->pArgs->nAllDeps, pTdnf->pArgs->nBest, nAutoErase, pTdnf->pArgs->nSkipBroken, nAllowErasing,
                   nUpdateAll, nDistSyncAll,
-                  (const char *const *)pTdnf->pConf->ppszPkgLocks,
+                  (const char *const *)pTdnf->pConf->ppszPkgLocks, (const char *const *)ppszInstallOnlyPkgs,
                   (const char *const *)pTdnf->pConf->ppszProtectedPkgs,
                   pTdnf->pRpmConfig, pszNativeArch, pInfo, &comparison);
     if(dwError && !IsNullOrEmptyString(TDNFRepoMdLastError()))
@@ -726,7 +721,6 @@ TDNFGoalObserveNativeSolver(
         pr_info("native-solver-shadow: %s\n", TDNFRepoMdLastError());
     }
     BAIL_ON_TDNF_ERROR(dwError);
-
     switch(comparison.dwStatus)
     {
         case TDNF_REPOMD_NATIVE_SOLVER_COMPARE_PROJECTED_MATCH:
@@ -750,9 +744,8 @@ TDNFGoalObserveNativeSolver(
             dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
             BAIL_ON_TDNF_ERROR(dwError);
     }
-
 cleanup:
-    TDNF_SAFE_FREE_MEMORY(pszNativeArchOwned);
+    TDNF_SAFE_FREE_MEMORY(pszNativeArchOwned); TDNF_SAFE_FREE_MEMORY(ppszInstallOnlyPkgs);
     TDNFGoalFreeNativeSolverJobs(pHiddenAvailable, dwHiddenAvailableCount);
     TDNFGoalFreeNativeSolverJobs(pJobs, dwJobCount + dwEraseJobCount);
     TDNFGoalFreeNativeSolverRepoInputs(pRepos, dwRepoCount);
@@ -760,7 +753,6 @@ cleanup:
 error:
     goto cleanup;
 }
-
 static
 uint32_t
 TDNFGoalBuildNativeSolverRepoInputs(
@@ -857,20 +849,19 @@ TDNFGoalBuildNativeSolverJobs(
     PTDNF pTdnf, const Queue *pQueueJobs,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppJobs, uint32_t *pdwJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppEraseJobs, uint32_t *pdwEraseJobCount,
-    int *pnUpdateAll, int *pnDistSyncAll
+    char ***pppszInstallOnlyPkgs, int *pnUpdateAll, int *pnDistSyncAll
     )
 {
     uint32_t dwError = 0;
-    uint32_t dwCount = 0, dwIndex = 0;
-    uint32_t dwInstallCount = 0, dwEraseCount = 0, dwLockedCount = 0;
+    uint32_t dwCount = 0, dwIndex = 0, dwInstallCount = 0, dwEraseCount = 0, dwLockedCount = 0, dwInstallOnlyCount = 0;
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJobs = NULL;
-    char **ppszLocks = NULL;
+    char **ppszLocks = NULL, **ppszInstallOnlyPkgs = NULL;
     Pool *pPool = NULL;
     int nUpdateAll = 0, nDistSyncAll = 0;
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
        !pTdnf->pSack->pPool || !pQueueJobs || !ppJobs || !pdwJobCount ||
-       !ppEraseJobs || !pdwEraseJobCount || !pnUpdateAll || !pnDistSyncAll ||
-       pQueueJobs->count <= 0 || pQueueJobs->count % 2 != 0)
+       !ppEraseJobs || !pdwEraseJobCount || !pppszInstallOnlyPkgs ||
+       !pnUpdateAll || !pnDistSyncAll || pQueueJobs->count <= 0 || pQueueJobs->count % 2 != 0)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -879,6 +870,8 @@ TDNFGoalBuildNativeSolverJobs(
     ppszLocks = pTdnf->pConf->ppszPkgLocks;
     dwCount = (uint32_t)pQueueJobs->count / 2;
     dwError = TDNFAllocateMemory(dwCount, sizeof(*pJobs), (void **)&pJobs);
+    BAIL_ON_TDNF_ERROR(dwError);
+    dwError = TDNFAllocateMemory(dwCount + 1, sizeof(*ppszInstallOnlyPkgs), (void **)&ppszInstallOnlyPkgs);
     BAIL_ON_TDNF_ERROR(dwError);
     for(dwIndex = 0; dwIndex < dwCount; dwIndex++)
     {
@@ -892,10 +885,9 @@ TDNFGoalBuildNativeSolverJobs(
         int nInstall = how == (SOLVER_SOLVABLE | SOLVER_INSTALL),
             nErase = how == (SOLVER_SOLVABLE | SOLVER_ERASE),
             nUserInstalled = how == (SOLVER_SOLVABLE | SOLVER_USERINSTALLED),
-            nLocked = rawHow == (SOLVER_SOLVABLE_NAME | SOLVER_LOCK),
+            nLocked = rawHow == (SOLVER_SOLVABLE_NAME | SOLVER_LOCK), nInstallOnly = rawHow == (SOLVER_SOLVABLE_NAME | SOLVER_MULTIVERSION),
             nUpdateAllJob = how == (SOLVER_SOLVABLE_ALL | SOLVER_UPDATE),
             nDistSyncAllJob = how == (SOLVER_SOLVABLE_ALL | SOLVER_DISTUPGRADE);
-
         if((nUpdateAllJob || nDistSyncAllJob) && !dwPkgId && !nUpdateAll && !nDistSyncAll)
         {
             nUpdateAll = nUpdateAllJob;
@@ -914,6 +906,15 @@ TDNFGoalBuildNativeSolverJobs(
             }
             ppszLocks++; dwLockedCount++;
             continue;
+        }
+        if(nInstallOnly)
+        {
+            const char *pszName = dwPkgId > 0 ? pool_id2str(pPool, dwPkgId) : NULL;
+            if(dwPkgId <= 0 || IsNullOrEmptyString(pszName))
+            {
+                dwError = ERROR_TDNF_CALL_NOT_SUPPORTED; BAIL_ON_TDNF_ERROR(dwError);
+            }
+            ppszInstallOnlyPkgs[dwInstallOnlyCount++] = (char *)pszName; continue;
         }
         if((!nInstall && !nErase && !nUserInstalled) || dwPkgId <= 0 ||
            dwPkgId >= pPool->nsolvables)
@@ -941,7 +942,7 @@ TDNFGoalBuildNativeSolverJobs(
         BAIL_ON_TDNF_ERROR(dwError);
     }
     if((ppszLocks && *ppszLocks) ||
-       ((nUpdateAll || nDistSyncAll) && dwCount != dwLockedCount + 1))
+       ((nUpdateAll || nDistSyncAll) && dwCount != dwLockedCount + dwInstallOnlyCount + 1))
     {
         dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -949,13 +950,12 @@ TDNFGoalBuildNativeSolverJobs(
     memmove(pJobs + dwInstallCount, pJobs + dwCount - dwEraseCount, dwEraseCount * sizeof(*pJobs));
     *ppJobs = pJobs; *pdwJobCount = dwInstallCount;
     *ppEraseJobs = dwEraseCount ? pJobs + dwInstallCount : NULL;
-    *pdwEraseJobCount = dwEraseCount;
-    *pnUpdateAll = nUpdateAll;
-    *pnDistSyncAll = nDistSyncAll;
+    *pdwEraseJobCount = dwEraseCount; *pppszInstallOnlyPkgs = ppszInstallOnlyPkgs;
+    *pnUpdateAll = nUpdateAll; *pnDistSyncAll = nDistSyncAll;
 cleanup:
     return dwError;
 error:
-    TDNFGoalFreeNativeSolverJobs(pJobs, dwCount);
+    TDNF_SAFE_FREE_MEMORY(ppszInstallOnlyPkgs); TDNFGoalFreeNativeSolverJobs(pJobs, dwCount);
     goto cleanup;
 }
 

@@ -6,6 +6,8 @@
 # of the License are located in the COPYING file of this distribution.
 #
 
+import shutil
+
 import pytest
 
 
@@ -16,7 +18,7 @@ PKG_VERSIONS = ["1.0.1-1", "1.0.1-2", "1.0.1-3", "1.0.1-4"]
 
 @pytest.fixture(scope='function', autouse=True)
 def setup_test(utils):
-    utils.edit_config({"installonlypkgs": PKGNAME})
+    utils.edit_config({"installonlypkgs": PKGNAME, "installonly_limit": "3"})
     yield
     teardown_test(utils)
 
@@ -25,7 +27,8 @@ def teardown_test(utils):
     # removing package by name without version will remoe all versions
     pkgname = PKGNAME
     utils.run(['tdnf', 'erase', '-y', pkgname])
-    utils.edit_config({"installonlypkgs": None})
+    utils.edit_config({"installonlypkgs": None, "installonly_limit": "3"})
+    shutil.rmtree('debugdata', ignore_errors=True)
 
 
 # package can be installed twice
@@ -44,6 +47,50 @@ def test_install_twice(utils):
 
     # test that the other version is still there
     assert utils.check_package(pkgname, version=latest)
+
+
+def test_installonly_native_shadow(utils):
+    pkgname = PKGNAME
+    first = PKG_VERSIONS[0]
+    latest = PKG_VERSIONS[-1]
+    utils.erase_package(pkgname)
+    utils.run([
+        'tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}",
+    ])
+
+    ret = utils.run([
+        'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
+        '--debugsolver', '--noautoremove', pkgname,
+    ])
+    output = '\n'.join(ret['stdout'] + ret['stderr'])
+    assert ret['retval'] == 0, ret
+    assert 'native-solver-shadow: projected match' in output
+    assert 'native-solver-shadow: unavailable' not in output
+    assert utils.check_package(pkgname, version=first)
+    assert not utils.check_package(pkgname, version=latest)
+
+    ret = utils.run([
+        'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
+        '--debugsolver', '--noautoremove',
+    ])
+    output = '\n'.join(ret['stdout'] + ret['stderr'])
+    assert ret['retval'] == 0, ret
+    assert 'native-solver-shadow: projected match' in output
+    assert 'native-solver-shadow: unavailable' not in output
+    assert utils.check_package(pkgname, version=first)
+    assert not utils.check_package(pkgname, version=latest)
+
+    utils.edit_config({"installonly_limit": "1"})
+    ret = utils.run([
+        'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
+        '--debugsolver', '--noautoremove', pkgname,
+    ])
+    output = '\n'.join(ret['stdout'] + ret['stderr'])
+    assert ret['retval'] == 0, ret
+    assert 'native-solver-shadow: unavailable' in output
+    assert 'native-solver-shadow: projected match' not in output
+    assert utils.check_package(pkgname, version=first)
+    assert not utils.check_package(pkgname, version=latest)
 
 
 # package can be installed thrice

@@ -45,6 +45,7 @@ pub const Input = struct {
     update_all: bool = false,
     dist_sync_all: bool = false,
     locked_names: []const []const u8 = &.{},
+    installonly_names: []const []const u8 = &.{},
     best: bool = false,
     allow_erasing: bool = false,
     clean_deps: bool = false,
@@ -94,7 +95,7 @@ pub fn produce(
         @as(usize, @intFromBool(input.dist_sync_all));
     if (input.repositories.len == 0 or
         input.jobs.len + input.erase_jobs.len + input.locked_names.len +
-            global_job_count == 0 or
+            input.installonly_names.len + global_job_count == 0 or
         input.native_arch.len == 0)
     {
         return error.InvalidInput;
@@ -116,6 +117,14 @@ pub fn produce(
     if (input.locked_names.len != 0 and
         (!input.include_installed or
             (global_job_count != 0 and input.best)))
+    {
+        return error.UnsupportedInput;
+    }
+    if (input.installonly_names.len != 0 and
+        (!input.include_installed or
+            input.erase_jobs.len != 0 or
+            input.clean_deps or
+            input.skip_broken))
     {
         return error.UnsupportedInput;
     }
@@ -281,6 +290,8 @@ pub fn produce(
             .clean_deps = input.clean_deps,
             .skip_broken = input.skip_broken,
             .protected_names = input.protected_names,
+            .installonly_limit = std.math.maxInt(u32),
+            .installonly_names = input.installonly_names,
         },
     );
     errdefer solved.deinit();
@@ -655,6 +666,47 @@ test "live producer translates installed package locks by name" {
     );
     input.best = false;
     input.include_installed = false;
+    try std.testing.expectError(
+        error.UnsupportedInput,
+        produce(std.testing.allocator, input),
+    );
+}
+
+test "live producer retains installed multiversion packages" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalledVersion(41, "candidate", "0.9");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    input.installonly_names = &.{"candidate"};
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        solved.solved.result.selected.len,
+    );
+    const actions = solved.solved.result.outcome.actions;
+    try std.testing.expectEqual(@as(usize, 1), actions.len);
+    try std.testing.expectEqual(solver_model.ActionKind.install, actions[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), actions[0].priors.len);
+
+    input.include_installed = false;
+    try std.testing.expectError(
+        error.UnsupportedInput,
+        produce(std.testing.allocator, input),
+    );
+    input.include_installed = true;
+    input.clean_deps = true;
     try std.testing.expectError(
         error.UnsupportedInput,
         produce(std.testing.allocator, input),
