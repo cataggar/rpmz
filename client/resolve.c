@@ -57,7 +57,9 @@ TDNFPrepareAllPackages(
     char** ppszPkgArray = NULL;
     uint32_t dwCount = 0;
     uint32_t dwRebootRequired = 0;
+    uint32_t dwTraceRequestRef = 0;
     TDNF_ALTERTYPE nAlterType = 0;
+    int nTraceStart = 0;
 
     if(!pTdnf || !pTdnf->pSack ||
        !pTdnf->pArgs || !ppszPkgsNotResolved || !queueGoal || !pAlterType)
@@ -71,17 +73,17 @@ TDNFPrepareAllPackages(
 
     if(nAlterType == ALTER_DOWNGRADEALL)
     {
-        dwError = TDNFFilterPackages(
-                       pTdnf,
-                       nAlterType,
-                       ppszPkgsNotResolved,
-                       queueGoal);
+        dwError = TDNFFilterPackages(pTdnf, nAlterType,
+                       ppszPkgsNotResolved, queueGoal);
         BAIL_ON_TDNF_ERROR(dwError);
     }
     else if (nAlterType == ALTER_AUTOERASEALL)
     {
+        nTraceStart = queueGoal->count;
         dwError = TDNFGetAutoInstalledOrphans(pTdnf, queueGoal);
         BAIL_ON_TDNF_ERROR(dwError);
+        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf->pRequestTrace, queueGoal->elements, nTraceStart, queueGoal->count,
+            ALTER_AUTOERASEALL, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_CLEANUP, 0);
     }
 
     dwError = TDNFGetSecuritySeverityOption(
@@ -99,19 +101,25 @@ TDNFPrepareAllPackages(
          nAlterType == ALTER_UPGRADE) &&
         (dwSecurity || pszSeverity || dwRebootRequired))
     {
-        //pAlterType is changed to ALTER_UPGRADE and later used in TDNFGoal() to add exclude the
-        // list of packages that are added in --exclude option.
         *pAlterType = ALTER_UPGRADE;
         dwError = TDNFGetUpdatePkgs(pTdnf, &ppszPkgArray, &dwCount);
         BAIL_ON_TDNF_ERROR(dwError);
         for(nPkgIndex = 0; (uint32_t)nPkgIndex < dwCount; ++nPkgIndex)
         {
-            dwError = TDNFPrepareSinglePkg(
-                          pTdnf,
-                          ppszPkgArray[nPkgIndex],
-                          *pAlterType,
-                          ppszPkgsNotResolved,
-                          queueGoal);
+            dwTraceRequestRef = nAlterType == ALTER_UPGRADEALL ? 0 :
+                                TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST;
+            for(int nCmdIndex = 1;
+                nAlterType == ALTER_UPGRADE && nCmdIndex < pCmdArgs->nCmdCount;
+                nCmdIndex++)
+            {
+                if(dwTraceRequestRef == TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST &&
+                   !fnmatch(pCmdArgs->ppszCmds[nCmdIndex],
+                            ppszPkgArray[nPkgIndex], 0))
+                    dwTraceRequestRef = nCmdIndex - 1;
+            }
+            dwError = TDNFPrepareSinglePkg(pTdnf, ppszPkgArray[nPkgIndex],
+                          *pAlterType, ppszPkgsNotResolved, queueGoal,
+                          dwTraceRequestRef);
             BAIL_ON_TDNF_ERROR(dwError);
         }
     }
@@ -152,12 +160,8 @@ TDNFPrepareAllPackages(
                                      &pszName);
                        BAIL_ON_TDNF_ERROR(dwError);
 
-                       dwError = TDNFPrepareSinglePkg(
-                                     pTdnf,
-                                     pszName,
-                                     nAlterType,
-                                     ppszPkgsNotResolved,
-                                     queueGoal);
+                       dwError = TDNFPrepareSinglePkg(pTdnf, pszName, nAlterType,
+                                     ppszPkgsNotResolved, queueGoal, nCmdIndex - 1);
                        BAIL_ON_TDNF_ERROR(dwError);
                        TDNF_SAFE_FREE_MEMORY(pszName);
                        pszName = NULL;
@@ -167,16 +171,11 @@ TDNFPrepareAllPackages(
            else
            {
                if (fnmatch("*.rpm", pszPkgName, 0) == 0) {
-                   /* already handled in TDNFAddCmdLinePackages */
                    continue;
                }
 
-               dwError = TDNFPrepareSinglePkg(
-                             pTdnf,
-                             pszPkgName,
-                             nAlterType,
-                             ppszPkgsNotResolved,
-                             queueGoal);
+               dwError = TDNFPrepareSinglePkg(pTdnf, pszPkgName, nAlterType,
+                             ppszPkgsNotResolved, queueGoal, nCmdIndex - 1);
                BAIL_ON_TDNF_ERROR(dwError);
            }
        }
@@ -235,12 +234,8 @@ TDNFFilterPackages(
                       &pszName);
         BAIL_ON_TDNF_ERROR(dwError);
 
-        dwError = TDNFPrepareSinglePkg(
-                      pTdnf,
-                      pszName,
-                      nAlterType,
-                      ppszPkgsNotResolved,
-                      queueGoal);
+        dwError = TDNFPrepareSinglePkg(pTdnf, pszName, nAlterType,
+                      ppszPkgsNotResolved, queueGoal, 0);
         BAIL_ON_TDNF_ERROR(dwError);
         TDNF_SAFE_FREE_MEMORY(pszName);
         pszName = NULL;
@@ -328,13 +323,15 @@ TDNFPrepareSinglePkg(
     const char* pszPkgName,
     TDNF_ALTERTYPE nAlterType,
     char** ppszPkgsNotResolved,
-    Queue* queueGoal
+    Queue* queueGoal,
+    uint32_t dwRequestRef
     )
 {
     uint32_t dwError = 0;
     PSolvPackageList pInstalledPkgList = NULL;
     uint32_t dwCount = 0;
     PSolvSack pSack = NULL;
+    int nTraceStart = 0;
 
     if(!pTdnf ||
        !pTdnf->pSack ||
@@ -347,6 +344,7 @@ TDNFPrepareSinglePkg(
     }
 
     pSack = pTdnf->pSack;
+    nTraceStart = queueGoal->count;
 
     //Check if this is a known package. If not add to unresolved
     dwError = SolvCountPkgByName(pSack, pszPkgName, pTdnf->pArgs->nSource, &dwCount);
@@ -445,6 +443,11 @@ TDNFPrepareSinglePkg(
     }
 
 cleanup:
+    if(!dwError)
+    {
+        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf->pRequestTrace, queueGoal->elements, nTraceStart, queueGoal->count, nAlterType,
+            TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, dwRequestRef);
+    }
     if (dwError)
     {
         pr_err("Error while processing package: '%s'\n", pszPkgName);
@@ -624,12 +627,9 @@ TDNFResolveBuildDependencies(
                them */
             continue;
         }
-        dwError = TDNFPrepareSinglePkg(
-                      pTdnf,
-                      pszDep,
-                      ALTER_INSTALL,
-                      ppszPkgsNotResolved,
-                      queueGoal);
+        dwError = TDNFPrepareSinglePkg(pTdnf, pszDep, ALTER_INSTALL,
+                      ppszPkgsNotResolved, queueGoal,
+                      TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
@@ -641,12 +641,9 @@ TDNFResolveBuildDependencies(
             continue;
         }
 
-        dwError = TDNFPrepareSinglePkg(
-                      pTdnf,
-                      pszDep,
-                      ALTER_INSTALL,
-                      ppszPkgsNotResolved,
-                      queueGoal);
+        dwError = TDNFPrepareSinglePkg(pTdnf, pszDep, ALTER_INSTALL,
+                      ppszPkgsNotResolved, queueGoal,
+                      TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
@@ -658,12 +655,9 @@ TDNFResolveBuildDependencies(
             continue;
         }
 
-        dwError = TDNFPrepareSinglePkg(
-                      pTdnf,
-                      pszDep,
-                      ALTER_INSTALL,
-                      ppszPkgsNotResolved,
-                      queueGoal);
+        dwError = TDNFPrepareSinglePkg(pTdnf, pszDep, ALTER_INSTALL,
+                      ppszPkgsNotResolved, queueGoal,
+                      TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
         BAIL_ON_TDNF_ERROR(dwError);
     }
 

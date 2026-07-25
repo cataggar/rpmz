@@ -310,6 +310,7 @@ TDNFAddUserInstalledToJobs(
 {
     uint32_t dwError = 0;
     struct history_ctx *pHistoryCtx = NULL;
+    int nTraceStart = 0;
 
     if(!pTdnf || !pQueueJobs)
     {
@@ -320,10 +321,14 @@ TDNFAddUserInstalledToJobs(
     dwError = TDNFGetHistoryCtx(pTdnf, &pHistoryCtx, 1);
     BAIL_ON_TDNF_ERROR(dwError);
 
+    nTraceStart = pQueueJobs->count;
     dwError = SolvAddUserInstalledToJobs(pQueueJobs,
                                          pTdnf->pSack->pPool,
                                          pHistoryCtx);
     BAIL_ON_TDNF_ERROR(dwError);
+    TDNFTransactionPlanRequestTraceRecordPackageJobRange(pTdnf->pRequestTrace, pQueueJobs->elements,
+        nTraceStart, pQueueJobs->count, TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
+        TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
 cleanup:
     if (pHistoryCtx)
     {
@@ -362,6 +367,10 @@ TDNFSolv(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
+    TDNFTransactionPlanRequestTraceRecordPolicies(pTdnf->pRequestTrace, (const char *const *)ppszExcludes,
+        (const char *const *)pTdnf->pConf->ppszInstallOnlyPkgs, (const char *const *)pTdnf->pConf->ppszPkgLocks,
+        (const char *const *)pTdnf->pConf->ppszMinVersions,
+        (const char *const *)pTdnf->pConf->ppszProtectedPkgs, nAllowErasing);
     if(pTdnf->pArgs->nBest)
     {
         nFlags = nFlags | SOLVER_FORCEBEST;
@@ -410,7 +419,6 @@ TDNFSolv(
             solver_set_flag(pSolv, SOLVER_FLAG_ALLOW_UNINSTALL, 1);
         }
     }
-    solver_set_flag(pSolv, SOLVER_FLAG_BEST_OBEY_POLICY, 1);
     solver_set_flag(pSolv, SOLVER_FLAG_ALLOW_VENDORCHANGE, 1);
     solver_set_flag(pSolv, SOLVER_FLAG_KEEP_ORPHANS, 1);
     solver_set_flag(pSolv, SOLVER_FLAG_BEST_OBEY_POLICY, 1);
@@ -419,7 +427,6 @@ TDNFSolv(
     solver_set_flag(pSolv, SOLVER_FLAG_INSTALL_ALSO_UPDATES, 1);
 
     do {
-        /* in case this is second or later try */
         if(pTrans)
         {
             transaction_free(pTrans);
@@ -449,8 +456,6 @@ TDNFSolv(
         }
 
         if (pTdnf->pConf->ppszInstallOnlyPkgs) {
-            /* check if we are going to exceed the installonly limit */
-            /* if so, removal jobs will be added and we'll try to solve again */
             dwError = TDNFSolvCheckInstallOnlyLimitInTrans(pTdnf, pTrans, pTdnf->pSack->pPool, pQueueJobs);
             if (dwError != ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED) {
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -458,6 +463,8 @@ TDNFSolv(
         }
         retries++;
     } while (dwError == ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED && retries < 2);
+    TDNFTransactionPlanRequestTraceFinalize(pTdnf->pRequestTrace, pQueueJobs->elements,
+        pQueueJobs->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);
     BAIL_ON_TDNF_ERROR(dwError);
 
     if(pTdnf->pArgs->nDebugSolver)
@@ -568,7 +575,7 @@ TDNFGoal(
     int nAllowErasing = 0;
     char** ppszExcludes = NULL;
     uint32_t dwExcludeCount = 0;
-    char **ppszAutoInstalled = NULL;
+    int nTraceStart = 0;
 
     if(!pTdnf || !ppInfo || !pQueuePkgList)
     {
@@ -582,13 +589,21 @@ TDNFGoal(
     queue_init(&queueJobs);
     if (nAlterType == ALTER_UPGRADEALL)
     {
+        nTraceStart = queueJobs.count;
         dwError = SolvAddUpgradeAllJob(&queueJobs);
         BAIL_ON_TDNF_ERROR(dwError);
+        TDNFTransactionPlanRequestTraceRecordAllJob(pTdnf->pRequestTrace, nTraceStart / 2,
+            TDNF_TRANSACTION_PLAN_CAPTURE_JOB_UPDATE, queueJobs.elements[nTraceStart], 0,
+            TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, 0);
     }
     else if(nAlterType == ALTER_DISTRO_SYNC)
     {
+        nTraceStart = queueJobs.count;
         dwError = SolvAddDistUpgradeJob(&queueJobs);
         BAIL_ON_TDNF_ERROR(dwError);
+        TDNFTransactionPlanRequestTraceRecordAllJob(pTdnf->pRequestTrace, nTraceStart / 2,
+            TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DIST_SYNC, queueJobs.elements[nTraceStart], 0,
+            TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, 0);
     }
     else
     {
@@ -635,7 +650,6 @@ TDNFGoal(
     }
 
 cleanup:
-    TDNF_SAFE_FREE_STRINGARRAY(ppszAutoInstalled);
     TDNF_SAFE_FREE_STRINGARRAY(ppszExcludes);
     queue_free(&queueJobs);
     return dwError;
@@ -1259,29 +1273,13 @@ TDNFMarkAutoInstalled(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    /* ppInfo->pPkgsToInstall contains packages that were installed.
-       ppInfo->ppszPkgsUserInstall contains packages that the user intended to
-       install. Therefore, any packages that are in pPkgsToInstall but not in
-       ppszPkgsUserInstall are automatic installs and were pulled in by
-       dependencies.
-
-       Corner cases:
-       - packages that are dependencies but are already installed will be
-         unaffected
-       - on upgrades/downgrades, only additional packages will be in
-         pPkgsToInstall. These are automatic if the upgrade was invoked w/out
-         package args. If they are in package args, they are not in pPkgsToInstall
-         (but will be in pPkgsToUpgrade) and their status will not change.
-    */
+    /* Installs absent from ppszPkgsUserInstall were dependency-selected. */
     for (pPkgInfo = ppInfo->pPkgsToInstall; pPkgInfo; pPkgInfo = pPkgInfo->pNext)
     {
         const char *pszName = pPkgInfo->pszName;
         int nFlag = 1;
-        /* check if user installed */
         if (ppInfo->ppszPkgsUserInstall)
         {
-            /* TODO: if both lists were sorted, we could start with i
-               where it left last time */
             for (int i = 0; ppInfo->ppszPkgsUserInstall[i]; i++)
             {
                 if (strcmp(pszName,
@@ -1292,19 +1290,13 @@ TDNFMarkAutoInstalled(
                 }
             }
         }
-        /* During upgrades, ppInfo->pPkgsToInstall contains any packages that are
-           being installed as a dependency automatically as well as any
-           ppszInstallOnlyPkgs which are installing a new version. The packages
-           configured as installonlypkgs need to retain to retain their previous
-           install status.
-        */
+        /* New installonly versions retain the prior user/auto status. */
         if (nFlag == 1 && pTdnf->pConf && pTdnf->pConf->ppszInstallOnlyPkgs)
         {
             for (int i = 0; pTdnf->pConf->ppszInstallOnlyPkgs[i]; i++)
             {
                 if (strcmp(pTdnf->pConf->ppszInstallOnlyPkgs[i], pszName) == 0)
                 {
-                    // Lookup current auto install status, ensure matching status
                     int value = 0;
                     int rc = history_get_auto_flag(pHistoryCtx, pszName, &value);
                     if (rc != 0)
@@ -1314,8 +1306,6 @@ TDNFMarkAutoInstalled(
                     }
                     if (value == 0)
                     {
-                        // Packages previously marked as user installed should
-                        // remain user installed.
                         nFlag = 0;
                         break;
                     }
@@ -1349,15 +1339,17 @@ TDNFAddGoal(
     )
 {
     uint32_t dwError = 0;
-    char* pszPkg = NULL;
     char** ppszPackagesTemp = NULL;
     char* pszName = NULL;
+    int nTraceStart = 0;
 
-    if(!pQueueJobs || dwId == 0 || !pTdnf->pSack || !pTdnf->pSack->pPool)
+    if(!pTdnf || !pQueueJobs || dwId == 0 || !pTdnf->pSack ||
+       !pTdnf->pSack->pPool)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
+    nTraceStart = pQueueJobs->count;
 
     if (dwCount != 0 && ppszExcludes)
     {
@@ -1409,7 +1401,11 @@ TDNFAddGoal(
             BAIL_ON_TDNF_ERROR(dwError);
     }
 cleanup:
-    TDNF_SAFE_FREE_MEMORY(pszPkg);
+    if(!dwError)
+    {
+        TDNFTransactionPlanRequestTraceCommitGoal(pTdnf->pRequestTrace, dwId,
+            nAlterType, pQueueJobs->elements, nTraceStart, pQueueJobs->count);
+    }
     TDNF_SAFE_FREE_MEMORY(pszName);
     return dwError;
 
@@ -1516,6 +1512,9 @@ TDNFSolvAddPkgLocks(PTDNF pTdnf, Queue* pQueueJobs, Pool *pPool)
             if (idPkg == s->name)
             {
                 queue_push2(pQueueJobs, SOLVER_SOLVABLE_NAME|SOLVER_LOCK, idPkg);
+                TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
+                    TDNF_TRANSACTION_PLAN_CAPTURE_JOB_LOCK, pszPkg, SOLVER_SOLVABLE_NAME|SOLVER_LOCK, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
+                    TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
                 break;
             }
         }
@@ -1553,15 +1552,15 @@ TDNFSolvAddInstallOnlyPkgs(
         {
             Id p;
             Solvable *s;
-            /* only mark if they are installed - first install doesn't care */
-            /* we are marking the name, so we just need to mark it once */
-            /* the flag only affects to be installed packages and
-               it has no effect for already installed packages */
+            /* Name multiversion jobs matter only when an instance exists. */
             FOR_REPO_SOLVABLES(pPool->installed, p, s)
             {
                 if (idPkg == s->name)
                 {
                     queue_push2(pQueueJobs, SOLVER_SOLVABLE_NAME|SOLVER_MULTIVERSION, idPkg);
+                    TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
+                        TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION, pszPkg, SOLVER_SOLVABLE_NAME|SOLVER_MULTIVERSION, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
+                        TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
                     break;
                 }
             }
@@ -1586,7 +1585,6 @@ TDNFSolvCheckInstallOnlyLimitInTrans(
     char **ppszPackages = NULL;
     int i;
     int nLimit;
-    Queue qPkgs = {0};
     Map *pMapRemove = NULL;
 
     if(!pTdnf || !pTrans || !pPool || !pTdnf->pConf)
@@ -1612,7 +1610,6 @@ TDNFSolvCheckInstallOnlyLimitInTrans(
         Id idName = pool_str2id(pPool, pszPkg, 1);
         int n = 0;
 
-        /* count installed packages */
         if (idName)
         {
             Id p;
@@ -1624,8 +1621,7 @@ TDNFSolvCheckInstallOnlyLimitInTrans(
                 }
             }
         }
-        /* increment if more gets installed,
-           subtract if any gets removed */
+        /* Apply the tentative transaction delta to the installed count. */
         for (int j = 0; j < pTrans->steps.count; j++) {
             Id idType;
             Id idPkg = pTrans->steps.elements[j];
@@ -1643,21 +1639,19 @@ TDNFSolvCheckInstallOnlyLimitInTrans(
             }
         }
 
-        /* if we exceed the limit, add erase jobs */
         if (n > nLimit) {
             Id p;
             Solvable *s;
 
-            /* we are going to add jobs and return this error,
-               so the caller can re-solve */
             dwError = ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED;
 
-            /* TODO: look for lowest versions? Currently looks like least
-               recent installed gets selected first - which may be fine too */
             FOR_REPO_SOLVABLES(pPool->installed, p, s) {
                 if (idName == s->name && !MAPTST(pMapRemove, p)) {
                     map_set(pMapRemove, p);
                     queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_ERASE, p);
+                    TDNFTransactionPlanRequestTraceRecordPackageJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
+                        TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ERASE, p, SOLVER_SOLVABLE|SOLVER_ERASE, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_INSTALLONLY_LIMIT,
+                        TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
                     n--;
                     if (n <= nLimit)
                         break;
@@ -1671,7 +1665,6 @@ cleanup:
         map_free(pMapRemove);
         TDNFFreeMemory(pMapRemove);
     }
-    queue_free(&qPkgs);
     return dwError;
 error:
     goto cleanup;
@@ -1792,11 +1785,9 @@ TDNFSolvAddProtectPkgs(
         }
     }
 
-    /* Not setting SOLVER_ALLOWUNINSTALL will not prevent a package from being
-       uninstalled if it's going to be removed directly. */
+    /* Direct erases of protected names must be rejected explicitly. */
     for (j = 0; j < pQueueJobs->count; j += 2) {
         Id how = pQueueJobs->elements[j];
-        /* assuming that all erase jobs that we added use SOLVER_SOLVABLE */
         if (((how & SOLVER_JOBMASK) == SOLVER_ERASE) && (how & SOLVER_SOLVABLE)) {
             Id what = pQueueJobs->elements[j+1];
             s = pool_id2solvable(pPool, what);
@@ -1806,8 +1797,6 @@ TDNFSolvAddProtectPkgs(
             }
             if (i < qPkgs.count) {
                 const char *pszPkgName = ppszProtectedPkgs[i];
-                /* if this is a history transaction,
-                   we may add it again (with another version) */
                 for (i = 0; i < pQueueJobs->count; i += 2) {
                     if (i == j)
                         continue;
@@ -1820,7 +1809,7 @@ TDNFSolvAddProtectPkgs(
                         }
                     }
                 }
-                if (i == pQueueJobs->count) { /* not found in re-adds */
+                if (i == pQueueJobs->count) {
                     pr_err("package %s is protected\n", pszPkgName);
                     dwError = ERROR_TDNF_PROTECTED;
                     BAIL_ON_TDNF_ERROR(dwError);
@@ -1829,8 +1818,7 @@ TDNFSolvAddProtectPkgs(
         }
     }
 
-    /* There is no "SOLVER_PROTECTED" flag, so we allow
-       all pkgs that are not protected to be removed. */
+    /* libsolv has no protected flag; allow uninstall only for other names. */
     FOR_REPO_SOLVABLES(pPool->installed, p, s)
     {
         for (i = 0; i < qPkgs.count; i++) {
@@ -1839,10 +1827,14 @@ TDNFSolvAddProtectPkgs(
         }
         if (i == qPkgs.count) {
             queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_ALLOWUNINSTALL, p);
+            TDNFTransactionPlanRequestTraceRecordPackageJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
+                TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ALLOW_UNINSTALL, p, SOLVER_SOLVABLE|SOLVER_ALLOWUNINSTALL, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
+                TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
         } else {
-            /* autoerase would remove this, even if we do not set
-               SOLVER_ALLOWUNINSTALL for it */
             queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_USERINSTALLED, p);
+            TDNFTransactionPlanRequestTraceRecordPackageJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
+                TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED, p, SOLVER_SOLVABLE|SOLVER_USERINSTALLED, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
+                TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
         }
     }
 

@@ -1,12 +1,12 @@
 /*
  * Private borrowed-value ABI for authoritative transaction-plan capture.
  *
- * Every pointer is borrowed and remains valid only for the duration of
- * TDNFTransactionPlanCaptureCreate().  This include is internal to libtdnf and
- * is deliberately not installed.  A span/array pointer is NULL exactly when
- * its length/count is zero.  Presence and boolean fields contain only 0 or 1.
- * Every reference is a zero-based index into the corresponding top-level
- * array.  An absent optional has a zero/empty payload.
+ * Capture-input pointers are borrowed for TDNFTransactionPlanCaptureCreate().
+ * This include is internal to libtdnf and deliberately not installed.  A
+ * span/array pointer is NULL exactly when its length/count is zero.  Presence
+ * and boolean fields contain only 0 or 1.  Every reference is a zero-based
+ * index into the corresponding top-level array.  An absent optional has a
+ * zero/empty payload.
  */
 #ifndef _TDNF_CLIENT_TRANSACTION_PLAN_CAPTURE_ABI_INC_
 #define _TDNF_CLIENT_TRANSACTION_PLAN_CAPTURE_ABI_INC_
@@ -96,6 +96,20 @@ extern "C" {
 #define TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_PACKAGE UINT32_C(1)
 #define TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_NAME UINT32_C(2)
 #define TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_CAPABILITY UINT32_C(3)
+
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST UINT32_MAX
+
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_CLEAN_DEPS (UINT32_C(1) << 0)
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_FORCE_BEST (UINT32_C(1) << 1)
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_TARGETED (UINT32_C(1) << 2)
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_NOT_BY_USER (UINT32_C(1) << 3)
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_WEAK (UINT32_C(1) << 4)
+
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_EXCLUDE UINT32_C(0)
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_INSTALLONLY UINT32_C(1)
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_LOCK UINT32_C(2)
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_MIN_VERSION UINT32_C(3)
+#define TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_PROTECTED UINT32_C(4)
 
 typedef struct
 {
@@ -345,6 +359,74 @@ typedef struct
 typedef struct TDNF_TRANSACTION_PLAN_CAPTURE_OWNER
     TDNF_TRANSACTION_PLAN_CAPTURE_OWNER;
 
+/*
+ * Owned per-resolve provenance.  Package selections retain libsolv Id values
+ * until extraction supplies the corresponding capture package references.
+ * Views borrow all storage from the trace and become invalid on destruction.
+ */
+typedef struct TDNF_TRANSACTION_PLAN_REQUEST_TRACE
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE;
+
+typedef struct
+{
+    TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY capability;
+    TDNF_TRANSACTION_PLAN_CAPTURE_BYTES selection_value;
+    int32_t selection_id;
+    uint32_t action;
+    uint32_t selection_kind;
+    uint32_t raw_how;
+    uint32_t effective_how;
+    uint32_t raw_flags;
+    uint32_t effective_flags;
+    uint32_t reason;
+    uint32_t request_ref;
+    uint32_t has_request_ref;
+} TDNF_TRANSACTION_PLAN_REQUEST_TRACE_JOB;
+
+typedef struct
+{
+    uint32_t queue_pair_index;
+    uint32_t job_ref;
+    uint32_t request_ref;
+    uint32_t has_request_ref;
+} TDNF_TRANSACTION_PLAN_REQUEST_TRACE_QUEUE_ORIGIN;
+
+typedef struct
+{
+    TDNF_TRANSACTION_PLAN_CAPTURE_BYTES value;
+    uint32_t kind;
+} TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_FACT;
+
+typedef struct
+{
+    const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST *requests;
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_JOB *jobs;
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_QUEUE_ORIGIN *queue_origins;
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_FACT *policy_facts;
+    uint32_t request_count;
+    uint32_t job_count;
+    uint32_t queue_origin_count;
+    uint32_t policy_fact_count;
+    uint32_t allow_erasing;
+} TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW;
+
+typedef struct
+{
+    int32_t selection_id;
+    uint32_t package_ref;
+} TDNF_TRANSACTION_PLAN_REQUEST_TRACE_PACKAGE_REF;
+
+typedef struct
+{
+    const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST *requests;
+    const TDNF_TRANSACTION_PLAN_CAPTURE_JOB *jobs;
+    uint32_t request_count;
+    uint32_t job_count;
+} TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_FACTS;
+
+typedef struct TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER;
+
 #if defined(__GNUC__) || defined(__clang__)
 #define TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN \
     __attribute__((visibility("hidden")))
@@ -361,6 +443,151 @@ TDNFTransactionPlanCaptureCreate(
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
 TDNFTransactionPlanCaptureDestroy(
     TDNF_TRANSACTION_PLAN_CAPTURE_OWNER *owner
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN TDNF_TRANSACTION_PLAN_REQUEST_TRACE *
+TDNFTransactionPlanRequestTraceCreate(
+    uint32_t alter_type,
+    const char *const *subjects,
+    uint32_t subject_count
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN TDNF_TRANSACTION_PLAN_REQUEST_TRACE *
+TDNFTransactionPlanRequestTraceCreateHistory(void);
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceDestroy(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceRecordGoalRange(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const int32_t *ids,
+    uint32_t start,
+    uint32_t end,
+    uint32_t alter_type,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceRecordHistoryGoal(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const char *subject,
+    uint32_t request_kind,
+    uint32_t action,
+    const int32_t *ids,
+    uint32_t start,
+    uint32_t end
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceCommitGoal(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    int32_t selection_id,
+    uint32_t alter_type,
+    const int32_t *queue,
+    uint32_t start,
+    uint32_t end
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceRecordPackageJob(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    uint32_t queue_pair_index,
+    uint32_t action,
+    int32_t selection_id,
+    int32_t raw_how,
+    uint32_t raw_flags,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceRecordPackageJobRange(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const int32_t *queue,
+    uint32_t start,
+    uint32_t end,
+    uint32_t action,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceRecordNameJob(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    uint32_t queue_pair_index,
+    uint32_t action,
+    const char *selection_name,
+    int32_t raw_how,
+    uint32_t raw_flags,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceRecordAllJob(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    uint32_t queue_pair_index,
+    uint32_t action,
+    int32_t raw_how,
+    uint32_t raw_flags,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceRecordCapabilityJob(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    uint32_t queue_pair_index,
+    uint32_t action,
+    const TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY *capability,
+    int32_t raw_how,
+    uint32_t raw_flags,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceRecordPolicies(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const char *const *excludes,
+    const char *const *installonly_names,
+    const char *const *locked_names,
+    const char *const *min_versions,
+    const char *const *protected_names,
+    uint32_t allow_erasing
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceFinalize(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const int32_t *queue,
+    uint32_t element_count,
+    int32_t clean_deps_mask,
+    int32_t force_best_mask
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN
+const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW *
+TDNFTransactionPlanRequestTraceGetView(
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
+TDNFTransactionPlanRequestTraceCaptureFactsCreate(
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_PACKAGE_REF *package_refs,
+    uint32_t package_ref_count,
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_FACTS **facts,
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER **owner
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanRequestTraceCaptureFactsDestroy(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER *owner
     );
 
 #ifdef __cplusplus

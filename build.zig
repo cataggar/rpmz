@@ -302,10 +302,34 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const transaction_plan_request_trace_mod = b.createModule(.{
+        .root_source_file = b.path(
+            "client/transaction_plan_request_trace.zig",
+        ),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_plan_request_trace_mod.addImport(
+        "transaction_plan_capture_abi",
+        transaction_plan_capture_abi_mod,
+    );
+    transaction_plan_request_trace_mod.addImport(
+        "tdnf_error",
+        tdnf_error_mod,
+    );
     const transaction_plan_capture_test_step = b.step(
         "transaction-plan-capture-test",
         "Run private transaction plan capture ABI and adapter tests",
     );
+    {
+        const tests = b.addTest(.{
+            .root_module = transaction_plan_request_trace_mod,
+        });
+        const run_tests = b.addRunArtifact(tests);
+        transaction_plan_capture_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
     const transaction_plan_capture_test_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan_capture.zig"),
         .target = target,
@@ -319,6 +343,10 @@ pub fn build(b: *Build) void {
     transaction_plan_capture_test_mod.addImport(
         "transaction_plan",
         transaction_plan_mod,
+    );
+    transaction_plan_capture_test_mod.addImport(
+        "transaction_plan_request_trace",
+        transaction_plan_request_trace_mod,
     );
     transaction_plan_capture_test_mod.addImport("tdnf_error", tdnf_error_mod);
     {
@@ -1106,6 +1134,10 @@ pub fn build(b: *Build) void {
     tdnf_so_mod.addImport(
         "transaction_plan_capture_abi",
         transaction_plan_capture_abi_mod,
+    );
+    tdnf_so_mod.addImport(
+        "transaction_plan_request_trace",
+        transaction_plan_request_trace_mod,
     );
     tdnf_so_mod.addImport("transaction_plan", transaction_plan_mod);
     tdnf_so_mod.addImport("tdnf_error", tdnf_error_mod);

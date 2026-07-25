@@ -76,6 +76,12 @@ comptime {
     assertSameCaptureLayout(capture_abi.Action, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION);
     assertSameCaptureLayout(capture_abi.Problem, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM);
     assertSameCaptureLayout(capture_abi.Capture, c.TDNF_TRANSACTION_PLAN_CAPTURE);
+    assertSameCaptureLayout(capture_abi.RequestTraceJob, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_JOB);
+    assertSameCaptureLayout(capture_abi.RequestTraceQueueOrigin, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_QUEUE_ORIGIN);
+    assertSameCaptureLayout(capture_abi.RequestTracePolicyFact, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_FACT);
+    assertSameCaptureLayout(capture_abi.RequestTraceView, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW);
+    assertSameCaptureLayout(capture_abi.RequestTracePackageRef, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_PACKAGE_REF);
+    assertSameCaptureLayout(capture_abi.RequestTraceCaptureFacts, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_FACTS);
 }
 
 test "private transaction capture constants match C declarations" {
@@ -146,6 +152,17 @@ test "private transaction capture constants match C declarations" {
         .{ capture_abi.selection_kind.package, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_PACKAGE },
         .{ capture_abi.selection_kind.name, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_NAME },
         .{ capture_abi.selection_kind.capability, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_CAPABILITY },
+        .{ capture_abi.request_trace_no_request, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST },
+        .{ capture_abi.request_trace_flag.clean_deps, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_CLEAN_DEPS },
+        .{ capture_abi.request_trace_flag.force_best, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_FORCE_BEST },
+        .{ capture_abi.request_trace_flag.targeted, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_TARGETED },
+        .{ capture_abi.request_trace_flag.not_by_user, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_NOT_BY_USER },
+        .{ capture_abi.request_trace_flag.weak, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_WEAK },
+        .{ capture_abi.request_trace_policy.exclude, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_EXCLUDE },
+        .{ capture_abi.request_trace_policy.installonly, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_INSTALLONLY },
+        .{ capture_abi.request_trace_policy.lock, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_LOCK },
+        .{ capture_abi.request_trace_policy.min_version, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_MIN_VERSION },
+        .{ capture_abi.request_trace_policy.protected, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_PROTECTED },
     }) |values| {
         try std.testing.expectEqual(values[1], values[0]);
     }

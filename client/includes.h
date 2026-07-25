@@ -48,6 +48,7 @@
 #include "../rpmzig/rpmdb.h"
 
 #include "defines.h"
+#include "transaction_plan_capture_abi.inc"
 #include "structs.h"
 #include "../common/config.h"
 #include "../common/structs.h"

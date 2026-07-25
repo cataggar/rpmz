@@ -643,6 +643,150 @@ TDNFSolvCheckInstallOnlyLimitInTrans(
     Queue *pQueueJobs
     );
 
+TDNF_TRANSACTION_PLAN_REQUEST_TRACE *
+TDNFTransactionPlanRequestTraceCreate(
+    uint32_t alter_type,
+    const char *const *subjects,
+    uint32_t subject_count
+    );
+
+TDNF_TRANSACTION_PLAN_REQUEST_TRACE *
+TDNFTransactionPlanRequestTraceCreateHistory(void);
+
+void
+TDNFTransactionPlanRequestTraceDestroy(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace
+    );
+
+void
+TDNFTransactionPlanRequestTraceRecordGoalRange(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const int32_t *ids,
+    uint32_t start,
+    uint32_t end,
+    uint32_t alter_type,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+void
+TDNFTransactionPlanRequestTraceRecordHistoryGoal(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const char *subject,
+    uint32_t request_kind,
+    uint32_t action,
+    const int32_t *ids,
+    uint32_t start,
+    uint32_t end
+    );
+
+void
+TDNFTransactionPlanRequestTraceCommitGoal(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    int32_t selection_id,
+    uint32_t alter_type,
+    const int32_t *queue,
+    uint32_t start,
+    uint32_t end
+    );
+
+void
+TDNFTransactionPlanRequestTraceRecordPackageJob(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    uint32_t queue_pair_index,
+    uint32_t action,
+    int32_t selection_id,
+    int32_t raw_how,
+    uint32_t raw_flags,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+void
+TDNFTransactionPlanRequestTraceRecordPackageJobRange(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const int32_t *queue,
+    uint32_t start,
+    uint32_t end,
+    uint32_t action,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+void
+TDNFTransactionPlanRequestTraceRecordNameJob(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    uint32_t queue_pair_index,
+    uint32_t action,
+    const char *selection_name,
+    int32_t raw_how,
+    uint32_t raw_flags,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+void
+TDNFTransactionPlanRequestTraceRecordAllJob(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    uint32_t queue_pair_index,
+    uint32_t action,
+    int32_t raw_how,
+    uint32_t raw_flags,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+void
+TDNFTransactionPlanRequestTraceRecordCapabilityJob(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    uint32_t queue_pair_index,
+    uint32_t action,
+    const TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY *capability,
+    int32_t raw_how,
+    uint32_t raw_flags,
+    uint32_t reason,
+    uint32_t request_ref
+    );
+
+void
+TDNFTransactionPlanRequestTraceRecordPolicies(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const char *const *excludes,
+    const char *const *installonly_names,
+    const char *const *locked_names,
+    const char *const *min_versions,
+    const char *const *protected_names,
+    uint32_t allow_erasing
+    );
+
+void
+TDNFTransactionPlanRequestTraceFinalize(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const int32_t *queue,
+    uint32_t element_count,
+    int32_t clean_deps_mask,
+    int32_t force_best_mask
+    );
+
+const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW *
+TDNFTransactionPlanRequestTraceGetView(
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace
+    );
+
+uint32_t
+TDNFTransactionPlanRequestTraceCaptureFactsCreate(
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_PACKAGE_REF *package_refs,
+    uint32_t package_ref_count,
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_FACTS **facts,
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER **owner
+    );
+
+void
+TDNFTransactionPlanRequestTraceCaptureFactsDestroy(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER *owner
+    );
+
 //config.c
 int
 TDNFConfGetRpmVerbosity(
@@ -844,7 +988,8 @@ TDNFPrepareSinglePkg(
     const char* pszPkgName,
     TDNF_ALTERTYPE nAlterType,
     char** ppszPkgsNotResolved,
-    Queue* pQueueGoal
+    Queue* pQueueGoal,
+    uint32_t dwRequestRef
     );
 
 uint32_t
