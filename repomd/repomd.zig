@@ -47,6 +47,7 @@ const Parser = struct {
     allocator: std.mem.Allocator,
     frames: std.array_list.Managed(Frame),
     records: std.array_list.Managed(model.Record),
+    record_xml_bases: std.array_list.Managed(?[]const u8),
     pszRevision: ?[*:0]const u8 = null,
     saw_root: bool = false,
 
@@ -55,6 +56,9 @@ const Parser = struct {
             .allocator = allocator,
             .frames = std.array_list.Managed(Frame).init(allocator),
             .records = std.array_list.Managed(model.Record).init(allocator),
+            .record_xml_bases = std.array_list.Managed(?[]const u8).init(
+                allocator,
+            ),
         };
     }
 
@@ -63,6 +67,7 @@ const Parser = struct {
             frame.deinit();
         }
         self.frames.deinit();
+        self.record_xml_bases.deinit();
         self.records.deinit();
     }
 
@@ -88,9 +93,17 @@ const Parser = struct {
             return error.InvalidRepoMd;
         }
 
+        const records = try self.records.toOwnedSlice();
+        errdefer self.allocator.free(records);
+        const record_xml_bases = try self.record_xml_bases.toOwnedSlice();
+        if (record_xml_bases.len != records.len) {
+            self.allocator.free(record_xml_bases);
+            return error.InvalidRepoMd;
+        }
         return .{
             .pszRevision = self.pszRevision,
-            .pRecords = try self.records.toOwnedSlice(),
+            .pRecords = records,
+            .pRecordXmlBases = record_xml_bases,
         };
     }
 
@@ -124,6 +137,7 @@ const Parser = struct {
                             .pszType = type_z.ptr,
                             .dwKind = @intFromEnum(model.kindFromRawType(raw_type)),
                         });
+                        try self.record_xml_bases.append(null);
                         frame.kind = .data;
                         frame.record_index = self.records.items.len - 1;
                     }
@@ -146,8 +160,14 @@ const Parser = struct {
                         }
                     } else if (std.mem.eql(u8, element.name.local, "location")) {
                         const href = lookupAttr(element.attrs, "href") orelse return error.InvalidRepoMd;
+                        if (href.len == 0) return error.InvalidRepoMd;
                         const href_z = try model.dupZ(self.allocator, href);
                         self.records.items[record_index].pszLocationHref = href_z.ptr;
+                        self.record_xml_bases.items[record_index] =
+                            if (element.xml_base) |xml_base|
+                                try model.dup(self.allocator, xml_base)
+                            else
+                                null;
                         frame.kind = .location;
                         frame.record_index = record_index;
                     } else if (std.mem.eql(u8, element.name.local, "timestamp")) {
@@ -216,7 +236,7 @@ const Parser = struct {
             .open_checksum => try self.finishChecksum(top, true),
             .timestamp => {
                 const record = try self.currentRecord(top);
-                record.nTimestamp = try parseRequiredUnsigned(top.text.items);
+                record.nTimestamp = try parseTimestamp(top.text.items);
                 record.nHasTimestamp = 1;
             },
             .size => {
@@ -299,5 +319,126 @@ fn parseRequiredUnsigned(text: []const u8) Error!u64 {
     if (trimmed.len == 0) {
         return error.InvalidRepoMd;
     }
-    return std.fmt.parseInt(u64, trimmed, 10) catch error.InvalidRepoMd;
+    return parseUnsignedDigits(trimmed) catch error.InvalidRepoMd;
+}
+
+fn parseTimestamp(text: []const u8) Error!u64 {
+    const trimmed = trimText(text);
+    if (trimmed.len == 0 or trimmed[0] == '-') {
+        return error.InvalidRepoMd;
+    }
+
+    var integer_end = trimmed.len;
+    if (std.mem.indexOfScalar(u8, trimmed, '.')) |dot| {
+        integer_end = dot;
+        if (dot + 1 == trimmed.len) {
+            return error.InvalidRepoMd;
+        }
+        for (trimmed[dot + 1 ..]) |byte| {
+            if (!std.ascii.isDigit(byte)) return error.InvalidRepoMd;
+        }
+    }
+    if (integer_end == 0) return error.InvalidRepoMd;
+    return parseUnsignedDigits(trimmed[0..integer_end]) catch
+        error.InvalidRepoMd;
+}
+
+fn parseUnsignedDigits(text: []const u8) !u64 {
+    var start: usize = 0;
+    if (text[0] == '+') {
+        start = 1;
+        if (start == text.len) return error.InvalidNumber;
+    }
+    for (text[start..]) |byte| {
+        if (!std.ascii.isDigit(byte)) return error.InvalidNumber;
+    }
+    return std.fmt.parseInt(u64, text[start..], 10);
+}
+
+test "repomd timestamps retain integer seconds from fractional values" {
+    const xml =
+        \\<repomd xmlns="http://linux.duke.edu/metadata/repo"><data type="primary"><location href="repodata/primary.xml"/><timestamp>42.875</timestamp></data></repomd>
+    ;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const parsed = try parse(arena_state.allocator(), xml);
+    try std.testing.expectEqual(@as(usize, 1), parsed.pRecords.len);
+    try std.testing.expectEqual(@as(u64, 42), parsed.pRecords[0].nTimestamp);
+    try std.testing.expectEqual(@as(c_int, 1), parsed.pRecords[0].nHasTimestamp);
+}
+
+test "repomd timestamps reject malformed, negative, and overflowing values" {
+    for ([_][]const u8{
+        "42.",
+        "42.seconds",
+        "-1",
+        "18446744073709551616",
+        "18446744073709551616.5",
+    }) |timestamp| {
+        const xml = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "<repomd xmlns=\"http://linux.duke.edu/metadata/repo\"><data type=\"primary\"><location href=\"repodata/primary.xml\"/><timestamp>{s}</timestamp></data></repomd>",
+            .{timestamp},
+        );
+        defer std.testing.allocator.free(xml);
+        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena_state.deinit();
+        try std.testing.expectError(
+            error.InvalidRepoMd,
+            parse(arena_state.allocator(), xml),
+        );
+    }
+}
+
+test "repomd locations retain inherited effective XML Base" {
+    const xml =
+        \\<repomd xmlns="http://linux.duke.edu/metadata/repo" xml:base="https://example.test/repo/">
+        \\  <data type="primary" xml:base="../metadata/">
+        \\    <location xml:base="nested/" href="repodata/primary.xml"/>
+        \\  </data>
+        \\</repomd>
+    ;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const parsed = try parse(arena_state.allocator(), xml);
+    try std.testing.expectEqual(@as(usize, 1), parsed.pRecords.len);
+    try std.testing.expectEqual(@as(usize, 1), parsed.pRecordXmlBases.len);
+    try std.testing.expectEqualStrings(
+        "https://example.test/metadata/nested/",
+        parsed.pRecordXmlBases[0].?,
+    );
+}
+
+test "repomd omits current-directory XML Bases" {
+    const xml =
+        \\<repomd xmlns="http://linux.duke.edu/metadata/repo" xml:base=".">
+        \\  <data type="primary" xml:base="./">
+        \\    <location xml:base="" href="repodata/primary.xml"/>
+        \\  </data>
+        \\</repomd>
+    ;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const parsed = try parse(arena_state.allocator(), xml);
+    try std.testing.expectEqual(@as(usize, 1), parsed.pRecordXmlBases.len);
+    try std.testing.expect(parsed.pRecordXmlBases[0] == null);
+    try std.testing.expectEqualStrings(
+        "repodata/primary.xml",
+        std.mem.span(parsed.pRecords[0].pszLocationHref.?),
+    );
+}
+
+test "repomd rejects empty required location href" {
+    const xml =
+        \\<repomd xmlns="http://linux.duke.edu/metadata/repo"><data type="primary"><location href=""/></data></repomd>
+    ;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    try std.testing.expectError(
+        error.InvalidRepoMd,
+        parse(arena_state.allocator(), xml),
+    );
 }

@@ -167,8 +167,8 @@ pub const Checksum = struct {
     value: []const u8,
 };
 
-/// Both fields are raw repository-relative URI references. xml_base is kept
-/// distinct from href because callers need to preserve the raw XML base.
+/// Both fields retain URI references from authoritative metadata. xml_base is
+/// kept distinct from href because callers need the effective XML Base.
 pub const PackageLocation = struct {
     href: []const u8,
     xml_base: ?[]const u8,
@@ -524,6 +524,16 @@ pub const Plan = struct {
 
 pub fn validate(data: Data) ValidationError!void {
     return validateWithAllocator(std.heap.page_allocator, data);
+}
+
+/// Validate independently captured available-repository facts before they are
+/// combined with authoritative solver output into a complete plan.
+pub fn validateRepositoryPackageFacts(
+    repository: Repository,
+    packages: []const Package,
+) ValidationError!void {
+    try validateRepositories(&.{repository});
+    return validatePackages(packages, &.{repository});
 }
 
 fn validateWithAllocator(allocator: Allocator, data: Data) ValidationError!void {
@@ -1179,10 +1189,14 @@ fn validateId(value: []const u8) ValidationError!void {
     }
 }
 
-fn validateRepositoryId(value: []const u8) ValidationError!void {
+pub fn validateRepositoryId(value: []const u8) ValidationError!void {
     if (value.len == 0) return error.EmptyId;
     try validateOpaqueText(value);
-    if (isAbsoluteHostPath(value)) return error.InvalidString;
+    if (isAbsoluteHostPath(value) or
+        decodedRepositoryIdHasForbiddenShape(value))
+    {
+        return error.InvalidString;
+    }
 }
 
 fn validateHandle(value: []const u8) ValidationError!void {
@@ -1231,6 +1245,96 @@ fn isAbsoluteHostPath(value: []const u8) bool {
         value[1] == ':' and (value[2] == '/' or value[2] == '\\');
 }
 
+fn decodedRepositoryIdHasForbiddenShape(value: []const u8) bool {
+    var history: [64]u8 = undefined;
+    var history_len: usize = 0;
+    var next_slot: usize = 0;
+    var value_index: usize = 0;
+    var decoded_index: usize = 0;
+    var first_bytes: [3]u8 = undefined;
+    var segment: [16]u8 = undefined;
+    var segment_len: usize = 0;
+    var segment_has_colon = false;
+    var segment_has_at = false;
+
+    while (value_index < value.len) {
+        const byte = nextDecodedRepositoryByte(value, &value_index);
+        if (decoded_index < first_bytes.len) {
+            first_bytes[decoded_index] = byte;
+        }
+        decoded_index += 1;
+
+        history[next_slot] = std.ascii.toLower(byte);
+        next_slot = (next_slot + 1) % history.len;
+        if (history_len < history.len) history_len += 1;
+        if (decodedRingEndsWith(
+            history[0..],
+            next_slot,
+            history_len,
+            "://",
+        )) {
+            return true;
+        }
+        for (secret_shape_markers) |marker| {
+            if (decodedRingEndsWith(
+                history[0..],
+                next_slot,
+                history_len,
+                marker,
+            )) {
+                return true;
+            }
+        }
+
+        if (byte == '/' or byte == '\\') {
+            if (decoded_index == 1) return true;
+            if (segment_has_at) return true;
+            segment_len = 0;
+            segment_has_colon = false;
+            segment_has_at = false;
+        } else if (byte == ':') {
+            if (isKnownUriScheme(segment[0..segment_len])) return true;
+            segment_has_colon = true;
+        } else if (byte == '@') {
+            if (segment_len != 0 or segment_has_colon) return true;
+            segment_has_at = true;
+        } else if (!segment_has_colon and segment_len < segment.len) {
+            segment[segment_len] = std.ascii.toLower(byte);
+            segment_len += 1;
+        }
+    }
+
+    if (decoded_index >= 3 and
+        std.ascii.isAlphabetic(first_bytes[0]) and
+        first_bytes[1] == ':' and
+        (first_bytes[2] == '/' or first_bytes[2] == '\\'))
+    {
+        return true;
+    }
+    return false;
+}
+
+fn nextDecodedRepositoryByte(value: []const u8, index: *usize) u8 {
+    const byte = value[index.*];
+    if (byte == '%' and index.* + 2 < value.len and
+        isHex(value[index.* + 1]) and isHex(value[index.* + 2]))
+    {
+        const decoded = hexByte(value[index.* + 1], value[index.* + 2]);
+        index.* += 3;
+        return decoded;
+    }
+    index.* += 1;
+    return byte;
+}
+
+fn isKnownUriScheme(value: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(value, "http") or
+        std.ascii.eqlIgnoreCase(value, "https") or
+        std.ascii.eqlIgnoreCase(value, "file") or
+        std.ascii.eqlIgnoreCase(value, "ftp") or
+        std.ascii.eqlIgnoreCase(value, "media");
+}
+
 fn validateLocation(location: PackageLocation) ValidationError!void {
     try validateUriReference(location.href);
     if (location.xml_base) |xml_base| try validateUriReference(xml_base);
@@ -1275,9 +1379,10 @@ fn validateUriReference(value: []const u8) ValidationError!void {
     if (std.mem.indexOfScalar(u8, value[0..segment_end], ':')) |colon| {
         if (colon != 0 and isSchemePrefix(value[0..colon])) {
             const scheme = value[0..colon];
-            if (!std.ascii.eqlIgnoreCase(scheme, "http") and
-                !std.ascii.eqlIgnoreCase(scheme, "https"))
-            {
+            const is_http = std.ascii.eqlIgnoreCase(scheme, "http") or
+                std.ascii.eqlIgnoreCase(scheme, "https");
+            const is_media = std.ascii.eqlIgnoreCase(scheme, "media");
+            if (!is_http and !is_media) {
                 return error.InvalidLocation;
             }
             const after_scheme = value[colon + 1 ..];
@@ -1285,7 +1390,9 @@ fn validateUriReference(value: []const u8) ValidationError!void {
             const authority_and_path = after_scheme[2..];
             const path_start = std.mem.indexOfScalar(u8, authority_and_path, '/') orelse authority_and_path.len;
             const authority = authority_and_path[0..path_start];
-            if (!validHttpAuthority(authority)) {
+            if ((is_http and !validHttpAuthority(authority)) or
+                (is_media and !validMediaAuthority(authority)))
+            {
                 return error.InvalidLocation;
             }
             if (decodedUriHasSecretShape(authority_and_path, authority.len)) {
@@ -1305,6 +1412,7 @@ fn validHttpAuthority(authority: []const u8) bool {
     if (authority.len == 0 or std.mem.indexOfScalar(u8, authority, '@') != null) {
         return false;
     }
+
     if (authority[0] == '[') {
         const closing = std.mem.indexOfScalar(u8, authority, ']') orelse return false;
         if (closing == 1) return false;
@@ -1324,6 +1432,20 @@ fn validHttpAuthority(authority: []const u8) bool {
         return false;
     }
     return validHttpPort(authority[colon + 1 ..]);
+}
+
+fn validMediaAuthority(authority: []const u8) bool {
+    if (authority.len == 0 or
+        std.mem.indexOfAny(u8, authority, "[]@") != null)
+    {
+        return false;
+    }
+    for (authority) |byte| {
+        if (byte == '\\' or byte < 0x20 or byte == 0x7f) {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn validHttpPort(value: []const u8) bool {
@@ -1414,7 +1536,12 @@ fn decodedUriHasSecretShape(
         const raw_index = value_index;
         const byte = decodedUriByte(value, &value_index);
         if (authority_length) |length| {
-            if (raw_index < length and byte == '@') return true;
+            if (raw_index < length and
+                (byte == '@' or byte == '/' or byte == '\\' or
+                    byte == '?' or byte == '#'))
+            {
+                return true;
+            }
         }
 
         history[next_slot] = std.ascii.toLower(byte);
@@ -3486,6 +3613,37 @@ test "repository IDs are opaque and preserve kind semantics" {
     }
 }
 
+test "repository IDs reject URI and credential-shaped values" {
+    for ([_][]const u8{
+        "copr/user/project",
+        "repo:tag",
+        "repo%3Atag",
+        "@System",
+    }) |safe| {
+        try validateRepositoryId(safe);
+    }
+
+    for ([_][]const u8{
+        "https://host/repo",
+        "file:///var/cache/repo",
+        "ftp://host/repo",
+        "user:password@host/repo",
+        "user@host/repo",
+        "user@host",
+        "user%3Apassword%40host%2Frepo",
+        "user%40host%2Frepo",
+        "https%3A%2F%2Fuser%3Apassword%40host%2Frepo",
+        "api_key%3Dsecret",
+        "%2Fvar%2Fcache%2Frepo",
+        "C%3A%2Fcache%2Frepo",
+    }) |bad| {
+        try std.testing.expectError(
+            error.InvalidString,
+            validateRepositoryId(bad),
+        );
+    }
+}
+
 test "opaque resolver text preserves benign punctuation" {
     var data = testData();
     var packages = [_]Package{
@@ -3706,6 +3864,9 @@ test "repository URI references reject secret markers everywhere" {
     packages[0].source.?.location.?.href = "pool/product:package.rpm";
     packages[0].source.?.location.?.xml_base = "https://example.test/repo/base:tag";
     try validate(data);
+    packages[0].source.?.location.?.xml_base =
+        "media://dvd-1/Packages/";
+    try validate(data);
     packages[0].source.?.location.?.xml_base = null;
 
     for ([_][]const u8{
@@ -3725,6 +3886,16 @@ test "repository URI references reject secret markers everywhere" {
         "pool/has\xc2\xa0space.rpm",
         "ftp://host/x",
         "file:///x",
+        "media:///var/cache/pkg.rpm",
+        "media://user:" ++ "pass" ++ "word@host/pkg.rpm",
+        "media://user%3Apassword%40host/pkg.rpm",
+        "media://host%2Fprivate/pkg.rpm",
+        "media://host%3Fquery/pkg.rpm",
+        "media://host%23fragment/pkg.rpm",
+        "media://host/pkg.rpm?query",
+        "media://host/pkg.rpm#fragment",
+        "media://host/secret=value.rpm",
+        "media://host/%73ecret%3Dvalue.rpm",
         "/absolute",
         "//host/x",
         "x?query",
@@ -3739,6 +3910,59 @@ test "repository URI references reject secret markers everywhere" {
         packages[0].source.?.location.?.href = bad;
         try std.testing.expectError(error.InvalidLocation, validate(data));
     }
+}
+
+test "plan rejects empty location fields before canonical output" {
+    const pristine = testData();
+    var data = pristine;
+    var packages = [_]Package{
+        pristine.packages[0],
+        pristine.packages[1],
+        pristine.packages[2],
+        pristine.packages[3],
+    };
+    data.packages = &packages;
+
+    packages[0].source.?.location.?.xml_base = "";
+    try std.testing.expectError(
+        error.InvalidLocation,
+        Plan.create(std.testing.allocator, data),
+    );
+
+    packages[0] = pristine.packages[0];
+    packages[0].source.?.location.?.href = "";
+    try std.testing.expectError(
+        error.InvalidLocation,
+        Plan.create(std.testing.allocator, data),
+    );
+
+    packages[0] = pristine.packages[0];
+    var records = [_]MetadataRecord{
+        pristine.repositories[0].repomd.?.records[0],
+    };
+    var repositories = [_]Repository{
+        pristine.repositories[0],
+        pristine.repositories[1],
+    };
+    repositories[0].repomd.?.records = &records;
+    data.repositories = &repositories;
+    records[0].location.xml_base = "";
+    try std.testing.expectError(
+        error.InvalidLocation,
+        Plan.create(std.testing.allocator, data),
+    );
+
+    data.repositories = pristine.repositories;
+    packages[0] = pristine.packages[0];
+    packages[0].source.?.location.?.xml_base = null;
+    const normalized = try Plan.create(std.testing.allocator, data);
+    defer normalized.destroy();
+    const json = try normalized.canonicalJsonAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    try expectJsonContains(
+        json,
+        "\"href\":\"dir/alpha.rpm\",\"xml_base\":null",
+    );
 }
 
 test "raw EVR ties hnum uniqueness globs records and resolved skips remain authoritative" {

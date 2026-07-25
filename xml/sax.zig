@@ -5,8 +5,11 @@
 //! them longer must copy them.
 
 const std = @import("std");
+const uri = @import("uri.zig");
 
 pub const XML_NS = "http://www.w3.org/XML/1998/namespace";
+pub const max_nesting_depth = 256;
+pub const max_xml_base_bytes = 8 * 1024;
 
 pub const Error = error{
     InvalidXml,
@@ -37,6 +40,9 @@ pub const StartElement = struct {
     name: QName,
     attrs: []const Attribute,
     ns_bindings: []const NamespaceBinding,
+    /// Effective XML Base after resolving this element's xml:base against
+    /// the inherited frame base. The slice is walker-owned and persistent.
+    xml_base: ?[]const u8,
     empty_element: bool,
 };
 
@@ -58,6 +64,7 @@ const SplitQName = struct {
 const ElementFrame = struct {
     name: QName,
     ns_bindings: []const NamespaceBinding,
+    xml_base: ?[]const u8,
 };
 
 pub const Walker = struct {
@@ -142,6 +149,9 @@ pub const Walker = struct {
         if (self.saw_root and self.frames.items.len == 0) {
             return error.InvalidXml;
         }
+        if (self.frames.items.len >= max_nesting_depth) {
+            return error.InvalidXml;
+        }
 
         const raw_qname = try self.parseNameSlice();
         const qname = try splitQName(raw_qname);
@@ -184,15 +194,29 @@ pub const Walker = struct {
             if (quote != '"' and quote != '\'') return error.InvalidXml;
             self.pos += 1;
 
-            const value = try self.parseAttributeValue(quote);
-            if (std.mem.eql(u8, attr_qname.prefix, "xmlns")) {
+            const is_namespace_declaration =
+                std.mem.eql(u8, attr_qname.prefix, "xmlns") or
+                (attr_qname.prefix.len == 0 and
+                    std.mem.eql(u8, attr_qname.local, "xmlns"));
+            const is_xml_base =
+                std.mem.eql(u8, attr_qname.prefix, "xml") and
+                std.mem.eql(u8, attr_qname.local, "base");
+            const decoded_limit: ?usize = if (is_namespace_declaration or is_xml_base)
+                max_xml_base_bytes
+            else
+                null;
+            const value = try self.parseAttributeValue(
+                quote,
+                decoded_limit,
+            );
+            if (is_namespace_declaration) {
+                const prefix = if (std.mem.eql(u8, attr_qname.prefix, "xmlns"))
+                    attr_qname.local
+                else
+                    "";
+                try validateNamespaceBinding(prefix, value);
                 try self.local_bindings.append(.{
-                    .prefix = attr_qname.local,
-                    .uri = value,
-                });
-            } else if (attr_qname.prefix.len == 0 and std.mem.eql(u8, attr_qname.local, "xmlns")) {
-                try self.local_bindings.append(.{
-                    .prefix = "",
+                    .prefix = prefix,
                     .uri = value,
                 });
             } else {
@@ -222,9 +246,19 @@ pub const Walker = struct {
             .ns_uri = ns_uri,
         };
 
+        const inherited_xml_base = if (self.frames.items.len == 0)
+            null
+        else
+            self.frames.getLast().xml_base;
+        const effective_xml_base = if (self.lookupXmlBase(self.attrs.items)) |raw|
+            try self.resolveXmlBase(inherited_xml_base, raw)
+        else
+            inherited_xml_base;
+
         const frame = ElementFrame{
             .name = name,
             .ns_bindings = try self.dupBindings(self.local_bindings.items),
+            .xml_base = effective_xml_base,
         };
         try self.frames.append(frame);
         self.saw_root = true;
@@ -234,6 +268,7 @@ pub const Walker = struct {
             .name = name,
             .attrs = self.attrs.items,
             .ns_bindings = self.local_bindings.items,
+            .xml_base = effective_xml_base,
             .empty_element = empty_element,
         };
     }
@@ -278,7 +313,7 @@ pub const Walker = struct {
                 if (outside_root) {
                     if (!isXmlWhitespaceCodepoint(cp)) return error.InvalidXml;
                 } else {
-                    try appendCodepoint(&self.text_buf, cp);
+                    try appendCodepoint(&self.text_buf, cp, null);
                     used_buffer = true;
                 }
 
@@ -333,7 +368,11 @@ pub const Walker = struct {
         return error.InvalidXml;
     }
 
-    fn parseAttributeValue(self: *Walker, quote: u8) Error![]const u8 {
+    fn parseAttributeValue(
+        self: *Walker,
+        quote: u8,
+        decoded_limit: ?usize,
+    ) Error![]const u8 {
         var out = std.array_list.Managed(u8).init(self.allocator);
         defer out.deinit();
         var segment_start = self.pos;
@@ -343,12 +382,17 @@ pub const Walker = struct {
             const ch = self.input[self.pos];
             if (ch == quote) {
                 if (used_buffer) {
-                    try out.appendSlice(self.input[segment_start..self.pos]);
+                    try appendDecodedBytes(
+                        &out,
+                        self.input[segment_start..self.pos],
+                        decoded_limit,
+                    );
                     self.pos += 1;
                     return try self.allocPersistent(out.items);
                 }
 
                 const value = self.input[segment_start..self.pos];
+                try checkDecodedLength(0, value.len, decoded_limit);
                 self.pos += 1;
                 return value;
             }
@@ -356,14 +400,23 @@ pub const Walker = struct {
             if (ch == '<' or ch == 0) return error.InvalidXml;
 
             if (ch == '&') {
-                try out.appendSlice(self.input[segment_start..self.pos]);
+                try appendDecodedBytes(
+                    &out,
+                    self.input[segment_start..self.pos],
+                    decoded_limit,
+                );
                 const cp = try self.parseEntityCodepoint();
-                try appendCodepoint(&out, cp);
+                try appendCodepoint(&out, cp, decoded_limit);
                 used_buffer = true;
                 segment_start = self.pos;
                 continue;
             }
 
+            try checkDecodedLength(
+                out.items.len,
+                self.pos - segment_start + 1,
+                decoded_limit,
+            );
             self.pos += 1;
         }
 
@@ -394,6 +447,7 @@ pub const Walker = struct {
             const digits = self.input[digits_start..self.pos];
             self.pos += 1;
             const cp = std.fmt.parseInt(u32, digits, base) catch return error.InvalidXml;
+            if (cp > std.math.maxInt(u21)) return error.InvalidXml;
             const scalar: u21 = @intCast(cp);
             if (!isValidXmlScalar(scalar)) return error.InvalidXml;
             return scalar;
@@ -558,6 +612,46 @@ pub const Walker = struct {
         return null;
     }
 
+    fn lookupXmlBase(
+        self: *Walker,
+        attrs: []const Attribute,
+    ) ?[]const u8 {
+        _ = self;
+        var index = attrs.len;
+        while (index > 0) {
+            index -= 1;
+            const attr = attrs[index];
+            if (std.mem.eql(u8, attr.prefix, "xml") and
+                std.mem.eql(u8, attr.ns_uri orelse "", XML_NS) and
+                std.mem.eql(u8, attr.local, "base"))
+            {
+                return attr.value;
+            }
+        }
+        return null;
+    }
+
+    fn resolveXmlBase(
+        self: *Walker,
+        inherited: ?[]const u8,
+        raw: []const u8,
+    ) Error!?[]const u8 {
+        if (raw.len > max_xml_base_bytes) return error.InvalidXml;
+        // Resolving an empty reference returns the inherited base unchanged.
+        // Avoid retaining a duplicate of it at every nested empty xml:base.
+        if (raw.len == 0) return inherited;
+
+        const resolved = uri.resolve(self.allocator, inherited, raw) catch |err|
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                error.InvalidUri => error.InvalidXml,
+            };
+        defer self.allocator.free(resolved);
+        if (resolved.len == 0) return null;
+        if (resolved.len > max_xml_base_bytes) return error.InvalidXml;
+        return try self.allocPersistent(resolved);
+    }
+
     fn allocPersistent(self: *Walker, bytes: []const u8) Error![]const u8 {
         return self.arena_state.allocator().dupe(u8, bytes) catch error.OutOfMemory;
     }
@@ -601,12 +695,42 @@ fn splitQName(raw: []const u8) Error!SplitQName {
     return .{ .prefix = "", .local = raw };
 }
 
-fn appendCodepoint(list: *std.array_list.Managed(u8), cp: u21) Error!void {
+fn appendDecodedBytes(
+    list: *std.array_list.Managed(u8),
+    bytes: []const u8,
+    decoded_limit: ?usize,
+) Error!void {
+    try checkDecodedLength(list.items.len, bytes.len, decoded_limit);
+    try list.appendSlice(bytes);
+}
+
+fn validateNamespaceBinding(prefix: []const u8, namespace_uri: []const u8) Error!void {
+    const is_xml_prefix = std.mem.eql(u8, prefix, "xml");
+    const is_xml_namespace = std.mem.eql(u8, namespace_uri, XML_NS);
+    if (is_xml_prefix != is_xml_namespace) return error.InvalidXml;
+}
+
+fn checkDecodedLength(
+    decoded_len: usize,
+    additional_len: usize,
+    decoded_limit: ?usize,
+) Error!void {
+    const limit = decoded_limit orelse return;
+    if (decoded_len > limit or additional_len > limit - decoded_len) {
+        return error.InvalidXml;
+    }
+}
+
+fn appendCodepoint(
+    list: *std.array_list.Managed(u8),
+    cp: u21,
+    decoded_limit: ?usize,
+) Error!void {
     if (!isValidXmlScalar(cp)) return error.InvalidXml;
 
     var buf: [4]u8 = undefined;
     const len = std.unicode.utf8Encode(cp, &buf) catch return error.InvalidXml;
-    try list.appendSlice(buf[0..len]);
+    try appendDecodedBytes(list, buf[0..len], decoded_limit);
 }
 
 fn isValidXmlScalar(cp: u21) bool {
@@ -692,6 +816,58 @@ fn consumeAll(xml: []const u8) Error!void {
     while (try walker.next()) |_| {}
 }
 
+fn nestedUnknownElements(
+    allocator: std.mem.Allocator,
+    depth: usize,
+    xml_base: ?[]const u8,
+) ![]u8 {
+    var xml = std.array_list.Managed(u8).init(allocator);
+    errdefer xml.deinit();
+
+    for (0..depth) |_| {
+        try xml.appendSlice("<unknown");
+        if (xml_base) |value| {
+            try xml.appendSlice(" xml:base=\"");
+            try xml.appendSlice(value);
+            try xml.append('"');
+        }
+        try xml.append('>');
+    }
+    for (0..depth) |_| {
+        try xml.appendSlice("</unknown>");
+    }
+    return xml.toOwnedSlice();
+}
+
+fn repeatedAttributeEntity(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    entity: []const u8,
+    count: usize,
+) ![]u8 {
+    var xml = std.array_list.Managed(u8).init(allocator);
+    errdefer xml.deinit();
+
+    try xml.appendSlice("<root ");
+    try xml.appendSlice(name);
+    try xml.appendSlice("=\"");
+    for (0..count) |_| {
+        try xml.appendSlice(entity);
+    }
+    try xml.appendSlice("\"/>");
+    return xml.toOwnedSlice();
+}
+
+fn xmlBaseAllocationFailureCase(allocator: std.mem.Allocator) !void {
+    var walker = Walker.init(
+        allocator,
+        "<root xml:base=\"https://example.test/repository/\"><unknown xml:base=\"nested&amp;path/\"/></root>",
+    );
+    defer walker.deinit();
+
+    while (try walker.next()) |_| {}
+}
+
 test "walker parses elements text CDATA comments entities and processing instructions" {
     const testing = std.testing;
     const xml =
@@ -768,5 +944,144 @@ test "walker rejects undefined namespace prefixes" {
     try std.testing.expectError(
         error.InvalidXml,
         consumeAll("<root xmlns=\"urn:def\"><x:child/></root>"),
+    );
+}
+
+test "walker enforces reserved XML namespace bindings" {
+    try std.testing.expectError(
+        error.InvalidXml,
+        consumeAll(
+            "<root xmlns:x=\"http://www.w3.org/XML/1998/namespace\"/>",
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidXml,
+        consumeAll("<root xmlns:xml=\"urn:illegal\"/>"),
+    );
+    try std.testing.expectError(
+        error.InvalidXml,
+        consumeAll("<root xmlns:xml=\"\"/>"),
+    );
+
+    try consumeAll(
+        "<root xmlns:xml=\"http://www.w3.org/XML/1998/namespace\" " ++
+            "xmlns:x=\"urn:extra\"><x:child xml:lang=\"en\"/></root>",
+    );
+}
+
+test "walker normalizes current-directory XML Bases to null" {
+    const xml =
+        \\<root xml:base="."><data xml:base="./"><package xml:base=""/></data></root>
+    ;
+    var walker = Walker.init(std.testing.allocator, xml);
+    defer walker.deinit();
+
+    try std.testing.expect((try nextEvent(&walker)).start.xml_base == null);
+    try std.testing.expect((try nextEvent(&walker)).start.xml_base == null);
+    try std.testing.expect((try nextEvent(&walker)).start.xml_base == null);
+    _ = try nextEvent(&walker);
+    _ = try nextEvent(&walker);
+    _ = try nextEvent(&walker);
+    try std.testing.expect((try walker.next()) == null);
+}
+
+test "walker bounds unknown nesting and effective XML Base growth" {
+    const too_deep = try nestedUnknownElements(
+        std.testing.allocator,
+        max_nesting_depth + 1,
+        null,
+    );
+    defer std.testing.allocator.free(too_deep);
+    try std.testing.expectError(error.InvalidXml, consumeAll(too_deep));
+
+    var growth_segment: [max_xml_base_bytes / 2]u8 = undefined;
+    @memset(&growth_segment, 'x');
+    growth_segment[growth_segment.len - 1] = '/';
+    const growing_bases = try nestedUnknownElements(
+        std.testing.allocator,
+        3,
+        &growth_segment,
+    );
+    defer std.testing.allocator.free(growing_bases);
+    try std.testing.expectError(
+        error.InvalidXml,
+        consumeAll(growing_bases),
+    );
+}
+
+test "walker bounds entity-decoded XML Base attributes during parsing" {
+    const at_limit = try repeatedAttributeEntity(
+        std.testing.allocator,
+        "xml:base",
+        "&amp;",
+        max_xml_base_bytes,
+    );
+    defer std.testing.allocator.free(at_limit);
+    try consumeAll(at_limit);
+
+    const repeated_amp = try repeatedAttributeEntity(
+        std.testing.allocator,
+        "xml:base",
+        "&amp;",
+        max_xml_base_bytes + 1,
+    );
+    defer std.testing.allocator.free(repeated_amp);
+    try std.testing.expectError(
+        error.InvalidXml,
+        consumeAll(repeated_amp),
+    );
+
+    const repeated_numeric = try repeatedAttributeEntity(
+        std.testing.allocator,
+        "xml:base",
+        "&#x1F600;",
+        max_xml_base_bytes / 4 + 1,
+    );
+    defer std.testing.allocator.free(repeated_numeric);
+    try std.testing.expectError(
+        error.InvalidXml,
+        consumeAll(repeated_numeric),
+    );
+}
+
+test "walker bounds namespace declarations and rejects XML Base aliases" {
+    var xml = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer xml.deinit();
+    try xml.appendSlice(
+        "<root xmlns:x=\"" ++ XML_NS ++ "\" x:base=\"",
+    );
+    try xml.appendNTimes('x', max_xml_base_bytes + 1);
+    try xml.appendSlice("\"/>");
+    try std.testing.expectError(error.InvalidXml, consumeAll(xml.items));
+
+    const repeated_namespace = try repeatedAttributeEntity(
+        std.testing.allocator,
+        "xmlns:x",
+        "&amp;",
+        max_xml_base_bytes + 1,
+    );
+    defer std.testing.allocator.free(repeated_namespace);
+    try std.testing.expectError(
+        error.InvalidXml,
+        consumeAll(repeated_namespace),
+    );
+}
+
+test "walker does not apply the XML Base ceiling to other attributes" {
+    const unrelated = try repeatedAttributeEntity(
+        std.testing.allocator,
+        "metadata",
+        "&amp;",
+        max_xml_base_bytes + 1,
+    );
+    defer std.testing.allocator.free(unrelated);
+    try consumeAll(unrelated);
+}
+
+test "walker releases temporary XML Base resolutions on allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        xmlBaseAllocationFailureCase,
+        .{},
     );
 }

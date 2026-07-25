@@ -330,6 +330,15 @@ fn compareInstalled(
     return std.math.order(left.rpmdb_hnum, right.rpmdb_hnum);
 }
 
+/// Compare authoritative available-package keys. This is shared by capture
+/// code so absent epochs are normalized only at the same solver boundary.
+pub fn compareAvailableKeys(
+    left: AvailableKey,
+    right: AvailableKey,
+) std.math.Order {
+    return compareAvailable(left, right);
+}
+
 fn compareAvailable(
     left: AvailableKey,
     right: AvailableKey,

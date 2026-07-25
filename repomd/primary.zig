@@ -145,7 +145,6 @@ const PackageBuilder = struct {
         }
 
         const checksum = self.checksum.?;
-        if (!checksum.is_pkgid) return error.InvalidPrimary;
 
         var package = model.Package{
             .pkg_id = checksum.value,
@@ -319,7 +318,7 @@ const Parser = struct {
                     } else if (std.mem.eql(u8, element.name.local, "size")) {
                         try self.parseSize(element.attrs);
                     } else if (std.mem.eql(u8, element.name.local, "location")) {
-                        try self.parseLocation(element.attrs);
+                        try self.parseLocation(element);
                     } else if (std.mem.eql(u8, element.name.local, "format")) {
                         frame.kind = .format;
                     }
@@ -507,13 +506,15 @@ const Parser = struct {
         builder.saw_size = true;
     }
 
-    fn parseLocation(self: *Parser, attrs: []const sax.Attribute) Error!void {
+    fn parseLocation(self: *Parser, element: sax.StartElement) Error!void {
         const builder = try self.currentPackage();
         if (builder.saw_location) return error.InvalidPrimary;
 
-        const href = lookupAttr(attrs, "href") orelse return error.InvalidPrimary;
+        const href = lookupAttr(element.attrs, "href") orelse
+            return error.InvalidPrimary;
+        if (href.len == 0) return error.InvalidPrimary;
         builder.location_href = try model.dup(self.allocator, href);
-        if (lookupNsAttr(attrs, sax.XML_NS, "base")) |xml_base| {
+        if (element.xml_base) |xml_base| {
             builder.location_xml_base = try model.dup(self.allocator, xml_base);
         }
 
@@ -618,19 +619,6 @@ fn lookupAttr(attrs: []const sax.Attribute, local: []const u8) ?[]const u8 {
         index -= 1;
         const attr = attrs[index];
         if (attr.prefix.len == 0 and std.mem.eql(u8, attr.local, local)) {
-            return attr.value;
-        }
-    }
-    return null;
-}
-
-fn lookupNsAttr(attrs: []const sax.Attribute, ns_uri: []const u8, local: []const u8) ?[]const u8 {
-    var index = attrs.len;
-    while (index > 0) {
-        index -= 1;
-        const attr = attrs[index];
-        const attr_ns = attr.ns_uri orelse continue;
-        if (std.mem.eql(u8, attr_ns, ns_uri) and std.mem.eql(u8, attr.local, local)) {
             return attr.value;
         }
     }
@@ -871,8 +859,6 @@ test "rejects missing required primary fields" {
         ,
         \\<metadata xmlns="http://linux.duke.edu/metadata/common"><package type="rpm"><name>pkg</name><arch>aarch64</arch><version epoch="0" ver="1.0" rel="1"/><checksum type="sha256" pkgid="YES">deadbeef</checksum></package></metadata>
         ,
-        \\<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm"><package type="rpm"><name>pkg</name><arch>aarch64</arch><version epoch="0" ver="1.0" rel="1"/><checksum type="sha256" pkgid="NO">deadbeef</checksum><location href="pkg.rpm"/></package></metadata>
-        ,
     };
 
     for (cases) |xml| {
@@ -880,6 +866,91 @@ test "rejects missing required primary fields" {
         defer arena_state.deinit();
         try testing.expectError(error.InvalidPrimary, parse(arena_state.allocator(), xml));
     }
+}
+
+test "retains primary packages whose checksum is not the package id" {
+    const xml =
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common"><package type="rpm"><name>pkg</name><arch>aarch64</arch><version ver="1.0" rel="1"/><checksum type="sha256" pkgid="NO">header-checksum</checksum><location href="pkg.rpm"/></package></metadata>
+    ;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const parsed = try parse(arena_state.allocator(), xml);
+    try std.testing.expectEqual(@as(usize, 1), parsed.packages.len);
+    try std.testing.expect(!parsed.packages[0].checksum.is_pkgid);
+    try std.testing.expectEqualStrings(
+        "header-checksum",
+        parsed.packages[0].pkg_id,
+    );
+}
+
+test "inherits and resolves XML Base across metadata package and location frames" {
+    const xml =
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common" xml:base="https://example.test/repo/">
+        \\  <package type="rpm" xml:base="../packages/">
+        \\    <name>pkg</name><arch>x86_64</arch><version ver="1" rel="1"/>
+        \\    <checksum type="sha256" pkgid="NO">header</checksum>
+        \\    <location xml:base="nested/" href="pkg.rpm"/>
+        \\  </package>
+        \\</metadata>
+    ;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const parsed = try parse(arena_state.allocator(), xml);
+    const location = parsed.packages[0].location;
+    try std.testing.expectEqualStrings(
+        "https://example.test/packages/nested/",
+        location.xml_base.?,
+    );
+    const resolved = try location.resolve(arena_state.allocator());
+    try std.testing.expectEqualStrings(
+        "https://example.test/packages/nested/pkg.rpm",
+        resolved,
+    );
+
+    const relative_xml =
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common" xml:base="../repo/">
+        \\  <package type="rpm" xml:base="packages/">
+        \\    <name>relative</name><arch>noarch</arch><version ver="1" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">checksum</checksum>
+        \\    <location href="relative.rpm"/>
+        \\  </package>
+        \\</metadata>
+    ;
+    const relative = try parse(arena_state.allocator(), relative_xml);
+    try std.testing.expectEqualStrings(
+        "../repo/packages/",
+        relative.packages[0].location.xml_base.?,
+    );
+    const relative_location = try relative.packages[0].location.resolve(
+        arena_state.allocator(),
+    );
+    try std.testing.expectEqualStrings(
+        "../repo/packages/relative.rpm",
+        relative_location,
+    );
+}
+
+test "normalizes current-directory XML Bases before retaining locations" {
+    const xml =
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common" xml:base=".">
+        \\  <package type="rpm" xml:base="./">
+        \\    <name>current-dir</name><arch>noarch</arch><version ver="1" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">checksum</checksum>
+        \\    <location xml:base="" href="current-dir.rpm"/>
+        \\  </package>
+        \\</metadata>
+    ;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const parsed = try parse(arena_state.allocator(), xml);
+    try std.testing.expect(parsed.packages[0].location.xml_base == null);
+    try std.testing.expectEqualStrings(
+        "current-dir.rpm",
+        parsed.packages[0].location.href,
+    );
 }
 
 test "rejects malformed primary xml and invalid dependency flags" {
@@ -894,8 +965,11 @@ test "rejects malformed primary xml and invalid dependency flags" {
     const bad_count =
         \\<metadata xmlns="http://linux.duke.edu/metadata/common" packages="2"><package type="rpm"><name>pkg</name><arch>aarch64</arch><version ver="1.0" rel="1"/><checksum type="sha256" pkgid="YES">abc</checksum><location href="pkg.rpm"/></package></metadata>
     ;
+    const empty_location =
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common"><package type="rpm"><name>pkg</name><arch>aarch64</arch><version ver="1.0" rel="1"/><checksum type="sha256" pkgid="YES">abc</checksum><location href=""/></package></metadata>
+    ;
 
-    for ([_][]const u8{ malformed, bad_flags, bad_count }) |xml| {
+    for ([_][]const u8{ malformed, bad_flags, bad_count, empty_location }) |xml| {
         var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
         defer arena_state.deinit();
         try testing.expectError(error.InvalidPrimary, parse(arena_state.allocator(), xml));
