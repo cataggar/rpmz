@@ -2,9 +2,11 @@ const std = @import("std");
 const solver_result_abi = @import("solver_result_abi");
 const solver_shadow_abi = @import("solver_shadow_abi");
 const solver_live_abi = @import("solver_live_abi");
+const capture_abi = @import("transaction_plan_capture_abi");
 const c = @cImport({
     @cInclude("tdnf.h");
     @cInclude("tdnfrepomd.h");
+    @cInclude("transaction_plan_capture_abi.inc");
 });
 
 fn expectSameLayout(
@@ -19,6 +21,133 @@ fn expectSameLayout(
             @offsetOf(c_type, field),
             @offsetOf(zig_type, field),
         );
+    }
+}
+
+fn assertSameCaptureLayout(comptime zig_type: type, comptime c_type: type) void {
+    if (@sizeOf(zig_type) != @sizeOf(c_type)) {
+        @compileError("C ABI size mismatch for " ++ @typeName(zig_type));
+    }
+    if (@alignOf(zig_type) != @alignOf(c_type)) {
+        @compileError("C ABI alignment mismatch for " ++ @typeName(zig_type));
+    }
+    const zig_fields = @typeInfo(zig_type).@"struct".fields;
+    const c_fields = @typeInfo(c_type).@"struct".fields;
+    if (zig_fields.len != c_fields.len) {
+        @compileError("C ABI field-count mismatch for " ++ @typeName(zig_type));
+    }
+    inline for (zig_fields) |field| {
+        if (!@hasField(c_type, field.name)) {
+            @compileError("C ABI missing field " ++ field.name);
+        }
+        if (@offsetOf(zig_type, field.name) != @offsetOf(c_type, field.name)) {
+            @compileError("C ABI offset mismatch for " ++ field.name);
+        }
+        const c_field_type = @TypeOf(@field(
+            @as(c_type, undefined),
+            field.name,
+        ));
+        if (@sizeOf(field.type) != @sizeOf(c_field_type) or
+            @alignOf(field.type) != @alignOf(c_field_type))
+        {
+            @compileError("C ABI field layout mismatch for " ++ field.name);
+        }
+    }
+}
+
+comptime {
+    assertSameCaptureLayout(capture_abi.Bytes, c.TDNF_TRANSACTION_PLAN_CAPTURE_BYTES);
+    assertSameCaptureLayout(capture_abi.Checksum, c.TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM);
+    assertSameCaptureLayout(capture_abi.Location, c.TDNF_TRANSACTION_PLAN_CAPTURE_LOCATION);
+    assertSameCaptureLayout(capture_abi.Capability, c.TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY);
+    assertSameCaptureLayout(capture_abi.MinVersion, c.TDNF_TRANSACTION_PLAN_CAPTURE_MIN_VERSION);
+    assertSameCaptureLayout(capture_abi.Policy, c.TDNF_TRANSACTION_PLAN_CAPTURE_POLICY);
+    assertSameCaptureLayout(capture_abi.Rpmdb, c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB);
+    assertSameCaptureLayout(capture_abi.Environment, c.TDNF_TRANSACTION_PLAN_CAPTURE_ENVIRONMENT);
+    assertSameCaptureLayout(capture_abi.MetadataRecord, c.TDNF_TRANSACTION_PLAN_CAPTURE_METADATA_RECORD);
+    assertSameCaptureLayout(capture_abi.Repomd, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOMD);
+    assertSameCaptureLayout(capture_abi.Snapshot, c.TDNF_TRANSACTION_PLAN_CAPTURE_SNAPSHOT);
+    assertSameCaptureLayout(capture_abi.Repository, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY);
+    assertSameCaptureLayout(capture_abi.Request, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST);
+    assertSameCaptureLayout(capture_abi.Job, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB);
+    assertSameCaptureLayout(capture_abi.PackageIdentity, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_IDENTITY);
+    assertSameCaptureLayout(capture_abi.PackageSource, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_SOURCE);
+    assertSameCaptureLayout(capture_abi.Package, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE);
+    assertSameCaptureLayout(capture_abi.Action, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION);
+    assertSameCaptureLayout(capture_abi.Problem, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM);
+    assertSameCaptureLayout(capture_abi.Capture, c.TDNF_TRANSACTION_PLAN_CAPTURE);
+}
+
+test "private transaction capture constants match C declarations" {
+    inline for (.{
+        .{ capture_abi.abi_version, c.TDNF_TRANSACTION_PLAN_CAPTURE_ABI_VERSION },
+        .{ capture_abi.request_kind.distro_sync, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_DISTRO_SYNC },
+        .{ capture_abi.request_kind.downgrade, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_DOWNGRADE },
+        .{ capture_abi.request_kind.erase, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_ERASE },
+        .{ capture_abi.request_kind.install, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_INSTALL },
+        .{ capture_abi.request_kind.lock, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_LOCK },
+        .{ capture_abi.request_kind.reinstall, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_REINSTALL },
+        .{ capture_abi.request_kind.update, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_UPDATE },
+        .{ capture_abi.request_kind.update_all, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_UPDATE_ALL },
+        .{ capture_abi.job_action.install, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_INSTALL },
+        .{ capture_abi.job_action.erase, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ERASE },
+        .{ capture_abi.job_action.update, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_UPDATE },
+        .{ capture_abi.job_action.downgrade, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DOWNGRADE },
+        .{ capture_abi.job_action.dist_sync, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DIST_SYNC },
+        .{ capture_abi.job_action.reinstall, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_REINSTALL },
+        .{ capture_abi.job_action.lock, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_LOCK },
+        .{ capture_abi.job_action.multiversion, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION },
+        .{ capture_abi.job_action.user_installed, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED },
+        .{ capture_abi.job_action.allow_uninstall, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ALLOW_UNINSTALL },
+        .{ capture_abi.request_reason.user, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER },
+        .{ capture_abi.request_reason.dependency, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_DEPENDENCY },
+        .{ capture_abi.request_reason.weak_dependency, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_WEAK_DEPENDENCY },
+        .{ capture_abi.request_reason.cleanup, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_CLEANUP },
+        .{ capture_abi.request_reason.installonly_limit, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_INSTALLONLY_LIMIT },
+        .{ capture_abi.request_reason.policy, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY },
+        .{ capture_abi.package_state.available, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_AVAILABLE },
+        .{ capture_abi.package_state.installed, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_INSTALLED },
+        .{ capture_abi.action_kind.downgrade, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_DOWNGRADE },
+        .{ capture_abi.action_kind.erase, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_ERASE },
+        .{ capture_abi.action_kind.install, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_INSTALL },
+        .{ capture_abi.action_kind.obsolete, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_OBSOLETE },
+        .{ capture_abi.action_kind.reinstall, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REINSTALL },
+        .{ capture_abi.action_kind.upgrade, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_UPGRADE },
+        .{ capture_abi.action_reason.cleanup, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_CLEANUP },
+        .{ capture_abi.action_reason.dependency, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_DEPENDENCY },
+        .{ capture_abi.action_reason.installonly_limit, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_INSTALLONLY_LIMIT },
+        .{ capture_abi.action_reason.obsoletes, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_OBSOLETES },
+        .{ capture_abi.action_reason.policy, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_POLICY },
+        .{ capture_abi.action_reason.user, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_USER },
+        .{ capture_abi.action_reason.weak_dependency, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_WEAK_DEPENDENCY },
+        .{ capture_abi.problem_kind.conflict, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_CONFLICT },
+        .{ capture_abi.problem_kind.installonly_limit, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_INSTALLONLY_LIMIT },
+        .{ capture_abi.problem_kind.no_candidate, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_NO_CANDIDATE },
+        .{ capture_abi.problem_kind.not_installable, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_NOT_INSTALLABLE },
+        .{ capture_abi.problem_kind.obsoletes, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_OBSOLETES },
+        .{ capture_abi.problem_kind.protected_package, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE },
+        .{ capture_abi.problem_kind.unsatisfied_requirement, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_UNSATISFIED_REQUIREMENT },
+        .{ capture_abi.compare_op.eq, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_EQ },
+        .{ capture_abi.compare_op.ge, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_GE },
+        .{ capture_abi.compare_op.gt, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_GT },
+        .{ capture_abi.compare_op.le, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_LE },
+        .{ capture_abi.compare_op.lt, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_LT },
+        .{ capture_abi.compare_op.none, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_NONE },
+        .{ capture_abi.resolution_status.problems, c.TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_PROBLEMS },
+        .{ capture_abi.resolution_status.resolved, c.TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_RESOLVED },
+        .{ capture_abi.resolution_status.resolved_with_skips, c.TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_RESOLVED_WITH_SKIPS },
+        .{ capture_abi.rpmdb_backend.bdb, c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_BDB },
+        .{ capture_abi.rpmdb_backend.ndb, c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_NDB },
+        .{ capture_abi.rpmdb_backend.sqlite, c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_SQLITE },
+        .{ capture_abi.repository_kind.available, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_AVAILABLE },
+        .{ capture_abi.repository_kind.installed, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_INSTALLED },
+        .{ capture_abi.repository_kind.command_line, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_COMMAND_LINE },
+        .{ capture_abi.selection_kind.all, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_ALL },
+        .{ capture_abi.selection_kind.package, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_PACKAGE },
+        .{ capture_abi.selection_kind.name, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_NAME },
+        .{ capture_abi.selection_kind.capability, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_CAPABILITY },
+    }) |values| {
+        try std.testing.expectEqual(values[1], values[0]);
     }
 }
 
