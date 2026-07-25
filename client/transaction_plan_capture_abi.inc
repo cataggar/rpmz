@@ -2,14 +2,14 @@
  * Private borrowed-value ABI for authoritative transaction-plan capture.
  *
  * Every pointer is borrowed and remains valid only for the duration of
- * TDNFTransactionPlanCaptureCreate().  This header is internal to libtdnf and
+ * TDNFTransactionPlanCaptureCreate().  This include is internal to libtdnf and
  * is deliberately not installed.  A span/array pointer is NULL exactly when
  * its length/count is zero.  Presence and boolean fields contain only 0 or 1.
  * Every reference is a zero-based index into the corresponding top-level
  * array.  An absent optional has a zero/empty payload.
  */
-#ifndef _TDNF_CLIENT_TRANSACTION_PLAN_CAPTURE_H_
-#define _TDNF_CLIENT_TRANSACTION_PLAN_CAPTURE_H_
+#ifndef _TDNF_CLIENT_TRANSACTION_PLAN_CAPTURE_ABI_INC_
+#define _TDNF_CLIENT_TRANSACTION_PLAN_CAPTURE_ABI_INC_
 
 #include <stddef.h>
 #include <stdint.h>
@@ -367,4 +367,4 @@ TDNFTransactionPlanCaptureDestroy(
 }
 #endif
 
-#endif /* _TDNF_CLIENT_TRANSACTION_PLAN_CAPTURE_H_ */
+#endif /* _TDNF_CLIENT_TRANSACTION_PLAN_CAPTURE_ABI_INC_ */

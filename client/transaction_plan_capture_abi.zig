@@ -1,110 +1,104 @@
-const std = @import("std");
-
-const c = @cImport({
-    @cInclude("transaction_plan_capture.h");
-});
-
-pub const abi_version: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ABI_VERSION;
+pub const abi_version: u32 = 1;
 
 pub const request_kind = struct {
-    pub const distro_sync: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_DISTRO_SYNC;
-    pub const downgrade: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_DOWNGRADE;
-    pub const erase: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_ERASE;
-    pub const install: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_INSTALL;
-    pub const lock: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_LOCK;
-    pub const reinstall: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_REINSTALL;
-    pub const update: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_UPDATE;
-    pub const update_all: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_UPDATE_ALL;
+    pub const distro_sync: u32 = 0;
+    pub const downgrade: u32 = 1;
+    pub const erase: u32 = 2;
+    pub const install: u32 = 3;
+    pub const lock: u32 = 4;
+    pub const reinstall: u32 = 5;
+    pub const update: u32 = 6;
+    pub const update_all: u32 = 7;
 };
 
 pub const job_action = struct {
-    pub const install: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_INSTALL;
-    pub const erase: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ERASE;
-    pub const update: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_UPDATE;
-    pub const downgrade: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DOWNGRADE;
-    pub const dist_sync: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DIST_SYNC;
-    pub const reinstall: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_REINSTALL;
-    pub const lock: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_LOCK;
-    pub const multiversion: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION;
-    pub const user_installed: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED;
-    pub const allow_uninstall: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ALLOW_UNINSTALL;
+    pub const install: u32 = 0;
+    pub const erase: u32 = 1;
+    pub const update: u32 = 2;
+    pub const downgrade: u32 = 3;
+    pub const dist_sync: u32 = 4;
+    pub const reinstall: u32 = 5;
+    pub const lock: u32 = 6;
+    pub const multiversion: u32 = 7;
+    pub const user_installed: u32 = 8;
+    pub const allow_uninstall: u32 = 9;
 };
 
 pub const request_reason = struct {
-    pub const user: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER;
-    pub const dependency: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_DEPENDENCY;
-    pub const weak_dependency: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_WEAK_DEPENDENCY;
-    pub const cleanup: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_CLEANUP;
-    pub const installonly_limit: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_INSTALLONLY_LIMIT;
-    pub const policy: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY;
+    pub const user: u32 = 0;
+    pub const dependency: u32 = 1;
+    pub const weak_dependency: u32 = 2;
+    pub const cleanup: u32 = 3;
+    pub const installonly_limit: u32 = 4;
+    pub const policy: u32 = 5;
 };
 
 pub const package_state = struct {
-    pub const available: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_AVAILABLE;
-    pub const installed: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_INSTALLED;
+    pub const available: u32 = 0;
+    pub const installed: u32 = 1;
 };
 
 pub const action_kind = struct {
-    pub const downgrade: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_DOWNGRADE;
-    pub const erase: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_ERASE;
-    pub const install: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_INSTALL;
-    pub const obsolete: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_OBSOLETE;
-    pub const reinstall: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REINSTALL;
-    pub const upgrade: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_UPGRADE;
+    pub const downgrade: u32 = 0;
+    pub const erase: u32 = 1;
+    pub const install: u32 = 2;
+    pub const obsolete: u32 = 3;
+    pub const reinstall: u32 = 4;
+    pub const upgrade: u32 = 5;
 };
 
 pub const action_reason = struct {
-    pub const cleanup: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_CLEANUP;
-    pub const dependency: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_DEPENDENCY;
-    pub const installonly_limit: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_INSTALLONLY_LIMIT;
-    pub const obsoletes: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_OBSOLETES;
-    pub const policy: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_POLICY;
-    pub const user: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_USER;
-    pub const weak_dependency: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_WEAK_DEPENDENCY;
+    pub const cleanup: u32 = 0;
+    pub const dependency: u32 = 1;
+    pub const installonly_limit: u32 = 2;
+    pub const obsoletes: u32 = 3;
+    pub const policy: u32 = 4;
+    pub const user: u32 = 5;
+    pub const weak_dependency: u32 = 6;
 };
 
 pub const problem_kind = struct {
-    pub const conflict: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_CONFLICT;
-    pub const installonly_limit: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_INSTALLONLY_LIMIT;
-    pub const no_candidate: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_NO_CANDIDATE;
-    pub const not_installable: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_NOT_INSTALLABLE;
-    pub const obsoletes: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_OBSOLETES;
-    pub const protected_package: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE;
-    pub const unsatisfied_requirement: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_UNSATISFIED_REQUIREMENT;
+    pub const conflict: u32 = 0;
+    pub const installonly_limit: u32 = 1;
+    pub const no_candidate: u32 = 2;
+    pub const not_installable: u32 = 3;
+    pub const obsoletes: u32 = 4;
+    pub const protected_package: u32 = 5;
+    pub const unsatisfied_requirement: u32 = 6;
 };
 
 pub const compare_op = struct {
-    pub const eq: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_EQ;
-    pub const ge: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_GE;
-    pub const gt: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_GT;
-    pub const le: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_LE;
-    pub const lt: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_LT;
-    pub const none: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_NONE;
+    pub const eq: u32 = 0;
+    pub const ge: u32 = 1;
+    pub const gt: u32 = 2;
+    pub const le: u32 = 3;
+    pub const lt: u32 = 4;
+    pub const none: u32 = 5;
 };
 
 pub const resolution_status = struct {
-    pub const problems: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_PROBLEMS;
-    pub const resolved: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_RESOLVED;
-    pub const resolved_with_skips: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_RESOLVED_WITH_SKIPS;
+    pub const problems: u32 = 0;
+    pub const resolved: u32 = 1;
+    pub const resolved_with_skips: u32 = 2;
 };
 
 pub const rpmdb_backend = struct {
-    pub const bdb: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_BDB;
-    pub const ndb: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_NDB;
-    pub const sqlite: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_SQLITE;
+    pub const bdb: u32 = 0;
+    pub const ndb: u32 = 1;
+    pub const sqlite: u32 = 2;
 };
 
 pub const repository_kind = struct {
-    pub const available: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_AVAILABLE;
-    pub const installed: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_INSTALLED;
-    pub const command_line: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_COMMAND_LINE;
+    pub const available: u32 = 0;
+    pub const installed: u32 = 1;
+    pub const command_line: u32 = 2;
 };
 
 pub const selection_kind = struct {
-    pub const all: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_ALL;
-    pub const package: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_PACKAGE;
-    pub const name: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_NAME;
-    pub const capability: u32 = c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_CAPABILITY;
+    pub const all: u32 = 0;
+    pub const package: u32 = 1;
+    pub const name: u32 = 2;
+    pub const capability: u32 = 3;
 };
 
 pub const Bytes = extern struct {
@@ -330,64 +324,3 @@ pub const Capture = extern struct {
     hidden_package_ref_count: u32 = 0,
     problem_count: u32 = 0,
 };
-
-fn assertSameLayout(comptime zig_type: type, comptime c_type: type) void {
-    if (@sizeOf(zig_type) != @sizeOf(c_type)) {
-        @compileError("C ABI size mismatch for " ++ @typeName(zig_type));
-    }
-    if (@alignOf(zig_type) != @alignOf(c_type)) {
-        @compileError("C ABI alignment mismatch for " ++ @typeName(zig_type));
-    }
-    const zig_fields = @typeInfo(zig_type).@"struct".fields;
-    const c_fields = @typeInfo(c_type).@"struct".fields;
-    if (zig_fields.len != c_fields.len) {
-        @compileError("C ABI field-count mismatch for " ++ @typeName(zig_type));
-    }
-    inline for (zig_fields) |field| {
-        if (!@hasField(c_type, field.name)) {
-            @compileError("C ABI missing field " ++ field.name);
-        }
-        if (@offsetOf(zig_type, field.name) != @offsetOf(c_type, field.name)) {
-            @compileError("C ABI offset mismatch for " ++ field.name);
-        }
-        const c_field_type = @TypeOf(@field(
-            @as(c_type, undefined),
-            field.name,
-        ));
-        if (@sizeOf(field.type) != @sizeOf(c_field_type) or
-            @alignOf(field.type) != @alignOf(c_field_type))
-        {
-            @compileError("C ABI field layout mismatch for " ++ field.name);
-        }
-    }
-}
-
-comptime {
-    assertSameLayout(Bytes, c.TDNF_TRANSACTION_PLAN_CAPTURE_BYTES);
-    assertSameLayout(Checksum, c.TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM);
-    assertSameLayout(Location, c.TDNF_TRANSACTION_PLAN_CAPTURE_LOCATION);
-    assertSameLayout(Capability, c.TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY);
-    assertSameLayout(MinVersion, c.TDNF_TRANSACTION_PLAN_CAPTURE_MIN_VERSION);
-    assertSameLayout(Policy, c.TDNF_TRANSACTION_PLAN_CAPTURE_POLICY);
-    assertSameLayout(Rpmdb, c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB);
-    assertSameLayout(Environment, c.TDNF_TRANSACTION_PLAN_CAPTURE_ENVIRONMENT);
-    assertSameLayout(MetadataRecord, c.TDNF_TRANSACTION_PLAN_CAPTURE_METADATA_RECORD);
-    assertSameLayout(Repomd, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOMD);
-    assertSameLayout(Snapshot, c.TDNF_TRANSACTION_PLAN_CAPTURE_SNAPSHOT);
-    assertSameLayout(Repository, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY);
-    assertSameLayout(Request, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST);
-    assertSameLayout(Job, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB);
-    assertSameLayout(PackageIdentity, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_IDENTITY);
-    assertSameLayout(PackageSource, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_SOURCE);
-    assertSameLayout(Package, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE);
-    assertSameLayout(Action, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION);
-    assertSameLayout(Problem, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM);
-    assertSameLayout(Capture, c.TDNF_TRANSACTION_PLAN_CAPTURE);
-}
-
-test "private capture header compiles with fixed domains" {
-    try std.testing.expectEqual(@as(u32, 1), abi_version);
-    try std.testing.expectEqual(@as(u32, 3), selection_kind.capability);
-    try std.testing.expectEqual(@as(u32, 2), repository_kind.command_line);
-    try std.testing.expectEqual(@as(u32, 6), problem_kind.unsatisfied_requirement);
-}

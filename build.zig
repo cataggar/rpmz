@@ -301,21 +301,11 @@ pub fn build(b: *Build) void {
         .root_source_file = b.path("client/transaction_plan_capture_abi.zig"),
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
     });
-    transaction_plan_capture_abi_mod.addIncludePath(b.path("client"));
     const transaction_plan_capture_test_step = b.step(
         "transaction-plan-capture-test",
         "Run private transaction plan capture ABI and adapter tests",
     );
-    {
-        const tests = b.addTest(.{
-            .root_module = transaction_plan_capture_abi_mod,
-        });
-        const run_tests = b.addRunArtifact(tests);
-        transaction_plan_capture_test_step.dependOn(&run_tests.step);
-        zig_test_step.dependOn(&run_tests.step);
-    }
     const transaction_plan_capture_test_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan_capture.zig"),
         .target = target,
@@ -364,10 +354,16 @@ pub fn build(b: *Build) void {
     repomd_abi_mod.addImport("solver_result_abi", solver_result_abi_mod);
     repomd_abi_mod.addImport("solver_shadow_abi", solver_shadow_abi_mod);
     repomd_abi_mod.addImport("solver_live_abi", solver_live_abi_mod);
+    repomd_abi_mod.addImport(
+        "transaction_plan_capture_abi",
+        transaction_plan_capture_abi_mod,
+    );
     repomd_abi_mod.addIncludePath(b.path("include"));
+    repomd_abi_mod.addIncludePath(b.path("client"));
     {
         const tests = b.addTest(.{ .root_module = repomd_abi_mod });
         const run_tests = b.addRunArtifact(tests);
+        transaction_plan_capture_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
     }
 
