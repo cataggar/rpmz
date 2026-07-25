@@ -359,6 +359,9 @@ typedef struct
 typedef struct TDNF_TRANSACTION_PLAN_CAPTURE_OWNER
     TDNF_TRANSACTION_PLAN_CAPTURE_OWNER;
 
+typedef struct TDNF_TRANSACTION_PLAN_LIBSOLV_CAPTURE_OWNER
+    TDNF_TRANSACTION_PLAN_LIBSOLV_CAPTURE_OWNER;
+
 /*
  * Owned per-resolve provenance.  Package selections retain libsolv Id values
  * until extraction supplies the corresponding capture package references.
@@ -443,6 +446,28 @@ TDNFTransactionPlanCaptureCreate(
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
 TDNFTransactionPlanCaptureDestroy(
     TDNF_TRANSACTION_PLAN_CAPTURE_OWNER *owner
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
+TDNFTransactionPlanLibsolvCaptureCreate(
+    void *pool,
+    void *solver,
+    void *transaction,
+    const void *jobs,
+    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW *trace,
+    int solve_status,
+    uint32_t problem_count,
+    uint32_t problems_accepted,
+    uint32_t unresolved_count,
+    const int32_t *installonly_erases,
+    uint32_t installonly_erase_count,
+    const TDNF_TRANSACTION_PLAN_CAPTURE **facts,
+    TDNF_TRANSACTION_PLAN_LIBSOLV_CAPTURE_OWNER **owner
+    );
+
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
+TDNFTransactionPlanLibsolvCaptureDestroy(
+    TDNF_TRANSACTION_PLAN_LIBSOLV_CAPTURE_OWNER *owner
     );
 
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN TDNF_TRANSACTION_PLAN_REQUEST_TRACE *

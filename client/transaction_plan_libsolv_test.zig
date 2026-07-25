@@ -188,6 +188,32 @@ const Fixture = struct {
         }
     }
 
+    fn addProvide(
+        self: *Fixture,
+        package: c.Id,
+        name: [:0]const u8,
+        evr: [:0]const u8,
+    ) !c.Id {
+        const raw = c.pool_id2solvable(self.pool, package);
+        if (raw == null) return error.TestUnexpectedResult;
+        const solvable: *c.Solvable = @ptrCast(raw);
+        const repository = solvableRepository(solvable);
+        const relation = c.pool_rel2id(
+            self.pool,
+            c.pool_str2id(self.pool, name, 1),
+            c.pool_str2id(self.pool, evr, 1),
+            c.REL_EQ,
+            1,
+        );
+        solvable.provides = c.repo_addid_dep(
+            repository,
+            solvable.provides,
+            relation,
+            0,
+        );
+        return relation;
+    }
+
     fn finish(self: *Fixture) void {
         for (self.repositories[0..self.repository_count]) |raw| {
             c.repo_internalize(raw.?);
@@ -283,6 +309,20 @@ fn packageByName(
         {
             return .{ .ref = @intCast(index), .package = package };
         }
+    }
+    return null;
+}
+
+fn repositoryById(
+    facts: *const abi.Capture,
+    id: []const u8,
+) ?*const abi.Repository {
+    const repositories = if (facts.repository_count == 0)
+        return null
+    else
+        facts.repositories.?[0..facts.repository_count];
+    for (repositories) |*repository| {
+        if (std.mem.eql(u8, bytes(repository.id), id)) return repository;
     }
     return null;
 }
@@ -469,11 +509,222 @@ test "install capture owns jobs dependencies selected providers hidden metadata 
     _ = dependency;
 }
 
+test "package and capability EVRs recognize only complete decimal epochs" {
+    {
+        const vectors = [_]struct {
+            name: [:0]const u8,
+            evr: [:0]const u8,
+            epoch: ?u32,
+            version: []const u8,
+            release: []const u8,
+        }{
+            .{ .name = "pkg-decimal", .evr = "1:2-3", .epoch = 1, .version = "2", .release = "3" },
+            .{ .name = "pkg-leading-zero", .evr = "01:2:3-4", .epoch = 1, .version = "2:3", .release = "4" },
+            .{ .name = "pkg-zero", .evr = "0:2-3", .epoch = 0, .version = "2", .release = "3" },
+            .{ .name = "pkg-empty-prefix", .evr = ":2-3", .epoch = null, .version = ":2", .release = "3" },
+            .{ .name = "pkg-alpha-prefix", .evr = "x:2-3", .epoch = null, .version = "x:2", .release = "3" },
+            .{ .name = "pkg-mixed-prefix", .evr = "1x:2-3", .epoch = null, .version = "1x:2", .release = "3" },
+            .{ .name = "pkg-release-colon", .evr = "2-3:4", .epoch = null, .version = "2", .release = "3:4" },
+        };
+
+        var fixture = try Fixture.init();
+        defer fixture.deinit();
+        const available = try fixture.addRepository("base", false);
+        var package_ids: [vectors.len]c.Id = undefined;
+        for (vectors, &package_ids) |vector, *package_id| {
+            package_id.* = try fixture.addPackage(available, .{
+                .name = vector.name,
+                .evr = vector.evr,
+            });
+        }
+        fixture.finish();
+
+        var jobs: c.Queue = undefined;
+        c.queue_init(&jobs);
+        defer c.queue_free(&jobs);
+        var trace = request_trace.Trace.init(testing.allocator);
+        defer trace.deinit();
+        for (vectors, package_ids, 0..) |vector, package_id, index| {
+            c.queue_push2(
+                &jobs,
+                c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+                package_id,
+            );
+            const request_ref = try trace.addRequest(
+                abi.request_kind.install,
+                vector.name,
+                false,
+            );
+            try addUserPackageJob(
+                &trace,
+                @intCast(index),
+                request_ref,
+                abi.job_action.install,
+                package_id,
+                c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+            );
+        }
+        try trace.finalize(queueSlice(&jobs), 0, 0);
+
+        var solved = try solve(fixture.pool, &jobs, true);
+        defer solved.deinit();
+        const owner = try capture.create(testing.allocator, .{
+            .pool = fixture.pool,
+            .solver = solved.solver,
+            .transaction = solved.transaction,
+            .jobs = &jobs,
+            .trace = trace.getView().?,
+            .solve_status = 0,
+            .problem_count = 0,
+        });
+        defer owner.destroy();
+
+        for (vectors) |vector| {
+            const package = packageByName(
+                owner.view(),
+                vector.name,
+                abi.package_state.available,
+            ).?.package;
+            try testing.expectEqual(
+                @as(u32, @intFromBool(vector.epoch != null)),
+                package.identity.has_epoch,
+            );
+            try testing.expectEqual(
+                vector.epoch orelse 0,
+                package.identity.epoch,
+            );
+            try testing.expectEqualStrings(
+                vector.version,
+                bytes(package.identity.version),
+            );
+            try testing.expectEqualStrings(
+                vector.release,
+                bytes(package.identity.release),
+            );
+        }
+    }
+
+    {
+        const vectors = [_]struct {
+            package_name: [:0]const u8,
+            capability_name: [:0]const u8,
+            evr: [:0]const u8,
+            epoch: ?u64,
+            version: []const u8,
+            release: ?[]const u8,
+        }{
+            .{ .package_name = "provider-decimal", .capability_name = "cap-decimal", .evr = "1:2-3", .epoch = 1, .version = "2", .release = "3" },
+            .{ .package_name = "provider-leading-zero", .capability_name = "cap-leading-zero", .evr = "01:2:3-4", .epoch = 1, .version = "2:3", .release = "4" },
+            .{ .package_name = "provider-empty-prefix", .capability_name = "cap-empty-prefix", .evr = ":2-3", .epoch = null, .version = ":2", .release = "3" },
+            .{ .package_name = "provider-alpha-prefix", .capability_name = "cap-alpha-prefix", .evr = "x:2-3", .epoch = null, .version = "x:2", .release = "3" },
+            .{ .package_name = "provider-mixed-prefix", .capability_name = "cap-mixed-prefix", .evr = "1x:2-3", .epoch = null, .version = "1x:2", .release = "3" },
+            .{ .package_name = "provider-empty-suffix", .capability_name = "cap-empty-suffix", .evr = "1:", .epoch = null, .version = "1:", .release = null },
+            .{ .package_name = "provider-colon", .capability_name = "cap-colon", .evr = ":", .epoch = null, .version = ":", .release = null },
+        };
+
+        var fixture = try Fixture.init();
+        defer fixture.deinit();
+        const available = try fixture.addRepository("base", false);
+        var relations: [vectors.len]c.Id = undefined;
+        for (vectors, &relations) |vector, *relation| {
+            const package = try fixture.addPackage(available, .{
+                .name = vector.package_name,
+            });
+            relation.* = try fixture.addProvide(
+                package,
+                vector.capability_name,
+                vector.evr,
+            );
+        }
+        fixture.finish();
+
+        var jobs: c.Queue = undefined;
+        c.queue_init(&jobs);
+        defer c.queue_free(&jobs);
+        var trace = request_trace.Trace.init(testing.allocator);
+        defer trace.deinit();
+        for (vectors, relations, 0..) |vector, relation, index| {
+            c.queue_push2(
+                &jobs,
+                c.SOLVER_SOLVABLE_PROVIDES | c.SOLVER_INSTALL,
+                relation,
+            );
+            const request_ref = try trace.addRequest(
+                abi.request_kind.install,
+                vector.capability_name,
+                false,
+            );
+            try trace.recordCapabilityJob(
+                @intCast(index),
+                abi.job_action.install,
+                .{
+                    .name = vector.capability_name,
+                    .flags = "EQ",
+                    .version = vector.version,
+                    .release = vector.release,
+                    .epoch = vector.epoch,
+                    .comparison = abi.compare_op.eq,
+                },
+                c.SOLVER_SOLVABLE_PROVIDES | c.SOLVER_INSTALL,
+                0,
+                abi.request_reason.user,
+                request_ref,
+            );
+        }
+        try trace.finalize(queueSlice(&jobs), 0, 0);
+
+        var solved = try solve(fixture.pool, &jobs, true);
+        defer solved.deinit();
+        const owner = try capture.create(testing.allocator, .{
+            .pool = fixture.pool,
+            .solver = solved.solver,
+            .transaction = solved.transaction,
+            .jobs = &jobs,
+            .trace = trace.getView().?,
+            .solve_status = 0,
+            .problem_count = 0,
+        });
+        defer owner.destroy();
+
+        const captured_jobs = owner.view().jobs.?[0..owner.view().job_count];
+        for (vectors, captured_jobs) |vector, job| {
+            const capability = job.capability;
+            try testing.expectEqualStrings(
+                vector.capability_name,
+                bytes(capability.name),
+            );
+            try testing.expectEqual(
+                @as(u32, @intFromBool(vector.epoch != null)),
+                capability.has_epoch,
+            );
+            try testing.expectEqual(vector.epoch orelse 0, capability.epoch);
+            try testing.expectEqualStrings(
+                vector.version,
+                bytes(capability.version),
+            );
+            try testing.expectEqual(
+                @as(u32, @intFromBool(vector.release != null)),
+                capability.has_release,
+            );
+            if (vector.release) |release| {
+                try testing.expectEqualStrings(
+                    release,
+                    bytes(capability.release),
+                );
+            }
+        }
+    }
+}
+
 test "job queue mismatch fails closed without publishing partial facts" {
     var fixture = try Fixture.init();
     defer fixture.deinit();
     const available = try fixture.addRepository("base", false);
     const package = try fixture.addPackage(available, .{ .name = "app" });
+    const stale_package = try fixture.addPackage(
+        available,
+        .{ .name = "stale-app" },
+    );
     fixture.finish();
 
     var jobs: c.Queue = undefined;
@@ -503,7 +754,11 @@ test "job queue mismatch fails closed without publishing partial facts" {
 
     var solved = try solve(fixture.pool, &jobs, true);
     defer solved.deinit();
-    jobs.elements[0] = c.SOLVER_SOLVABLE | c.SOLVER_ERASE;
+    jobs.elements[1] = stale_package;
+    var stale_job = trace.getView().?.jobs.?[0];
+    stale_job.selection_id = stale_package;
+    var stale_view = trace.getView().?.*;
+    stale_view.jobs = @ptrCast(&stale_job);
     try testing.expectError(error.JobMismatch, capture.create(
         testing.allocator,
         .{
@@ -511,7 +766,434 @@ test "job queue mismatch fails closed without publishing partial facts" {
             .solver = solved.solver,
             .transaction = solved.transaction,
             .jobs = &jobs,
+            .trace = &stale_view,
+            .solve_status = 0,
+            .problem_count = 0,
+        },
+    ));
+}
+
+test "solver pool-job prefixes do not shift submitted job attribution" {
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    const available = try fixture.addRepository("base", false);
+    const package = try fixture.addPackage(available, .{ .name = "app" });
+    fixture.finish();
+    const name_id = c.pool_str2id(fixture.pool, "app", 0);
+    c.queue_push2(
+        &fixture.pool.pooljobs,
+        c.SOLVER_SOLVABLE_NAME | c.SOLVER_MULTIVERSION,
+        name_id,
+    );
+
+    var jobs: c.Queue = undefined;
+    c.queue_init(&jobs);
+    defer c.queue_free(&jobs);
+    c.queue_push2(
+        &jobs,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+        package,
+    );
+    var trace = request_trace.Trace.init(testing.allocator);
+    defer trace.deinit();
+    const request_ref = try trace.addRequest(
+        abi.request_kind.install,
+        "app",
+        false,
+    );
+    try addUserPackageJob(
+        &trace,
+        0,
+        request_ref,
+        abi.job_action.install,
+        package,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+    );
+    try trace.finalize(queueSlice(&jobs), 0, 0);
+
+    var solved = try solve(fixture.pool, &jobs, true);
+    defer solved.deinit();
+    try testing.expectEqual(@as(c_int, 2), solved.solver.pooljobcnt);
+    const owner = try capture.create(testing.allocator, .{
+        .pool = fixture.pool,
+        .solver = solved.solver,
+        .transaction = solved.transaction,
+        .jobs = &jobs,
+        .trace = trace.getView().?,
+        .solve_status = 0,
+        .problem_count = 0,
+    });
+    defer owner.destroy();
+
+    var saw_app = false;
+    for (owner.view().actions.?[0..owner.view().action_count]) |action| {
+        const target = owner.view().packages.?[action.target_package_ref];
+        if (std.mem.eql(u8, bytes(target.identity.name), "app")) {
+            try testing.expectEqual(@as(u32, 1), action.has_requested_job_ref);
+            try testing.expectEqual(@as(u32, 0), action.requested_job_ref);
+            saw_app = true;
+        }
+    }
+    try testing.expect(saw_app);
+}
+
+test "unresolved input fails closed and C outputs are always cleared" {
+    var sentinel_storage: usize = 0;
+    var facts_output: ?*const abi.Capture = @ptrCast(&sentinel_storage);
+    var owner_output: ?*anyopaque = @ptrCast(&sentinel_storage);
+    const invalid_parameter = capture.mapCaptureError(error.InvalidInput);
+
+    try testing.expectEqual(
+        invalid_parameter,
+        capture.libsolvCaptureCreate(
+            null,
+            null,
+            null,
+            null,
+            null,
+            0,
+            0,
+            0,
+            0,
+            null,
+            0,
+            &facts_output,
+            null,
+        ),
+    );
+    try testing.expect(facts_output == null);
+
+    owner_output = @ptrCast(&sentinel_storage);
+    try testing.expectEqual(
+        invalid_parameter,
+        capture.libsolvCaptureCreate(
+            null,
+            null,
+            null,
+            null,
+            null,
+            0,
+            0,
+            0,
+            0,
+            null,
+            0,
+            null,
+            &owner_output,
+        ),
+    );
+    try testing.expect(owner_output == null);
+
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    const available = try fixture.addRepository("base", false);
+    const package = try fixture.addPackage(available, .{ .name = "app" });
+    fixture.finish();
+    var jobs: c.Queue = undefined;
+    c.queue_init(&jobs);
+    defer c.queue_free(&jobs);
+    c.queue_push2(
+        &jobs,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+        package,
+    );
+    var trace = request_trace.Trace.init(testing.allocator);
+    defer trace.deinit();
+    const request_ref = try trace.addRequest(
+        abi.request_kind.install,
+        "app",
+        false,
+    );
+    try addUserPackageJob(
+        &trace,
+        0,
+        request_ref,
+        abi.job_action.install,
+        package,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+    );
+    try trace.finalize(queueSlice(&jobs), 0, 0);
+    var solved = try solve(fixture.pool, &jobs, true);
+    defer solved.deinit();
+
+    const input = capture.Input{
+        .pool = fixture.pool,
+        .solver = solved.solver,
+        .transaction = solved.transaction,
+        .jobs = &jobs,
+        .trace = trace.getView().?,
+        .solve_status = 0,
+        .problem_count = 0,
+        .unresolved_count = 1,
+    };
+    try testing.expectError(
+        error.UnsupportedResult,
+        capture.create(testing.allocator, input),
+    );
+
+    facts_output = @ptrCast(&sentinel_storage);
+    owner_output = @ptrCast(&sentinel_storage);
+    try testing.expectEqual(
+        capture.mapCaptureError(error.UnsupportedResult),
+        capture.libsolvCaptureCreate(
+            fixture.pool,
+            solved.solver,
+            solved.transaction,
+            &jobs,
+            trace.getView().?,
+            0,
+            0,
+            0,
+            1,
+            null,
+            0,
+            &facts_output,
+            &owner_output,
+        ),
+    );
+    try testing.expect(facts_output == null);
+    try testing.expect(owner_output == null);
+}
+
+test "malformed solvable string relation and repository IDs fail safely" {
+    {
+        var fixture = try Fixture.init();
+        defer fixture.deinit();
+        const available = try fixture.addRepository("base", false);
+        const package = try fixture.addPackage(available, .{ .name = "app" });
+        fixture.finish();
+        var jobs: c.Queue = undefined;
+        c.queue_init(&jobs);
+        defer c.queue_free(&jobs);
+        c.queue_push2(
+            &jobs,
+            c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+            package,
+        );
+        var trace = request_trace.Trace.init(testing.allocator);
+        defer trace.deinit();
+        const request_ref = try trace.addRequest(
+            abi.request_kind.install,
+            "app",
+            false,
+        );
+        try addUserPackageJob(
+            &trace,
+            0,
+            request_ref,
+            abi.job_action.install,
+            package,
+            c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+        );
+        try trace.finalize(queueSlice(&jobs), 0, 0);
+        var solved = try solve(fixture.pool, &jobs, true);
+        defer solved.deinit();
+        const input = capture.Input{
+            .pool = fixture.pool,
+            .solver = solved.solver,
+            .transaction = solved.transaction,
+            .jobs = &jobs,
             .trace = trace.getView().?,
+            .solve_status = 0,
+            .problem_count = 0,
+        };
+
+        const solver_what_index: usize =
+            @intCast(solved.solver.pooljobcnt + 1);
+        const invalid_solvid = fixture.pool.nsolvables;
+        jobs.elements[1] = invalid_solvid;
+        solved.solver.job.elements[solver_what_index] = invalid_solvid;
+        var malformed_job = trace.getView().?.jobs.?[0];
+        malformed_job.selection_id = invalid_solvid;
+        var malformed_view = trace.getView().?.*;
+        malformed_view.jobs = @ptrCast(&malformed_job);
+        var malformed_input = input;
+        malformed_input.trace = &malformed_view;
+        try testing.expectError(
+            error.UnsupportedResult,
+            capture.create(testing.allocator, malformed_input),
+        );
+        jobs.elements[1] = package;
+        solved.solver.job.elements[solver_what_index] = package;
+
+        const raw_solvable = c.pool_id2solvable(fixture.pool, package);
+        const solvable: *c.Solvable = @ptrCast(raw_solvable);
+        const valid_name = solvable.name;
+        solvable.name = fixture.pool.ss.nstrings;
+        try testing.expectError(
+            error.UnsupportedResult,
+            capture.create(testing.allocator, input),
+        );
+        solvable.name = valid_name;
+
+        const valid_end = available.end;
+        available.end = package;
+        try testing.expectError(
+            error.UnsupportedResult,
+            capture.create(testing.allocator, input),
+        );
+        available.end = valid_end;
+    }
+
+    {
+        var fixture = try Fixture.init();
+        defer fixture.deinit();
+        const available = try fixture.addRepository("base", false);
+        const package = try fixture.addPackage(
+            available,
+            .{ .name = "provider" },
+        );
+        const relation = try fixture.addProvide(
+            package,
+            "capability",
+            "1:2-3",
+        );
+        fixture.finish();
+        var jobs: c.Queue = undefined;
+        c.queue_init(&jobs);
+        defer c.queue_free(&jobs);
+        c.queue_push2(
+            &jobs,
+            c.SOLVER_SOLVABLE_PROVIDES | c.SOLVER_INSTALL,
+            relation,
+        );
+        var trace = request_trace.Trace.init(testing.allocator);
+        defer trace.deinit();
+        const request_ref = try trace.addRequest(
+            abi.request_kind.install,
+            "capability",
+            false,
+        );
+        try trace.recordCapabilityJob(
+            0,
+            abi.job_action.install,
+            .{
+                .name = "capability",
+                .flags = "EQ",
+                .version = "2",
+                .release = "3",
+                .epoch = 1,
+                .comparison = abi.compare_op.eq,
+            },
+            c.SOLVER_SOLVABLE_PROVIDES | c.SOLVER_INSTALL,
+            0,
+            abi.request_reason.user,
+            request_ref,
+        );
+        try trace.finalize(queueSlice(&jobs), 0, 0);
+        var solved = try solve(fixture.pool, &jobs, true);
+        defer solved.deinit();
+
+        var malformed_job = trace.getView().?.jobs.?[0];
+        var byte: u8 = 0;
+        malformed_job.capability.version = .{
+            .data = @ptrCast(&byte),
+            .length = std.math.maxInt(usize),
+        };
+        var malformed_view = trace.getView().?.*;
+        malformed_view.jobs = @ptrCast(&malformed_job);
+        try testing.expectError(error.InvalidTrace, capture.create(
+            testing.allocator,
+            .{
+                .pool = fixture.pool,
+                .solver = solved.solver,
+                .transaction = solved.transaction,
+                .jobs = &jobs,
+                .trace = &malformed_view,
+                .solve_status = 0,
+                .problem_count = 0,
+            },
+        ));
+
+        const invalid_relation: c.Id = @bitCast(
+            @as(u32, @intCast(fixture.pool.nrels)) | 0x80000000,
+        );
+        jobs.elements[1] = invalid_relation;
+        const solver_what_index: usize =
+            @intCast(solved.solver.pooljobcnt + 1);
+        solved.solver.job.elements[solver_what_index] = invalid_relation;
+        try testing.expectError(error.UnsupportedResult, capture.create(
+            testing.allocator,
+            .{
+                .pool = fixture.pool,
+                .solver = solved.solver,
+                .transaction = solved.transaction,
+                .jobs = &jobs,
+                .trace = trace.getView().?,
+                .solve_status = 0,
+                .problem_count = 0,
+            },
+        ));
+    }
+}
+
+test "borrowed spans reject oversized lengths with 32-bit-safe arithmetic" {
+    const address_limit: usize = std.math.maxInt(i32);
+    const max_u64_count = address_limit / @sizeOf(u64);
+    try testing.expect(capture.sliceCountFitsAddressLimit(
+        u64,
+        max_u64_count,
+        address_limit,
+    ));
+    try testing.expect(!capture.sliceCountFitsAddressLimit(
+        u64,
+        max_u64_count + 1,
+        address_limit,
+    ));
+    try testing.expect(!capture.sliceCountFitsAddressLimit(
+        u8,
+        address_limit + 1,
+        address_limit,
+    ));
+
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    const available = try fixture.addRepository("base", false);
+    const package = try fixture.addPackage(available, .{ .name = "app" });
+    fixture.finish();
+    var jobs: c.Queue = undefined;
+    c.queue_init(&jobs);
+    defer c.queue_free(&jobs);
+    c.queue_push2(
+        &jobs,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+        package,
+    );
+    var trace = request_trace.Trace.init(testing.allocator);
+    defer trace.deinit();
+    const request_ref = try trace.addRequest(
+        abi.request_kind.install,
+        "app",
+        false,
+    );
+    try addUserPackageJob(
+        &trace,
+        0,
+        request_ref,
+        abi.job_action.install,
+        package,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+    );
+    try trace.finalize(queueSlice(&jobs), 0, 0);
+    var solved = try solve(fixture.pool, &jobs, true);
+    defer solved.deinit();
+
+    var malformed_request = trace.getView().?.requests.?[0];
+    var byte: u8 = 0;
+    malformed_request.id = .{
+        .data = @ptrCast(&byte),
+        .length = std.math.maxInt(usize),
+    };
+    var malformed_view = trace.getView().?.*;
+    malformed_view.requests = @ptrCast(&malformed_request);
+    try testing.expectError(error.InvalidTrace, capture.create(
+        testing.allocator,
+        .{
+            .pool = fixture.pool,
+            .solver = solved.solver,
+            .transaction = solved.transaction,
+            .jobs = &jobs,
+            .trace = &malformed_view,
             .solve_status = 0,
             .problem_count = 0,
         },
@@ -582,6 +1264,108 @@ test "command-line package paths and hidden candidates never enter facts" {
     try testing.expectEqual(
         @as(u32, 0),
         facts.packages.?[0].source.has_location,
+    );
+}
+
+test "repository priorities use tdnf semantics by repository kind" {
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    const installed = try fixture.addRepository("@System", true);
+    const available = try fixture.addRepository("base", false);
+    const command_line = try fixture.addRepository("@cmdline", false);
+    installed.priority = 91;
+    available.priority = -23;
+    command_line.priority = -77;
+    const old = try fixture.addPackage(installed, .{
+        .name = "old",
+        .hnum = 1,
+    });
+    const remote = try fixture.addPackage(available, .{ .name = "remote" });
+    const local = try fixture.addPackage(command_line, .{ .name = "local" });
+    fixture.finish();
+
+    var jobs: c.Queue = undefined;
+    c.queue_init(&jobs);
+    defer c.queue_free(&jobs);
+    c.queue_push2(&jobs, c.SOLVER_SOLVABLE | c.SOLVER_ERASE, old);
+    c.queue_push2(&jobs, c.SOLVER_SOLVABLE | c.SOLVER_INSTALL, remote);
+    c.queue_push2(&jobs, c.SOLVER_SOLVABLE | c.SOLVER_INSTALL, local);
+
+    var trace = request_trace.Trace.init(testing.allocator);
+    defer trace.deinit();
+    const erase_request = try trace.addRequest(
+        abi.request_kind.erase,
+        "old",
+        false,
+    );
+    const remote_request = try trace.addRequest(
+        abi.request_kind.install,
+        "remote",
+        false,
+    );
+    const local_request = try trace.addRequest(
+        abi.request_kind.install,
+        null,
+        false,
+    );
+    try addUserPackageJob(
+        &trace,
+        0,
+        erase_request,
+        abi.job_action.erase,
+        old,
+        c.SOLVER_SOLVABLE | c.SOLVER_ERASE,
+    );
+    try addUserPackageJob(
+        &trace,
+        1,
+        remote_request,
+        abi.job_action.install,
+        remote,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+    );
+    try addUserPackageJob(
+        &trace,
+        2,
+        local_request,
+        abi.job_action.install,
+        local,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+    );
+    try trace.finalize(queueSlice(&jobs), 0, 0);
+
+    var solved = try solve(fixture.pool, &jobs, true);
+    defer solved.deinit();
+    const input = capture.Input{
+        .pool = fixture.pool,
+        .solver = solved.solver,
+        .transaction = solved.transaction,
+        .jobs = &jobs,
+        .trace = trace.getView().?,
+        .solve_status = 0,
+        .problem_count = 0,
+    };
+    const owner = try capture.create(testing.allocator, input);
+    defer owner.destroy();
+
+    try testing.expectEqual(
+        @as(i32, 23),
+        repositoryById(owner.view(), "base").?.priority,
+    );
+    try testing.expectEqual(
+        @as(i32, 0),
+        repositoryById(owner.view(), "@System").?.priority,
+    );
+    try testing.expectEqual(
+        @as(i32, 0),
+        repositoryById(owner.view(), "@cmdline").?.priority,
+    );
+
+    available.priority = std.math.minInt(i32);
+    defer available.priority = -23;
+    try testing.expectError(
+        error.UnsupportedResult,
+        capture.create(testing.allocator, input),
     );
 }
 
@@ -1584,6 +2368,74 @@ test "accepted solver problems produce only authoritative skipped jobs" {
         try testing.expectEqual(@as(u32, 1), problem.has_job_ref);
         try testing.expectEqual(@as(u32, 1), problem.job_ref);
     }
+}
+
+test "thousands of selected actions capture without quadratic deduplication" {
+    const package_count = 2048;
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    const available = try fixture.addRepository("base", false);
+    const package_ids = try testing.allocator.alloc(c.Id, package_count);
+    defer testing.allocator.free(package_ids);
+    for (package_ids, 0..) |*package_id, index| {
+        var name_buffer: [64]u8 = undefined;
+        const name = try std.fmt.bufPrintZ(
+            &name_buffer,
+            "scale-package-{d}",
+            .{index},
+        );
+        package_id.* = try fixture.addPackage(available, .{ .name = name });
+    }
+    fixture.finish();
+
+    var jobs: c.Queue = undefined;
+    c.queue_init(&jobs);
+    defer c.queue_free(&jobs);
+    var trace = request_trace.Trace.init(testing.allocator);
+    defer trace.deinit();
+    for (package_ids, 0..) |package_id, index| {
+        c.queue_push2(
+            &jobs,
+            c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+            package_id,
+        );
+        try trace.recordPackageJob(
+            @intCast(index),
+            abi.job_action.install,
+            package_id,
+            c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+            0,
+            abi.request_reason.policy,
+            abi.request_trace_no_request,
+        );
+    }
+    try trace.finalize(queueSlice(&jobs), 0, 0);
+
+    var solved = try solve(fixture.pool, &jobs, true);
+    defer solved.deinit();
+    const owner = try capture.create(testing.allocator, .{
+        .pool = fixture.pool,
+        .solver = solved.solver,
+        .transaction = solved.transaction,
+        .jobs = &jobs,
+        .trace = trace.getView().?,
+        .solve_status = 0,
+        .problem_count = 0,
+    });
+    defer owner.destroy();
+
+    try testing.expectEqual(
+        @as(u32, package_count),
+        owner.view().package_count,
+    );
+    try testing.expectEqual(
+        @as(u32, package_count),
+        owner.view().selected_package_ref_count,
+    );
+    try testing.expectEqual(
+        @as(u32, package_count),
+        owner.view().action_count,
+    );
 }
 
 fn captureNameOrder(reverse: bool) ![]u8 {

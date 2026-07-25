@@ -34,6 +34,7 @@ pub const Input = struct {
     solve_status: c_int,
     problem_count: u32,
     problems_accepted: bool = false,
+    unresolved_count: u32 = 0,
     /// When supplied, this is cross-checked against the install-only erase
     /// jobs in the trace. The trace remains the authoritative attribution.
     installonly_retry_erases: ?[]const c.Id = null,
@@ -99,17 +100,22 @@ const BuildState = struct {
     bindings: []JobBinding,
     trace_to_pair: []u32,
     referenced: []bool,
+    selected_seen: []bool,
+    hidden_seen: []bool,
     raw_actions: std.ArrayList(RawAction) = .empty,
     raw_selected: std.ArrayList(c.Id) = .empty,
     raw_hidden: std.ArrayList(c.Id) = .empty,
     raw_problems: std.ArrayList(RawProblem) = .empty,
     skipped_pairs: []bool,
+    solver_job_prefix: usize,
     resolution_status: u32,
 
     fn init(arena: Allocator, input: Input) CaptureError!BuildState {
+        if (input.unresolved_count != 0) return error.UnsupportedResult;
         if (input.pool.nsolvables < 2 or input.solver.pool != input.pool) {
             return error.InvalidInput;
         }
+        try validateInstalledRepository(input.pool);
         if (input.solve_status < 0) return error.SolverFailed;
         const solve_count: u32 = std.math.cast(
             u32,
@@ -137,6 +143,15 @@ const BuildState = struct {
 
         const queue = try queueElements(input.jobs);
         if (queue.len % 2 != 0) return error.JobMismatch;
+        const solver_queue = try queueElements(&input.solver.job);
+        if (input.solver.pooljobcnt < 0) return error.JobMismatch;
+        const solver_job_prefix: usize = @intCast(input.solver.pooljobcnt);
+        if (solver_job_prefix > solver_queue.len or
+            solver_job_prefix % 2 != 0 or
+            !std.mem.eql(c.Id, queue, solver_queue[solver_job_prefix..]))
+        {
+            return error.JobMismatch;
+        }
         const requests = try borrowedArray(
             abi.Request,
             input.trace.requests,
@@ -154,6 +169,10 @@ const BuildState = struct {
             @intCast(input.pool.nsolvables),
         );
         @memset(referenced, false);
+        const selected_seen = try arena.alloc(bool, referenced.len);
+        @memset(selected_seen, false);
+        const hidden_seen = try arena.alloc(bool, referenced.len);
+        @memset(hidden_seen, false);
         const bindings = try arena.alloc(JobBinding, jobs.len);
         const trace_to_pair = try arena.alloc(u32, jobs.len);
         @memset(trace_to_pair, std.math.maxInt(u32));
@@ -169,7 +188,10 @@ const BuildState = struct {
             .bindings = bindings,
             .trace_to_pair = trace_to_pair,
             .referenced = referenced,
+            .selected_seen = selected_seen,
+            .hidden_seen = hidden_seen,
             .skipped_pairs = skipped_pairs,
+            .solver_job_prefix = solver_job_prefix,
             .resolution_status = if (input.problem_count == 0)
                 abi.resolution_status.resolved
             else if (input.problems_accepted)
@@ -412,6 +434,11 @@ const BuildState = struct {
         var rules: c.Queue = undefined;
         c.queue_init(&rules);
         defer c.queue_free(&rules);
+        var empty_jobs: [0]bool = .{};
+        const jobs_in_problem: []bool = if (self.input.problems_accepted)
+            try self.arena.alloc(bool, self.bindings.len)
+        else
+            empty_jobs[0..];
 
         var problem_number: c.Id = 1;
         while (problem_number <= self.input.problem_count) : (problem_number += 1) {
@@ -424,15 +451,15 @@ const BuildState = struct {
             if (problem_rules.len == 0) return error.UnsupportedResult;
 
             const start = self.raw_problems.items.len;
-            const jobs_in_problem = try self.arena.alloc(
-                bool,
-                self.bindings.len,
-            );
-            @memset(jobs_in_problem, false);
+            if (self.input.problems_accepted) {
+                @memset(jobs_in_problem, false);
+            }
 
             for (problem_rules) |rule| {
                 const job_ref = try self.jobPairForRule(rule);
-                if (job_ref) |value| jobs_in_problem[value] = true;
+                if (self.input.problems_accepted) {
+                    if (job_ref) |value| jobs_in_problem[value] = true;
+                }
                 const problem = try self.problemForRule(rule, job_ref);
                 if (problem.package) |package| try self.markPackage(package);
                 if (problem.related_package) |package|
@@ -641,8 +668,13 @@ const BuildState = struct {
         self: *BuildState,
         offset: c.Id,
     ) CaptureError!?u32 {
-        if (offset < 0 or offset & 1 != 0) return error.UnsupportedResult;
-        const pair: usize = @intCast(@divTrunc(offset, 2));
+        if (offset < 0) return error.UnsupportedResult;
+        const full_offset: usize = @intCast(offset);
+        if (full_offset & 1 != 0) return error.UnsupportedResult;
+        if (full_offset < self.solver_job_prefix) return null;
+        const relevant_offset = full_offset - self.solver_job_prefix;
+        if (relevant_offset >= self.queue.len) return error.UnsupportedResult;
+        const pair = relevant_offset / 2;
         if (pair >= self.bindings.len) return error.UnsupportedResult;
         return @intCast(pair);
     }
@@ -658,7 +690,12 @@ const BuildState = struct {
         for (try queueElements(&selected)) |solvid| {
             if (isResultSentinel(solvid)) continue;
             try self.markPackage(solvid);
-            try appendUniqueId(self.arena, &self.raw_selected, solvid);
+            try appendUniquePoolId(
+                self.arena,
+                &self.raw_selected,
+                self.selected_seen,
+                solvid,
+            );
         }
     }
 
@@ -668,11 +705,13 @@ const BuildState = struct {
             c.SOLVER_TRANSACTION_SHOW_ALL |
             c.SOLVER_TRANSACTION_SHOW_OBSOLETES |
             c.SOLVER_TRANSACTION_CHANGE_IS_REINSTALL;
+        const prior_seen = try self.arena.alloc(bool, self.referenced.len);
+        @memset(prior_seen, false);
 
         for (try queueElements(&transaction.steps)) |solvid| {
             if (isResultSentinel(solvid)) continue;
             const solvable = try packageSolvable(self.input.pool, solvid);
-            if (!isRealPackage(self.input.pool, solvable)) {
+            if (!(try isRealPackage(self.input.pool, solvable))) {
                 return error.UnsupportedResult;
             }
             const raw_type = c.transaction_type(transaction, solvid, mode);
@@ -680,7 +719,11 @@ const BuildState = struct {
             if (isPastTransactionType(raw_type)) {
                 if (!isInstalledRepository(
                     self.input.pool,
-                    try solvableRepository(solvable),
+                    try solvableRepository(
+                        self.input.pool,
+                        solvid,
+                        solvable,
+                    ),
                 )) {
                     return error.UnsupportedResult;
                 }
@@ -701,6 +744,9 @@ const BuildState = struct {
                 );
             }
             var priors = std.ArrayList(c.Id).empty;
+            defer for (priors.items) |prior| {
+                prior_seen[@intCast(prior)] = false;
+            };
             for (try queueElements(&prior_queue)) |prior| {
                 if (isResultSentinel(prior)) continue;
                 const prior_solvable = try packageSolvable(
@@ -709,13 +755,20 @@ const BuildState = struct {
                 );
                 if (!isInstalledRepository(
                     self.input.pool,
-                    try solvableRepository(prior_solvable),
+                    try solvableRepository(
+                        self.input.pool,
+                        prior,
+                        prior_solvable,
+                    ),
                 ) or
-                    !isRealPackage(self.input.pool, prior_solvable))
+                    !(try isRealPackage(self.input.pool, prior_solvable)))
                 {
                     return error.UnsupportedResult;
                 }
-                try appendUniqueId(self.arena, &priors, prior);
+                const prior_index: usize = @intCast(prior);
+                if (prior_seen[prior_index]) continue;
+                prior_seen[prior_index] = true;
+                try priors.append(self.arena, prior);
                 try self.markPackage(prior);
             }
 
@@ -728,7 +781,11 @@ const BuildState = struct {
             if (kind.? == abi.action_kind.erase) {
                 if (!isInstalledRepository(
                     self.input.pool,
-                    try solvableRepository(solvable),
+                    try solvableRepository(
+                        self.input.pool,
+                        solvid,
+                        solvable,
+                    ),
                 ) or
                     priors.items.len != 0)
                 {
@@ -736,7 +793,11 @@ const BuildState = struct {
                 }
             } else if (isInstalledRepository(
                 self.input.pool,
-                try solvableRepository(solvable),
+                try solvableRepository(
+                    self.input.pool,
+                    solvid,
+                    solvable,
+                ),
             )) {
                 return error.UnsupportedResult;
             }
@@ -757,6 +818,11 @@ const BuildState = struct {
             self.referenced.len,
         );
         @memset(prior_targets, false);
+        const action_targets = try self.arena.alloc(
+            bool,
+            self.referenced.len,
+        );
+        @memset(action_targets, false);
         for (self.raw_actions.items) |action| {
             for (action.priors) |prior| prior_targets[@intCast(prior)] = true;
         }
@@ -767,10 +833,9 @@ const BuildState = struct {
             {
                 continue;
             }
-            for (self.raw_actions.items[0..write_index]) |earlier| {
-                if (earlier.target == action.target)
-                    return error.UnsupportedResult;
-            }
+            const target_index: usize = @intCast(action.target);
+            if (action_targets[target_index]) return error.UnsupportedResult;
+            action_targets[target_index] = true;
             self.raw_actions.items[write_index] = action;
             write_index += 1;
         }
@@ -955,25 +1020,40 @@ const BuildState = struct {
     }
 
     fn captureHidden(self: *BuildState) CaptureError!void {
-        const considered = self.input.pool.considered orelse return;
+        const raw_considered = self.input.pool.considered orelse return;
+        const considered: *c.Map = @ptrCast(raw_considered);
+        if (considered.size < 0 or considered.map == null) {
+            return error.UnsupportedResult;
+        }
+        const required_map_bytes =
+            (@as(usize, @intCast(self.input.pool.nsolvables)) + 7) / 8;
+        if (@as(usize, @intCast(considered.size)) < required_map_bytes) {
+            return error.UnsupportedResult;
+        }
         var solvid: c.Id = 2;
         while (solvid < self.input.pool.nsolvables) : (solvid += 1) {
-            const raw_solvable = c.pool_id2solvable(
+            const raw_solvable = try solvableAt(self.input.pool, solvid);
+            if (raw_solvable.repo == null) continue;
+            const solvable = try packageSolvable(self.input.pool, solvid);
+            const repository = try solvableRepository(
                 self.input.pool,
                 solvid,
+                solvable,
             );
-            if (raw_solvable == null) continue;
-            const solvable: *c.Solvable = @ptrCast(raw_solvable);
-            const repository = solvableRepository(solvable) catch continue;
             if (isInstalledRepository(self.input.pool, repository) or
                 repositoryIsCommandLine(repository) or
-                !isRealPackage(self.input.pool, solvable) or
+                !(try isRealPackage(self.input.pool, solvable)) or
                 c.map_tst(considered, solvid) != 0)
             {
                 continue;
             }
             try self.markPackage(solvid);
-            try appendUniqueId(self.arena, &self.raw_hidden, solvid);
+            try appendUniquePoolId(
+                self.arena,
+                &self.raw_hidden,
+                self.hidden_seen,
+                solvid,
+            );
         }
     }
 
@@ -995,7 +1075,8 @@ const BuildState = struct {
         }
         if (trace_count != expected.len) return error.JobMismatch;
         for (expected, 0..) |solvid, index| {
-            if (solvid <= c.SYSTEMSOLVABLE) return error.JobMismatch;
+            _ = packageSolvable(self.input.pool, solvid) catch
+                return error.JobMismatch;
             for (expected[0..index]) |prior| {
                 if (prior == solvid) return error.JobMismatch;
             }
@@ -1021,7 +1102,11 @@ const BuildState = struct {
                 self.input.pool,
                 @intCast(solvid),
             );
-            const repository = try solvableRepository(solvable);
+            const repository = try solvableRepository(
+                self.input.pool,
+                @intCast(solvid),
+                solvable,
+            );
             var found = false;
             for (repositories.items) |existing| {
                 if (existing.pointer == repository) {
@@ -1035,7 +1120,10 @@ const BuildState = struct {
                 .pointer = repository,
                 .value = .{
                     .id = try ownBytes(self.arena, name),
-                    .priority = repository.*.priority,
+                    .priority = try repositoryPriority(
+                        self.input.pool,
+                        repository,
+                    ),
                     .kind = repositoryKind(self.input.pool, repository),
                 },
             });
@@ -1070,7 +1158,11 @@ const BuildState = struct {
             if (!self.referenced[solvid]) continue;
             const raw_id: c.Id = @intCast(solvid);
             const solvable = try packageSolvable(self.input.pool, raw_id);
-            const repository = try solvableRepository(solvable);
+            const repository = try solvableRepository(
+                self.input.pool,
+                raw_id,
+                solvable,
+            );
             const repository_ref = findRepositoryRef(
                 repositories,
                 repository,
@@ -1370,10 +1462,10 @@ const BuildState = struct {
             return error.UnsupportedResult;
         }
         const solvable = try packageSolvable(self.input.pool, solvid);
-        if (solvable.*.repo == null or !isRealPackage(
+        if (!(try isRealPackage(
             self.input.pool,
             solvable,
-        )) {
+        ))) {
             return error.UnsupportedResult;
         }
         self.referenced[@intCast(solvid)] = true;
@@ -1406,7 +1498,7 @@ pub fn mapCaptureError(err: anyerror) u32 {
     };
 }
 
-fn libsolvCaptureCreate(
+pub fn libsolvCaptureCreate(
     raw_pool: ?*anyopaque,
     raw_solver: ?*anyopaque,
     raw_transaction: ?*anyopaque,
@@ -1415,17 +1507,21 @@ fn libsolvCaptureCreate(
     solve_status: c_int,
     problem_count: u32,
     problems_accepted: u32,
+    unresolved_count: u32,
     raw_installonly_erases: ?[*]const c.Id,
     installonly_erase_count: u32,
     raw_facts: ?*?*const abi.Capture,
     raw_owner: ?*?*anyopaque,
 ) callconv(.c) u32 {
+    if (raw_facts) |output| output.* = null;
+    if (raw_owner) |output| output.* = null;
     const facts_out = raw_facts orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     const owner_out = raw_owner orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    facts_out.* = null;
-    owner_out.* = null;
+    if (unresolved_count != 0) {
+        return mapCaptureError(error.UnsupportedResult);
+    }
     const accepted = flagValue(problems_accepted) catch
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     const installonly_erases = borrowedArray(
@@ -1449,6 +1545,7 @@ fn libsolvCaptureCreate(
         .solve_status = solve_status,
         .problem_count = problem_count,
         .problems_accepted = accepted,
+        .unresolved_count = unresolved_count,
         .installonly_retry_erases = installonly_erases,
     }) catch |err| return mapCaptureError(err);
     facts_out.* = owner.view();
@@ -1480,7 +1577,7 @@ fn capturePackage(
     repository_ref: u32,
 ) CaptureError!abi.Package {
     const solvable = try packageSolvable(pool, solvid);
-    const repository = try solvableRepository(solvable);
+    const repository = try solvableRepository(pool, solvid, solvable);
     const identity = try parseIdentity(
         allocator,
         pool,
@@ -1598,14 +1695,12 @@ fn parseIdentity(
         return error.UnsupportedResult;
     }
 
-    var version_release = evr;
-    var epoch: ?u32 = null;
-    if (std.mem.indexOfScalar(u8, evr, ':')) |colon| {
-        if (colon == 0) return error.UnsupportedResult;
-        epoch = std.fmt.parseUnsigned(u32, evr[0..colon], 10) catch
-            return error.UnsupportedResult;
-        version_release = evr[colon + 1 ..];
-    }
+    const parsed_evr = try splitEvrEpoch(evr);
+    const version_release = parsed_evr.version_release;
+    const epoch: ?u32 = if (parsed_evr.epoch) |value|
+        std.math.cast(u32, value) orelse return error.UnsupportedResult
+    else
+        null;
     const release_separator = std.mem.lastIndexOfScalar(
         u8,
         version_release,
@@ -1672,6 +1767,7 @@ fn captureCapability(
         return error.UnsupportedResult;
     const name = try poolString(pool, relation.name);
     const evr = try poolString(pool, relation.evr);
+    if (name.len == 0) return error.UnsupportedResult;
     var output = abi.Capability{
         .name = try ownBytes(allocator, name),
         .comparison = comparison.value,
@@ -1680,16 +1776,11 @@ fn captureCapability(
     };
     if (evr.len == 0) return output;
 
-    var version_release = evr;
-    if (std.mem.indexOfScalar(u8, evr, ':')) |colon| {
-        if (colon == 0) return error.UnsupportedResult;
-        output.epoch = std.fmt.parseUnsigned(
-            u64,
-            evr[0..colon],
-            10,
-        ) catch return error.UnsupportedResult;
+    const parsed_evr = try splitEvrEpoch(evr);
+    const version_release = parsed_evr.version_release;
+    if (parsed_evr.epoch) |epoch| {
+        output.epoch = epoch;
         output.has_epoch = 1;
-        version_release = evr[colon + 1 ..];
     }
     if (std.mem.lastIndexOfScalar(u8, version_release, '-')) |separator| {
         if (separator == 0 or separator + 1 == version_release.len) {
@@ -1711,6 +1802,29 @@ fn captureCapability(
         output.has_version = 1;
     }
     return output;
+}
+
+const EvrEpoch = struct {
+    epoch: ?u64,
+    version_release: []const u8,
+};
+
+fn splitEvrEpoch(evr: []const u8) CaptureError!EvrEpoch {
+    const colon = std.mem.indexOfScalar(u8, evr, ':') orelse
+        return .{ .epoch = null, .version_release = evr };
+    if (colon == 0 or colon + 1 == evr.len) {
+        return .{ .epoch = null, .version_release = evr };
+    }
+    for (evr[0..colon]) |byte| {
+        if (!std.ascii.isDigit(byte)) {
+            return .{ .epoch = null, .version_release = evr };
+        }
+    }
+    return .{
+        .epoch = std.fmt.parseUnsigned(u64, evr[0..colon], 10) catch
+            return error.UnsupportedResult,
+        .version_release = evr[colon + 1 ..],
+    };
 }
 
 const RelationComparison = struct {
@@ -1804,6 +1918,13 @@ fn capabilityEmpty(value: abi.Capability) bool {
 fn queueElements(queue: *const c.Queue) CaptureError![]const c.Id {
     if (queue.count < 0) return error.InvalidInput;
     const count: usize = @intCast(queue.count);
+    if (!sliceCountFitsAddressLimit(
+        c.Id,
+        count,
+        @intCast(std.math.maxInt(isize)),
+    )) {
+        return error.InvalidInput;
+    }
     if (count == 0) return &.{};
     if (queue.elements == null) return error.InvalidInput;
     return queue.elements[0..count];
@@ -1818,8 +1939,17 @@ fn borrowedArray(
         if (pointer != null) return error.InvalidTrace;
         return &.{};
     }
+    const value_count = std.math.cast(usize, count) orelse
+        return error.InvalidTrace;
+    if (!sliceCountFitsAddressLimit(
+        T,
+        value_count,
+        @intCast(std.math.maxInt(isize)),
+    )) {
+        return error.InvalidTrace;
+    }
     const values = pointer orelse return error.InvalidTrace;
-    return values[0..count];
+    return values[0..value_count];
 }
 
 fn bytesSlice(value: abi.Bytes) CaptureError![]const u8 {
@@ -1827,8 +1957,22 @@ fn bytesSlice(value: abi.Bytes) CaptureError![]const u8 {
         if (value.data != null) return error.InvalidTrace;
         return "";
     }
+    if (value.length > @as(usize, @intCast(std.math.maxInt(isize)))) {
+        return error.InvalidTrace;
+    }
     const pointer = value.data orelse return error.InvalidTrace;
     return pointer[0..value.length];
+}
+
+pub fn sliceCountFitsAddressLimit(
+    comptime T: type,
+    count: usize,
+    address_limit: usize,
+) bool {
+    if (count > address_limit) return false;
+    const byte_length = std.math.mul(usize, count, @sizeOf(T)) catch
+        return false;
+    return byte_length <= address_limit;
 }
 
 fn bytesEmpty(value: abi.Bytes) bool {
@@ -1910,17 +2054,83 @@ fn packageSolvable(
     pool: *c.Pool,
     solvid: c.Id,
 ) CaptureError!*c.Solvable {
+    const solvable = try solvableAt(pool, solvid);
+    _ = try poolString(pool, solvable.name);
+    _ = try poolString(pool, solvable.arch);
+    _ = try poolString(pool, solvable.evr);
+    _ = try solvableRepository(pool, solvid, solvable);
+    return solvable;
+}
+
+fn solvableAt(
+    pool: *c.Pool,
+    solvid: c.Id,
+) CaptureError!*c.Solvable {
     if (solvid <= c.SYSTEMSOLVABLE or solvid >= pool.nsolvables) {
         return error.UnsupportedResult;
     }
+    if (pool.solvables == null) return error.UnsupportedResult;
     const raw = c.pool_id2solvable(pool, solvid);
     if (raw == null) return error.UnsupportedResult;
     return @ptrCast(raw);
 }
 
-fn solvableRepository(solvable: *c.Solvable) CaptureError!*c.Repo {
-    if (solvable.*.repo == null) return error.UnsupportedResult;
-    return @ptrCast(solvable.*.repo);
+fn solvableRepository(
+    pool: *c.Pool,
+    solvid: c.Id,
+    solvable: *c.Solvable,
+) CaptureError!*c.Repo {
+    const raw = solvable.*.repo orelse return error.UnsupportedResult;
+    const repository: *c.Repo = @ptrCast(raw);
+    const index = try repositoryIndex(pool, repository);
+    if (repository.pool != pool or
+        repository.repoid != index or
+        repository.start < 2 or
+        repository.end <= repository.start or
+        repository.end > pool.nsolvables or
+        repository.nsolvables <= 0 or
+        solvid < repository.start or
+        solvid >= repository.end)
+    {
+        return error.UnsupportedResult;
+    }
+    return repository;
+}
+
+fn repositoryIndex(
+    pool: *c.Pool,
+    repository: *c.Repo,
+) CaptureError!c.Id {
+    if (pool.nrepos <= 0 or pool.repos == null) {
+        return error.UnsupportedResult;
+    }
+    if (!sliceCountFitsAddressLimit(
+        ?*c.Repo,
+        @intCast(pool.nrepos),
+        @intCast(std.math.maxInt(isize)),
+    )) {
+        return error.UnsupportedResult;
+    }
+    var index: c.Id = 1;
+    while (index < pool.nrepos) : (index += 1) {
+        if (pool.repos[@intCast(index)] == repository) return index;
+    }
+    return error.UnsupportedResult;
+}
+
+fn validateInstalledRepository(pool: *c.Pool) CaptureError!void {
+    const raw = pool.installed orelse return;
+    const repository: *c.Repo = @ptrCast(raw);
+    const index = try repositoryIndex(pool, repository);
+    if (repository.pool != pool or
+        repository.repoid != index or
+        repository.start < 0 or
+        repository.end < repository.start or
+        repository.end > pool.nsolvables or
+        repository.nsolvables < 0)
+    {
+        return error.UnsupportedResult;
+    }
 }
 
 fn isInstalledRepository(pool: *c.Pool, repository: *c.Repo) bool {
@@ -1934,7 +2144,16 @@ fn requiredPackageId(pool: *c.Pool, solvid: c.Id) CaptureError!c.Id {
 }
 
 fn poolString(pool: *c.Pool, id: c.Id) CaptureError![]const u8 {
-    if (id <= 0) return error.UnsupportedResult;
+    if (id <= 0 or isRelationId(id) or
+        pool.ss.nstrings <= 0 or
+        id >= pool.ss.nstrings or
+        pool.ss.strings == null or
+        pool.ss.stringspace == null)
+    {
+        return error.UnsupportedResult;
+    }
+    const offset = pool.ss.strings[@intCast(id)];
+    if (offset >= pool.ss.sstrings) return error.UnsupportedResult;
     const raw = c.pool_id2str(pool, id);
     if (raw == null) return error.UnsupportedResult;
     return std.mem.span(raw);
@@ -1960,13 +2179,33 @@ fn repositoryKind(pool: *c.Pool, repository: *c.Repo) u32 {
     return abi.repository_kind.available;
 }
 
-fn isRealPackage(pool: *c.Pool, solvable: *c.Solvable) bool {
-    if (solvable.name <= 0 or solvable.arch <= 0 or solvable.evr <= 0) {
-        return false;
-    }
-    const raw_name = c.pool_id2str(pool, solvable.name);
-    if (raw_name == null) return false;
-    return !std.mem.startsWith(u8, std.mem.span(raw_name), "patch:");
+fn repositoryPriority(
+    pool: *c.Pool,
+    repository: *c.Repo,
+) CaptureError!i32 {
+    return switch (repositoryKind(pool, repository)) {
+        abi.repository_kind.available => {
+            if (repository.priority == std.math.minInt(i32)) {
+                return error.UnsupportedResult;
+            }
+            return -repository.priority;
+        },
+        abi.repository_kind.installed,
+        abi.repository_kind.command_line,
+        => 0,
+        else => unreachable,
+    };
+}
+
+fn isRealPackage(
+    pool: *c.Pool,
+    solvable: *c.Solvable,
+) CaptureError!bool {
+    return !std.mem.startsWith(
+        u8,
+        try poolString(pool, solvable.name),
+        "patch:",
+    );
 }
 
 fn isResultSentinel(solvid: c.Id) bool {
@@ -2017,14 +2256,16 @@ fn packageRef(refs: []const u32, solvid: c.Id) CaptureError!u32 {
     return value;
 }
 
-fn appendUniqueId(
+fn appendUniquePoolId(
     allocator: Allocator,
     list: *std.ArrayList(c.Id),
+    seen: []bool,
     value: c.Id,
 ) CaptureError!void {
-    for (list.items) |existing| {
-        if (existing == value) return;
-    }
+    if (value < 0 or value >= seen.len) return error.UnsupportedResult;
+    const index: usize = @intCast(value);
+    if (seen[index]) return;
+    seen[index] = true;
     try list.append(allocator, value);
 }
 
@@ -2211,8 +2452,16 @@ fn packageTieLess(
     }
     return std.mem.order(
         u8,
-        try repositoryName(try solvableRepository(left_solvable)),
-        try repositoryName(try solvableRepository(right_solvable)),
+        try repositoryName(try solvableRepository(
+            pool,
+            left,
+            left_solvable,
+        )),
+        try repositoryName(try solvableRepository(
+            pool,
+            right,
+            right_solvable,
+        )),
     ) == .lt;
 }
 
