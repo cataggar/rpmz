@@ -724,7 +724,8 @@ error:
 static uint32_t
 TDNFAddCmdLinePackages(
     PTDNF pTdnf,
-    Queue *pQueueGoal
+    Queue *pQueueGoal,
+    TDNF_ALTERTYPE nAlterType
 )
 {
     uint32_t dwError = 0;
@@ -737,6 +738,7 @@ TDNFAddCmdLinePackages(
     char *pszCopyOfPkgName = NULL;
     char* pszRPMPath = NULL;
     Id id;
+    int nTraceStart;
 
     if(!pTdnf)
     {
@@ -749,12 +751,9 @@ TDNFAddCmdLinePackages(
 
     for(nCmdIndex = 1; nCmdIndex < pCmdArgs->nCmdCount; ++nCmdIndex)
     {
-        /* Add packages with URLs or filenames on the command line
-         * to our virtual @cmdline repo */
         pszPkgName = pCmdArgs->ppszCmds[nCmdIndex];
-
-        /* check if it's a package file or URL */
-        if (fnmatch("*.rpm", pszPkgName, 0) != 0) {
+        if (fnmatch("*.rpm", pszPkgName, 0) != 0)
+        {
             continue;
         }
 
@@ -775,8 +774,6 @@ TDNFAddCmdLinePackages(
         dwError = TDNFIsFileOrSymlink(pszPkgName, &nIsFile);
         BAIL_ON_TDNF_ERROR(dwError);
 
-        /* if it's a file it's to be installed
-         * directly as a file. No need to download. */
         if (nIsFile)
         {
             pszRPMPath = realpath(pszPkgName, NULL);
@@ -791,14 +788,12 @@ TDNFAddCmdLinePackages(
             dwError = TDNFUriIsRemote(pszPkgName, &nIsRemote);
             if (dwError == ERROR_TDNF_URL_INVALID)
             {
-                /* not a URL => normal pkg name, nothing to do here */
                 dwError = 0;
                 continue;
             }
             BAIL_ON_TDNF_ERROR(dwError);
             if (!nIsRemote)
             {
-                /* non-remote URL, like "file:///", no need to download */
                 dwError = TDNFPathFromUri(pszPkgName, &pszRPMPath);
                 BAIL_ON_TDNF_ERROR(dwError);
             }
@@ -806,33 +801,27 @@ TDNFAddCmdLinePackages(
             {
                 PTDNF_REPO_DATA pRepo = NULL;
 
-                /* remote URL, we need to download */
-                dwError = TDNFAllocateString(pszPkgName,
-                                             &pszCopyOfPkgName);
+                dwError = TDNFAllocateString(pszPkgName, &pszCopyOfPkgName);
                 BAIL_ON_TDNF_ERROR(dwError);
 
                 dwError = TDNFFindRepoById(pTdnf, CMDLINE_REPO_NAME, &pRepo);
                 BAIL_ON_TDNF_ERROR(dwError);
 
-                dwError = TDNFDownloadPackageToCache(
-                              pTdnf,
-                              pszPkgName,
-                              basename(pszCopyOfPkgName),
-                              pRepo,
-                              &pszRPMPath
-                          );
+                dwError = TDNFDownloadPackageToCache(pTdnf, pszPkgName,
+                              basename(pszCopyOfPkgName), pRepo, &pszRPMPath);
                 BAIL_ON_TDNF_ERROR(dwError);
 
                 TDNF_SAFE_FREE_MEMORY(pszCopyOfPkgName);
            }
         }
-        dwError = SolvAddRpmNative(
-                      pTdnf->pSolvCmdLineRepo,
-                      pszRPMPath,
-                      REPO_REUSE_REPODATA|REPO_NO_INTERNALIZE|RPM_ADD_WITH_HDRID|RPM_ADD_WITH_SHA256SUM,
-                      &id);
+        dwError = SolvAddRpmNative(pTdnf->pSolvCmdLineRepo, pszRPMPath,
+                      REPO_REUSE_REPODATA|REPO_NO_INTERNALIZE|
+                      RPM_ADD_WITH_HDRID|RPM_ADD_WITH_SHA256SUM, &id);
         BAIL_ON_TDNF_ERROR(dwError);
+        nTraceStart = pQueueGoal->count;
         queue_push(pQueueGoal, id);
+        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf->pRequestTrace, pQueueGoal->elements, nTraceStart,
+            pQueueGoal->count, nAlterType, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, nCmdIndex - 1);
     }
 
     repo_internalize(pTdnf->pSolvCmdLineRepo);
@@ -1454,8 +1443,6 @@ error:
     goto cleanup;
 }
 
-//Resolve alter command before presenting
-//the goal steps to user for approval
 uint32_t
 TDNFResolve(
     PTDNF pTdnf,
@@ -1469,9 +1456,13 @@ TDNFResolve(
     PTDNF_SOLVED_PKG_INFO pSolvedPkgInfo = NULL;
     uint64_t qwAvailCacheBytes = 0;
     char **ppszPkgNames = NULL;
-    char **ppszPkgFiles = NULL; /* cmd line packages */
+    char **ppszPkgFiles = NULL;
     int i, iFiles = 0, iPkgs = 0;
 
+    if(pTdnf) {
+        TDNFTransactionPlanRequestTraceDestroy(pTdnf->pRequestTrace);
+        pTdnf->pRequestTrace = NULL;
+    }
     if(!pTdnf || !ppSolvedPkgInfo)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
@@ -1491,9 +1482,16 @@ TDNFResolve(
 
     queue_init(&queueGoal);
 
+    if(!pTdnf->pArgs->nBuildDeps && !pTdnf->pArgs->nSource &&
+       !pTdnf->pArgs->nNoDeps)
+    {
+        pTdnf->pRequestTrace = TDNFTransactionPlanRequestTraceCreate(nAlterType,
+            (const char *const *)(pTdnf->pArgs->ppszCmds + 1),
+            pTdnf->pArgs->nCmdCount > 1 ? pTdnf->pArgs->nCmdCount - 1 : 0);
+    }
     if(nAlterType == ALTER_INSTALL || nAlterType == ALTER_REINSTALL)
     {
-        dwError = TDNFAddCmdLinePackages(pTdnf, &queueGoal);
+        dwError = TDNFAddCmdLinePackages(pTdnf, &queueGoal, nAlterType);
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
@@ -1584,7 +1582,6 @@ TDNFResolve(
     *ppSolvedPkgInfo = pSolvedPkgInfo;
 
 cleanup:
-    /* only free the pointers */
     TDNF_SAFE_FREE_MEMORY(ppszPkgNames);
     TDNF_SAFE_FREE_MEMORY(ppszPkgFiles);
 
@@ -1763,7 +1760,6 @@ TDNFHistoryResolve(
     uint32_t dwError = 0;
     int rc = 0;
     char **ppszPkgsNotResolved = NULL;
-    Queue queueGoal = {0};
     PTDNF_SOLVED_PKG_INFO pSolvedPkgInfo = NULL;
     struct history_ctx *ctx = NULL;
     struct history_delta *hd = NULL;
@@ -1775,14 +1771,18 @@ TDNFHistoryResolve(
     uint32_t dwRepoCount = 0;
     char **ppszMatches = NULL;
     uint32_t dwMatchCount = 0;
+    int nTraceStart = 0;
 
+    if(pTdnf) {
+        TDNFTransactionPlanRequestTraceDestroy(pTdnf->pRequestTrace);
+        pTdnf->pRequestTrace = NULL;
+    }
     if(!pTdnf || !pHistoryArgs || !ppSolvedPkgInfo)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    /* args sanity checks */
     if (pHistoryArgs->nCommand == HISTORY_CMD_ROLLBACK)
     {
         if (pHistoryArgs->nTo <= 0)
@@ -1805,6 +1805,9 @@ TDNFHistoryResolve(
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
+    }
+    if(pHistoryArgs->nCommand != HISTORY_CMD_INIT) {
+        pTdnf->pRequestTrace = TDNFTransactionPlanRequestTraceCreateHistory();
     }
 
     /* no need to refresh cache when initializing db */
@@ -1883,6 +1886,7 @@ TDNFHistoryResolve(
             if (strncmp(pszPkgName, "gpg-pubkey-", 11) == 0)
                 continue;
 
+            nTraceStart = qInstall.count;
             queue_init(&qResult);
 
             dwError = TDNFRepoMdNativeFindNevraMatchesConfig(
@@ -1948,6 +1952,9 @@ TDNFHistoryResolve(
             ppszMatches = NULL;
             dwMatchCount = 0;
             queue_free(&qResult);
+            TDNFTransactionPlanRequestTraceRecordHistoryGoal(pTdnf->pRequestTrace, pszPkgName,
+                TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_INSTALL, TDNF_TRANSACTION_PLAN_CAPTURE_JOB_INSTALL,
+                qInstall.elements, nTraceStart, qInstall.count);
         }
         else
         {
@@ -1964,6 +1971,7 @@ TDNFHistoryResolve(
             if (strncmp(pszPkgName, "gpg-pubkey-", 11) == 0)
                 continue;
 
+            nTraceStart = qErase.count;
             dwError = TDNFRepoMdNativeFindNevraMatchesConfig(
                           pRepos,
                           dwRepoCount,
@@ -1985,6 +1993,9 @@ TDNFHistoryResolve(
             TDNFFreeStringArray(ppszMatches);
             ppszMatches = NULL;
             dwMatchCount = 0;
+            TDNFTransactionPlanRequestTraceRecordHistoryGoal(pTdnf->pRequestTrace, pszPkgName,
+                TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_ERASE, TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ERASE,
+                qErase.elements, nTraceStart, qErase.count);
         }
         else
         {
@@ -2032,7 +2043,6 @@ cleanup:
     destroy_history_ctx(ctx);
     TDNFFreeStringArray(ppszMatches);
     TDNFNativeQueryFreeRepoInputs(pRepos, dwRepoCount);
-    queue_free(&queueGoal);
     queue_free(&qInstall);
     queue_free(&qErase);
     return dwError;
@@ -2396,6 +2406,7 @@ TDNFCloseHandle(
         }
         tdnf_rpm_config_destroy(pTdnf->pRpmConfig);
         TDNFFreePlugins(pTdnf->pPlugins);
+        TDNFTransactionPlanRequestTraceDestroy(pTdnf->pRequestTrace);
         TDNFFreeMemory(pTdnf);
     }
     TdnfExitHandler();

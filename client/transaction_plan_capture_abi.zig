@@ -101,6 +101,24 @@ pub const selection_kind = struct {
     pub const capability: u32 = 3;
 };
 
+pub const request_trace_no_request: u32 = 0xffffffff;
+
+pub const request_trace_flag = struct {
+    pub const clean_deps: u32 = 1 << 0;
+    pub const force_best: u32 = 1 << 1;
+    pub const targeted: u32 = 1 << 2;
+    pub const not_by_user: u32 = 1 << 3;
+    pub const weak: u32 = 1 << 4;
+};
+
+pub const request_trace_policy = struct {
+    pub const exclude: u32 = 0;
+    pub const installonly: u32 = 1;
+    pub const lock: u32 = 2;
+    pub const min_version: u32 = 3;
+    pub const protected: u32 = 4;
+};
+
 pub const Bytes = extern struct {
     data: ?[*]const u8 = null,
     length: usize = 0,
@@ -323,4 +341,55 @@ pub const Capture = extern struct {
     skipped_job_ref_count: u32 = 0,
     hidden_package_ref_count: u32 = 0,
     problem_count: u32 = 0,
+};
+
+pub const RequestTraceJob = extern struct {
+    capability: Capability = .{},
+    selection_value: Bytes = .{},
+    selection_id: i32 = 0,
+    action: u32 = 0,
+    selection_kind: u32 = 0,
+    raw_how: u32 = 0,
+    effective_how: u32 = 0,
+    raw_flags: u32 = 0,
+    effective_flags: u32 = 0,
+    reason: u32 = 0,
+    request_ref: u32 = 0,
+    has_request_ref: u32 = 0,
+};
+
+pub const RequestTraceQueueOrigin = extern struct {
+    queue_pair_index: u32 = 0,
+    job_ref: u32 = 0,
+    request_ref: u32 = 0,
+    has_request_ref: u32 = 0,
+};
+
+pub const RequestTracePolicyFact = extern struct {
+    value: Bytes = .{},
+    kind: u32 = 0,
+};
+
+pub const RequestTraceView = extern struct {
+    requests: ?[*]const Request = null,
+    jobs: ?[*]const RequestTraceJob = null,
+    queue_origins: ?[*]const RequestTraceQueueOrigin = null,
+    policy_facts: ?[*]const RequestTracePolicyFact = null,
+    request_count: u32 = 0,
+    job_count: u32 = 0,
+    queue_origin_count: u32 = 0,
+    policy_fact_count: u32 = 0,
+    allow_erasing: u32 = 0,
+};
+
+pub const RequestTracePackageRef = extern struct {
+    selection_id: i32 = 0,
+    package_ref: u32 = 0,
+};
+
+pub const RequestTraceCaptureFacts = extern struct {
+    requests: ?[*]const Request = null,
+    jobs: ?[*]const Job = null,
+    request_count: u32 = 0,
+    job_count: u32 = 0,
 };

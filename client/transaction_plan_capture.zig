@@ -4,6 +4,11 @@ const Allocator = std.mem.Allocator;
 const abi = @import("transaction_plan_capture_abi");
 const error_codes = @import("tdnf_error");
 const transaction_plan = @import("transaction_plan");
+const request_trace = @import("transaction_plan_request_trace");
+
+comptime {
+    _ = request_trace;
+}
 
 const DecodeError = error{InvalidAbi} || Allocator.Error;
 const CaptureError = DecodeError || transaction_plan.InitError;
@@ -1830,4 +1835,117 @@ test "capture adapter cleans every allocation failure" {
         captureAllocationFailureCase,
         .{},
     );
+}
+
+test "request trace remaps stable capture facts without queue or path data" {
+    var trace = request_trace.Trace.init(std.testing.allocator);
+    defer trace.deinit();
+    const update_request = try trace.addRequest(
+        abi.request_kind.update,
+        "raw alpha subject",
+        true,
+    );
+    const install_request = try trace.addRequest(
+        abi.request_kind.install,
+        "/home/user/credential-bearing-cli-package.rpm",
+        true,
+    );
+    try trace.recordNameJob(
+        0,
+        abi.job_action.update,
+        "alpha",
+        0x101,
+        abi.request_trace_flag.force_best,
+        abi.request_reason.user,
+        update_request,
+    );
+    try trace.recordPackageJob(
+        1,
+        abi.job_action.install,
+        200,
+        0x102,
+        abi.request_trace_flag.clean_deps |
+            abi.request_trace_flag.targeted,
+        abi.request_reason.user,
+        install_request,
+    );
+    try trace.recordCapabilityJob(
+        2,
+        abi.job_action.install,
+        .{
+            .name = "libfeature.so.1()(64bit)",
+            .flags = "GE",
+            .version = "2.0",
+            .release = "1",
+            .epoch = 1,
+            .comparison = abi.compare_op.ge,
+            .sense = 0x104,
+            .pre = true,
+        },
+        0x103,
+        abi.request_trace_flag.not_by_user |
+            abi.request_trace_flag.weak,
+        abi.request_reason.dependency,
+        abi.request_trace_no_request,
+    );
+    try trace.recordAllJob(
+        3,
+        abi.job_action.update,
+        0x104,
+        0,
+        abi.request_reason.policy,
+        abi.request_trace_no_request,
+    );
+    const queue = [_]i32{
+        0x101, 0,
+        0x102, 200,
+        0x103, 0,
+        0x104, 0,
+    };
+    try trace.finalize(&queue, 0, 0);
+
+    const first_map = [_]abi.RequestTracePackageRef{
+        .{ .selection_id = 999, .package_ref = 4 },
+        .{ .selection_id = 200, .package_ref = 2 },
+    };
+    const first = try request_trace.CaptureFactsOwner.create(
+        std.testing.allocator,
+        &trace,
+        &first_map,
+    );
+    defer first.destroy();
+    const second_map = [_]abi.RequestTracePackageRef{
+        .{ .selection_id = 200, .package_ref = 2 },
+        .{ .selection_id = 999, .package_ref = 4 },
+    };
+    const second = try request_trace.CaptureFactsOwner.create(
+        std.testing.allocator,
+        &trace,
+        &second_map,
+    );
+    defer second.destroy();
+    try std.testing.expectEqual(
+        first.facts.jobs.?[1].selection_package_ref,
+        second.facts.jobs.?[1].selection_package_ref,
+    );
+    try std.testing.expectEqual(@as(u32, 2), first.facts.jobs.?[1].selection_package_ref);
+    try std.testing.expectEqual(@as(u32, 0), first.facts.requests.?[1].has_subject);
+
+    var fixture: TestFixture = undefined;
+    fixture.init();
+    @memcpy(
+        fixture.requests[0..],
+        first.facts.requests.?[0..first.facts.request_count],
+    );
+    @memcpy(
+        fixture.jobs[0..],
+        first.facts.jobs.?[0..first.facts.job_count],
+    );
+    const owner = try createOwner(std.testing.allocator, &fixture.input);
+    defer owner.destroy();
+    const canonical = try owner.plan.canonicalJsonAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(canonical);
+    try std.testing.expect(std.mem.indexOf(u8, canonical, "/home/user") == null);
+    try std.testing.expect(std.mem.indexOf(u8, canonical, "queue_pair") == null);
+    try std.testing.expect(std.mem.indexOf(u8, canonical, "raw_how") == null);
 }
