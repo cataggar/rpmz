@@ -297,6 +297,49 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
+    const transaction_plan_capture_abi_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan_capture_abi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_plan_capture_abi_mod.addIncludePath(b.path("client"));
+    const transaction_plan_capture_test_step = b.step(
+        "transaction-plan-capture-test",
+        "Run private transaction plan capture ABI and adapter tests",
+    );
+    {
+        const tests = b.addTest(.{
+            .root_module = transaction_plan_capture_abi_mod,
+        });
+        const run_tests = b.addRunArtifact(tests);
+        transaction_plan_capture_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    const transaction_plan_capture_test_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan_capture.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_plan_capture_test_mod.addImport(
+        "transaction_plan_capture_abi",
+        transaction_plan_capture_abi_mod,
+    );
+    transaction_plan_capture_test_mod.addImport(
+        "transaction_plan",
+        transaction_plan_mod,
+    );
+    transaction_plan_capture_test_mod.addImport("tdnf_error", tdnf_error_mod);
+    {
+        const tests = b.addTest(.{
+            .root_module = transaction_plan_capture_test_mod,
+        });
+        const run_tests = b.addRunArtifact(tests);
+        transaction_plan_capture_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
     const repomd_abi_mod = b.createModule(.{
         .root_source_file = b.path("abi/repomd_layout.zig"),
         .target = target,
@@ -1023,11 +1066,18 @@ pub fn build(b: *Build) void {
     // ----- libtdnf (shared) ----- //
 
     const tdnf_so_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan_capture.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .pic = true,
     });
+    tdnf_so_mod.addImport(
+        "transaction_plan_capture_abi",
+        transaction_plan_capture_abi_mod,
+    );
+    tdnf_so_mod.addImport("transaction_plan", transaction_plan_mod);
+    tdnf_so_mod.addImport("tdnf_error", tdnf_error_mod);
     tdnf_so_mod.addIncludePath(b.path("include"));
     tdnf_so_mod.addIncludePath(b.path("client"));
     addLibsolvIncludes(
@@ -1080,6 +1130,8 @@ pub fn build(b: *Build) void {
         .root_module = tdnf_so_mod,
         .version = project_semver,
     });
+    libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureCreate");
+    libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureDestroy");
     b.installArtifact(libtdnf);
 
     // ----- libtdnfcli (shared) ----- //
