@@ -247,7 +247,24 @@ pub fn prepareWithOptions(
     if (options.allow_erasing and base.replacement_kind != .none) {
         return error.UnsupportedPolicy;
     }
-    const clean_deps = try validateCleanupPolicy(base, options);
+    const install_cleanup_seeds = try computeInstallCleanupSeeds(
+        allocator,
+        base,
+        options,
+    );
+    defer allocator.free(install_cleanup_seeds);
+    var has_install_cleanup_seed = false;
+    for (install_cleanup_seeds) |seed| {
+        if (seed) {
+            has_install_cleanup_seed = true;
+            break;
+        }
+    }
+    const clean_deps = try validateCleanupPolicy(
+        base,
+        options,
+        has_install_cleanup_seed,
+    );
     if (clean_deps and
         options.protected_names.len != 0 and
         !options.allow_erasing)
@@ -415,6 +432,9 @@ pub fn prepareWithOptions(
             }
             try replacement_candidates[package_index].append(candidate.id);
         }
+    }
+    for (cleanup_seeds, install_cleanup_seeds) |*seed, install_seed| {
+        if (install_seed) seed.* = true;
     }
     const cleanup_removals = if (clean_deps)
         try computeCleanupRemovals(
@@ -737,9 +757,143 @@ fn markProtectedPackages(
     }
 }
 
+/// Mirrors libsolv's install-job cleanup seeding in `solver_createcleandepsmap`
+/// (`cleandeps.c`): an install job carrying clean-deps seeds the cleanup walk
+/// with the installed packages that *every* literal of the job obsoletes, where
+/// an already-installed literal stands for itself. `solver_add_obsoleted` counts
+/// implicit same-name obsoletes, so a same-name replacement seeds the installed
+/// version it displaces. Install-only literals are skipped, matching libsolv's
+/// "multiversion is bad" bail-out.
+fn computeInstallCleanupSeeds(
+    allocator: std.mem.Allocator,
+    base: *const solver_rules.OwnedFormula,
+    options: PrepareOptions,
+) PrepareError![]bool {
+    const package_count = base.universe.packages.len;
+    const seeds = try allocator.alloc(bool, package_count);
+    errdefer allocator.free(seeds);
+    @memset(seeds, false);
+    if (!options.clean_deps) {
+        var any_clean_deps = false;
+        for (base.jobs) |job| {
+            if (job.flags.clean_deps) {
+                any_clean_deps = true;
+                break;
+            }
+        }
+        if (!any_clean_deps) return seeds;
+    }
+
+    const intersection = try allocator.alloc(bool, package_count);
+    defer allocator.free(intersection);
+    const obsoleted = try allocator.alloc(bool, package_count);
+    defer allocator.free(obsoleted);
+
+    for (base.clauses) |clause| {
+        const job_id = switch (clause.origin) {
+            .job => |value| value,
+            else => continue,
+        };
+        const job_index: usize = @intFromEnum(job_id);
+        if (job_index >= base.jobs.len) return error.InvalidFormula;
+        const job = base.jobs[job_index];
+        if (job.action != .install) continue;
+        if (!options.clean_deps and !job.flags.clean_deps) continue;
+        const literals = try checkedClauseLiterals(base, clause);
+        if (literals.len == 0) continue;
+
+        // libsolv leaves a job already satisfied by one installed literal alone.
+        if (literals.len == 1) {
+            const only_index = try packageIndex(
+                literals[0].package(),
+                package_count,
+            );
+            if (base.universe.packages[only_index].installed != null) continue;
+        }
+
+        var skip = false;
+        for (literals) |literal| {
+            if (!literal.positive()) {
+                skip = true;
+                break;
+            }
+            const literal_index = try packageIndex(
+                literal.package(),
+                package_count,
+            );
+            if (base.package_states[literal_index].multiversion) {
+                skip = true;
+                break;
+            }
+        }
+        if (skip) continue;
+
+        @memset(intersection, true);
+        for (literals) |literal| {
+            const literal_index = try packageIndex(
+                literal.package(),
+                package_count,
+            );
+            try collectObsoletedInstalled(base, literal_index, obsoleted);
+            var remaining = false;
+            for (intersection, obsoleted) |*keep, hit| {
+                keep.* = keep.* and hit;
+                if (keep.*) remaining = true;
+            }
+            if (!remaining) break;
+        }
+        for (intersection, 0..) |seed, package_index| {
+            if (seed) seeds[package_index] = true;
+        }
+    }
+    return seeds;
+}
+
+/// Fills `obsoleted` with the installed packages that `package_index` displaces:
+/// itself when already installed, otherwise every installed package sharing its
+/// name plus every installed target of its explicit `Obsoletes` entries.
+fn collectObsoletedInstalled(
+    base: *const solver_rules.OwnedFormula,
+    package_index: usize,
+    obsoleted: []bool,
+) PrepareError!void {
+    @memset(obsoleted, false);
+    const package = base.universe.packages[package_index];
+    if (package.installed != null) {
+        obsoleted[package_index] = true;
+        return;
+    }
+    if (solver_rules.isSource(package.source.nevra.arch)) return;
+    for (base.universe.packages, 0..) |other, other_index| {
+        if (other.installed == null) continue;
+        if (solver_rules.isSource(other.source.nevra.arch)) continue;
+        if (std.mem.eql(
+            u8,
+            other.source.nevra.name,
+            package.source.nevra.name,
+        )) {
+            obsoleted[other_index] = true;
+        }
+    }
+    for (base.clauses) |clause| {
+        const origin = switch (clause.origin) {
+            .obsoletes => |value| value,
+            else => continue,
+        };
+        if (@intFromEnum(origin.dependency.package) != package_index) continue;
+        const target_index = try packageIndex(
+            origin.target,
+            base.universe.packages.len,
+        );
+        if (base.universe.packages[target_index].installed == null) continue;
+        obsoleted[target_index] = true;
+    }
+}
+
 fn validateCleanupPolicy(
     base: *const solver_rules.OwnedFormula,
     options: PrepareOptions,
+    has_install_cleanup_seed: bool,
 ) PrepareError!bool {
     var clean_deps = options.clean_deps;
     var erase_count: usize = 0;
@@ -749,9 +903,9 @@ fn validateCleanupPolicy(
         }
     }
     if (!clean_deps) return false;
-    // Cleanup seeds are only ever taken from erase jobs, so a clean-deps
-    // request without one cannot remove anything and is inert rather than
-    // unsupported.
+    // Cleanup is seeded from erase jobs and from install jobs that replace an
+    // installed package. A clean-deps request with neither cannot remove
+    // anything and is inert rather than unsupported.
     var has_erase_job = false;
     for (base.jobs) |job| {
         if (job.action == .erase) {
@@ -759,7 +913,7 @@ fn validateCleanupPolicy(
             break;
         }
     }
-    if (!has_erase_job) return false;
+    if (!has_erase_job and !has_install_cleanup_seed) return false;
     if (options.best or base.replacement_kind != .none) {
         return error.UnsupportedPolicy;
     }
@@ -800,10 +954,24 @@ fn validateCleanupPolicy(
                     return error.UnsupportedPolicy;
                 }
             },
+            .install => {
+                if (std.meta.activeTag(job.selection) != .package) {
+                    return error.UnsupportedPolicy;
+                }
+                if (job.flags.force_best or
+                    job.flags.targeted or
+                    job.flags.not_by_user or
+                    job.flags.weak)
+                {
+                    return error.UnsupportedPolicy;
+                }
+            },
             else => return error.UnsupportedPolicy,
         }
     }
-    if (erase_count == 0) return error.UnsupportedPolicy;
+    if (erase_count == 0 and !has_install_cleanup_seed) {
+        return error.UnsupportedPolicy;
+    }
 
     for (base.package_states) |state| {
         if (state.allow_uninstall) return error.UnsupportedPolicy;
@@ -857,7 +1025,11 @@ fn computeCleanupRemovals(
         const package = base.universe.package(package_id) orelse
             return error.InvalidFormula;
         if (package.installed == null) continue;
+        // libsolv clears the user-installed bit for every cleanup candidate it
+        // seeds, so a seed is always a cleanup root even when the user asked
+        // for it explicitly.
         if (!directly_erased[package_index] and
+            !cleanup_seeds[package_index] and
             installedIsUserRoot(base, package_index, protected))
         {
             continue;
@@ -7169,6 +7341,285 @@ test "clean deps honors explicit user-installed roots and rejects supplements" {
             ),
         );
     }
+}
+
+test "clean deps seeds cleanup from a same-name replacement install" {
+    var installed_relations = [_]metadata.Relation{
+        .{ .name = "helper" },
+    };
+    var installed_packages = [_]metadata.Package{
+        testPackage("app", "1"),
+        testPackage("helper", "1"),
+    };
+    installed_packages[0].requires = .{ .start = 0, .len = 1 };
+    const installed_model = metadata.RepositoryModel{
+        .packages = &installed_packages,
+        .relations = &installed_relations,
+    };
+    var available_packages = [_]metadata.Package{
+        testPackage("app", "2"),
+    };
+    const available_model = metadata.RepositoryModel{
+        .packages = &available_packages,
+    };
+    const installed_states = [_]solver_model.InstalledState{
+        .{ .rpmdb_hnum = 1, .reason = .user },
+        .{ .rpmdb_hnum = 2, .reason = .automatic },
+    };
+    var universe = try solver_model.Universe.init(
+        std.testing.allocator,
+        &.{
+            .{
+                .id = "@System",
+                .model = &installed_model,
+                .kind = .installed,
+                .installed_states = &installed_states,
+            },
+            .{ .id = "available", .model = &available_model },
+        },
+    );
+    defer universe.deinit();
+    var base = try solver_rules.generateBase(
+        std.testing.allocator,
+        &universe,
+        .{ .jobs = &.{.{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(2) },
+            .flags = .{ .clean_deps = true },
+        }} },
+        testArchitecture(),
+    );
+    defer base.deinit();
+
+    var prepared = try prepareWithOptions(
+        std.testing.allocator,
+        &base,
+        .{ .clean_deps = true },
+    );
+    defer prepared.deinit();
+    try std.testing.expectEqualSlices(
+        solver_model.PackageId,
+        &.{ @enumFromInt(0), @enumFromInt(1) },
+        prepared.cleanup_packages,
+    );
+    var result = try prepared.solve(std.testing.allocator);
+    defer result.deinit();
+    try std.testing.expectEqualSlices(
+        bool,
+        &.{ false, false, true },
+        result.satisfiable.values,
+    );
+}
+
+test "clean deps seeds cleanup from an explicit obsoletes install" {
+    var installed_relations = [_]metadata.Relation{
+        .{ .name = "helper" },
+    };
+    var installed_packages = [_]metadata.Package{
+        testPackage("old", "1"),
+        testPackage("helper", "1"),
+    };
+    installed_packages[0].requires = .{ .start = 0, .len = 1 };
+    const installed_model = metadata.RepositoryModel{
+        .packages = &installed_packages,
+        .relations = &installed_relations,
+    };
+    var available_relations = [_]metadata.Relation{
+        .{ .name = "old" },
+    };
+    var available_packages = [_]metadata.Package{
+        testPackage("new", "1"),
+    };
+    available_packages[0].obsoletes = .{ .start = 0, .len = 1 };
+    const available_model = metadata.RepositoryModel{
+        .packages = &available_packages,
+        .relations = &available_relations,
+    };
+    const installed_states = [_]solver_model.InstalledState{
+        .{ .rpmdb_hnum = 1, .reason = .user },
+        .{ .rpmdb_hnum = 2, .reason = .automatic },
+    };
+    var universe = try solver_model.Universe.init(
+        std.testing.allocator,
+        &.{
+            .{
+                .id = "@System",
+                .model = &installed_model,
+                .kind = .installed,
+                .installed_states = &installed_states,
+            },
+            .{ .id = "available", .model = &available_model },
+        },
+    );
+    defer universe.deinit();
+    var base = try solver_rules.generateBase(
+        std.testing.allocator,
+        &universe,
+        .{ .jobs = &.{.{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(2) },
+            .flags = .{ .clean_deps = true },
+        }} },
+        testArchitecture(),
+    );
+    defer base.deinit();
+
+    var prepared = try prepareWithOptions(
+        std.testing.allocator,
+        &base,
+        .{ .clean_deps = true },
+    );
+    defer prepared.deinit();
+    try std.testing.expectEqualSlices(
+        solver_model.PackageId,
+        &.{ @enumFromInt(0), @enumFromInt(1) },
+        prepared.cleanup_packages,
+    );
+    var result = try prepared.solve(std.testing.allocator);
+    defer result.deinit();
+    try std.testing.expectEqualSlices(
+        bool,
+        &.{ false, false, true },
+        result.satisfiable.values,
+    );
+}
+
+test "clean deps stays inert for installs that obsolete nothing" {
+    var installed_packages = [_]metadata.Package{
+        testPackage("orphan", "1"),
+    };
+    const installed_model = metadata.RepositoryModel{
+        .packages = &installed_packages,
+    };
+    var available_packages = [_]metadata.Package{
+        testPackage("fresh", "1"),
+        testPackage("multi", "2"),
+    };
+    const available_model = metadata.RepositoryModel{
+        .packages = &available_packages,
+    };
+    const installed_states = [_]solver_model.InstalledState{
+        .{ .rpmdb_hnum = 1, .reason = .automatic },
+    };
+    var universe = try solver_model.Universe.init(
+        std.testing.allocator,
+        &.{
+            .{
+                .id = "@System",
+                .model = &installed_model,
+                .kind = .installed,
+                .installed_states = &installed_states,
+            },
+            .{ .id = "available", .model = &available_model },
+        },
+    );
+    defer universe.deinit();
+    var base = try solver_rules.generateBase(
+        std.testing.allocator,
+        &universe,
+        .{ .jobs = &.{.{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(1) },
+            .flags = .{ .clean_deps = true },
+        }} },
+        testArchitecture(),
+    );
+    defer base.deinit();
+
+    var prepared = try prepareWithOptions(
+        std.testing.allocator,
+        &base,
+        .{ .clean_deps = true },
+    );
+    defer prepared.deinit();
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        prepared.cleanup_packages.len,
+    );
+    var result = try prepared.solve(std.testing.allocator);
+    defer result.deinit();
+    try std.testing.expectEqualSlices(
+        bool,
+        &.{ true, true, false },
+        result.satisfiable.values,
+    );
+}
+
+test "clean deps skips install-only literals when seeding cleanup" {
+    var installed_relations = [_]metadata.Relation{
+        .{ .name = "helper" },
+    };
+    var installed_packages = [_]metadata.Package{
+        testPackage("multi", "1"),
+        testPackage("helper", "1"),
+    };
+    installed_packages[0].requires = .{ .start = 0, .len = 1 };
+    const installed_model = metadata.RepositoryModel{
+        .packages = &installed_packages,
+        .relations = &installed_relations,
+    };
+    var available_packages = [_]metadata.Package{
+        testPackage("multi", "2"),
+    };
+    const available_model = metadata.RepositoryModel{
+        .packages = &available_packages,
+    };
+    const installed_states = [_]solver_model.InstalledState{
+        .{ .rpmdb_hnum = 1, .reason = .user },
+        .{ .rpmdb_hnum = 2, .reason = .automatic },
+    };
+    var universe = try solver_model.Universe.init(
+        std.testing.allocator,
+        &.{
+            .{
+                .id = "@System",
+                .model = &installed_model,
+                .kind = .installed,
+                .installed_states = &installed_states,
+            },
+            .{ .id = "available", .model = &available_model },
+        },
+    );
+    defer universe.deinit();
+    var base = try solver_rules.generateBase(
+        std.testing.allocator,
+        &universe,
+        .{ .jobs = &.{
+            .{
+                .action = .multiversion,
+                .selection = .{ .package = @enumFromInt(0) },
+            },
+            .{
+                .action = .multiversion,
+                .selection = .{ .package = @enumFromInt(2) },
+            },
+            .{
+                .action = .install,
+                .selection = .{ .package = @enumFromInt(2) },
+                .flags = .{ .clean_deps = true },
+            },
+        } },
+        testArchitecture(),
+    );
+    defer base.deinit();
+
+    var prepared = try prepareWithOptions(
+        std.testing.allocator,
+        &base,
+        .{ .clean_deps = true, .installonly_policy = true },
+    );
+    defer prepared.deinit();
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        prepared.cleanup_packages.len,
+    );
+    var result = try prepared.solve(std.testing.allocator);
+    defer result.deinit();
+    try std.testing.expectEqualSlices(
+        bool,
+        &.{ true, true, true },
+        result.satisfiable.values,
+    );
 }
 
 test "protected policy catches direct erase obsoletion and indirect removal" {
