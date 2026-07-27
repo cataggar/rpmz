@@ -11,6 +11,13 @@ pub const request_kind = struct {
     pub const update_all: u32 = 7;
 };
 
+pub const request_outcome = struct {
+    pub const pending: u32 = 0;
+    pub const queued: u32 = 1;
+    pub const satisfied: u32 = 2;
+    pub const no_candidate: u32 = 3;
+};
+
 pub const job_action = struct {
     pub const install: u32 = 0;
     pub const erase: u32 = 1;
@@ -249,6 +256,7 @@ pub const Request = extern struct {
     subject: Bytes = .{},
     kind: u32 = 0,
     has_subject: u32 = 0,
+    outcome: u32 = request_outcome.pending,
 };
 
 pub const Job = extern struct {
@@ -343,6 +351,145 @@ pub const Capture = extern struct {
     problem_count: u32 = 0,
 };
 
+pub const IntegrationRepository = extern struct {
+    repository: ?*anyopaque = null,
+    id: ?[*:0]const u8 = null,
+    cache_dir: ?[*:0]const u8 = null,
+    priority: i32 = 0,
+    cost: u32 = 0,
+};
+
+pub const IntegrationEnvironment = extern struct {
+    architecture: ?[*:0]const u8 = null,
+    distro: ?[*:0]const u8 = null,
+    releasever: ?[*:0]const u8 = null,
+    force_architecture: ?[*:0]const u8 = null,
+    excludes: ?[*]const ?[*:0]const u8 = null,
+    installonly_names: ?[*]const ?[*:0]const u8 = null,
+    locked_names: ?[*]const ?[*:0]const u8 = null,
+    min_versions: ?[*]const ?[*:0]const u8 = null,
+    protected_names: ?[*]const ?[*:0]const u8 = null,
+    rpm_config: ?*const anyopaque = null,
+    installonly_limit: u32 = 0,
+    allow_erasing: u32 = 0,
+    allow_multilib: u32 = 0,
+    all_deps: u32 = 0,
+    best: u32 = 0,
+    clean_requirements_on_remove: u32 = 0,
+    include_installed: u32 = 0,
+    install_weak_dependencies: u32 = 0,
+    keep_orphans: u32 = 0,
+    skip_broken: u32 = 0,
+};
+
+pub const RepositoryInitCallbacks = extern struct {
+    free_memory: ?*const fn (?*anyopaque) callconv(.c) void = null,
+    make_dirs: ?*const fn (?[*:0]const u8) callconv(.c) u32 = null,
+    get_cache_path: ?*const fn (
+        ?*anyopaque,
+        ?*anyopaque,
+        ?[*:0]const u8,
+        ?[*:0]const u8,
+        ?*?[*:0]u8,
+    ) callconv(.c) u32 = null,
+    get_repo_md: ?*const fn (
+        ?*anyopaque,
+        ?*anyopaque,
+        ?[*:0]const u8,
+        ?*?*anyopaque,
+    ) callconv(.c) u32 = null,
+    free_repo_metadata: ?*const fn (?*anyopaque) callconv(.c) void = null,
+    calculate_cookie: ?*const fn (
+        ?[*:0]const u8,
+        ?[*]u8,
+    ) callconv(.c) u32 = null,
+    use_metadata_cache: ?*const fn (
+        ?*anyopaque,
+        ?*anyopaque,
+        ?*c_int,
+    ) callconv(.c) u32 = null,
+    create_metadata_cache: ?*const fn (
+        ?*anyopaque,
+        ?*anyopaque,
+    ) callconv(.c) u32 = null,
+    init_from_metadata: ?*const fn (
+        ?*anyopaque,
+        ?[*:0]const u8,
+        ?*anyopaque,
+    ) callconv(.c) u32 = null,
+    read_rpms_from_directory: ?*const fn (
+        ?*anyopaque,
+        ?[*:0]const u8,
+    ) callconv(.c) u32 = null,
+    apply_snapshot: ?*const fn (
+        ?*anyopaque,
+        ?*anyopaque,
+        ?*anyopaque,
+        ?*anyopaque,
+    ) callconv(.c) u32 = null,
+};
+
+pub const RepositoryRefreshView = extern struct {
+    next: ?*anyopaque = null,
+    live_repository: ?*anyopaque = null,
+    live_repository_slot: ?*?*anyopaque = null,
+    id: ?[*:0]const u8 = null,
+    name: ?[*:0]const u8 = null,
+    base_url: ?[*:0]const u8 = null,
+    snapshot_file: ?[*:0]const u8 = null,
+    metadata_expire: c_long = 0,
+    priority: c_int = 0,
+    enabled: c_int = 0,
+    skip_if_unavailable: c_int = 0,
+    has_metadata: c_int = 0,
+};
+
+pub const RepositoryRefreshInput = extern struct {
+    tdnf_handle: ?*anyopaque = null,
+    sack: ?*anyopaque = null,
+    live_sack: ?*anyopaque = null,
+    repository_head: ?*anyopaque = null,
+    command_line_repository_slot: ?*?*anyopaque = null,
+    state_slot: ?*?*anyopaque = null,
+    failure_stage: ?*u32 = null,
+    refresh_flag: ?*c_int = null,
+    cache_dir: ?[*:0]const u8 = null,
+    root_dir: ?[*:0]const u8 = null,
+    architecture: ?[*:0]const u8 = null,
+    rpm_config: ?*const anyopaque = null,
+    cache_only: c_int = 0,
+    all_deps: c_int = 0,
+    repository_init_callbacks: ?*const RepositoryInitCallbacks = null,
+    describe_repository: ?*const fn (
+        ?*anyopaque,
+        ?*RepositoryRefreshView,
+    ) callconv(.c) void = null,
+    set_repository_enabled: ?*const fn (
+        ?*anyopaque,
+        c_int,
+    ) callconv(.c) void = null,
+};
+
+pub const RepositoryInitInput = extern struct {
+    tdnf_handle: ?*anyopaque = null,
+    repo_data: ?*anyopaque = null,
+    sack: ?*anyopaque = null,
+    pool: ?*anyopaque = null,
+    callbacks: ?*const RepositoryInitCallbacks = null,
+    refresh_input: ?*const RepositoryRefreshInput = null,
+    state_slot: ?*?*anyopaque = null,
+    command_line_repository: ?*anyopaque = null,
+    live_repository_slot: ?*?*anyopaque = null,
+    failure_stage: ?*u32 = null,
+    repository_id: ?[*:0]const u8 = null,
+    base_url: ?[*:0]const u8 = null,
+    snapshot_file: ?[*:0]const u8 = null,
+    priority: i32 = 0,
+    has_metadata: u32 = 0,
+    apply_snapshot: u32 = 0,
+    reuse_empty_repository: u32 = 0,
+};
+
 pub const RequestTraceJob = extern struct {
     capability: Capability = .{},
     selection_value: Bytes = .{},
@@ -370,6 +517,11 @@ pub const RequestTracePolicyFact = extern struct {
     kind: u32 = 0,
 };
 
+pub const RequestTraceSatisfiedSelection = extern struct {
+    request_ref: u32 = 0,
+    selection_id: i32 = 0,
+};
+
 pub const RequestTraceView = extern struct {
     requests: ?[*]const Request = null,
     jobs: ?[*]const RequestTraceJob = null,
@@ -380,6 +532,8 @@ pub const RequestTraceView = extern struct {
     queue_origin_count: u32 = 0,
     policy_fact_count: u32 = 0,
     allow_erasing: u32 = 0,
+    satisfied_selections: ?[*]const RequestTraceSatisfiedSelection = null,
+    satisfied_selection_count: u32 = 0,
 };
 
 pub const RequestTracePackageRef = extern struct {
@@ -387,9 +541,16 @@ pub const RequestTracePackageRef = extern struct {
     package_ref: u32 = 0,
 };
 
+pub const RequestTraceSatisfiedPackage = extern struct {
+    request_ref: u32 = 0,
+    package_ref: u32 = 0,
+};
+
 pub const RequestTraceCaptureFacts = extern struct {
     requests: ?[*]const Request = null,
     jobs: ?[*]const Job = null,
+    satisfied_packages: ?[*]const RequestTraceSatisfiedPackage = null,
     request_count: u32 = 0,
     job_count: u32 = 0,
+    satisfied_package_count: u32 = 0,
 };

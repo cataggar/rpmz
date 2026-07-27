@@ -1,9 +1,90 @@
 const std = @import("std");
 
 const api = @import("api.zig");
+const history_db = @import("db.zig");
+const history_store = @import("store.zig");
 
 const tdnf_rpmdb_iter = opaque {};
 const tdnf_rpm_config = opaque {};
+
+fn transactionPlanTestWriteHistoryFixture(
+    raw_path: ?[*:0]const u8,
+) callconv(.c) c_int {
+    const path = raw_path orelse return -1;
+    const db = history_db.Database.init(path) catch return -1;
+    defer db.close();
+    history_store.ensureAllTables(db) catch return -1;
+    inline for (.{
+        "DELETE FROM flag_set;",
+        "DELETE FROM names;",
+        "DELETE FROM trans_items;",
+        "DELETE FROM transactions;",
+        "DELETE FROM rpms;",
+    }) |statement| db.exec(statement, .{}) catch return -1;
+    db.exec(
+        "INSERT INTO rpms(Id, nevra) VALUES " ++
+            "(1, 'app-1-1.x86_64'), " ++
+            "(2, 'missing-history-1-1.x86_64'), " ++
+            "(3, 'installed-file-provider-1-1.x86_64'), " ++
+            "(4, 'absent-history-1-1.x86_64'), " ++
+            "(5, 'excluded-1-1.x86_64');",
+        .{},
+    ) catch return -1;
+    db.exec(
+        "INSERT INTO transactions(Id, cookie, cmdline, timestamp, type) " ++
+            "VALUES (1, '', 'history fixture', 1, 0), " ++
+            "(2, '', 'history fixture current', 2, 1);",
+        .{},
+    ) catch return -1;
+    db.exec(
+        "INSERT INTO trans_items(trans_id, type, rpm_id) VALUES " ++
+            "(1, 0, 3), (1, 0, 4), (2, 2, 3), (2, 2, 4), " ++
+            "(2, 1, 1), (2, 1, 2), (2, 1, 5);",
+        .{},
+    ) catch return -1;
+    db.exec("INSERT INTO names(Id, name) VALUES (1, 'app');", .{}) catch
+        return -1;
+    db.exec(
+        "INSERT INTO flag_set(trans_id, name_id, value) VALUES " ++
+            "(1, 1, 0), (2, 1, 0);",
+        .{},
+    ) catch return -1;
+    return 0;
+}
+
+fn transactionPlanTestWriteExcludedHistoryFixture(
+    raw_path: ?[*:0]const u8,
+) callconv(.c) c_int {
+    if (transactionPlanTestWriteHistoryFixture(raw_path) != 0) return -1;
+    const path = raw_path orelse return -1;
+    const db = history_db.Database.init(path) catch return -1;
+    defer db.close();
+    db.exec("DELETE FROM trans_items;", .{}) catch return -1;
+    db.exec("DELETE FROM rpms;", .{}) catch return -1;
+    db.exec(
+        "INSERT INTO rpms(Id, nevra) VALUES " ++
+            "(1, 'installed-file-provider-1-1.x86_64'), " ++
+            "(2, 'excluded-1-1.x86_64');",
+        .{},
+    ) catch return -1;
+    db.exec(
+        "INSERT INTO trans_items(trans_id, type, rpm_id) VALUES " ++
+            "(1, 0, 1), (2, 1, 2);",
+        .{},
+    ) catch return -1;
+    return 0;
+}
+
+comptime {
+    @export(&transactionPlanTestWriteHistoryFixture, .{
+        .name = "TDNFTransactionPlanTestWriteHistoryFixture",
+        .visibility = .hidden,
+    });
+    @export(&transactionPlanTestWriteExcludedHistoryFixture, .{
+        .name = "TDNFTransactionPlanTestWriteExcludedHistoryFixture",
+        .visibility = .hidden,
+    });
+}
 
 extern fn tdnf_rpmdb_cookie(root: ?[*:0]const u8) ?[*:0]u8;
 extern fn tdnf_rpmdb_cookie_config(config: *const tdnf_rpm_config) ?[*:0]u8;

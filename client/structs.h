@@ -28,7 +28,10 @@ typedef struct _TDNF_
     PTDNF_REPO_DATA pRepos;
     Repo *pSolvCmdLineRepo;
     PTDNF_PLUGIN pPlugins;
+    char **ppszRepoFromDirIds;
     TDNF_TRANSACTION_PLAN_REQUEST_TRACE *pRequestTrace;
+    TDNF_TRANSACTION_PLAN_STATE *pTransactionPlanState;
+    uint32_t nTestReloadFailureStage;
 } TDNF;
 
 typedef struct _TDNF_CACHED_RPM_ENTRY

@@ -79,6 +79,40 @@ def dynamic_soname(path):
     return match.group(1)
 
 
+def check_history_goal_compatibility(prefix):
+    cache_dir = ROOT / ".zig-cache" / "abi-history-goal"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    source = cache_dir / "consumer.c"
+    executable = cache_dir / "consumer"
+    source.write_text(
+        """
+#include <stdint.h>
+extern uint32_t TDNFHistoryGoal(void *, void *, void *, void **);
+int main(void)
+{
+    void *result = 0;
+    return TDNFHistoryGoal(0, 0, 0, &result) == 1622 ? 0 : 1;
+}
+""",
+        encoding="utf-8",
+    )
+    try:
+        subprocess.run(
+            [
+                "zig", "cc", str(source),
+                f"-L{prefix / 'lib'}", "-ltdnf",
+                f"-Wl,-rpath,{prefix / 'lib'}",
+                "-o", str(executable),
+            ],
+            check=True,
+        )
+        subprocess.run([str(executable)], check=True)
+    finally:
+        executable.unlink(missing_ok=True)
+        source.unlink(missing_ok=True)
+        cache_dir.rmdir()
+
+
 def header_hashes(headers_dir):
     headers = sorted(headers_dir.glob("*.h"))
     if not headers:
@@ -234,6 +268,7 @@ def main():
 
     try:
         actual = collect_snapshot(args.prefix.resolve(), args.headers_dir)
+        check_history_goal_compatibility(args.prefix.resolve())
         if args.update_baseline:
             with args.baseline.open("w", encoding="utf-8") as stream:
                 json.dump(actual, stream, indent=2, sort_keys=True)

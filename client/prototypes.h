@@ -196,6 +196,13 @@ TDNFFetchRemoteGPGKey(
     );
 
 //init.c
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
+TDNFBuildRefreshInput(
+    PTDNF pTdnf,
+    PSolvSack pSack,
+    TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT *pInput
+    );
+
 uint32_t
 TDNFRefreshSack(
     PTDNF pTdnf,
@@ -513,6 +520,19 @@ TDNFHistoryGoal(
     PTDNF_SOLVED_PKG_INFO* ppInfo
     );
 
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
+TDNFSolv(
+    PTDNF pTdnf,
+    Queue *pQueueJobs,
+    char **ppszExcludes,
+    uint32_t dwExcludeCount,
+    int nAllowErasing,
+    int nAutoErase,
+    int nReInstall,
+    int nUnresolved,
+    PTDNF_SOLVED_PKG_INFO *ppInfo
+    );
+
 uint32_t
 TDNFAddUserInstall(
     PTDNF pTdnf,
@@ -677,7 +697,15 @@ TDNFTransactionPlanRequestTraceRecordHistoryGoal(
     uint32_t action,
     const int32_t *ids,
     uint32_t start,
-    uint32_t end
+    uint32_t end,
+    uint32_t outcome
+    );
+
+void
+TDNFTransactionPlanRequestTraceRecordRequestOutcome(
+    TDNF_TRANSACTION_PLAN_REQUEST_TRACE *trace,
+    uint32_t request_ref,
+    uint32_t outcome
     );
 
 void

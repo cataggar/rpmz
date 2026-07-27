@@ -487,16 +487,29 @@ fn cookieAtPath(db_path: []const u8) ?[*:0]u8 {
         });
         return null;
     }
+    return cookieFromDb(db);
+}
 
+fn cookieFromDb(db: ?*c.sqlite3) ?[*:0]u8 {
+    const database = db orelse {
+        setError("null rpmdb connection", .{});
+        return null;
+    };
     var stmt: ?*c.sqlite3_stmt = null;
     const sql = "SELECT IFNULL(MAX(hnum), 0), COUNT(*) FROM " ++ PKG_TABLE;
-    const prepare_rc = c.sqlite3_prepare_v2(db, sql, sql.len, &stmt, null);
+    const prepare_rc = c.sqlite3_prepare_v2(
+        database,
+        sql,
+        sql.len,
+        &stmt,
+        null,
+    );
     defer {
         if (stmt != null) _ = c.sqlite3_finalize(stmt);
     }
     if (prepare_rc != c.SQLITE_OK) {
         setError("sqlite3_prepare_v2: {s}", .{
-            std.mem.span(@as([*:0]const u8, c.sqlite3_errmsg(db))),
+            std.mem.span(@as([*:0]const u8, c.sqlite3_errmsg(database))),
         });
         return null;
     }
@@ -531,6 +544,8 @@ pub const Iter = struct {
     db: ?*c.sqlite3,
     stmt: ?*c.sqlite3_stmt,
     pinned: ?PinnedReadDb,
+    snapshot: bool = false,
+    strict_blobs: bool = false,
 
     pub const OpenError = error{
         OutOfMemory,
@@ -628,6 +643,15 @@ pub const Iter = struct {
 
     pub fn close(self: *Iter) void {
         if (self.stmt) |s| _ = c.sqlite3_finalize(s);
+        if (self.snapshot and self.db != null) {
+            _ = c.sqlite3_exec(
+                self.db,
+                "ROLLBACK TRANSACTION",
+                null,
+                null,
+                null,
+            );
+        }
         if (self.db) |d| _ = c.sqlite3_close(d);
         if (self.pinned) |*pinned| pinned.deinit();
         std.heap.c_allocator.destroy(self);
@@ -667,7 +691,10 @@ pub const Iter = struct {
             if (hnum == 0) return error.InvalidHnum;
             const blob_ptr = c.sqlite3_column_blob(self.stmt, 1);
             const blob_len: usize = @intCast(c.sqlite3_column_bytes(self.stmt, 1));
-            if (blob_ptr == null or blob_len == 0) continue;
+            if (blob_ptr == null or blob_len == 0) {
+                if (self.strict_blobs) return error.InvalidHnum;
+                continue;
+            }
             return .{
                 .hnum = hnum,
                 .blob = @as([*]const u8, @ptrCast(blob_ptr))[0..blob_len],
@@ -697,6 +724,159 @@ export fn tdnf_rpmdb_iter_open_config(config: ?*const TxnConfig) ?*Iter {
         setError("rpmdb_iter_open_config: {t}", .{err});
         return null;
     };
+}
+
+fn transactionPlanSnapshotOpenConfig(
+    config: ?*const TxnConfig,
+    cookie_out: ?*?[*:0]u8,
+) callconv(.c) ?*Iter {
+    clearError();
+    const output = cookie_out orelse {
+        setError("null transaction plan cookie output", .{});
+        return null;
+    };
+    output.* = null;
+    const cfg = config orelse {
+        setError("null rpm config", .{});
+        return null;
+    };
+    const iterator = Iter.openConfig(cfg) catch |err| {
+        setError("transaction plan rpmdb snapshot open: {t}", .{err});
+        return null;
+    };
+    if (iterator.db) |db| {
+        if (c.sqlite3_exec(
+            db,
+            "BEGIN DEFERRED TRANSACTION",
+            null,
+            null,
+            null,
+        ) != c.SQLITE_OK) {
+            setError("failed to begin transaction plan rpmdb snapshot", .{});
+            iterator.close();
+            return null;
+        }
+        iterator.snapshot = true;
+        iterator.strict_blobs = true;
+        output.* = cookieFromDb(db) orelse {
+            iterator.close();
+            return null;
+        };
+    } else {
+        output.* = dupZ("0:0") orelse {
+            iterator.close();
+            return null;
+        };
+    }
+    return iterator;
+}
+
+pub fn transactionPlanTestFileProviderBlob(
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const zero = [_]u8{0} ** 4;
+    return rpmdb_write.encodeImmutableHeader(
+        allocator,
+        &.{
+            .{
+                .tag = @intFromEnum(header.TagId.name),
+                .typ = .string,
+                .count = 1,
+                .bytes = "installed-file-provider\x00",
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.version),
+                .typ = .string,
+                .count = 1,
+                .bytes = "1\x00",
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.release),
+                .typ = .string,
+                .count = 1,
+                .bytes = "1\x00",
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.arch),
+                .typ = .string,
+                .count = 1,
+                .bytes = "x86_64\x00",
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.epoch),
+                .typ = .int32,
+                .count = 1,
+                .bytes = &zero,
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.requirename),
+                .typ = .string_array,
+                .count = 1,
+                .bytes = "/usr/bin/tool\x00",
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.requireversion),
+                .typ = .string_array,
+                .count = 1,
+                .bytes = "\x00",
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.requireflags),
+                .typ = .int32,
+                .count = 1,
+                .bytes = &zero,
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.basenames),
+                .typ = .string_array,
+                .count = 1,
+                .bytes = "tool\x00",
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.dirnames),
+                .typ = .string_array,
+                .count = 1,
+                .bytes = "/usr/bin/\x00",
+            },
+            .{
+                .tag = @intFromEnum(header.TagId.dirindexes),
+                .typ = .int32,
+                .count = 1,
+                .bytes = &zero,
+            },
+        },
+    );
+}
+
+fn writeTransactionPlanFileProvider(config: *const TxnConfig) !void {
+    const blob = try transactionPlanTestFileProviderBlob(
+        std.heap.c_allocator,
+    );
+    defer std.heap.c_allocator.free(blob);
+    var writer = try rpmdb_write.Writer.openConfig(config);
+    defer writer.close();
+    try writer.beginTransaction();
+    errdefer writer.rollbackTransaction() catch {};
+    _ = try writer.insertHeaderInTransaction(blob);
+    try writer.commitTransaction();
+}
+
+fn transactionPlanTestWriteFileProvider(
+    config: ?*const TxnConfig,
+) callconv(.c) c_int {
+    writeTransactionPlanFileProvider(config orelse return -1) catch return -1;
+    return 0;
+}
+
+comptime {
+    @export(&transactionPlanSnapshotOpenConfig, .{
+        .name = "TDNFTransactionPlanRpmdbSnapshotOpenConfig",
+        .visibility = .hidden,
+    });
+    @export(&transactionPlanTestWriteFileProvider, .{
+        .name = "TDNFTransactionPlanTestWriteFileProvider",
+        .visibility = .hidden,
+    });
 }
 
 /// Close and free an iterator opened by tdnf_rpmdb_iter_open.

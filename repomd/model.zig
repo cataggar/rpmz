@@ -136,6 +136,39 @@ pub const Nevra = struct {
     arch: []const u8 = "",
 };
 
+pub const EvrQueryParts = struct {
+    epoch: ?u32,
+    version: []const u8,
+    release: ?[]const u8,
+};
+
+pub fn splitEvrQuery(evr: []const u8) EvrQueryParts {
+    if (evr.len == 0) {
+        return .{ .epoch = null, .version = "", .release = null };
+    }
+    var epoch: ?u32 = null;
+    var body = evr;
+    if (std.mem.indexOfScalar(u8, evr, ':')) |separator| {
+        if (separator != 0) {
+            epoch = std.fmt.parseInt(u32, evr[0..separator], 10) catch null;
+            if (epoch != null) body = evr[separator + 1 ..];
+        }
+    }
+    if (body.len == 0) {
+        return .{ .epoch = epoch, .version = "", .release = null };
+    }
+    if (std.mem.lastIndexOfScalar(u8, body, '-')) |separator| {
+        if (separator != 0 and separator + 1 < body.len) {
+            return .{
+                .epoch = epoch,
+                .version = body[0..separator],
+                .release = body[separator + 1 ..],
+            };
+        }
+    }
+    return .{ .epoch = epoch, .version = body, .release = null };
+}
+
 pub const PackageTime = struct {
     file: ?u64 = null,
     build: ?u64 = null,

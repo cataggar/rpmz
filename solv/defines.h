@@ -3,7 +3,7 @@
 
 #define SYSTEM_REPO_NAME "@System"
 #define CMDLINE_REPO_NAME "@cmdline"
-#define SOLV_COOKIE_IDENT "tdnf"
+#define SOLV_COOKIE_IDENT "tdnf-solv-content-v3"
 #define TDNF_SOLVCACHE_DIR_NAME "solvcache"
 #define SOLV_COOKIE_LEN   32
 

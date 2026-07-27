@@ -25,6 +25,11 @@ pub const CaptureError = Allocator.Error || error{
     UnsupportedResult,
 };
 
+pub const JobQueueMutation = enum {
+    none,
+    installonly_erase_tail,
+};
+
 pub const Input = struct {
     pool: *c.Pool,
     solver: *c.Solver,
@@ -35,6 +40,9 @@ pub const Input = struct {
     problem_count: u32,
     problems_accepted: bool = false,
     unresolved_count: u32 = 0,
+    synthetic_terminal: bool = false,
+    job_queue_mutation: JobQueueMutation = .none,
+    installonly_names: []const []const u8 = &.{},
     /// When supplied, this is cross-checked against the install-only erase
     /// jobs in the trace. The trace remains the authoritative attribution.
     installonly_retry_erases: ?[]const c.Id = null,
@@ -97,6 +105,7 @@ const BuildState = struct {
     queue: []const c.Id,
     trace_requests: []const abi.Request,
     trace_jobs: []const abi.RequestTraceJob,
+    trace_satisfied_selections: []const abi.RequestTraceSatisfiedSelection,
     bindings: []JobBinding,
     trace_to_pair: []u32,
     referenced: []bool,
@@ -108,6 +117,7 @@ const BuildState = struct {
     raw_problems: std.ArrayList(RawProblem) = .empty,
     skipped_pairs: []bool,
     solver_job_prefix: usize,
+    solver_job_pair_count: usize,
     resolution_status: u32,
 
     fn init(arena: Allocator, input: Input) CaptureError!BuildState {
@@ -132,7 +142,8 @@ const BuildState = struct {
         if (input.problem_count == 0 and input.problems_accepted) {
             return error.InvalidInput;
         }
-        if ((input.problem_count == 0 or input.problems_accepted) and
+        if (!input.synthetic_terminal and
+            (input.problem_count == 0 or input.problems_accepted) and
             input.transaction == null)
         {
             return error.InvalidInput;
@@ -143,13 +154,40 @@ const BuildState = struct {
 
         const queue = try queueElements(input.jobs);
         if (queue.len % 2 != 0) return error.JobMismatch;
-        const solver_queue = try queueElements(&input.solver.job);
-        if (input.solver.pooljobcnt < 0) return error.JobMismatch;
-        const solver_job_prefix: usize = @intCast(input.solver.pooljobcnt);
-        if (solver_job_prefix > solver_queue.len or
-            solver_job_prefix % 2 != 0 or
-            !std.mem.eql(c.Id, queue, solver_queue[solver_job_prefix..]))
-        {
+        var solver_job_prefix: usize = 0;
+        var solver_job_pair_count: usize = 0;
+        if (!input.synthetic_terminal) {
+            const solver_queue = try queueElements(&input.solver.job);
+            if (input.solver.pooljobcnt < 0) return error.JobMismatch;
+            solver_job_prefix = @intCast(input.solver.pooljobcnt);
+            if (solver_job_prefix > solver_queue.len or
+                solver_job_prefix % 2 != 0)
+            {
+                return error.JobMismatch;
+            }
+            const solved_jobs = solver_queue[solver_job_prefix..];
+            if (solved_jobs.len % 2 != 0) return error.JobMismatch;
+            solver_job_pair_count = solved_jobs.len / 2;
+            switch (input.job_queue_mutation) {
+                .none => if (!std.mem.eql(
+                    c.Id,
+                    queue,
+                    solved_jobs,
+                ))
+                    return error.JobMismatch,
+                .installonly_erase_tail => {
+                    if (solved_jobs.len >= queue.len or
+                        !std.mem.eql(
+                            c.Id,
+                            solved_jobs,
+                            queue[0..solved_jobs.len],
+                        ))
+                    {
+                        return error.JobMismatch;
+                    }
+                },
+            }
+        } else if (input.job_queue_mutation != .none) {
             return error.JobMismatch;
         }
         const requests = try borrowedArray(
@@ -161,6 +199,11 @@ const BuildState = struct {
             abi.RequestTraceJob,
             input.trace.jobs,
             input.trace.job_count,
+        );
+        const satisfied_selections = try borrowedArray(
+            abi.RequestTraceSatisfiedSelection,
+            input.trace.satisfied_selections,
+            input.trace.satisfied_selection_count,
         );
         if (jobs.len != queue.len / 2) return error.JobMismatch;
 
@@ -185,6 +228,7 @@ const BuildState = struct {
             .queue = queue,
             .trace_requests = requests,
             .trace_jobs = jobs,
+            .trace_satisfied_selections = satisfied_selections,
             .bindings = bindings,
             .trace_to_pair = trace_to_pair,
             .referenced = referenced,
@@ -192,7 +236,10 @@ const BuildState = struct {
             .hidden_seen = hidden_seen,
             .skipped_pairs = skipped_pairs,
             .solver_job_prefix = solver_job_prefix,
-            .resolution_status = if (input.problem_count == 0)
+            .solver_job_pair_count = solver_job_pair_count,
+            .resolution_status = if (input.synthetic_terminal)
+                abi.resolution_status.problems
+            else if (input.problem_count == 0)
                 abi.resolution_status.resolved
             else if (input.problems_accepted)
                 abi.resolution_status.resolved_with_skips
@@ -273,6 +320,11 @@ const BuildState = struct {
 
         for (self.trace_requests) |request| {
             _ = try bytesSlice(request.id);
+            if (request.outcome == abi.request_outcome.pending or
+                request.outcome > abi.request_outcome.no_candidate)
+            {
+                return error.InvalidTrace;
+            }
             if (try flagValue(request.has_subject)) {
                 _ = try bytesSlice(request.subject);
             } else if (!bytesEmpty(request.subject)) {
@@ -281,6 +333,36 @@ const BuildState = struct {
             if (request.kind > abi.request_kind.update_all) {
                 return error.InvalidTrace;
             }
+        }
+
+        for (
+            self.trace_satisfied_selections,
+            0..,
+        ) |selection, index| {
+            if (selection.request_ref >= self.trace_requests.len or
+                (self.trace_requests[selection.request_ref].outcome !=
+                    abi.request_outcome.satisfied and
+                    self.trace_requests[selection.request_ref].outcome !=
+                        abi.request_outcome.queued) or
+                selection.selection_id <= c.SYSTEMSOLVABLE or
+                selection.selection_id >= self.input.pool.nsolvables)
+            {
+                return error.InvalidTrace;
+            }
+            if (index != 0) {
+                const prior = self.trace_satisfied_selections[index - 1];
+                if (selection.request_ref < prior.request_ref or
+                    (selection.request_ref == prior.request_ref and
+                        selection.selection_id <= prior.selection_id))
+                {
+                    return error.InvalidTrace;
+                }
+            }
+            _ = try packageSolvable(
+                self.input.pool,
+                selection.selection_id,
+            );
+            self.referenced[@intCast(selection.selection_id)] = true;
         }
 
         for (origins, 0..) |origin, pair_index| {
@@ -321,6 +403,59 @@ const BuildState = struct {
         }
         for (self.trace_to_pair) |pair| {
             if (pair == std.math.maxInt(u32)) return error.JobMismatch;
+        }
+        try self.validateJobQueueMutation();
+    }
+
+    fn validateJobQueueMutation(self: *BuildState) CaptureError!void {
+        if (self.input.job_queue_mutation != .installonly_erase_tail) return;
+        const expected_how = intConstant(
+            c.SOLVER_SOLVABLE | c.SOLVER_ERASE,
+        );
+        for (
+            self.bindings[self.solver_job_pair_count..],
+            self.solver_job_pair_count..,
+        ) |binding, pair| {
+            const job = self.trace_jobs[binding.trace_job_ref];
+            if (binding.how != expected_how or
+                job.raw_how != expected_how or
+                job.effective_how != expected_how or
+                job.action != abi.job_action.erase or
+                job.reason != abi.request_reason.installonly_limit or
+                job.selection_kind != abi.selection_kind.package or
+                job.selection_id != binding.what or
+                try flagValue(job.has_request_ref) or
+                job.request_ref != 0 or
+                job.raw_flags != 0 or
+                job.effective_flags != 0)
+            {
+                return error.JobMismatch;
+            }
+            const solvable = try packageSolvable(
+                self.input.pool,
+                binding.what,
+            );
+            const repository = try solvableRepository(
+                self.input.pool,
+                binding.what,
+                solvable,
+            );
+            if (!isInstalledRepository(self.input.pool, repository)) {
+                return error.JobMismatch;
+            }
+            const package_name = try poolString(
+                self.input.pool,
+                solvable.name,
+            );
+            const permitted = for (self.input.installonly_names) |name| {
+                if (std.mem.eql(u8, name, package_name)) break true;
+            } else false;
+            if (!permitted) return error.JobMismatch;
+            for (
+                self.bindings[self.solver_job_pair_count..pair],
+            ) |prior| {
+                if (prior.what == binding.what) return error.JobMismatch;
+            }
         }
     }
 
@@ -1616,7 +1751,19 @@ fn capturePackage(
     return output;
 }
 
-fn capturePackageSource(
+pub fn capturePackageIdentity(
+    allocator: Allocator,
+    pool: *c.Pool,
+    solvid: c.Id,
+) CaptureError!abi.PackageIdentity {
+    return parseIdentity(
+        allocator,
+        pool,
+        try packageSolvable(pool, solvid),
+    );
+}
+
+pub fn capturePackageSource(
     allocator: Allocator,
     pool: *c.Pool,
     solvable: *c.Solvable,

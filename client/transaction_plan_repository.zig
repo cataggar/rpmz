@@ -2,17 +2,19 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const repository_metadata = @import("repository_metadata");
-const available_loader = repository_metadata.available_loader;
+const available_loader = repository_metadata.available_repository_loader;
+const metadata_model = repository_metadata.metadata_model;
 const solver_identity = repository_metadata.solver_identity;
 const transaction_plan = @import("transaction_plan");
 
 /// Domain separator for SnapshotIdentity.id. The ID is lower-case hexadecimal
-/// SHA-256 over `snapshot_identity_domain ++ "\x00" ++
-/// SHA256(exact repodata/repomd.xml bytes)`, prefixed by `snapshot-v1-`.
+/// SHA-256 over the exact repomd digest and selected metadata mask, prefixed
+/// by `snapshot-v2-`.
 ///
 /// repomd.xml binds every advertised sidecar checksum, so this identifies the
 /// exact loaded metadata snapshot without retaining a cache path or URL.
-pub const snapshot_identity_domain = "tdnf.repository-snapshot/v1";
+pub const snapshot_identity_domain = "tdnf.repository-snapshot/v2";
+pub const snapshot_id_prefix = "snapshot-v2-";
 
 pub const Input = struct {
     /// Borrowed repository identity. It is copied into Owner on success.
@@ -48,6 +50,10 @@ pub const Owner = struct {
     repository: transaction_plan.Repository,
     packages: []transaction_plan.Package,
     entries: []const KeyEntry,
+    solver_entries: []const usize,
+    solver_lookup_steps: usize,
+    load_cookie_sha256: [32]u8,
+    solver_repository: metadata_model.RepositoryModel,
 
     pub fn destroy(self: *Owner) void {
         const allocator = self.allocator;
@@ -60,6 +66,16 @@ pub const Owner = struct {
             .repository = &self.repository,
             .packages = self.packages,
         };
+    }
+
+    pub fn loadCookieSha256(self: *const Owner) *const [32]u8 {
+        return &self.load_cookie_sha256;
+    }
+
+    pub fn solverRepository(
+        self: *const Owner,
+    ) *const metadata_model.RepositoryModel {
+        return &self.solver_repository;
     }
 
     /// Resolve the exact key used by solver_identity.AvailableKey. The index
@@ -85,24 +101,137 @@ pub const Owner = struct {
         }
         return null;
     }
+
+    /// Match the normalized package identity libsolv retained to the exact
+    /// authoritative metadata record. Checksum kind spelling is deliberately
+    /// not part of this bridge because libsolv canonicalizes it; ambiguity is
+    /// rejected during repository capture.
+    pub fn findSolverPackage(
+        self: *Owner,
+        repository_id: []const u8,
+        identity: transaction_plan.PackageIdentity,
+        checksum_value: []const u8,
+        checksum_is_pkgid: bool,
+    ) ?*const transaction_plan.Package {
+        self.solver_lookup_steps = 0;
+        var low: usize = 0;
+        var high = self.solver_entries.len;
+        while (low < high) {
+            self.solver_lookup_steps += 1;
+            const middle = low + (high - low) / 2;
+            const package = &self.packages[self.solver_entries[middle]];
+            switch (compareSolverPackageQuery(
+                package.*,
+                repository_id,
+                identity,
+                checksum_value,
+                checksum_is_pkgid,
+            )) {
+                .lt => low = middle + 1,
+                .gt => high = middle,
+                .eq => return package,
+            }
+        }
+        return null;
+    }
 };
 
-/// Load, verify, and deeply own one available cache. The exact repomd bytes
-/// are returned by available_loader from the same opened cache root and are
-/// hashed before that temporary loader arena is released.
+fn buildSolverIndex(
+    allocator: Allocator,
+    packages: []const transaction_plan.Package,
+) CaptureError![]const usize {
+    const entries = try allocator.alloc(usize, packages.len);
+    for (entries, 0..) |*entry, index| entry.* = index;
+    std.mem.sort(usize, entries, packages, solverIndexLessThan);
+    if (entries.len > 1) {
+        for (entries[1..], entries[0 .. entries.len - 1]) |current, previous| {
+            if (compareSolverPackages(
+                packages[previous],
+                packages[current],
+            ) == .eq) return error.DuplicatePackageKey;
+        }
+    }
+    return entries;
+}
+
+fn solverIndexLessThan(
+    packages: []const transaction_plan.Package,
+    left: usize,
+    right: usize,
+) bool {
+    return compareSolverPackages(packages[left], packages[right]) == .lt;
+}
+
+fn compareSolverPackages(
+    left: transaction_plan.Package,
+    right: transaction_plan.Package,
+) std.math.Order {
+    return compareSolverPackageQuery(
+        left,
+        right.repository_id,
+        right.identity,
+        right.source.?.checksum.value,
+        right.source.?.checksum.is_pkgid,
+    );
+}
+
+fn compareSolverPackageQuery(
+    package: transaction_plan.Package,
+    repository_id: []const u8,
+    identity: transaction_plan.PackageIdentity,
+    checksum_value: []const u8,
+    checksum_is_pkgid: bool,
+) std.math.Order {
+    const source = package.source orelse return .lt;
+    inline for (.{
+        .{ package.repository_id, repository_id },
+        .{ package.identity.name, identity.name },
+    }) |values| {
+        const order = std.mem.order(u8, values[0], values[1]);
+        if (order != .eq) return order;
+    }
+    const epoch_order = std.math.order(
+        package.identity.epoch orelse 0,
+        identity.epoch orelse 0,
+    );
+    if (epoch_order != .eq) return epoch_order;
+    inline for (.{
+        .{ package.identity.version, identity.version },
+        .{ package.identity.release, identity.release },
+        .{ package.identity.arch, identity.arch },
+    }) |values| {
+        const order = std.mem.order(u8, values[0], values[1]);
+        if (order != .eq) return order;
+    }
+    const checksum_order = asciiOrderIgnoreCase(
+        source.checksum.value,
+        checksum_value,
+    );
+    if (checksum_order != .eq) return checksum_order;
+    return std.math.order(
+        @intFromBool(source.checksum.is_pkgid),
+        @intFromBool(checksum_is_pkgid),
+    );
+}
+
+fn asciiOrderIgnoreCase(left: []const u8, right: []const u8) std.math.Order {
+    const length = @min(left.len, right.len);
+    for (left[0..length], right[0..length]) |left_byte, right_byte| {
+        const left_lower = std.ascii.toLower(left_byte);
+        const right_lower = std.ascii.toLower(right_byte);
+        if (left_lower != right_lower) {
+            return std.math.order(left_lower, right_lower);
+        }
+    }
+    return std.math.order(left.len, right.len);
+}
+
+/// Load, verify, and deeply own one available cache.
 pub fn capture(
     parent_allocator: Allocator,
     input: Input,
 ) CaptureError!*Owner {
     try transaction_plan.validateRepositoryId(input.repository_id);
-
-    var loaded_arena = std.heap.ArenaAllocator.init(parent_allocator);
-    defer loaded_arena.deinit();
-    const loaded = try available_loader.loadCacheModelWithRepomd(
-        loaded_arena.allocator(),
-        input.cache_dir,
-        input.options,
-    );
 
     const owner = try parent_allocator.create(Owner);
     owner.* = .{
@@ -111,6 +240,10 @@ pub fn capture(
         .repository = undefined,
         .packages = undefined,
         .entries = undefined,
+        .solver_entries = undefined,
+        .solver_lookup_steps = 0,
+        .load_cookie_sha256 = undefined,
+        .solver_repository = undefined,
     };
     errdefer {
         owner.arena_state.deinit();
@@ -118,6 +251,16 @@ pub fn capture(
     }
 
     const arena = owner.arena_state.allocator();
+    const loaded = try available_loader.loadCacheModelWithRepomd(
+        arena,
+        input.cache_dir,
+        input.options,
+    );
+    owner.load_cookie_sha256 = available_loader.solvCacheCookie(
+        loaded.repomd_bytes,
+        input.options,
+    );
+    owner.solver_repository = loaded.repository;
     owner.repository = try captureRepository(arena, input, loaded);
     owner.packages = try capturePackages(
         arena,
@@ -129,6 +272,7 @@ pub fn capture(
         owner.repository.id,
         owner.packages,
     );
+    owner.solver_entries = try buildSolverIndex(arena, owner.packages);
     try transaction_plan.validateRepositoryPackageFacts(
         owner.repository,
         owner.packages,
@@ -175,7 +319,11 @@ fn captureRepository(
             .timestamp = timestamp,
         },
         .snapshot = .{
-            .id = try snapshotId(allocator, repomd_digest),
+            .id = try snapshotId(
+                allocator,
+                repomd_digest,
+                input.options,
+            ),
             .metadata_sha256 = try allocator.dupe(u8, &repomd_hex),
         },
     };
@@ -371,15 +519,24 @@ fn sha256(bytes: []const u8) [32]u8 {
 fn snapshotId(
     allocator: Allocator,
     repomd_digest: [32]u8,
+    options: available_loader.CacheOptions,
 ) Allocator.Error![]const u8 {
     var digest: [32]u8 = undefined;
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(snapshot_identity_domain);
     hasher.update("\x00");
     hasher.update(&repomd_digest);
+    hasher.update(&.{
+        @intFromBool(options.include_filelists),
+        @intFromBool(options.include_updateinfo),
+        @intFromBool(options.include_other),
+    });
     hasher.final(&digest);
     const hex = lowerHex(digest);
-    return std.fmt.allocPrint(allocator, "snapshot-v1-{s}", .{&hex});
+    return std.fmt.allocPrint(allocator, "{s}{s}", .{
+        snapshot_id_prefix,
+        &hex,
+    });
 }
 
 fn lowerHex(bytes: [32]u8) [64]u8 {
@@ -702,6 +859,7 @@ test "captures owned available repository and package facts" {
     const expected_snapshot = try snapshotId(
         std.testing.allocator,
         sha256FromHex(repomd.checksum_sha256),
+        .{},
     );
     defer std.testing.allocator.free(expected_snapshot);
     try std.testing.expectEqualStrings(expected_snapshot, snapshot.id);
@@ -858,6 +1016,69 @@ test "captures owned available repository and package facts" {
     );
     try std.testing.expect(std.mem.indexOf(u8, json, "available-0") == null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"xml_base\":\"../pool\"") != null);
+}
+
+test "snapshot identity binds selected metadata mask" {
+    try std.testing.expectEqualStrings(
+        "tdnf.repository-snapshot/v2",
+        snapshot_identity_domain,
+    );
+    var fixture = try Fixture.create(primary_xml, .{});
+    defer fixture.cleanup();
+    var cache_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const cache_dir = fixture.cachePath(&cache_path_buffer);
+    const with_filelists = try capture(std.testing.allocator, .{
+        .repository_id = "repo-a",
+        .priority = 11,
+        .cost = 777,
+        .cache_dir = cache_dir,
+    });
+    defer with_filelists.destroy();
+    const primary_only = try capture(std.testing.allocator, .{
+        .repository_id = "repo-a",
+        .priority = 11,
+        .cost = 777,
+        .cache_dir = cache_dir,
+        .options = .{ .include_filelists = false },
+    });
+    defer primary_only.destroy();
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        with_filelists.view().repository.snapshot.?.id,
+        snapshot_id_prefix,
+    ));
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        primary_only.view().repository.snapshot.?.id,
+        snapshot_id_prefix,
+    ));
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        with_filelists.view().repository.snapshot.?.id,
+        primary_only.view().repository.snapshot.?.id,
+    ));
+
+    const digest = sha256("fixed-repomd");
+    const baseline = try snapshotId(std.testing.allocator, digest, .{});
+    defer std.testing.allocator.free(baseline);
+    inline for (.{
+        available_loader.CacheOptions{ .include_filelists = false },
+        available_loader.CacheOptions{ .include_updateinfo = true },
+        available_loader.CacheOptions{ .include_other = true },
+    }) |options| {
+        const changed = try snapshotId(
+            std.testing.allocator,
+            digest,
+            options,
+        );
+        defer std.testing.allocator.free(changed);
+        try std.testing.expect(std.mem.startsWith(
+            u8,
+            changed,
+            snapshot_id_prefix,
+        ));
+        try std.testing.expect(!std.mem.eql(u8, baseline, changed));
+    }
 }
 
 test "repeated captures and record permutations remain canonical" {
@@ -1034,6 +1255,64 @@ test "rejects malformed metadata, invalid checksums, and duplicate keys" {
             .options = .{ .include_filelists = false },
         },
     ));
+}
+
+test "normalized solver package lookup is logarithmic" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const packages = try arena.alloc(transaction_plan.Package, 1024);
+    for (packages, 0..) |*package, index| {
+        const name = try std.fmt.allocPrint(arena, "package-{d:0>4}", .{index});
+        const checksum = try std.fmt.allocPrint(
+            arena,
+            "{x:0>64}",
+            .{index + 1},
+        );
+        package.* = .{
+            .id = name,
+            .identity = .{
+                .arch = "x86_64",
+                .epoch = null,
+                .name = name,
+                .release = "1",
+                .version = "1",
+            },
+            .repository_id = "scale",
+            .rpmdb_hnum = null,
+            .source = .{
+                .checksum = .{
+                    .kind = "SHA256",
+                    .is_pkgid = true,
+                    .value = checksum,
+                },
+                .location = .{ .href = name, .xml_base = null },
+                .size = null,
+            },
+            .state = .available,
+        };
+    }
+    const solver_entries = try buildSolverIndex(arena, packages);
+    var owner = Owner{
+        .allocator = arena,
+        .arena_state = undefined,
+        .repository = undefined,
+        .packages = packages,
+        .entries = &.{},
+        .solver_entries = solver_entries,
+        .solver_lookup_steps = 0,
+        .load_cookie_sha256 = undefined,
+        .solver_repository = undefined,
+    };
+    const wanted = packages[777];
+    const found = owner.findSolverPackage(
+        wanted.repository_id,
+        wanted.identity,
+        wanted.source.?.checksum.value,
+        wanted.source.?.checksum.is_pkgid,
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(wanted.identity.name, found.identity.name);
+    try std.testing.expect(owner.solver_lookup_steps <= 11);
 }
 
 fn allocationFailureCase(

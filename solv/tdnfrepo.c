@@ -763,20 +763,18 @@ SolvUseMetaDataCache(
     // Reading the cookie from cached Solv File
     if (fseek (fp, -sizeof(pszTempCookie), SEEK_END) || fread (pszTempCookie, sizeof(pszTempCookie), 1, fp) != 1)
     {
-        dwError = ERROR_TDNF_SOLV_IO;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
+        goto cleanup;
     }
     // compare the calculated cookie with the one read from Solv file
     if (pszCookie && memcmp (pszCookie, pszTempCookie, sizeof(pszTempCookie)) != 0)
     {
-        dwError = ERROR_TDNF_SOLV_IO;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
+        goto cleanup;
     }
     rewind(fp);
     if (repo_add_solv(pRepo, fp, 0))
     {
-        dwError = ERROR_TDNF_ADD_SOLV;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
+        repo_empty(pRepo, 1);
+        goto cleanup;
     }
     *nUseMetaDataCache = 1;
 

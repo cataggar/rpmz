@@ -1200,6 +1200,78 @@ test "borrowed spans reject oversized lengths with 32-bit-safe arithmetic" {
     ));
 }
 
+test "satisfied selections are captured and validated independently of jobs" {
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    const installed = try fixture.addRepository("@System", true);
+    const package = try fixture.addPackage(installed, .{
+        .name = "installed",
+        .hnum = 1,
+    });
+    fixture.finish();
+    var jobs: c.Queue = undefined;
+    c.queue_init(&jobs);
+    defer c.queue_free(&jobs);
+    var trace = request_trace.Trace.init(testing.allocator);
+    defer trace.deinit();
+    const request_ref = try trace.addRequest(
+        abi.request_kind.install,
+        "installed*",
+        false,
+    );
+    const selections = [_]i32{package};
+    try trace.recordGoalRange(
+        &selections,
+        0,
+        1,
+        5,
+        abi.request_reason.user,
+        request_ref,
+    );
+    try trace.commitGoal(package, 5, &.{}, 0, 0);
+    try trace.finalize(&.{}, 0, 0);
+    var solved = try solve(fixture.pool, &jobs, true);
+    defer solved.deinit();
+    const input = capture.Input{
+        .pool = fixture.pool,
+        .solver = solved.solver,
+        .transaction = solved.transaction,
+        .jobs = &jobs,
+        .trace = trace.getView().?,
+        .solve_status = 0,
+        .problem_count = 0,
+    };
+    const owner = try capture.create(testing.allocator, input);
+    defer owner.destroy();
+    try testing.expectEqual(@as(u32, 1), owner.view().package_count);
+    try testing.expectEqual(@as(u32, 0), owner.view().job_count);
+
+    var invalid_selection = trace.getView().?.satisfied_selections.?[0];
+    invalid_selection.request_ref = 1;
+    var invalid_view = trace.getView().?.*;
+    invalid_view.satisfied_selections = @ptrCast(&invalid_selection);
+    var invalid_input = input;
+    invalid_input.trace = &invalid_view;
+    try testing.expectError(
+        error.InvalidTrace,
+        capture.create(testing.allocator, invalid_input),
+    );
+
+    const duplicate_selections = [_]abi.RequestTraceSatisfiedSelection{
+        trace.getView().?.satisfied_selections.?[0],
+        trace.getView().?.satisfied_selections.?[0],
+    };
+    var duplicate_view = trace.getView().?.*;
+    duplicate_view.satisfied_selections = &duplicate_selections;
+    duplicate_view.satisfied_selection_count = duplicate_selections.len;
+    var duplicate_input = input;
+    duplicate_input.trace = &duplicate_view;
+    try testing.expectError(
+        error.InvalidTrace,
+        capture.create(testing.allocator, duplicate_input),
+    );
+}
+
 test "command-line package paths and hidden candidates never enter facts" {
     var fixture = try Fixture.init();
     defer fixture.deinit();
@@ -1638,6 +1710,131 @@ test "erase and installonly retry erase retain exact reasons" {
             .solve_status = 0,
             .problem_count = 0,
             .installonly_retry_erases = &.{new},
+        },
+    ));
+}
+
+test "installonly terminal accepts only an attributed erase tail" {
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    const installed = try fixture.addRepository("@System", true);
+    const available = try fixture.addRepository("base", false);
+    const old = try fixture.addPackage(installed, .{
+        .name = "kernel",
+        .evr = "1-1",
+        .hnum = 10,
+    });
+    const new = try fixture.addPackage(available, .{
+        .name = "kernel",
+        .evr = "2-1",
+    });
+    fixture.finish();
+
+    var jobs: c.Queue = undefined;
+    c.queue_init(&jobs);
+    defer c.queue_free(&jobs);
+    const kernel_name = c.pool_str2id(fixture.pool, "kernel", 1);
+    c.queue_push2(
+        &jobs,
+        c.SOLVER_SOLVABLE_NAME | c.SOLVER_MULTIVERSION,
+        kernel_name,
+    );
+    c.queue_push2(
+        &jobs,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+        new,
+    );
+    var solved = try solve(fixture.pool, &jobs, true);
+    defer solved.deinit();
+    try testing.expectEqual(@as(u32, 0), solved.problems);
+
+    c.queue_push2(
+        &jobs,
+        c.SOLVER_SOLVABLE | c.SOLVER_ERASE,
+        old,
+    );
+    var trace = request_trace.Trace.init(testing.allocator);
+    defer trace.deinit();
+    const request_ref = try trace.addRequest(
+        abi.request_kind.install,
+        "kernel",
+        false,
+    );
+    try trace.recordNameJob(
+        0,
+        abi.job_action.multiversion,
+        "kernel",
+        c.SOLVER_SOLVABLE_NAME | c.SOLVER_MULTIVERSION,
+        0,
+        abi.request_reason.policy,
+        abi.request_trace_no_request,
+    );
+    try addUserPackageJob(
+        &trace,
+        1,
+        request_ref,
+        abi.job_action.install,
+        new,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+    );
+    try trace.recordPackageJob(
+        2,
+        abi.job_action.erase,
+        old,
+        c.SOLVER_SOLVABLE | c.SOLVER_ERASE,
+        0,
+        abi.request_reason.installonly_limit,
+        abi.request_trace_no_request,
+    );
+    try trace.finalize(queueSlice(&jobs), 0, 0);
+
+    const owner = try capture.create(testing.allocator, .{
+        .pool = fixture.pool,
+        .solver = solved.solver,
+        .transaction = solved.transaction,
+        .jobs = &jobs,
+        .trace = trace.getView().?,
+        .solve_status = 0,
+        .problem_count = 0,
+        .job_queue_mutation = .installonly_erase_tail,
+        .installonly_names = &.{"kernel"},
+    });
+    owner.destroy();
+
+    jobs.elements[1] = new;
+    try testing.expectError(error.JobMismatch, capture.create(
+        testing.allocator,
+        .{
+            .pool = fixture.pool,
+            .solver = solved.solver,
+            .transaction = solved.transaction,
+            .jobs = &jobs,
+            .trace = trace.getView().?,
+            .solve_status = 0,
+            .problem_count = 0,
+            .job_queue_mutation = .installonly_erase_tail,
+            .installonly_names = &.{"kernel"},
+        },
+    ));
+    jobs.elements[1] = kernel_name;
+
+    var trace_jobs: [3]abi.RequestTraceJob = undefined;
+    @memcpy(&trace_jobs, trace.getView().?.jobs.?[0..3]);
+    trace_jobs[2].reason = abi.request_reason.user;
+    var divergent_trace = trace.getView().?.*;
+    divergent_trace.jobs = &trace_jobs;
+    try testing.expectError(error.JobMismatch, capture.create(
+        testing.allocator,
+        .{
+            .pool = fixture.pool,
+            .solver = solved.solver,
+            .transaction = solved.transaction,
+            .jobs = &jobs,
+            .trace = &divergent_trace,
+            .solve_status = 0,
+            .problem_count = 0,
+            .job_queue_mutation = .installonly_erase_tail,
+            .installonly_names = &.{"kernel"},
         },
     ));
 }
