@@ -1208,7 +1208,7 @@ test "clean deps is a no-op for a fresh exact install" {
     try expectNativeMatchesOracle(&native, &observation);
 }
 
-test "clean deps exact install replacement remains unsupported" {
+test "clean deps cleans up the closure displaced by an exact install replacement" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     var builder = GraphBuilder.init(arena_state.allocator());
     const installed = try builder.addRepo("@System", .installed, 50);
@@ -1249,15 +1249,14 @@ test "clean deps exact install replacement remains unsupported" {
         solver_model.TransactionReason.cleanup,
         actionForName(&graph, &observation, "old-dependency").?.reason,
     );
-    try testing.expectError(
-        error.UnsupportedPolicy,
-        solveNative(
-            testing.allocator,
-            &graph.universe,
-            goal,
-            cleanup_policy,
-        ),
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
     );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
 }
 
 test "clean deps removes only the automatic dependency closure of an exact erase" {

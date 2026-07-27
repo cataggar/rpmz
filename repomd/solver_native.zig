@@ -171,7 +171,6 @@ fn solveOrdinaryProjected(
             .skipped_jobs = skipped.skipped_jobs,
         });
         errdefer result.deinit();
-        try validateInstallCleanDepsNoOp(goal, policy, &result);
         return .{
             .universe = universe,
             .result = result,
@@ -197,30 +196,11 @@ fn solveOrdinaryProjected(
         .accepted_weak = weak.accepted,
     });
     errdefer result.deinit();
-    try validateInstallCleanDepsNoOp(goal, policy, &result);
     return .{
         .universe = universe,
         .result = result,
         .effective_job_count = goal.jobs.len,
     };
-}
-
-fn validateInstallCleanDepsNoOp(
-    goal: solver_model.Goal,
-    policy: solver_model.SolvePolicy,
-    result: *const solver_result.OwnedResult,
-) error{UnsupportedPolicy}!void {
-    if (!policy.clean_deps or goal.jobs.len == 0) return;
-    for (goal.jobs) |job| {
-        if (job.action != .install or
-            std.meta.activeTag(job.selection) != .package)
-        {
-            return;
-        }
-    }
-    for (result.outcome.actions) |action| {
-        if (action.kind != .install) return error.UnsupportedPolicy;
-    }
 }
 
 fn hasHiddenPackages(
