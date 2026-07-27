@@ -125,7 +125,6 @@ pub fn produce(
     if (input.installonly_names.len != 0 and
         (!input.include_installed or
             input.erase_jobs.len != 0 or
-            input.clean_deps or
             input.skip_broken))
     {
         return error.UnsupportedInput;
@@ -743,6 +742,23 @@ test "live producer retains installed multiversion packages" {
     );
     input.include_installed = true;
     input.clean_deps = true;
+    // clean-deps cannot seed a removal without an erase job, so an
+    // install-only install stays supported and keeps the same projection
+    var cleaned = try produce(std.testing.allocator, input);
+    defer cleaned.deinit();
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        cleaned.solved.result.selected.len,
+    );
+    const cleaned_actions = cleaned.solved.result.outcome.actions;
+    try std.testing.expectEqual(@as(usize, 1), cleaned_actions.len);
+    try std.testing.expectEqual(
+        solver_model.ActionKind.install,
+        cleaned_actions[0].kind,
+    );
+    try std.testing.expectEqual(@as(usize, 0), cleaned_actions[0].priors.len);
+
+    input.skip_broken = true;
     try std.testing.expectError(
         error.UnsupportedInput,
         produce(std.testing.allocator, input),

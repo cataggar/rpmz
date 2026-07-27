@@ -749,19 +749,17 @@ fn validateCleanupPolicy(
         }
     }
     if (!clean_deps) return false;
-    var fresh_exact_install = base.replacement_kind == .none and
-        !options.allow_erasing and
-        !options.installonly_policy and
-        base.jobs.len != 0;
+    // Cleanup seeds are only ever taken from erase jobs, so a clean-deps
+    // request without one cannot remove anything and is inert rather than
+    // unsupported.
+    var has_erase_job = false;
     for (base.jobs) |job| {
-        if (job.action != .install or
-            std.meta.activeTag(job.selection) != .package)
-        {
-            fresh_exact_install = false;
+        if (job.action == .erase) {
+            has_erase_job = true;
             break;
         }
     }
-    if (fresh_exact_install) return false;
+    if (!has_erase_job) return false;
     if (options.best or base.replacement_kind != .none) {
         return error.UnsupportedPolicy;
     }
