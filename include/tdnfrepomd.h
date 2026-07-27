@@ -986,6 +986,41 @@ TDNFRepoMdNativeSolverLiveCompareV13(
     );
 
 /*
+ * Version 14 additionally accepts the null-terminated package names that the
+ * user asked for explicitly, mirroring the libsolv SOLVER_USERINSTALLED feed
+ * derived from the history auto flags. Installed packages absent from the list
+ * are treated as dependency-installed and are therefore clean-deps eligible.
+ * Passing NULL leaves every install reason unknown, which keeps all installed
+ * packages as clean-deps roots exactly like versions 2 through 13.
+ */
+uint32_t
+TDNFRepoMdNativeSolverLiveCompareV14(
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY *pRepositories,
+    uint32_t dwRepositoryCount,
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pJobs,
+    uint32_t dwJobCount,
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pEraseJobs,
+    uint32_t dwEraseJobCount,
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pHiddenAvailable,
+    uint32_t dwHiddenAvailableCount,
+    int nAllDeps,
+    int nBest,
+    int nCleanDeps,
+    int nSkipBroken,
+    int nAllowErasing,
+    int nUpdateAll,
+    int nDistSyncAll,
+    const char *const *ppszLockedPackages,
+    const char *const *ppszInstallOnlyPackages,
+    const char *const *ppszProtectedPackages,
+    const char *const *ppszUserInstalledPackages,
+    const tdnf_rpm_config *pRpmConfig,
+    const char *pszNativeArch,
+    const TDNF_SOLVED_PKG_INFO *pLegacy,
+    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT *pComparison
+    );
+
+/*
  * Run the native metadata-backed implementation of repoquery-style
  * selectors and field population. `pRepoqueryArgs` uses the public
  * TDNF_REPOQUERY_ARGS layout from tdnftypes.h.

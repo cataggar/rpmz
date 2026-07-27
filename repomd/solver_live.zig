@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const available_loader = @import("available_loader.zig");
 const installed_repository = @import("installed_repository.zig");
+const model = @import("model.zig");
 const rpmpkg = if (builtin.is_test) @import("rpmpkg.zig") else struct {};
 const sqlite = if (builtin.is_test) @import("sqlite") else struct {};
 const solver_identity = @import("solver_identity.zig");
@@ -39,6 +40,9 @@ pub const Input = struct {
     native_arch: []const u8,
     jobs: []const JobInput,
     erase_jobs: []const EraseJobInput = &.{},
+    /// Null means the caller did not provide install-reason data, so every
+    /// installed package keeps `.unknown` and stays a clean-deps root.
+    user_installed_names: ?[]const []const u8 = null,
     /// Null means the caller did not provide an authoritative considered map.
     hidden_available: ?[]const JobInput = null,
     include_installed: bool = true,
@@ -109,9 +113,7 @@ pub fn produce(
     {
         return error.UnsupportedInput;
     }
-    if (input.erase_jobs.len != 0 and
-        (input.jobs.len != 0 or input.clean_deps))
-    {
+    if (input.erase_jobs.len != 0 and input.jobs.len != 0) {
         return error.UnsupportedInput;
     }
     if (input.locked_names.len != 0 and
@@ -152,12 +154,21 @@ pub fn produce(
                 .include_changelogs = false,
             },
         );
+        var installed_states = installed.installed_states;
         models[0] = installed.repository;
+        if (input.user_installed_names) |user_installed_names| {
+            try applyInstallReasons(
+                arena,
+                models[0].packages,
+                &installed_states,
+                user_installed_names,
+            );
+        }
         repository_inputs[0] = .{
             .id = system_repository_id,
             .model = &models[0],
             .kind = .installed,
-            .installed_states = installed.installed_states,
+            .installed_states = installed_states,
         };
     }
 
@@ -301,6 +312,31 @@ pub fn produce(
         .universe = universe,
         .solved = solved,
     };
+}
+
+/// Mirrors the libsolv `SOLVER_USERINSTALLED` feed: names present in
+/// `user_installed_names` were requested by the user, everything else on the
+/// system arrived as a dependency and is therefore clean-deps eligible.
+fn applyInstallReasons(
+    arena: std.mem.Allocator,
+    packages: []const model.Package,
+    installed_states: *[]const solver_model.InstalledState,
+    user_installed_names: []const []const u8,
+) !void {
+    if (packages.len != installed_states.len) return error.InvalidInput;
+    const states = try arena.alloc(solver_model.InstalledState, packages.len);
+    for (packages, installed_states.*, states) |package, state, *updated| {
+        var user_installed = false;
+        for (user_installed_names) |name| {
+            if (std.mem.eql(u8, name, package.nevra.name)) {
+                user_installed = true;
+                break;
+            }
+        }
+        updated.* = state;
+        updated.reason = if (user_installed) .user else .automatic;
+    }
+    installed_states.* = states;
 }
 
 pub fn compare(
@@ -707,6 +743,129 @@ test "live producer retains installed multiversion packages" {
     );
     input.include_installed = true;
     input.clean_deps = true;
+    try std.testing.expectError(
+        error.UnsupportedInput,
+        produce(std.testing.allocator, input),
+    );
+}
+
+fn testPackageNamed(name: []const u8) model.Package {
+    return .{
+        .pkg_id = name,
+        .nevra = .{
+            .name = name,
+            .version = "1.0",
+            .release = "1",
+            .arch = "x86_64",
+        },
+        .checksum = .{ .kind = "sha256", .value = "00", .is_pkgid = true },
+        .location = .{ .href = name },
+    };
+}
+
+test "install reasons follow the user-installed name feed" {
+    const packages = [_]model.Package{
+        testPackageNamed("user-picked"),
+        testPackageNamed("pulled-in"),
+    };
+    const initial = [_]solver_model.InstalledState{
+        .{ .rpmdb_hnum = 11, .reason = .unknown, .install_order = 1 },
+        .{ .rpmdb_hnum = 12, .reason = .unknown, .install_order = 2 },
+    };
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    var states: []const solver_model.InstalledState = &initial;
+    try applyInstallReasons(
+        arena_state.allocator(),
+        &packages,
+        &states,
+        &.{"user-picked"},
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), states.len);
+    try std.testing.expectEqual(solver_model.InstallReason.user, states[0].reason);
+    try std.testing.expectEqual(
+        solver_model.InstallReason.automatic,
+        states[1].reason,
+    );
+    // unrelated state must survive the rewrite
+    try std.testing.expectEqual(@as(u32, 11), states[0].rpmdb_hnum);
+    try std.testing.expectEqual(@as(u32, 12), states[1].rpmdb_hnum);
+    try std.testing.expectEqual(@as(u64, 2), states[1].install_order);
+
+    // an empty feed means nothing was user requested
+    states = &initial;
+    try applyInstallReasons(
+        arena_state.allocator(),
+        &packages,
+        &states,
+        &.{},
+    );
+    for (states) |state| {
+        try std.testing.expectEqual(
+            solver_model.InstallReason.automatic,
+            state.reason,
+        );
+    }
+
+    var mismatched: []const solver_model.InstalledState = initial[0..1];
+    try std.testing.expectError(
+        error.InvalidInput,
+        applyInstallReasons(
+            arena_state.allocator(),
+            &packages,
+            &mismatched,
+            &.{},
+        ),
+    );
+}
+
+test "live producer translates erase jobs with clean deps" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalled(51, "leaf");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    const erase_jobs = [_]EraseJobInput{.{
+        .selector = .{
+            .repository = system_repository_id,
+            .name = "leaf",
+            .epoch = null,
+            .version = "1.0",
+            .release = "1",
+            .arch = "x86_64",
+        },
+    }};
+    input.jobs = &.{};
+    input.erase_jobs = &erase_jobs;
+    input.clean_deps = true;
+
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    const actions = solved.solved.result.outcome.actions;
+    try std.testing.expectEqual(@as(usize, 1), actions.len);
+    try std.testing.expectEqual(solver_model.ActionKind.erase, actions[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), actions[0].priors.len);
+
+    // clean deps stays rejected where it is still combined with an unsupported
+    // shape, so lifting the erase restriction does not widen the others
+    input.jobs = jobs[0..];
+    try std.testing.expectError(
+        error.UnsupportedInput,
+        produce(std.testing.allocator, input),
+    );
+    input.jobs = &.{};
+    input.installonly_names = &.{"leaf"};
     try std.testing.expectError(
         error.UnsupportedInput,
         produce(std.testing.allocator, input),
