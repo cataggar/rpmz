@@ -17,6 +17,13 @@ const legacy_max_output_bytes = 1024 * 1024 * 1024;
 const legacy_max_expansion_ratio = 4096;
 const legacy_expansion_slack = 64 * 1024 * 1024;
 const decompression_writer_history_bytes = 64 * 1024;
+// std's zstd decoder decodes through a caller-supplied window buffer. When that
+// buffer is empty the destination writer has to hold the whole window instead,
+// which would push the temporary output budget far past the metadata size. Own
+// the window explicitly so the output budget stays proportional to the output.
+const zstd_max_decoder_scratch_bytes =
+    std.compress.zstd.default_window_len +
+    std.compress.zstd.block_size_max;
 const xz_work_base_units = 4096;
 const xz_work_input_quantum = 4096;
 const xz_work_output_quantum = 1024 * 1024;
@@ -1238,7 +1245,16 @@ fn decompressMetadataAlloc(
     if (std.mem.endsWith(u8, path, ".zst") or
         std.mem.endsWith(u8, path, ".zstd"))
     {
-        var decoder: std.compress.zstd.Decompress = .init(&input, &.{}, .{});
+        const window = std.heap.c_allocator.alloc(
+            u8,
+            zstd_max_decoder_scratch_bytes,
+        ) catch return error.OutOfMemory;
+        defer std.heap.c_allocator.free(window);
+        var decoder: std.compress.zstd.Decompress = .init(
+            &input,
+            window,
+            .{},
+        );
         return decoder.reader.allocRemaining(
             allocator,
             .limited(max_output_bytes),
@@ -2671,6 +2687,41 @@ const xz_property_reset_vector = [_]u8{
     0,   1,  34,  16, 111, 227, 131, 154, 31,  182, 243, 125,
     1,   0,  0,   0,  0,   4,   89,  90,
 };
+
+test "zstd metadata decodes under a window-sized frame descriptor" {
+    // Repository metadata is produced by streaming compressors, so the frame
+    // advertises the compressor's window (2 MiB here, 4 MiB for createrepo_c)
+    // rather than the payload size. Decoding compressed blocks needs that whole
+    // window available, so the decoder must own it -- otherwise the destination
+    // writer is forced to hold it and the temporary output budget, which is
+    // sized from the advertised open-size, reports StreamTooLong.
+    const payload = "metadata-payload " ** 128;
+    const zstd_window_frame = [_]u8{
+        40,  181, 47,  253, 4,   88,  205, 0,   0,  136, 109, 101,
+        116, 97,  100, 97,  116, 97,  45,  112, 97, 121, 108, 111,
+        97,  100, 32,  1,   0,   217, 64,  254, 92, 2,   199, 242,
+        183, 33,
+    };
+
+    const decoded = try decompressMetadata(
+        std.testing.allocator,
+        "metadata.xml.zst",
+        &zstd_window_frame,
+        payload.len + 1,
+    );
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings(payload, decoded);
+
+    try std.testing.expectError(
+        error.StreamTooLong,
+        decompressMetadata(
+            std.testing.allocator,
+            "metadata.xml.zst",
+            &zstd_window_frame,
+            payload.len,
+        ),
+    );
+}
 
 test "metadata decompression supports raw gzip zstd and xz" {
     const payload = "metadata-payload";
