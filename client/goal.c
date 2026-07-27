@@ -514,7 +514,9 @@ TDNFSolv(
                   nReInstall);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    if(pTdnf->pArgs->nDebugSolver)
+    if(pTdnf->pArgs->nDebugSolver ||
+       TDNFRepoMdNativeSolverShadowMode() !=
+           TDNF_REPOMD_NATIVE_SOLVER_SHADOW_OFF)
     {
         uint32_t dwShadowError = TDNFGoalObserveNativeSolver(
                                      pTdnf,
@@ -523,6 +525,11 @@ TDNFSolv(
                                      nAllowErasing,
                                      nAutoErase,
                                      nProblems, nUnresolved);
+        if(dwShadowError == ERROR_TDNF_NATIVE_SOLVER_MISMATCH)
+        {
+            dwError = dwShadowError;
+            BAIL_ON_TDNF_ERROR(dwError);
+        }
         if(dwShadowError)
         {
             pr_info("native-solver-shadow: unavailable (%u)\n",
@@ -795,6 +802,12 @@ TDNFGoalObserveNativeSolver(
                    comparison.dwDifferenceIndex,
                    comparison.dwNativeCount,
                    comparison.dwLegacyCount);
+            if(TDNFRepoMdNativeSolverShadowMode() ==
+               TDNF_REPOMD_NATIVE_SOLVER_SHADOW_STRICT)
+            {
+                dwError = ERROR_TDNF_NATIVE_SOLVER_MISMATCH;
+                BAIL_ON_TDNF_ERROR(dwError);
+            }
             break;
         case TDNF_REPOMD_NATIVE_SOLVER_COMPARE_UNSUPPORTED:
             pr_info("native-solver-shadow: comparison unsupported "
