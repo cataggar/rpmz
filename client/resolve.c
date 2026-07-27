@@ -148,6 +148,10 @@ TDNFPrepareAllPackages(
                {
                    dwError = TDNFAddNotResolved(ppszPkgsNotResolved, pszPkgName);
                    BAIL_ON_TDNF_ERROR(dwError);
+                   TDNFTransactionPlanRequestTraceRecordRequestOutcome(
+                       pTdnf->pRequestTrace,
+                       nCmdIndex - 1,
+                       TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_NO_CANDIDATE);
                }
                else
                {
@@ -472,6 +476,13 @@ error:
             }
         }
         dwError = 0;
+        if(dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST)
+        {
+            TDNFTransactionPlanRequestTraceRecordRequestOutcome(
+                pTdnf->pRequestTrace,
+                dwRequestRef,
+                TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED);
+        }
         if(nShowAlreadyInstalled)
         {
             pr_err("Package %s is already installed.\n", pszPkgName);
@@ -480,11 +491,25 @@ error:
     else if (dwError == ERROR_TDNF_NO_UPGRADE_PATH)
     {
         dwError = 0;
+        if(dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST)
+        {
+            TDNFTransactionPlanRequestTraceRecordRequestOutcome(
+                pTdnf->pRequestTrace,
+                dwRequestRef,
+                TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED);
+        }
         pr_err("There is no upgrade path for %s.\n", pszPkgName);
     }
     else if (dwError == ERROR_TDNF_NO_DOWNGRADE_PATH)
     {
         dwError = 0;
+        if(dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST)
+        {
+            TDNFTransactionPlanRequestTraceRecordRequestOutcome(
+                pTdnf->pRequestTrace,
+                dwRequestRef,
+                TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED);
+        }
         pr_err("There is no downgrade path for %s.\n", pszPkgName);
     }
     else if (dwError == ERROR_TDNF_NO_SEARCH_RESULTS)
@@ -494,10 +519,24 @@ error:
         {
             pr_err("Error while adding not resolved packages: '%s'\n", pszPkgName);
         }
+        else if(dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST)
+        {
+            TDNFTransactionPlanRequestTraceRecordRequestOutcome(
+                pTdnf->pRequestTrace,
+                dwRequestRef,
+                TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_NO_CANDIDATE);
+        }
     }
     else if (dwError == ERROR_TDNF_ERASE_NEEDS_INSTALL)
     {
         dwError = 0;
+        if(dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST)
+        {
+            TDNFTransactionPlanRequestTraceRecordRequestOutcome(
+                pTdnf->pRequestTrace,
+                dwRequestRef,
+                TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED);
+        }
         //TODO: maybe restore solvedinfo based processing here.
     }
     else if (dwError == ERROR_TDNF_NO_MATCH)

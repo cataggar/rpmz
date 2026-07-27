@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 
 pub const schema = "tdnf.transaction-plan/v1";
 const digest_prefix = schema ++ "\x00";
+const snapshot_id_prefix = "snapshot-v2-";
 
 pub const ValidationError = error{
     AmbiguousPackageIdentity,
@@ -605,7 +606,13 @@ fn validateEnvironment(environment: Environment) ValidationError!void {
 fn validateMinVersions(values: []const MinVersionConstraint) ValidationError!void {
     for (values, 0..) |value, index| {
         try validateOpaqueText(value.name);
-        try validateOpaqueText(value.version);
+        if (value.version.len == 0) {
+            if (value.epoch == null or value.release != null) {
+                return error.InvalidString;
+            }
+        } else {
+            try validateOpaqueText(value.version);
+        }
         if (value.arch) |arch| try validateOpaqueText(arch);
         if (value.release) |release| try validateOpaqueText(release);
         for (values[0..index]) |prior| {
@@ -752,7 +759,7 @@ fn validateRepositories(repositories: []const Repository) ValidationError!void {
                 if (repomd.revision) |revision| try validateOpaqueText(revision);
                 if (repomd.records.len == 0) return error.IncompletePackageSource;
                 try validateMetadataRecords(repomd.records);
-                try validateId(snapshot.id);
+                try validateSnapshotId(snapshot.id);
                 try validateSha256(snapshot.metadata_sha256);
             },
             .installed => {
@@ -1186,6 +1193,19 @@ fn validateId(value: []const u8) ValidationError!void {
     if (!std.unicode.utf8ValidateSlice(value) or std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidString;
     for (value) |byte| {
         if (!std.ascii.isAlphanumeric(byte) and byte != '.' and byte != '_' and byte != '+' and byte != '-') return error.InvalidString;
+    }
+}
+
+fn validateSnapshotId(value: []const u8) ValidationError!void {
+    if (!std.mem.startsWith(u8, value, snapshot_id_prefix) or
+        value.len != snapshot_id_prefix.len + 64)
+    {
+        return error.InvalidString;
+    }
+    for (value[snapshot_id_prefix.len..]) |byte| {
+        if (!std.ascii.isDigit(byte) and (byte < 'a' or byte > 'f')) {
+            return error.InvalidString;
+        }
     }
 }
 
@@ -3002,7 +3022,7 @@ fn testData() Data {
         },
         .problems = &.{},
         .repositories = &.{
-            .{ .cost = 1000, .id = "base", .kind = .available, .priority = 10, .repomd = .{ .checksum_sha256 = test_sha_a, .records = &.{.{ .checksum = .{ .kind = "sha256", .value = test_sha_b }, .database_version = null, .location = .{ .href = "repodata/primary.xml.zst", .xml_base = null }, .open_checksum = null, .open_size = null, .record_type = "primary", .size = 12, .timestamp = 42 }}, .revision = "rev-1", .timestamp = 42 }, .snapshot = .{ .id = "snap", .metadata_sha256 = test_sha_b } },
+            .{ .cost = 1000, .id = "base", .kind = .available, .priority = 10, .repomd = .{ .checksum_sha256 = test_sha_a, .records = &.{.{ .checksum = .{ .kind = "sha256", .value = test_sha_b }, .database_version = null, .location = .{ .href = "repodata/primary.xml.zst", .xml_base = null }, .open_checksum = null, .open_size = null, .record_type = "primary", .size = 12, .timestamp = 42 }}, .revision = "rev-1", .timestamp = 42 }, .snapshot = .{ .id = "snapshot-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", .metadata_sha256 = test_sha_b } },
             .{ .cost = 0, .id = "@System", .kind = .installed, .priority = 0, .repomd = null, .snapshot = null },
         },
         .requests = &.{
@@ -3529,6 +3549,18 @@ test "repository kinds and semantic IDs are enforced" {
     repositories[0] = testData().repositories[0];
     repositories[0].repomd.?.records = &.{};
     try std.testing.expectError(error.IncompletePackageSource, validate(data));
+    repositories[0] = testData().repositories[0];
+    repositories[0].snapshot.?.id =
+        "snapshot-v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    try std.testing.expectError(error.InvalidString, validate(data));
+    repositories[0].snapshot.?.id =
+        "snapshot-v2-Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    try std.testing.expectError(error.InvalidString, validate(data));
+    repositories[0].snapshot.?.id =
+        "snapshot-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    try std.testing.expectError(error.InvalidString, validate(data));
+    repositories[0] = testData().repositories[0];
+    try validate(data);
 
     const command_line = Repository{ .cost = 0, .id = "command-line", .kind = .command_line, .priority = 0, .repomd = null, .snapshot = null };
     const pristine = testData();

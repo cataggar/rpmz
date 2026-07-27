@@ -34,7 +34,7 @@ static uint32_t TDNFParseOSInfo(PTDNF_CONF pConf, const char *os_rel_fn)
     uint32_t dwError = 0;
     FILE *fp = NULL;
     size_t s;
-    char *buf;
+    char *buf = NULL;
     const char keys[][KEY_MAX_LEN] = {
         "ID",
         "VERSION_ID"
@@ -57,24 +57,29 @@ static uint32_t TDNFParseOSInfo(PTDNF_CONF pConf, const char *os_rel_fn)
             const char *key = keys[i];
             int key_l = strlen(key);
 
-            if (strncmp(key, buf, key_l))
+            if (strncmp(key, buf, key_l) || buf[key_l] != '=')
+            {
                 continue;
-
-            /* read the value within double quotes */
-            beg = strchr(buf + key_l + 1, '"'); // skip till 'KEY='
-            if (beg) {
+            }
+            beg = buf + key_l + 1;
+            if (*beg == '"') {
                 char *end;
 
                 beg += 1;
                 end = strrchr(beg, '"');
+                if (!end)
+                {
+                    continue;
+                }
                 *end = '\0';
-                snprintf(buf, s, "%s=%s", key, beg);
             }
-
-            if (strncmp(buf, "ID=", sizeof("ID=") - 1)) {
-                dwError = TDNFAllocateString(buf, &name);
-            } else if (strncmp(buf, "VERSION_ID=", sizeof("VERSION_ID=") - 1)) {
-                dwError = TDNFAllocateString(buf, &version);
+            if (!strcmp(key, "ID"))
+            {
+                dwError = TDNFAllocateString(beg, &name);
+            }
+            else
+            {
+                dwError = TDNFAllocateString(beg, &version);
             }
             BAIL_ON_TDNF_ERROR(dwError);
         }
@@ -323,6 +328,7 @@ TDNFReadConfig(
     char *pszProtectedDir = NULL;
     char *pszCacheDir = NULL;
     char *pszRepoDir = NULL;
+    char *pszOSRelFile = NULL;
     const char *pszTdnfVersion = NULL;
     struct cnfnode *cn_conf = NULL;
     struct cnfmodule *mod_ini;
@@ -373,7 +379,15 @@ TDNFReadConfig(
         }
     }
 
-    dwError = TDNFParseOSInfo(pConf, OS_REL_FILE);
+    if(!IsNullOrEmptyString(pTdnf->pArgs->pszInstallRoot) &&
+       strcmp(pTdnf->pArgs->pszInstallRoot, "/"))
+    {
+        dwError = TDNFJoinPath(&pszOSRelFile,
+                               pTdnf->pArgs->pszInstallRoot,
+                               OS_REL_FILE, NULL);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+    dwError = TDNFParseOSInfo(pConf, pszOSRelFile ? pszOSRelFile : OS_REL_FILE);
     BAIL_ON_TDNF_ERROR(dwError);
 
     /* cn_conf == NULL => we will not reach here */
@@ -505,6 +519,7 @@ cleanup:
     destroy_cnftree(cn_conf);
     TDNF_SAFE_FREE_MEMORY(pszCacheDir);
     TDNF_SAFE_FREE_MEMORY(pszRepoDir);
+    TDNF_SAFE_FREE_MEMORY(pszOSRelFile);
     TDNF_SAFE_FREE_MEMORY(pszConfDir);
     TDNF_SAFE_FREE_MEMORY(pszMinVersionsDir);
     TDNF_SAFE_FREE_MEMORY(pszPkgLocksDir);

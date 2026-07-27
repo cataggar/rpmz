@@ -4,6 +4,10 @@ const Allocator = std.mem.Allocator;
 const abi = @import("transaction_plan_capture_abi");
 const error_codes = @import("tdnf_error");
 
+threadlocal var last_trace_error: u32 = 0;
+threadlocal var test_fail_create: bool = false;
+threadlocal var test_fail_record: bool = false;
+
 const TraceError = Allocator.Error || error{
     InvalidTrace,
 };
@@ -25,6 +29,7 @@ const Request = struct {
     id: []const u8,
     kind: u32,
     subject: ?[]const u8,
+    outcome: u32 = abi.request_outcome.pending,
 };
 
 pub const SemanticCapability = struct {
@@ -92,11 +97,16 @@ pub const Trace = struct {
     jobs: std.ArrayList(Job) = .empty,
     origins: std.ArrayList(Origin) = .empty,
     policy_facts: std.ArrayList(PolicyFact) = .empty,
+    satisfied_selections: std.ArrayList(
+        abi.RequestTraceSatisfiedSelection,
+    ) = .empty,
     stage_cursor: usize = 0,
     allow_erasing: bool = false,
     policies_recorded: bool = false,
     valid: bool = true,
     finalized: bool = false,
+    failure_code: u32 = 0,
+    fail_next_record: bool = false,
     view: abi.RequestTraceView = .{},
 
     pub fn init(allocator: Allocator) Trace {
@@ -121,6 +131,14 @@ pub const Trace = struct {
     fn invalidate(self: *Trace) void {
         self.valid = false;
         self.view = .{};
+    }
+
+    fn fail(self: *Trace, err: anyerror) void {
+        if (self.failure_code == 0) {
+            self.failure_code = mapTraceError(err);
+            last_trace_error = self.failure_code;
+        }
+        self.invalidate();
     }
 
     pub fn initResolve(
@@ -216,6 +234,7 @@ pub const Trace = struct {
         ids: []const i32,
         start: usize,
         end: usize,
+        outcome: u32,
     ) TraceError!void {
         const request_ref = try self.addRequest(
             request_kind,
@@ -223,7 +242,14 @@ pub const Trace = struct {
             false,
         );
         try validateAction(action);
-        if (start > end or end > ids.len) return error.InvalidTrace;
+        try validateRequestOutcome(outcome);
+        if (start > end or end > ids.len or
+            (outcome == abi.request_outcome.queued) != (start != end))
+        {
+            return error.InvalidTrace;
+        }
+        if (outcome != abi.request_outcome.queued)
+            try self.recordRequestOutcome(request_ref, outcome);
         const allocator = self.arenaAllocator();
         for (ids[start..end]) |selection_id| {
             if (selection_id <= 0) return error.InvalidTrace;
@@ -233,6 +259,29 @@ pub const Trace = struct {
                 .reason = abi.request_reason.user,
                 .request_ref = request_ref,
             });
+        }
+    }
+
+    pub fn recordRequestOutcome(
+        self: *Trace,
+        request_ref: u32,
+        outcome: u32,
+    ) TraceError!void {
+        try self.ensureMutable();
+        try validateRequestOutcome(outcome);
+        if (outcome == abi.request_outcome.pending or
+            request_ref >= self.requests.items.len)
+        {
+            return error.InvalidTrace;
+        }
+        const current = &self.requests.items[request_ref].outcome;
+        if (outcome == abi.request_outcome.no_candidate or
+            (outcome == abi.request_outcome.queued and
+                current.* != abi.request_outcome.no_candidate) or
+            (outcome == abi.request_outcome.satisfied and
+                current.* == abi.request_outcome.pending))
+        {
+            current.* = outcome;
         }
     }
 
@@ -258,7 +307,23 @@ pub const Trace = struct {
         {
             return error.InvalidTrace;
         }
-        if (end == start) return;
+        if (end == start) {
+            if (stage.request_ref) |request_ref| {
+                try self.recordRequestOutcome(
+                    request_ref,
+                    abi.request_outcome.satisfied,
+                );
+                if (self.requests.items[request_ref].outcome !=
+                    abi.request_outcome.no_candidate)
+                {
+                    try self.recordSatisfiedSelection(
+                        request_ref,
+                        stage.selection_id,
+                    );
+                }
+            }
+            return;
+        }
         if (queue[start + 1] != selection_id) return error.InvalidTrace;
         try self.recordPackageJob(
             @intCast(start / 2),
@@ -269,6 +334,19 @@ pub const Trace = struct {
             stage.reason,
             encodeRequestRef(stage.request_ref),
         );
+    }
+
+    fn recordSatisfiedSelection(
+        self: *Trace,
+        request_ref: u32,
+        selection_id: i32,
+    ) TraceError!void {
+        if (selection_id <= 0 or request_ref >= self.requests.items.len)
+            return error.InvalidTrace;
+        try self.satisfied_selections.append(self.arenaAllocator(), .{
+            .request_ref = request_ref,
+            .selection_id = selection_id,
+        });
     }
 
     pub fn recordPackageJob(
@@ -408,6 +486,8 @@ pub const Trace = struct {
             return error.InvalidTrace;
         }
         const request_ref = try self.decodeRequestRef(raw_request_ref);
+        if (request_ref) |value|
+            try self.recordRequestOutcome(value, abi.request_outcome.queued);
         const allocator = self.arenaAllocator();
         const job_ref: u32 = std.math.cast(u32, self.jobs.items.len) orelse
             return error.InvalidTrace;
@@ -467,6 +547,11 @@ pub const Trace = struct {
         const allocator = self.arenaAllocator();
         for (values) |value| {
             if (value.len == 0) return error.InvalidTrace;
+            const duplicate = for (self.policy_facts.items) |prior| {
+                if (prior.kind == kind and
+                    std.mem.eql(u8, prior.value, value)) break true;
+            } else false;
+            if (duplicate) continue;
             try self.policy_facts.append(allocator, .{
                 .value = try allocator.dupe(u8, value),
                 .kind = kind,
@@ -486,6 +571,38 @@ pub const Trace = struct {
             self.origins.items.len != queue.len / 2)
         {
             return error.InvalidTrace;
+        }
+        for (self.requests.items) |*request| {
+            if (request.outcome == abi.request_outcome.pending)
+                request.outcome = abi.request_outcome.satisfied;
+        }
+        std.mem.sort(
+            abi.RequestTraceSatisfiedSelection,
+            self.satisfied_selections.items,
+            {},
+            satisfiedSelectionLessThan,
+        );
+        var retained: usize = 0;
+        for (self.satisfied_selections.items) |selection| {
+            if (retained != 0) {
+                const prior = self.satisfied_selections.items[retained - 1];
+                if (selection.request_ref == prior.request_ref and
+                    selection.selection_id == prior.selection_id)
+                {
+                    continue;
+                }
+            }
+            self.satisfied_selections.items[retained] = selection;
+            retained += 1;
+        }
+        self.satisfied_selections.shrinkRetainingCapacity(retained);
+        for (self.satisfied_selections.items) |selection| {
+            if (selection.request_ref >= self.requests.items.len or
+                self.requests.items[selection.request_ref].outcome ==
+                    abi.request_outcome.no_candidate)
+            {
+                return error.InvalidTrace;
+            }
         }
         const clean_mask: u32 = @bitCast(clean_deps_mask);
         const best_mask: u32 = @bitCast(force_best_mask);
@@ -515,6 +632,7 @@ pub const Trace = struct {
             output.* = .{
                 .id = bytes(request.id),
                 .kind = request.kind,
+                .outcome = request.outcome,
             };
             if (request.subject) |subject| {
                 output.subject = bytes(subject);
@@ -589,6 +707,13 @@ pub const Trace = struct {
             .queue_origin_count = @intCast(origins.len),
             .policy_fact_count = @intCast(policy_facts.len),
             .allow_erasing = @intFromBool(self.allow_erasing),
+            .satisfied_selections = optionalManyPointer(
+                abi.RequestTraceSatisfiedSelection,
+                self.satisfied_selections.items,
+            ),
+            .satisfied_selection_count = @intCast(
+                self.satisfied_selections.items.len,
+            ),
         };
     }
 
@@ -633,6 +758,7 @@ pub const CaptureFactsOwner = struct {
             output.* = .{
                 .id = bytes(try arena.dupe(u8, request.id)),
                 .kind = request.kind,
+                .outcome = request.outcome,
             };
             if (request.subject) |subject| {
                 output.subject = bytes(try arena.dupe(u8, subject));
@@ -691,11 +817,33 @@ pub const CaptureFactsOwner = struct {
             }
         }
 
+        const satisfied_packages = try arena.alloc(
+            abi.RequestTraceSatisfiedPackage,
+            trace.satisfied_selections.items.len,
+        );
+        for (
+            trace.satisfied_selections.items,
+            satisfied_packages,
+        ) |selection, *output| {
+            output.* = .{
+                .request_ref = selection.request_ref,
+                .package_ref = try findPackageRef(
+                    package_refs,
+                    selection.selection_id,
+                ),
+            };
+        }
+
         owner.facts = .{
             .requests = optionalManyPointer(abi.Request, requests),
             .jobs = optionalManyPointer(abi.Job, jobs),
+            .satisfied_packages = optionalManyPointer(
+                abi.RequestTraceSatisfiedPackage,
+                satisfied_packages,
+            ),
             .request_count = @intCast(requests.len),
             .job_count = @intCast(jobs.len),
+            .satisfied_package_count = @intCast(satisfied_packages.len),
         };
         return owner;
     }
@@ -708,20 +856,31 @@ pub const CaptureFactsOwner = struct {
 };
 
 fn shouldOmitSubject(subject: []const u8) bool {
-    if (std.mem.endsWith(u8, subject, ".rpm")) return true;
-    const scheme = std.mem.indexOf(u8, subject, "://") orelse return false;
-    const authority_start = scheme + 3;
-    const authority_end = std.mem.indexOfScalarPos(
-        u8,
-        subject,
-        authority_start,
-        '/',
-    ) orelse subject.len;
-    return std.mem.indexOfScalar(
-        u8,
-        subject[authority_start..authority_end],
-        '@',
-    ) != null;
+    if (hasRpmSuffix(subject)) return true;
+    if (std.mem.indexOf(u8, subject, "://") != null) {
+        const resource_end = std.mem.indexOfAny(u8, subject, "?#") orelse
+            subject.len;
+        if (hasRpmSuffix(subject[0..resource_end])) return true;
+        return true;
+    }
+    return std.mem.startsWith(u8, subject, "******");
+}
+
+fn hasRpmSuffix(value: []const u8) bool {
+    return value.len >= 4 and std.ascii.eqlIgnoreCase(
+        value[value.len - 4 ..],
+        ".rpm",
+    );
+}
+
+fn satisfiedSelectionLessThan(
+    _: void,
+    left: abi.RequestTraceSatisfiedSelection,
+    right: abi.RequestTraceSatisfiedSelection,
+) bool {
+    if (left.request_ref != right.request_ref)
+        return left.request_ref < right.request_ref;
+    return left.selection_id < right.selection_id;
 }
 
 fn requestKindFromAlter(alter_type: u32) TraceError!u32 {
@@ -762,6 +921,11 @@ fn validateRequestKind(kind: u32) TraceError!void {
 
 fn validateAction(action: u32) TraceError!void {
     if (action > abi.job_action.allow_uninstall) return error.InvalidTrace;
+}
+
+fn validateRequestOutcome(outcome: u32) TraceError!void {
+    if (outcome > abi.request_outcome.no_candidate)
+        return error.InvalidTrace;
 }
 
 fn validateReason(reason: u32) TraceError!void {
@@ -1003,7 +1167,12 @@ fn cStringsToOwnedSlice(
 }
 
 fn handleTraceError(trace: *Trace, result: TraceError!void) void {
-    result catch trace.invalidate();
+    if (trace.fail_next_record) {
+        trace.fail_next_record = false;
+        trace.fail(error.OutOfMemory);
+        return;
+    }
+    result catch |err| trace.fail(err);
 }
 
 fn requestTraceCreate(
@@ -1011,26 +1180,44 @@ fn requestTraceCreate(
     raw_subjects: ?[*]const ?[*:0]const u8,
     subject_count: u32,
 ) callconv(.c) ?*Trace {
-    if (subject_count != 0 and raw_subjects == null) return null;
-    const trace = std.heap.c_allocator.create(Trace) catch return null;
+    last_trace_error = 0;
+    if (test_fail_create) {
+        test_fail_create = false;
+        last_trace_error = error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+        return null;
+    }
+    if (subject_count != 0 and raw_subjects == null) {
+        last_trace_error = error_codes.ERROR_TDNF_INVALID_PARAMETER;
+        return null;
+    }
+    const trace = std.heap.c_allocator.create(Trace) catch {
+        last_trace_error = error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+        return null;
+    };
     trace.* = Trace.init(std.heap.c_allocator);
+    trace.fail_next_record = test_fail_record;
+    test_fail_record = false;
 
-    const kind = requestKindFromAlter(alter_type) catch {
+    const kind = requestKindFromAlter(alter_type) catch |err| {
+        last_trace_error = mapTraceError(err);
         requestTraceDestroy(trace);
         return null;
     };
     if (subject_count == 0 or alterUsesSingletonRequest(alter_type)) {
-        _ = trace.addRequest(kind, null, true) catch {
+        _ = trace.addRequest(kind, null, true) catch |err| {
+            last_trace_error = mapTraceError(err);
             requestTraceDestroy(trace);
             return null;
         };
     } else {
         for (raw_subjects.?[0..subject_count]) |raw_subject| {
-            const subject = rawCString(raw_subject) catch {
+            const subject = rawCString(raw_subject) catch |err| {
+                last_trace_error = mapTraceError(err);
                 requestTraceDestroy(trace);
                 return null;
             };
-            _ = trace.addRequest(kind, subject, true) catch {
+            _ = trace.addRequest(kind, subject, true) catch |err| {
+                last_trace_error = mapTraceError(err);
                 requestTraceDestroy(trace);
                 return null;
             };
@@ -1040,8 +1227,19 @@ fn requestTraceCreate(
 }
 
 fn requestTraceCreateHistory() callconv(.c) ?*Trace {
-    const trace = std.heap.c_allocator.create(Trace) catch return null;
+    last_trace_error = 0;
+    if (test_fail_create) {
+        test_fail_create = false;
+        last_trace_error = error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+        return null;
+    }
+    const trace = std.heap.c_allocator.create(Trace) catch {
+        last_trace_error = error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+        return null;
+    };
     trace.* = Trace.init(std.heap.c_allocator);
+    trace.fail_next_record = test_fail_record;
+    test_fail_record = false;
     return trace;
 }
 
@@ -1086,6 +1284,7 @@ fn requestTraceRecordHistoryGoal(
     raw_ids: ?[*]const i32,
     start: u32,
     end: u32,
+    outcome: u32,
 ) callconv(.c) void {
     const value = trace orelse return;
     const subject = rawCString(raw_subject) catch {
@@ -1093,6 +1292,10 @@ fn requestTraceRecordHistoryGoal(
         return;
     };
     const ids = rawI32Slice(raw_ids, end) catch {
+        value.invalidate();
+        return;
+    };
+    validateRequestOutcome(outcome) catch {
         value.invalidate();
         return;
     };
@@ -1105,7 +1308,20 @@ fn requestTraceRecordHistoryGoal(
             ids,
             start,
             end,
+            outcome,
         ),
+    );
+}
+
+fn requestTraceRecordRequestOutcome(
+    trace: ?*Trace,
+    request_ref: u32,
+    outcome: u32,
+) callconv(.c) void {
+    const value = trace orelse return;
+    handleTraceError(
+        value,
+        value.recordRequestOutcome(request_ref, outcome),
     );
 }
 
@@ -1248,8 +1464,8 @@ fn requestTraceRecordCapabilityJob(
             value.invalidate();
             return;
         }).*,
-    ) catch {
-        value.invalidate();
+    ) catch |err| {
+        value.fail(err);
         return;
     };
     handleTraceError(
@@ -1277,40 +1493,40 @@ fn requestTraceRecordPolicies(
 ) callconv(.c) void {
     const value = trace orelse return;
     const allocator = value.arenaAllocator();
-    const excludes = cStringsToOwnedSlice(allocator, raw_excludes) catch {
-        value.invalidate();
+    const excludes = cStringsToOwnedSlice(allocator, raw_excludes) catch |err| {
+        value.fail(err);
         return;
     };
     const installonly_names = cStringsToOwnedSlice(
         allocator,
         raw_installonly_names,
-    ) catch {
-        value.invalidate();
+    ) catch |err| {
+        value.fail(err);
         return;
     };
     const locked_names = cStringsToOwnedSlice(
         allocator,
         raw_locked_names,
-    ) catch {
-        value.invalidate();
+    ) catch |err| {
+        value.fail(err);
         return;
     };
     const min_versions = cStringsToOwnedSlice(
         allocator,
         raw_min_versions,
-    ) catch {
-        value.invalidate();
+    ) catch |err| {
+        value.fail(err);
         return;
     };
     const protected_names = cStringsToOwnedSlice(
         allocator,
         raw_protected_names,
-    ) catch {
-        value.invalidate();
+    ) catch |err| {
+        value.fail(err);
         return;
     };
-    const allow_erasing = boolean(raw_allow_erasing) catch {
-        value.invalidate();
+    const allow_erasing = boolean(raw_allow_erasing) catch |err| {
+        value.fail(err);
         return;
     };
     handleTraceError(
@@ -1334,8 +1550,8 @@ fn requestTraceFinalize(
     force_best_mask: i32,
 ) callconv(.c) void {
     const value = trace orelse return;
-    const queue = rawI32Slice(raw_queue, element_count) catch {
-        value.invalidate();
+    const queue = rawI32Slice(raw_queue, element_count) catch |err| {
+        value.fail(err);
         return;
     };
     handleTraceError(
@@ -1348,6 +1564,21 @@ fn requestTraceGetView(
     trace: ?*const Trace,
 ) callconv(.c) ?*const abi.RequestTraceView {
     return (trace orelse return null).getView();
+}
+
+fn requestTraceGetError(trace: ?*const Trace) callconv(.c) u32 {
+    return if (trace) |value|
+        value.failure_code
+    else
+        last_trace_error;
+}
+
+fn requestTraceTestFailNextCreate() callconv(.c) void {
+    test_fail_create = true;
+}
+
+fn requestTraceTestFailNextRecord() callconv(.c) void {
+    test_fail_record = true;
 }
 
 fn mapTraceError(err: anyerror) u32 {
@@ -1412,6 +1643,10 @@ comptime {
         .name = "TDNFTransactionPlanRequestTraceRecordHistoryGoal",
         .visibility = .hidden,
     });
+    @export(&requestTraceRecordRequestOutcome, .{
+        .name = "TDNFTransactionPlanRequestTraceRecordRequestOutcome",
+        .visibility = .hidden,
+    });
     @export(&requestTraceCommitGoal, .{
         .name = "TDNFTransactionPlanRequestTraceCommitGoal",
         .visibility = .hidden,
@@ -1446,6 +1681,18 @@ comptime {
     });
     @export(&requestTraceGetView, .{
         .name = "TDNFTransactionPlanRequestTraceGetView",
+        .visibility = .hidden,
+    });
+    @export(&requestTraceGetError, .{
+        .name = "TDNFTransactionPlanRequestTraceGetError",
+        .visibility = .hidden,
+    });
+    @export(&requestTraceTestFailNextCreate, .{
+        .name = "TDNFTransactionPlanRequestTraceTestFailNextCreate",
+        .visibility = .hidden,
+    });
+    @export(&requestTraceTestFailNextRecord, .{
+        .name = "TDNFTransactionPlanRequestTraceTestFailNextRecord",
         .visibility = .hidden,
     });
     @export(&requestTraceCaptureFactsCreate, .{
@@ -1525,6 +1772,46 @@ test "original requests and glob jobs retain stable provenance" {
             origin.queue_pair_index,
         );
     }
+}
+
+test "command line subjects redact RPM paths and secret-bearing URIs" {
+    var trace = Trace.init(std.testing.allocator);
+    defer trace.deinit();
+    try trace.initResolve(alter.install, &.{
+        "/private/LOCAL.RPM",
+        "/private/token?secret.rpm",
+        "/private/token#secret.rpm",
+        "file:///private/package.rpm",
+        "https://repo.invalid/package.rpm?token=value",
+        "https://repo.invalid/package.rpm#token=value",
+        "https://user:value@repo.invalid/package",
+        "https://repo.invalid/package?api_key=value",
+        "https://user:pass@repo.invalid/package",
+        "https://repo.invalid/package#token=value",
+        "https://repo.invalid/token%3Dsecret/package",
+        "https://repo.invalid/token%253Dsecret/package",
+        "HtTpS://repo.invalid/ToKeN%3dsecret",
+        "https://repo.invalid/token%ZZsecret",
+        "ordinary-package",
+        "capability(foo?bar#baz)",
+        "/usr/bin/interpreter >= 2",
+    });
+    try std.testing.expectEqual(@as(usize, 17), trace.requests.items.len);
+    for (trace.requests.items[0..14]) |request| {
+        try std.testing.expect(request.subject == null);
+    }
+    try std.testing.expectEqualStrings(
+        "ordinary-package",
+        trace.requests.items[14].subject.?,
+    );
+    try std.testing.expectEqualStrings(
+        "capability(foo?bar#baz)",
+        trace.requests.items[15].subject.?,
+    );
+    try std.testing.expectEqualStrings(
+        "/usr/bin/interpreter >= 2",
+        trace.requests.items[16].subject.?,
+    );
 }
 
 test "erase update-all distro-sync downgrade and reinstall stay distinct" {
@@ -1692,6 +1979,7 @@ test "history goal inputs receive deterministic owned requests" {
         &goal,
         0,
         2,
+        abi.request_outcome.queued,
     );
     const queue = [_]i32{ 0x101, 40, 0x101, 41 };
     try trace.commitGoal(40, alter.install, &queue, 0, 2);
@@ -1706,6 +1994,119 @@ test "history goal inputs receive deterministic owned requests" {
         requests[0].subject.data.?[0..requests[0].subject.length],
     );
     try std.testing.expectEqual(@as(u32, 0), view.jobs.?[1].request_ref);
+}
+
+test "history trace preserves unresolved request provenance" {
+    var trace = Trace.init(std.testing.allocator);
+    defer trace.deinit();
+    try trace.recordHistoryGoal(
+        "missing-1-1.x86_64",
+        abi.request_kind.install,
+        abi.job_action.install,
+        &.{},
+        0,
+        0,
+        abi.request_outcome.no_candidate,
+    );
+    try trace.finalize(&.{}, 0, 0);
+    const view = trace.getView().?;
+    try std.testing.expectEqual(@as(u32, 1), view.request_count);
+    try std.testing.expectEqual(@as(u32, 0), view.job_count);
+    try std.testing.expectEqual(
+        abi.request_outcome.no_candidate,
+        view.requests.?[0].outcome,
+    );
+}
+
+test "queued outcome requires a committed solver job" {
+    var trace = Trace.init(std.testing.allocator);
+    defer trace.deinit();
+    try trace.initResolve(alter.install, &.{ "excluded", "app" });
+    const staged = [_]i32{ 40, 41, 42 };
+    try trace.recordGoalRange(
+        &staged,
+        0,
+        1,
+        alter.install,
+        abi.request_reason.user,
+        0,
+    );
+    try trace.recordGoalRange(
+        &staged,
+        1,
+        3,
+        alter.install,
+        abi.request_reason.user,
+        1,
+    );
+    const committed = [_]i32{ 0x101, 41 };
+    try trace.commitGoal(40, alter.install, &committed, 0, 0);
+    try trace.commitGoal(41, alter.install, &committed, 0, 2);
+    try trace.commitGoal(42, alter.install, &committed, 2, 2);
+    try trace.finalize(&committed, 0, 0);
+    const requests = trace.getView().?.requests.?;
+    try std.testing.expectEqual(
+        abi.request_outcome.satisfied,
+        requests[0].outcome,
+    );
+    const satisfied = trace.getView().?.satisfied_selections.?;
+    try std.testing.expectEqual(@as(u32, 2), trace.getView().?.satisfied_selection_count);
+    try std.testing.expectEqual(@as(u32, 0), satisfied[0].request_ref);
+    try std.testing.expectEqual(@as(i32, 40), satisfied[0].selection_id);
+    try std.testing.expectEqual(@as(u32, 1), satisfied[1].request_ref);
+    try std.testing.expectEqual(@as(i32, 42), satisfied[1].selection_id);
+    try std.testing.expectEqual(
+        abi.request_outcome.queued,
+        requests[1].outcome,
+    );
+}
+
+test "satisfied multi-match selections are lossless and deterministic" {
+    var trace = Trace.init(std.testing.allocator);
+    defer trace.deinit();
+    try trace.initResolve(alter.install, &.{"installed-*"});
+    const staged = [_]i32{ 42, 40, 42, 41 };
+    try trace.recordGoalRange(
+        &staged,
+        0,
+        staged.len,
+        alter.install,
+        abi.request_reason.user,
+        0,
+    );
+    for (staged) |selection_id| {
+        try trace.commitGoal(selection_id, alter.install, &.{}, 0, 0);
+    }
+    try trace.finalize(&.{}, 0, 0);
+    const view = trace.getView().?;
+    try std.testing.expectEqual(@as(u32, 0), view.job_count);
+    try std.testing.expectEqual(@as(u32, 3), view.satisfied_selection_count);
+    const selections = view.satisfied_selections.?[0..view.satisfied_selection_count];
+    try std.testing.expectEqual(@as(i32, 40), selections[0].selection_id);
+    try std.testing.expectEqual(@as(i32, 41), selections[1].selection_id);
+    try std.testing.expectEqual(@as(i32, 42), selections[2].selection_id);
+    for (selections) |selection| {
+        try std.testing.expectEqual(@as(u32, 0), selection.request_ref);
+    }
+    const refs = [_]abi.RequestTracePackageRef{
+        .{ .selection_id = 40, .package_ref = 4 },
+        .{ .selection_id = 41, .package_ref = 5 },
+        .{ .selection_id = 42, .package_ref = 6 },
+    };
+    const owner = try CaptureFactsOwner.create(
+        std.testing.allocator,
+        &trace,
+        &refs,
+    );
+    defer owner.destroy();
+    try std.testing.expectEqual(
+        @as(u32, 3),
+        owner.facts.satisfied_package_count,
+    );
+    const packages = owner.facts.satisfied_packages.?[0..owner.facts.satisfied_package_count];
+    try std.testing.expectEqual(@as(u32, 4), packages[0].package_ref);
+    try std.testing.expectEqual(@as(u32, 5), packages[1].package_ref);
+    try std.testing.expectEqual(@as(u32, 6), packages[2].package_ref);
 }
 
 test "private C trace API publishes borrowed view and remapped facts" {
@@ -1767,7 +2168,7 @@ fn allocationFailureCase(allocator: Allocator) !void {
     var trace = Trace.init(allocator);
     defer trace.deinit();
     try trace.initResolve(alter.install, &.{ "alpha*", "local.rpm" });
-    const goal = [_]i32{ 20, 21 };
+    const goal = [_]i32{ 20, 21, 22 };
     try trace.recordGoalRange(
         &goal,
         0,
@@ -1776,13 +2177,23 @@ fn allocationFailureCase(allocator: Allocator) !void {
         abi.request_reason.user,
         0,
     );
+    try trace.recordGoalRange(
+        &goal,
+        2,
+        3,
+        alter.install,
+        abi.request_reason.user,
+        1,
+    );
     const queue = [_]i32{ 0x101, 20, 0x101, 21 };
     try trace.commitGoal(20, alter.install, &queue, 0, 2);
     try trace.commitGoal(21, alter.install, &queue, 2, 4);
+    try trace.commitGoal(22, alter.install, &queue, 4, 4);
     try trace.finalize(&queue, 0, 0);
     const refs = [_]abi.RequestTracePackageRef{
         .{ .selection_id = 20, .package_ref = 0 },
         .{ .selection_id = 21, .package_ref = 1 },
+        .{ .selection_id = 22, .package_ref = 2 },
     };
     const owner = try CaptureFactsOwner.create(allocator, &trace, &refs);
     owner.destroy();

@@ -368,9 +368,12 @@ TDNFCreateRepoFromDirectory(
 {
     uint32_t dwError = 0;
     PTDNF_REPO_DATA pRepo = NULL;
+    char **ppszRepoId = NULL;
     int nIsDir = 0;
 
-    if(!ppRepo || !pszId || !pszPath)
+    if(!ppRepo || !pszId || !pszPath ||
+       !strcmp(pszId, SYSTEM_REPO_NAME) ||
+       !strcmp(pszId, CMDLINE_REPO_NAME))
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -406,10 +409,33 @@ TDNFCreateRepoFromDirectory(
     dwError = TDNFSafeAllocateString(pszPath, &pRepo->ppszBaseUrls[0]);
     BAIL_ON_TDNF_ERROR(dwError);
 
+    dwError = TDNFAllocateMemory(
+                  2,
+                  sizeof(char *),
+                  (void **)&ppszRepoId);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = TDNFSafeAllocateString(pszId, &ppszRepoId[0]);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    if(pTdnf->ppszRepoFromDirIds)
+    {
+        dwError = TDNFMergeStringArrays(
+                      &pTdnf->ppszRepoFromDirIds,
+                      ppszRepoId);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+    else
+    {
+        pTdnf->ppszRepoFromDirIds = ppszRepoId;
+    }
+    ppszRepoId = NULL;
+
     *ppRepo = pRepo;
 cleanup:
     return dwError;
 error:
+    TDNF_SAFE_FREE_STRINGARRAY(ppszRepoId);
     if(ppRepo)
     {
         *ppRepo = NULL;
@@ -435,7 +461,9 @@ TDNFCreateRepoFromPath(
     int nIsDir = 0;
     int nDummy = 0;
 
-    if(!ppRepo || !pszId || !pszPath)
+    if(!ppRepo || !pszId || !pszPath ||
+       !strcmp(pszId, SYSTEM_REPO_NAME) ||
+       !strcmp(pszId, CMDLINE_REPO_NAME))
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -660,6 +688,12 @@ TDNFLoadReposFromFile(
     {
         if (cn_section->name[0] == '.')
             continue;
+        if(!strcmp(cn_section->name, SYSTEM_REPO_NAME) ||
+           !strcmp(cn_section->name, CMDLINE_REPO_NAME))
+        {
+            dwError = ERROR_TDNF_INVALID_PARAMETER;
+            BAIL_ON_TDNF_ERROR(dwError);
+        }
 
         dwError = TDNFCreateRepo(pTdnf, &pRepo, cn_section->name);
         BAIL_ON_TDNF_ERROR(dwError);

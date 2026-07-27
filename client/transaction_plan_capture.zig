@@ -94,7 +94,7 @@ fn buildPlan(
     return transaction_plan.Plan.create(allocator, data);
 }
 
-fn decodeData(
+pub fn decodeData(
     allocator: Allocator,
     input: *const abi.Capture,
 ) DecodeError!transaction_plan.Data {
@@ -1201,7 +1201,7 @@ const TestFixture = struct {
                     .has_revision = 1,
                 },
                 .snapshot = .{
-                    .id = testBytes("snapshot-1"),
+                    .id = testBytes("snapshot-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
                     .metadata_sha256 = testBytes(test_sha_b),
                 },
                 .priority = 10,

@@ -501,6 +501,70 @@ pub fn build(b: *Build) void {
         "transaction-plan-libsolv-test",
         "Run authoritative libsolv transaction fact capture tests",
     );
+    const transaction_plan_repository_integration_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_plan_repository_integration_mod.addImport(
+        "repository_metadata",
+        repomd_mod,
+    );
+    transaction_plan_repository_integration_mod.addImport(
+        "transaction_plan",
+        transaction_plan_mod,
+    );
+    const transaction_plan_integration_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan_integration.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
+    });
+    const transaction_plan_integration_options = b.addOptions();
+    transaction_plan_integration_options.addOption(
+        bool,
+        "standalone_test",
+        false,
+    );
+    transaction_plan_integration_mod.addOptions(
+        "transaction_plan_integration_options",
+        transaction_plan_integration_options,
+    );
+    transaction_plan_integration_mod.addImport(
+        "transaction_plan_capture_abi",
+        transaction_plan_capture_abi_mod,
+    );
+    transaction_plan_integration_mod.addImport(
+        "transaction_plan_capture",
+        transaction_plan_capture_test_mod,
+    );
+    transaction_plan_integration_mod.addImport(
+        "transaction_plan_libsolv",
+        transaction_plan_libsolv_mod,
+    );
+    transaction_plan_integration_mod.addImport(
+        "transaction_plan_repository",
+        transaction_plan_repository_integration_mod,
+    );
+    transaction_plan_integration_mod.addImport(
+        "repository_metadata",
+        repomd_mod,
+    );
+    transaction_plan_integration_mod.addImport(
+        "transaction_plan",
+        transaction_plan_mod,
+    );
+    transaction_plan_integration_mod.addImport(
+        "transaction_plan_request_trace",
+        transaction_plan_request_trace_mod,
+    );
+    transaction_plan_integration_mod.addImport(
+        "rpm_header",
+        rpmzig_header_mod,
+    );
+    transaction_plan_integration_mod.addImport("tdnf_error", tdnf_error_mod);
 
     // ----- static libraries ----- //
 
@@ -668,6 +732,60 @@ pub fn build(b: *Build) void {
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         transaction_plan_libsolv_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    const transaction_plan_integration_test_step = b.step(
+        "transaction-plan-integration-test",
+        "Run authoritative stored transaction plan integration tests",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path(
+                "client/transaction_plan_integration.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport(
+            "transaction_plan_capture_abi",
+            transaction_plan_capture_abi_mod,
+        );
+        test_mod.addImport(
+            "transaction_plan_capture",
+            transaction_plan_capture_test_mod,
+        );
+        test_mod.addImport(
+            "transaction_plan_libsolv",
+            transaction_plan_libsolv_mod,
+        );
+        test_mod.addImport(
+            "transaction_plan_repository",
+            transaction_plan_repository_integration_mod,
+        );
+        test_mod.addImport("repository_metadata", repomd_mod);
+        test_mod.addImport("transaction_plan", transaction_plan_mod);
+        test_mod.addImport(
+            "transaction_plan_request_trace",
+            transaction_plan_request_trace_mod,
+        );
+        test_mod.addImport("rpm_header", rpmzig_header_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        const test_options = b.addOptions();
+        test_options.addOption(bool, "standalone_test", true);
+        test_mod.addOptions(
+            "transaction_plan_integration_options",
+            test_options,
+        );
+        const tests = b.addTest(.{
+            .root_module = test_mod,
+        });
+        tests.root_module.addObjectFile(libsolv.getEmittedBin());
+        tests.root_module.addObjectFile(libsolvext.getEmittedBin());
+        tests.root_module.linkLibrary(rpmzig_lib);
+        const run_tests = b.addRunArtifact(tests);
+        transaction_plan_integration_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
     }
 
@@ -1182,6 +1300,11 @@ pub fn build(b: *Build) void {
         "transaction_plan_libsolv",
         transaction_plan_libsolv_mod,
     );
+    tdnf_so_mod.addImport(
+        "transaction_plan_integration",
+        transaction_plan_integration_mod,
+    );
+    tdnf_so_mod.addImport("repomd_client_exports", repomd_mod);
     tdnf_so_mod.addIncludePath(b.path("include"));
     tdnf_so_mod.addIncludePath(b.path("client"));
     addLibsolvIncludes(
@@ -1238,6 +1361,26 @@ pub fn build(b: *Build) void {
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanLibsolvCaptureCreate");
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanLibsolvCaptureDestroy");
     b.installArtifact(libtdnf);
+
+    const transaction_plan_handle_test_step = b.step(
+        "transaction-plan-handle-test",
+        "Run private production handle transaction plan integration test",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path(
+                "client/transaction_plan_handle_test.zig",
+            ),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_root", tdnf_so_mod);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        transaction_plan_handle_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
 
     // ----- libtdnfcli (shared) ----- //
 

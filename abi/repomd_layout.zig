@@ -3,7 +3,7 @@ const solver_result_abi = @import("solver_result_abi");
 const solver_shadow_abi = @import("solver_shadow_abi");
 const solver_live_abi = @import("solver_live_abi");
 const capture_abi = @import("transaction_plan_capture_abi");
-const c = @cImport({
+pub const c = @cImport({
     @cInclude("tdnf.h");
     @cInclude("tdnfrepomd.h");
     @cInclude("transaction_plan_capture_abi.inc");
@@ -76,11 +76,17 @@ comptime {
     assertSameCaptureLayout(capture_abi.Action, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION);
     assertSameCaptureLayout(capture_abi.Problem, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM);
     assertSameCaptureLayout(capture_abi.Capture, c.TDNF_TRANSACTION_PLAN_CAPTURE);
+    assertSameCaptureLayout(capture_abi.IntegrationRepository, c.TDNF_TRANSACTION_PLAN_INTEGRATION_REPOSITORY);
+    assertSameCaptureLayout(capture_abi.IntegrationEnvironment, c.TDNF_TRANSACTION_PLAN_INTEGRATION_ENVIRONMENT);
+    assertSameCaptureLayout(capture_abi.RepositoryInitCallbacks, c.TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS);
+    assertSameCaptureLayout(capture_abi.RepositoryInitInput, c.TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT);
     assertSameCaptureLayout(capture_abi.RequestTraceJob, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_JOB);
     assertSameCaptureLayout(capture_abi.RequestTraceQueueOrigin, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_QUEUE_ORIGIN);
     assertSameCaptureLayout(capture_abi.RequestTracePolicyFact, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_FACT);
+    assertSameCaptureLayout(capture_abi.RequestTraceSatisfiedSelection, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_SATISFIED_SELECTION);
     assertSameCaptureLayout(capture_abi.RequestTraceView, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW);
     assertSameCaptureLayout(capture_abi.RequestTracePackageRef, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_PACKAGE_REF);
+    assertSameCaptureLayout(capture_abi.RequestTraceSatisfiedPackage, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_SATISFIED_PACKAGE);
     assertSameCaptureLayout(capture_abi.RequestTraceCaptureFacts, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_FACTS);
 }
 

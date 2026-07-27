@@ -60,6 +60,47 @@ pub export fn TDNFRepoMdNativeLoadSolvRepo(
     updateinfo_path: ?[*:0]const u8,
     other_path: ?[*:0]const u8,
 ) u32 {
+    return loadSolvRepo(
+        raw_repo,
+        repomd_path,
+        primary_path,
+        filelists_path,
+        updateinfo_path,
+        other_path,
+        null,
+    );
+}
+
+fn transactionPlanLoadSolvRepo(
+    raw_repo: ?*c.Repo,
+    repomd_path: ?[*:0]const u8,
+    primary_path: ?[*:0]const u8,
+    filelists_path: ?[*:0]const u8,
+    updateinfo_path: ?[*:0]const u8,
+    other_path: ?[*:0]const u8,
+    cookie_sha256: ?[*]u8,
+) callconv(.c) u32 {
+    if (cookie_sha256 == null) return c.ERROR_TDNF_INVALID_PARAMETER;
+    return loadSolvRepo(
+        raw_repo,
+        repomd_path,
+        primary_path,
+        filelists_path,
+        updateinfo_path,
+        other_path,
+        cookie_sha256,
+    );
+}
+
+fn loadSolvRepo(
+    raw_repo: ?*c.Repo,
+    repomd_path: ?[*:0]const u8,
+    primary_path: ?[*:0]const u8,
+    filelists_path: ?[*:0]const u8,
+    updateinfo_path: ?[*:0]const u8,
+    other_path: ?[*:0]const u8,
+    cookie_sha256: ?[*]u8,
+) u32 {
     clearError();
 
     const repo = raw_repo orelse {
@@ -78,22 +119,69 @@ pub export fn TDNFRepoMdNativeLoadSolvRepo(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const repository = loadRepositoryModel(
-        arena,
-        repomd_slice,
-        primary_slice,
-        spanOptionalPath(filelists_path),
-        spanOptionalPath(updateinfo_path),
-        spanOptionalPath(other_path),
-    ) catch |err| {
+    const paths = available_loader.Paths{
+        .repomd = repomd_slice,
+        .primary = primary_slice,
+        .filelists = spanOptionalPath(filelists_path),
+        .updateinfo = spanOptionalPath(updateinfo_path),
+        .other = spanOptionalPath(other_path),
+    };
+    const loaded = (if (cookie_sha256 == null)
+        available_loader.loadLegacyModelWithRepomd(arena, paths)
+    else
+        available_loader.loadModelWithRepomd(arena, paths)) catch |err| {
         return mapLoadError(err, repomd_slice);
     };
 
-    buildRepositoryIntoRepo(arena, repo, &repository) catch |err| {
+    buildRepositoryIntoRepo(arena, repo, &loaded.repository) catch |err| {
         return mapBuildError(err);
     };
+    if (cookie_sha256) |destination| {
+        const digest = available_loader.solvCacheCookie(
+            loaded.repomd_bytes,
+            .{
+                .include_filelists = filelists_path != null,
+                .include_updateinfo = updateinfo_path != null,
+                .include_other = other_path != null,
+            },
+        );
+        @memcpy(destination[0..32], &digest);
+    }
 
     return 0;
+}
+
+fn transactionPlanBindSolvCookie(
+    raw_cookie: ?*const [32]u8,
+    include_filelists: u32,
+    include_updateinfo: u32,
+    include_other: u32,
+    output: ?*[32]u8,
+) callconv(.c) c_int {
+    const input = raw_cookie orelse return -1;
+    const destination = output orelse return -1;
+    if (include_filelists > 1 or include_updateinfo > 1 or
+        include_other > 1)
+    {
+        return -1;
+    }
+    destination.* = available_loader.bindSolvCacheCookie(input.*, .{
+        .include_filelists = include_filelists != 0,
+        .include_updateinfo = include_updateinfo != 0,
+        .include_other = include_other != 0,
+    });
+    return 0;
+}
+
+comptime {
+    @export(&transactionPlanLoadSolvRepo, .{
+        .name = "TDNFTransactionPlanLoadSolvRepo",
+        .visibility = .hidden,
+    });
+    @export(&transactionPlanBindSolvCookie, .{
+        .name = "TDNFTransactionPlanBindSolvCookie",
+        .visibility = .hidden,
+    });
 }
 
 pub export fn TDNFRepoMdNativeLoadInstalledSolvRepo(
@@ -315,6 +403,17 @@ fn mapLoadError(err: LoadError, repomd_path: []const u8) u32 {
             break :blk c.ERROR_TDNF_FILESYS_IO;
         },
     };
+}
+
+test "resource policy and backing OOM map distinctly" {
+    try std.testing.expectEqual(
+        @as(u32, c.ERROR_TDNF_OVERFLOW),
+        mapLoadError(error.StreamTooLong, "fixture"),
+    );
+    try std.testing.expectEqual(
+        @as(u32, c.ERROR_TDNF_OUT_OF_MEMORY),
+        mapLoadError(error.OutOfMemory, "fixture"),
+    );
 }
 
 fn mapBuildError(err: BuildError) u32 {
@@ -772,7 +871,7 @@ const NativeRpmBridge = struct {
         solvable.*.evr = try evrIdOptional(
             self.arena,
             self.pool,
-            rpmHeaderEpoch(pkg.nevra.epoch),
+            normalizeRpmEpoch(pkg.nevra.epoch),
             if (pkg.nevra.version.len == 0) null else pkg.nevra.version,
             if (pkg.nevra.release.len == 0) null else pkg.nevra.release,
         );
@@ -893,6 +992,314 @@ fn optionsFromRpmFlags(flags: c_int) NativeRpmBridgeOptions {
         else
             null,
     };
+}
+
+pub const InstalledHeaderBatch = struct {
+    allocator: std.mem.Allocator,
+    bridge: NativeRpmBridge,
+    scratch_peak: usize = 0,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        repo: *c.Repo,
+    ) !InstalledHeaderBatch {
+        return .{
+            .allocator = allocator,
+            .bridge = try NativeRpmBridge.init(allocator, repo, .{
+                .include_filelists = true,
+                .include_changelogs = false,
+            }),
+        };
+    }
+
+    pub fn add(
+        self: *InstalledHeaderBatch,
+        header: rpm_header.Header,
+        rpmdb_hnum: u32,
+    ) !c.Id {
+        var scratch_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer {
+            self.scratch_peak = @max(
+                self.scratch_peak,
+                scratch_state.queryCapacity(),
+            );
+            scratch_state.deinit();
+        }
+        const prior_allocator = self.bridge.arena;
+        self.bridge.arena = scratch_state.allocator();
+        defer self.bridge.arena = prior_allocator;
+        const built = try rpmpkg.buildFromHeader(
+            scratch_state.allocator(),
+            header,
+            .{
+                .include_relations = true,
+                .include_files = true,
+                .include_changelogs = false,
+            },
+        );
+        return self.bridge.addBuiltPackage(
+            built,
+            null,
+            rpmdb_hnum,
+            null,
+            null,
+            null,
+        );
+    }
+
+    pub fn finish(self: *InstalledHeaderBatch) !void {
+        try self.bridge.finish();
+    }
+};
+
+test "installed header batch scratch memory is package bounded" {
+    const rpmdb_test = @import("rpmdb_test");
+    const blob = try rpmdb_test.transactionPlanTestFileProviderBlob(
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(blob);
+    const header = try rpm_header.Header.parse(blob);
+    const pool = c.pool_create() orelse return error.OutOfMemory;
+    defer c.pool_free(pool);
+    const repo: *c.Repo = @ptrCast(
+        c.repo_create(pool, "@System") orelse return error.OutOfMemory,
+    );
+    c.pool_set_installed(pool, repo);
+    var batch = try InstalledHeaderBatch.init(std.testing.allocator, repo);
+    _ = try batch.add(header, 1);
+    const one_package_peak = batch.scratch_peak;
+    for (2..502) |hnum| _ = try batch.add(header, @intCast(hnum));
+    try batch.finish();
+    try std.testing.expect(one_package_peak != 0);
+    try std.testing.expectEqual(one_package_peak, batch.scratch_peak);
+}
+
+pub fn buildInstalledHeaderIntoRepo(
+    allocator: std.mem.Allocator,
+    repo: *c.Repo,
+    header: rpm_header.Header,
+    rpmdb_hnum: u32,
+) !c.Id {
+    var batch = try InstalledHeaderBatch.init(allocator, repo);
+    const solvid = try batch.add(header, rpmdb_hnum);
+    try batch.finish();
+    return solvid;
+}
+
+pub fn seedFileProvideDependencies(
+    allocator: std.mem.Allocator,
+    source_pool: *c.Pool,
+    target_pool: *c.Pool,
+    target_repo: *c.Repo,
+) BuildError!void {
+    var dummy: ?*c.Solvable = null;
+    for ([_]c.Id{
+        c.SOLVABLE_REQUIRES,
+        c.SOLVABLE_RECOMMENDS,
+        c.SOLVABLE_SUGGESTS,
+        c.SOLVABLE_SUPPLEMENTS,
+        c.SOLVABLE_ENHANCES,
+        c.SOLVABLE_CONFLICTS,
+        c.SOLVABLE_OBSOLETES,
+    }) |key| {
+        var paths = std.ArrayList([]const u8).empty;
+        defer paths.deinit(allocator);
+        var seen = std.StringHashMapUnmanaged(void).empty;
+        defer seen.deinit(allocator);
+        var solvid: c.Id = 2;
+        while (solvid < source_pool.nsolvables) : (solvid += 1) {
+            const raw = c.pool_id2solvable(source_pool, solvid) orelse continue;
+            const solvable: *c.Solvable = @ptrCast(raw);
+            if (solvable.repo == null) continue;
+            var dependencies: c.Queue = undefined;
+            c.queue_init(&dependencies);
+            defer c.queue_free(&dependencies);
+            _ = c.solvable_lookup_deparray(
+                solvable,
+                key,
+                &dependencies,
+                0,
+            );
+            if (dependencies.count != 0) {
+                for (dependencies.elements[0..@intCast(dependencies.count)]) |id| {
+                    try collectFileProvideDependency(
+                        allocator,
+                        source_pool,
+                        id,
+                        0,
+                        &seen,
+                        &paths,
+                    );
+                }
+            }
+        }
+        if (paths.items.len == 0) continue;
+        if (dummy == null) {
+            const dummy_id = c.repo_add_solvable(target_repo);
+            dummy = @ptrCast(c.pool_id2solvable(
+                target_pool,
+                dummy_id,
+            ) orelse return error.InvalidRepoMetadata);
+        }
+        const destination = dependencyOffset(dummy.?, key) orelse
+            return error.InvalidRepoMetadata;
+        for (paths.items) |path| {
+            const path_id = c.pool_strn2id(
+                target_pool,
+                path.ptr,
+                @intCast(path.len),
+                1,
+            );
+            destination.* = c.repo_addid_dep(
+                target_repo,
+                destination.*,
+                path_id,
+                0,
+            );
+        }
+    }
+    c.repo_internalize(target_repo);
+}
+
+fn collectFileProvideDependency(
+    allocator: std.mem.Allocator,
+    source_pool: *c.Pool,
+    dependency: c.Id,
+    depth: u8,
+    seen: *std.StringHashMapUnmanaged(void),
+    paths: *std.ArrayList([]const u8),
+) BuildError!void {
+    if (depth == 64) return error.InvalidRepoMetadata;
+    const bits: u32 = @bitCast(dependency);
+    if (bits & 0x80000000 != 0) {
+        const index: c.Id = @bitCast(bits ^ 0x80000000);
+        if (index <= 0 or index >= source_pool.nrels or
+            source_pool.rels == null)
+        {
+            return error.InvalidRepoMetadata;
+        }
+        const relation = source_pool.rels[@intCast(index)];
+        try collectFileProvideDependency(
+            allocator,
+            source_pool,
+            relation.name,
+            depth + 1,
+            seen,
+            paths,
+        );
+        try collectFileProvideDependency(
+            allocator,
+            source_pool,
+            relation.evr,
+            depth + 1,
+            seen,
+            paths,
+        );
+        return;
+    }
+    if (dependency <= 0) return;
+    const raw = c.pool_id2str(source_pool, dependency) orelse
+        return error.InvalidRepoMetadata;
+    const path = std.mem.span(raw);
+    if (path.len == 0 or path[0] != '/') return;
+    const entry = try seen.getOrPut(allocator, path);
+    if (!entry.found_existing) try paths.append(allocator, path);
+}
+
+fn dependencyOffset(solvable: *c.Solvable, key: c.Id) ?*c.Offset {
+    return if (key == c.SOLVABLE_REQUIRES)
+        &solvable.requires
+    else if (key == c.SOLVABLE_RECOMMENDS)
+        &solvable.recommends
+    else if (key == c.SOLVABLE_SUGGESTS)
+        &solvable.suggests
+    else if (key == c.SOLVABLE_SUPPLEMENTS)
+        &solvable.supplements
+    else if (key == c.SOLVABLE_ENHANCES)
+        &solvable.enhances
+    else if (key == c.SOLVABLE_CONFLICTS)
+        &solvable.conflicts
+    else if (key == c.SOLVABLE_OBSOLETES)
+        &solvable.obsoletes
+    else
+        null;
+}
+
+test "file dependency bridge seeds ten thousand paths by kind" {
+    const source_pool = c.pool_create() orelse return error.OutOfMemory;
+    defer c.pool_free(source_pool);
+    const target_pool = c.pool_create() orelse return error.OutOfMemory;
+    defer c.pool_free(target_pool);
+    const source_repo: *c.Repo = @ptrCast(
+        c.repo_create(source_pool, "source") orelse return error.OutOfMemory,
+    );
+    const target_repo: *c.Repo = @ptrCast(
+        c.repo_create(target_pool, "target") orelse return error.OutOfMemory,
+    );
+    const source_id = c.repo_add_solvable(source_repo);
+    const source: *c.Solvable = @ptrCast(
+        c.pool_id2solvable(source_pool, source_id) orelse
+            return error.OutOfMemory,
+    );
+    source.name = c.pool_str2id(source_pool, "source", 1);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    inline for (.{
+        c.SOLVABLE_REQUIRES,
+        c.SOLVABLE_RECOMMENDS,
+        c.SOLVABLE_SUGGESTS,
+        c.SOLVABLE_SUPPLEMENTS,
+        c.SOLVABLE_ENHANCES,
+        c.SOLVABLE_CONFLICTS,
+        c.SOLVABLE_OBSOLETES,
+    }, 0..) |key, key_index| {
+        const destination = dependencyOffset(source, key).?;
+        var index = key_index;
+        while (index < 10_000) : (index += 7) {
+            const path = try std.fmt.allocPrintSentinel(
+                arena,
+                "/bridge/path-{d}",
+                .{index},
+                0,
+            );
+            const path_id = c.pool_str2id(source_pool, path.ptr, 1);
+            destination.* = c.repo_addid_dep(
+                source_repo,
+                destination.*,
+                path_id,
+                0,
+            );
+        }
+    }
+    c.repo_internalize(source_repo);
+    try seedFileProvideDependencies(
+        arena,
+        source_pool,
+        target_pool,
+        target_repo,
+    );
+    const dummy: *c.Solvable = @ptrCast(
+        c.pool_id2solvable(target_pool, target_repo.start) orelse
+            return error.TestUnexpectedResult,
+    );
+    var total: usize = 0;
+    inline for (.{
+        c.SOLVABLE_REQUIRES,
+        c.SOLVABLE_RECOMMENDS,
+        c.SOLVABLE_SUGGESTS,
+        c.SOLVABLE_SUPPLEMENTS,
+        c.SOLVABLE_ENHANCES,
+        c.SOLVABLE_CONFLICTS,
+        c.SOLVABLE_OBSOLETES,
+    }) |key| {
+        var queue: c.Queue = undefined;
+        c.queue_init(&queue);
+        defer c.queue_free(&queue);
+        _ = c.solvable_lookup_deparray(dummy, key, &queue, 0);
+        total += @intCast(queue.count);
+    }
+    try std.testing.expectEqual(@as(usize, 10_000), total);
 }
 
 fn loadInstalledPackagesIntoBridge(
@@ -1167,14 +1574,14 @@ fn relationIdRpmHeader(
     const evr = try evrIdOptional(
         allocator,
         pool,
-        rpmHeaderEpoch(relation.epoch),
+        normalizeRpmEpoch(relation.epoch),
         relation.version,
         relation.release,
     );
     return c.pool_rel2id(pool, name_id, evr, compareOpToSolv(relation.comparison), 1);
 }
 
-fn rpmHeaderEpoch(epoch: ?u32) ?u32 {
+pub fn normalizeRpmEpoch(epoch: ?u32) ?u32 {
     if (epoch) |value| {
         return if (value == 0) null else value;
     }
