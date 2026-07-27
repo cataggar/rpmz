@@ -319,6 +319,32 @@ typedef struct _TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT
     uint32_t dwLegacyCount;
 } TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT;
 
+typedef enum _TDNF_REPOMD_NATIVE_SOLVER_SHADOW_MODE
+{
+    TDNF_REPOMD_NATIVE_SOLVER_SHADOW_OFF = 0,
+    TDNF_REPOMD_NATIVE_SOLVER_SHADOW_OBSERVE = 1,
+    TDNF_REPOMD_NATIVE_SOLVER_SHADOW_STRICT = 2
+} TDNF_REPOMD_NATIVE_SOLVER_SHADOW_MODE;
+
+/**
+ * Report whether the diagnostic native-solver crosscheck is enabled.
+ *
+ * Controlled by the TDNF_NATIVE_SOLVER_SHADOW environment variable so an
+ * entire test corpus can opt in without changing each invocation:
+ *
+ *   unset, "", "0", "off", "false", "no"  -> OFF
+ *   "1", "on", "true", "yes", "observe"   -> OBSERVE (compare and log)
+ *   "strict"                              -> STRICT  (also fail on mismatch)
+ *
+ * Any other non-empty value is treated as OBSERVE, so a typo can never
+ * silently disable the crosscheck. The shadow never influences package
+ * selection; STRICT only turns a reported mismatch into an error.
+ */
+uint32_t
+TDNFRepoMdNativeSolverShadowMode(
+    void
+    );
+
 typedef struct _TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY
 {
     const char *pszId;

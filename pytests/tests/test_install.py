@@ -378,6 +378,36 @@ def test_install_debugsolver_native_shadow(utils):
         utils.erase_package(hidden_installed)
 
 
+# the native-solver crosscheck is opt-in through an environment variable so a
+# whole corpus can enable it without rewriting each invocation
+def test_install_native_shadow_env_gate(utils, monkeypatch):
+    pkgname = utils.config["mulversion_pkgname"]
+    utils.erase_package(pkgname)
+
+    cmd = ['tdnf', 'install', '-y', '--nogpgcheck', '--testonly', pkgname]
+
+    def run_with(value):
+        if value is None:
+            monkeypatch.delenv('TDNF_NATIVE_SOLVER_SHADOW', raising=False)
+        else:
+            monkeypatch.setenv('TDNF_NATIVE_SOLVER_SHADOW', value)
+        ret = utils.run(list(cmd))
+        assert ret['retval'] == 0
+        return '\n'.join(ret['stdout'] + ret['stderr'])
+
+    # unset and explicitly disabled values keep the crosscheck silent
+    for value in [None, '', '0', 'off', 'false', 'no']:
+        assert 'native-solver-shadow:' not in run_with(value)
+
+    # truthy values, unknown values, and strict all run the comparison
+    for value in ['1', 'on', 'true', 'yes', 'observe', 'typo', 'strict']:
+        output = run_with(value)
+        assert 'native-solver-shadow: projected match' in output
+        assert 'native-solver-shadow: unavailable' not in output
+
+    assert not utils.check_package(pkgname)
+
+
 # install multiple packages, one that doesn't exist
 # expect other pkg will be installed if invoked with --skip-broken
 def test_install_skip_broken_missing_pkg(utils):

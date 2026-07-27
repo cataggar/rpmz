@@ -33,6 +33,7 @@ pub const solver_policy = @import("solver_policy.zig");
 pub const solver_result = @import("solver_result.zig");
 pub const solver_result_c = @import("solver_result_c.zig");
 pub const solver_shadow = @import("solver_shadow.zig");
+pub const solver_shadow_mode = @import("solver_shadow_mode.zig");
 pub const solver_rules = @import("solver_rules.zig");
 pub const solver_search = @import("solver_search.zig");
 
@@ -122,6 +123,10 @@ pub export fn TDNFRepoMdNativeSolverResultCompare(
         };
     };
     return 0;
+}
+
+pub export fn TDNFRepoMdNativeSolverShadowMode() u32 {
+    return @intFromEnum(solver_shadow_mode.current());
 }
 
 pub export fn TDNFRepoMdNativeSolverLiveCompare(
@@ -1213,6 +1218,7 @@ comptime {
     _ = @import("solver_result.zig");
     _ = @import("solver_result_c.zig");
     _ = @import("solver_shadow.zig");
+    _ = @import("solver_shadow_mode.zig");
     _ = @import("solver_rules.zig");
     _ = @import("solver_search.zig");
     _ = @import("transaction_native.zig");
