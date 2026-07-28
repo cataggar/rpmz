@@ -15,6 +15,7 @@ const solver_rules = @import("solver_rules.zig");
 const solver_search = @import("solver_search.zig");
 
 const PackageIdList = std.array_list.Managed(solver_model.PackageId);
+const BoolList = std.array_list.Managed(bool);
 const CandidateGroupList =
     std.array_list.Managed(solver_search.CandidateGroup);
 const ReplacementGroup = struct {
@@ -342,6 +343,11 @@ pub fn prepareWithOptions(
 
     var candidate_groups = CandidateGroupList.init(allocator);
     defer candidate_groups.deinit();
+    // Parallel to `candidate_groups` for the clauses the main loop appends;
+    // the replacement groups appended afterwards rank by version, exactly as
+    // libsolv's update rules do.
+    var prefer_installed = BoolList.init(allocator);
+    defer prefer_installed.deinit();
     var replacement_groups = ReplacementGroupList.init(allocator);
     defer replacement_groups.deinit();
     var policy_candidates = PackageIdList.init(allocator);
@@ -427,6 +433,7 @@ pub fn prepareWithOptions(
             candidate_seen,
             &candidate_groups,
             &policy_candidates,
+            &prefer_installed,
         );
     }
     // Multiversion removes distinct-EVRA same-name clauses, so rebuild the
@@ -625,6 +632,7 @@ pub fn prepareWithOptions(
         base.architecture,
         candidate_groups.items,
         policy_candidates.items,
+        prefer_installed.items,
     );
     for (replacement_groups.items) |group| {
         rankReplacementGroup(
@@ -679,6 +687,7 @@ pub fn prepareWithOptions(
         base.architecture,
         weak_candidate_groups.items,
         weak_candidates,
+        &.{},
     );
     const package_states = try allocator.dupe(
         solver_rules.PackageState,
@@ -2777,6 +2786,9 @@ const UniverseVersionCandidate = struct {
 const RankingContext = struct {
     universe: *const solver_model.Universe,
     architecture: ?solver_model.ArchitecturePolicy,
+    /// Set while ranking a dependency clause, where an already-installed
+    /// provider outranks a newer one.
+    prefer_installed: bool = false,
 };
 
 const WeakDfsFrame = struct {
@@ -3449,6 +3461,7 @@ fn appendCandidateGroup(
     seen: []bool,
     groups: *CandidateGroupList,
     candidates: *PackageIdList,
+    prefer_installed: *BoolList,
 ) PrepareError!void {
     const start = candidates.items.len;
     errdefer candidates.shrinkRetainingCapacity(start);
@@ -3514,6 +3527,7 @@ fn appendCandidateGroup(
             .len = @intCast(candidate_count),
         },
     });
+    try prefer_installed.append(clause.origin == .requirement);
 }
 
 fn rankCandidateGroups(
@@ -3522,6 +3536,7 @@ fn rankCandidateGroups(
     architecture: ?solver_model.ArchitecturePolicy,
     groups: []const solver_search.CandidateGroup,
     candidates: []solver_model.PackageId,
+    prefer_installed: []const bool,
 ) error{OutOfMemory}!void {
     var max_candidates: usize = 0;
     for (groups) |group| {
@@ -3570,12 +3585,14 @@ fn rankCandidateGroups(
             }
         }
     }
-    const context = RankingContext{
+    var context = RankingContext{
         .universe = universe,
         .architecture = architecture,
     };
 
-    for (groups) |group| {
+    for (groups, 0..) |group, group_index| {
+        context.prefer_installed = group_index < prefer_installed.len and
+            prefer_installed[group_index];
         const start: usize = @intCast(group.candidates.start);
         const len: usize = @intCast(group.candidates.len);
         const group_candidates = candidates[start .. start + len];
@@ -4150,6 +4167,16 @@ fn versionCandidateLessThan(
     }
     if (left.architecture_tier != right.architecture_tier) {
         return left.architecture_tier < right.architecture_tier;
+    }
+    // libsolv decides every installed package before it looks at a dependency
+    // rule (`solver_run_sat`'s systemlevel pass keeps an installed solvable
+    // that no job marked for update), so a requirement whose provider is
+    // already installed is satisfied without a choice ever being made -- not
+    // by a newer build of the same name, and not by a different provider of
+    // the same capability. Job clauses are exactly the ones libsolv does mark
+    // for update, so they keep ranking by version.
+    if (context.prefer_installed and left.installed != right.installed) {
+        return left.installed;
     }
     const left_package = context.universe.package(left.package).?;
     const right_package = context.universe.package(right.package).?;
