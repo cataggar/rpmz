@@ -176,7 +176,12 @@ def test_install_debugsolver_native_shadow(utils):
             '--noautoremove', pkgname,
         ])
         assert ret['retval'] == 0
-        assert 'native-solver-shadow: unavailable' in \
+        # A configured lock naming a package that is not installed produces no
+        # libsolv lock job, so the shadow must compare against the locks that
+        # were actually queued rather than the whole configured list.
+        assert 'native-solver-shadow: projected match' in \
+            '\n'.join(ret['stdout'] + ret['stderr'])
+        assert 'native-solver-shadow: unavailable' not in \
             '\n'.join(ret['stdout'] + ret['stderr'])
         assert utils.check_package(pkgname)
         assert utils.check_package(hidden_installed)
