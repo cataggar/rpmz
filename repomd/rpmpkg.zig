@@ -1118,9 +1118,16 @@ test "builds packages from rpm file and rpmdb iterator" {
     try testing.expectEqual(@as(usize, 0), from_file.package.relationsFor(.provides, from_file.relations).len);
     try testing.expectEqual(@as(usize, 0), from_file.package.relationsFor(.requires, from_file.relations).len);
 
-    const db_path = "rpmpkg-test-rpmdb.sqlite";
-    std.Io.Dir.cwd().deleteFile(std.testing.io, db_path) catch {};
-    defer std.Io.Dir.cwd().deleteFile(std.testing.io, db_path) catch {};
+    // A fixed name in the current directory races: this test is compiled into
+    // several test binaries that the build runner executes in parallel.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var db_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const db_path = try std.fmt.bufPrintZ(
+        &db_path_buffer,
+        ".zig-cache/tmp/{s}/rpmdb.sqlite",
+        .{&tmp.sub_path},
+    );
 
     const db = try sqlite.Database.open(.{ .path = db_path });
     defer db.close();
