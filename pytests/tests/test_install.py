@@ -300,9 +300,9 @@ def test_install_debugsolver_native_shadow(utils):
             pkgname, 'tdnf-missing-dep',
         ])
         assert ret['retval'] == 0
-        # The native comparator declines when it had to drop a broken job
-        # (reason_skipped_jobs); that is its own verdict, not a bridge refusal.
-        assert 'native-solver-shadow: comparison unsupported reason=2' in \
+        # The native solver drops the unsatisfiable job and libsolv's problem
+        # is tolerated by --skip-broken, so both reach the same transaction.
+        assert 'native-solver-shadow: projected match' in \
             '\n'.join(ret['stdout'] + ret['stderr'])
         assert 'native-solver-shadow: unavailable' not in \
             '\n'.join(ret['stdout'] + ret['stderr'])
