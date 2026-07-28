@@ -805,10 +805,10 @@ fn nativeSolverLiveCompare(
     };
     output.* = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT);
     output.dwStatus = c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_INVALID;
-    const repositories_ptr = raw_repositories orelse {
+    if (repository_count != 0 and raw_repositories == null) {
         setError("null native live repositories", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
-    };
+    }
     if (job_count != 0 and raw_jobs == null) {
         setError("null native live jobs", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
@@ -825,10 +825,9 @@ fn nativeSolverLiveCompare(
         names[0] != null
     else
         false;
-    if (repository_count == 0 or
-        (job_count == 0 and erase_job_count == 0 and
-            !update_all and !dist_sync_all and
-            !has_locked_names and !has_installonly_names))
+    if (job_count == 0 and erase_job_count == 0 and
+        !update_all and !dist_sync_all and
+        !has_locked_names and !has_installonly_names)
     {
         setError("empty native live input", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
@@ -934,23 +933,25 @@ fn nativeSolverLiveCompare(
         return c.ERROR_TDNF_OUT_OF_MEMORY;
     };
     defer allocator.free(repositories);
-    for (repositories_ptr[0..repository_count], repositories) |
-        raw,
-        *repository,
-    | {
-        repository.* = .{
-            .id = spanRequired(raw.pszId) orelse {
-                setError("invalid native live repository id", .{});
-                return c.ERROR_TDNF_INVALID_PARAMETER;
-            },
-            .cache_dir = spanRequired(raw.pszCacheDir) orelse {
-                setError("invalid native live repository cache", .{});
-                return c.ERROR_TDNF_INVALID_PARAMETER;
-            },
-            .snapshot_file = spanOptional(raw.pszSnapshotFile),
-            .priority = raw.nPriority,
-            .cost = raw.dwCost,
-        };
+    if (raw_repositories) |repositories_ptr| {
+        for (repositories_ptr[0..repository_count], repositories) |
+            raw,
+            *repository,
+        | {
+            repository.* = .{
+                .id = spanRequired(raw.pszId) orelse {
+                    setError("invalid native live repository id", .{});
+                    return c.ERROR_TDNF_INVALID_PARAMETER;
+                },
+                .cache_dir = spanRequired(raw.pszCacheDir) orelse {
+                    setError("invalid native live repository cache", .{});
+                    return c.ERROR_TDNF_INVALID_PARAMETER;
+                },
+                .snapshot_file = spanOptional(raw.pszSnapshotFile),
+                .priority = raw.nPriority,
+                .cost = raw.dwCost,
+            };
+        }
     }
     const jobs = allocator.alloc(
         solver_live.JobInput,

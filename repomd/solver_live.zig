@@ -97,7 +97,9 @@ pub fn produce(
     const global_job_count: usize =
         @as(usize, @intFromBool(input.update_all)) +
         @as(usize, @intFromBool(input.dist_sync_all));
-    if (input.repositories.len == 0 or
+    // A universe with no repositories is still solvable when the installed set
+    // is included: that is what `--disablerepo=*` produces.
+    if ((input.repositories.len == 0 and !input.include_installed) or
         input.jobs.len + input.erase_jobs.len + input.locked_names.len +
             input.installonly_names.len + global_job_count == 0 or
         input.native_arch.len == 0)
@@ -884,6 +886,51 @@ test "live producer translates erase jobs with clean deps" {
     input.installonly_names = &.{"leaf"};
     try std.testing.expectError(
         error.UnsupportedInput,
+        produce(std.testing.allocator, input),
+    );
+}
+
+test "live producer erases from an installed-only universe" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalled(51, "leaf");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    const erase_jobs = [_]EraseJobInput{.{
+        .selector = .{
+            .repository = system_repository_id,
+            .name = "leaf",
+            .epoch = null,
+            .version = "1.0",
+            .release = "1",
+            .arch = "x86_64",
+        },
+    }};
+    input.jobs = &.{};
+    input.erase_jobs = &erase_jobs;
+    // `--disablerepo=*` leaves no available repository at all.
+    input.repositories = &.{};
+
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    const actions = solved.solved.result.outcome.actions;
+    try std.testing.expectEqual(@as(usize, 1), actions.len);
+    try std.testing.expectEqual(solver_model.ActionKind.erase, actions[0].kind);
+
+    // Dropping the installed repository too leaves nothing to solve against.
+    input.include_installed = false;
+    try std.testing.expectError(
+        error.InvalidInput,
         produce(std.testing.allocator, input),
     );
 }

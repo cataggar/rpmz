@@ -859,15 +859,14 @@ TDNFGoalBuildNativeSolverRepoInputs(
             dwCount++;
         }
     }
-    if(!dwCount)
+    /* No enabled repository with metadata is a valid universe: the installed
+       set alone, which is what --disablerepo=* produces. */
+    if(dwCount)
     {
-        dwError = ERROR_TDNF_NO_DATA;
+        dwError = TDNFAllocateMemory(
+                      dwCount, sizeof(*pRepos), (void **)&pRepos);
         BAIL_ON_TDNF_ERROR(dwError);
     }
-
-    dwError = TDNFAllocateMemory(
-                  dwCount, sizeof(*pRepos), (void **)&pRepos);
-    BAIL_ON_TDNF_ERROR(dwError);
 
     dwCount = 0;
     for(pRepoData = pTdnf->pRepos; pRepoData; pRepoData = pRepoData->pNext)
