@@ -1020,7 +1020,9 @@ TDNFGoalBuildNativeSolverJobs(
         PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob = NULL;
         int nInstall = how == (SOLVER_SOLVABLE | SOLVER_INSTALL),
             nErase = how == (SOLVER_SOLVABLE | SOLVER_ERASE),
-            nUserInstalled = how == (SOLVER_SOLVABLE | SOLVER_USERINSTALLED),
+            nUserInstalled = how == (SOLVER_SOLVABLE | SOLVER_USERINSTALLED) ||
+                rawHow == (SOLVER_SOLVABLE | SOLVER_USERINSTALLED),
+            nAllowUninstall = rawHow == (SOLVER_SOLVABLE | SOLVER_ALLOWUNINSTALL),
             nLocked = rawHow == (SOLVER_SOLVABLE_NAME | SOLVER_LOCK),
             nInstallOnly =
                 rawHow == (SOLVER_SOLVABLE_NAME | SOLVER_MULTIVERSION),
@@ -1054,8 +1056,8 @@ TDNFGoalBuildNativeSolverJobs(
             ppszInstallOnlyPkgs[dwInstallOnlyCount++] = (char *)pszName;
             continue;
         }
-        if((!nInstall && !nErase && !nUserInstalled) || dwPkgId <= 0 ||
-           dwPkgId >= pPool->nsolvables)
+        if((!nInstall && !nErase && !nUserInstalled && !nAllowUninstall) ||
+           dwPkgId <= 0 || dwPkgId >= pPool->nsolvables)
         {
             dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
             BAIL_ON_TDNF_ERROR(dwError);
@@ -1069,7 +1071,7 @@ TDNFGoalBuildNativeSolverJobs(
             dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
             BAIL_ON_TDNF_ERROR(dwError);
         }
-        if(nUserInstalled)
+        if(nUserInstalled || nAllowUninstall)
         {
             const char *pszName = pool_id2str(pPool, pSolvable->name);
             if(IsNullOrEmptyString(pszName))
@@ -1077,7 +1079,10 @@ TDNFGoalBuildNativeSolverJobs(
                 dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
                 BAIL_ON_TDNF_ERROR(dwError);
             }
-            ppszUserInstalledPkgs[dwUserInstalledCount++] = (char *)pszName;
+            if(nUserInstalled)
+            {
+                ppszUserInstalledPkgs[dwUserInstalledCount++] = (char *)pszName;
+            }
             continue;
         }
         pJob = nInstall
