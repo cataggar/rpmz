@@ -15,8 +15,7 @@ TDNFGoalObserveNativeSolver(
     const Queue *pQueueJobs,
     const TDNF_SOLVED_PKG_INFO *pInfo,
     int nAllowErasing,
-    int nAutoErase,
-    int nProblems, int nUnresolved
+    int nAutoErase
 );
 
 static
@@ -525,8 +524,7 @@ TDNFSolv(
                                      pQueueJobs,
                                      pInfo,
                                      nAllowErasing,
-                                     nAutoErase,
-                                     nProblems, nUnresolved);
+                                     nAutoErase);
         if(dwShadowError == ERROR_TDNF_NATIVE_SOLVER_MISMATCH)
         {
             dwError = dwShadowError;
@@ -713,8 +711,7 @@ TDNFGoalObserveNativeSolver(
     const Queue *pQueueJobs,
     const TDNF_SOLVED_PKG_INFO *pInfo,
     int nAllowErasing,
-    int nAutoErase,
-    int nProblems, int nUnresolved
+    int nAutoErase
     )
 {
     uint32_t dwError = 0;
@@ -733,11 +730,6 @@ TDNFGoalObserveNativeSolver(
        !pTdnf->pSack->pPool || !pTdnf->pRpmConfig || !pQueueJobs || !pInfo)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-    if(nProblems || nUnresolved)
-    {
-        dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
         BAIL_ON_TDNF_ERROR(dwError);
     }
     if(!IsNullOrEmptyString(pTdnf->pArgs->pszArch))
@@ -773,10 +765,7 @@ TDNFGoalObserveNativeSolver(
                   &nDistSyncAll);
     BAIL_ON_TDNF_ERROR(dwError);
     if((ppszInstallOnlyPkgs && *ppszInstallOnlyPkgs && dwEraseJobCount) || (dwEraseJobCount && dwJobCount) ||
-       (!nAllowErasing && dwEraseJobCount) ||
-       (nAllowErasing && !dwEraseJobCount &&
-        (pInfo->pPkgsToRemove || pInfo->pPkgsToUpgrade || pInfo->pPkgsToDowngrade ||
-         pInfo->pPkgsUnNeeded || pInfo->pPkgsToReinstall || pInfo->pPkgsObsoleted || pInfo->pPkgsRemovedByDowngrade)))
+       (!nAllowErasing && dwEraseJobCount))
     {
         dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
         BAIL_ON_TDNF_ERROR(dwError);

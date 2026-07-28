@@ -243,9 +243,9 @@ def test_install_debugsolver_native_shadow(utils):
             '--debugsolver', '--noautoremove', '--allowerasing', conflict1,
         ])
         assert ret['retval'] == 0
-        assert 'native-solver-shadow: unavailable' in \
+        assert 'native-solver-shadow: projected match' in \
             '\n'.join(ret['stdout'] + ret['stderr'])
-        assert 'native-solver-shadow: projected match' not in \
+        assert 'native-solver-shadow: unavailable' not in \
             '\n'.join(ret['stdout'] + ret['stderr'])
         assert utils.check_package(conflict0)
         assert not utils.check_package(conflict1)
@@ -260,9 +260,9 @@ def test_install_debugsolver_native_shadow(utils):
             PKGNAME_OBSING,
         ])
         assert ret['retval'] == 0
-        assert 'native-solver-shadow: unavailable' in \
+        assert 'native-solver-shadow: projected match' in \
             '\n'.join(ret['stdout'] + ret['stderr'])
-        assert 'native-solver-shadow: projected match' not in \
+        assert 'native-solver-shadow: unavailable' not in \
             '\n'.join(ret['stdout'] + ret['stderr'])
         assert utils.check_package(PKGNAME_OBSED)
         assert not utils.check_package(PKGNAME_OBSING)
@@ -287,7 +287,9 @@ def test_install_debugsolver_native_shadow(utils):
             pkgname, 'missing',
         ])
         assert ret['retval'] == 0
-        assert 'native-solver-shadow: unavailable' in \
+        assert 'native-solver-shadow: projected match' in \
+            '\n'.join(ret['stdout'] + ret['stderr'])
+        assert 'native-solver-shadow: unavailable' not in \
             '\n'.join(ret['stdout'] + ret['stderr'])
         assert not utils.check_package(pkgname)
         shutil.rmtree('debugdata', ignore_errors=True)
@@ -298,7 +300,11 @@ def test_install_debugsolver_native_shadow(utils):
             pkgname, 'tdnf-missing-dep',
         ])
         assert ret['retval'] == 0
-        assert 'native-solver-shadow: unavailable' in \
+        # The native comparator declines when it had to drop a broken job
+        # (reason_skipped_jobs); that is its own verdict, not a bridge refusal.
+        assert 'native-solver-shadow: comparison unsupported reason=2' in \
+            '\n'.join(ret['stdout'] + ret['stderr'])
+        assert 'native-solver-shadow: unavailable' not in \
             '\n'.join(ret['stdout'] + ret['stderr'])
         assert not utils.check_package(pkgname)
         shutil.rmtree('debugdata', ignore_errors=True)
