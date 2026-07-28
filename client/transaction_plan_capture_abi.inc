@@ -1073,7 +1073,7 @@ TDNFInitRepoWithResult(
         if (TDNFTransactionPlanStateIsEnabled(                           \
                 (_tdnf)->pTransactionPlanState))                         \
         {                                                                \
-            PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY _repos = NULL;   \
+            PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 _repos = NULL;   \
             TDNF_TRANSACTION_PLAN_INTEGRATION_REPOSITORY *_capture_repos = NULL; \
             uint32_t _repo_count = 0;                                    \
             TDNF_TRANSACTION_PLAN_INTEGRATION_ENVIRONMENT _environment = { \

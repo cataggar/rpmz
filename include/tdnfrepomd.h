@@ -355,6 +355,32 @@ typedef struct _TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY
 } TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY,
  *PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY;
 
+/*
+ * Repository input accepted by TDNFRepoMdNativeSolverLiveCompareV16. It
+ * extends TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY with pszDirectory, which
+ * describes a repository that has no downloaded metadata and is instead backed
+ * by the .rpm files sitting in a directory -- what --repofromdir produces, and
+ * what libsolv loads with repo_add_rpmdb-style directory scanning.
+ *
+ * Exactly one of pszCacheDir and pszDirectory is set. A metadata-backed
+ * repository sets pszCacheDir and leaves pszDirectory NULL; a directory-backed
+ * repository does the reverse.
+ *
+ * This is a distinct type rather than a new field on
+ * TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY because that struct is passed as
+ * an array to versions 2 through 15, whose callers depend on its stride.
+ */
+typedef struct _TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16
+{
+    const char *pszId;
+    const char *pszCacheDir;
+    const char *pszSnapshotFile;
+    const char *pszDirectory;
+    int32_t nPriority;
+    uint32_t dwCost;
+} TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
+ *PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16;
+
 typedef struct _TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB
 {
     const char *pszRepository;
@@ -1031,6 +1057,40 @@ TDNFRepoMdNativeSolverLiveCompareV14(
 uint32_t
 TDNFRepoMdNativeSolverLiveCompareV15(
     const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY *pRepositories,
+    uint32_t dwRepositoryCount,
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pJobs,
+    uint32_t dwJobCount,
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pEraseJobs,
+    uint32_t dwEraseJobCount,
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pHiddenAvailable,
+    uint32_t dwHiddenAvailableCount,
+    int nAllDeps,
+    int nBest,
+    int nCleanDeps,
+    int nSkipBroken,
+    int nAllowErasing,
+    int nUpdateAll,
+    int nDistSyncAll,
+    const char *const *ppszLockedPackages,
+    const char *const *ppszInstallOnlyPackages,
+    const char *const *ppszProtectedPackages,
+    const char *const *ppszUserInstalledPackages,
+    const char *const *ppszCmdLineRpmPaths,
+    const tdnf_rpm_config *pRpmConfig,
+    const char *pszNativeArch,
+    const TDNF_SOLVED_PKG_INFO *pLegacy,
+    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT *pComparison
+    );
+
+/*
+ * Version 16 takes TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 repositories,
+ * which can describe a repository backed by a directory of .rpm files rather
+ * than by downloaded metadata. Every other parameter matches version 15, and
+ * passing repositories that all set pszCacheDir reproduces it exactly.
+ */
+uint32_t
+TDNFRepoMdNativeSolverLiveCompareV16(
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 *pRepositories,
     uint32_t dwRepositoryCount,
     const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pJobs,
     uint32_t dwJobCount,

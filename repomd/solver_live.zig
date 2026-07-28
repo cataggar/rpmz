@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const available_loader = @import("available_loader.zig");
 const cmdline_repository = @import("cmdline_repository.zig");
+const directory_repository = @import("directory_repository.zig");
 const installed_repository = @import("installed_repository.zig");
 const model = @import("model.zig");
 const rpmpkg = if (builtin.is_test) @import("rpmpkg.zig") else struct {};
@@ -26,7 +27,12 @@ pub const cmdline_repository_id = "@cmdline";
 
 pub const RepositoryInput = struct {
     id: []const u8,
+    /// Directory holding the repository's downloaded metadata. Empty when
+    /// `rpm_directory` is set, because such a repository has no metadata.
     cache_dir: []const u8,
+    /// Directory of `.rpm` files backing the repository, as `--repofromdir`
+    /// declares. Null for an ordinary metadata-backed repository.
+    rpm_directory: ?[]const u8 = null,
     snapshot_file: ?[]const u8 = null,
     priority: i32 = solver_model.default_repository_priority,
     cost: u32 = solver_model.default_repository_cost,
@@ -70,6 +76,7 @@ pub const Input = struct {
 pub const ProduceError =
     available_loader.LoadError ||
     cmdline_repository.LoadError ||
+    directory_repository.LoadError ||
     installed_repository.LoadError ||
     solver_model.UniverseInitError ||
     solver_identity.InitError ||
@@ -197,9 +204,12 @@ pub fn produce(
         *loaded,
         index,
     | {
-        if (repository.id.len == 0 or
-            repository.cache_dir.len == 0)
-        {
+        if (repository.id.len == 0) {
+            return error.InvalidInput;
+        }
+        if (repository.rpm_directory) |directory| {
+            if (directory.len == 0) return error.InvalidInput;
+        } else if (repository.cache_dir.len == 0) {
             return error.InvalidInput;
         }
         if (repository.snapshot_file != null and
@@ -210,15 +220,18 @@ pub fn produce(
         if (repository.priority == std.math.minInt(i32)) {
             return error.UnsupportedInput;
         }
-        loaded.* = try available_loader.loadCacheModel(
-            arena,
-            repository.cache_dir,
-            .{
-                .include_filelists = true,
-                .include_updateinfo = false,
-                .include_other = false,
-            },
-        );
+        loaded.* = if (repository.rpm_directory) |directory|
+            try directory_repository.loadModel(arena, directory)
+        else
+            try available_loader.loadCacheModel(
+                arena,
+                repository.cache_dir,
+                .{
+                    .include_filelists = true,
+                    .include_updateinfo = false,
+                    .include_other = false,
+                },
+            );
         repository_inputs[index + available_offset] = .{
             .id = try arena.dupe(u8, repository.id),
             .model = loaded,
@@ -1481,6 +1494,75 @@ test "live producer rejects inconsistent command-line paths" {
     input.cmdline_rpm_paths = &.{};
     try std.testing.expectError(
         error.PackageNotFound,
+        produce(std.testing.allocator, input),
+    );
+}
+
+test "live producer installs from a repository backed by a directory" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var rpm_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var dir_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    const input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    _ = try fixture.addCmdlineRpm(&rpm_buffer, "dir-pkg");
+
+    // --repofromdir: no metadata cache, just the .rpm files in the directory.
+    repositories[0] = .{
+        .id = "fromdir",
+        .cache_dir = "",
+        .rpm_directory = fixture.path(&dir_buffer, ""),
+    };
+    jobs[0] = .{ .selector = .{
+        .repository = "fromdir",
+        .name = "dir-pkg",
+        .epoch = null,
+        .version = "1.0",
+        .release = "1",
+        .arch = "x86_64",
+    } };
+
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    const actions = solved.solved.result.outcome.actions;
+    try std.testing.expectEqual(@as(usize, 1), actions.len);
+    try std.testing.expectEqual(
+        solver_model.ActionKind.install,
+        actions[0].kind,
+    );
+    try std.testing.expectEqualStrings(
+        "dir-pkg",
+        solved.universe.package(actions[0].package).?.source.nevra.name,
+    );
+}
+
+test "live producer rejects an empty repository directory path" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    const input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    repositories[0].rpm_directory = "";
+    try std.testing.expectError(
+        error.InvalidInput,
         produce(std.testing.allocator, input),
     );
 }

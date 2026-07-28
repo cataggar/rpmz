@@ -22,14 +22,14 @@ static
 uint32_t
 TDNFGoalBuildNativeSolverRepoInputs(
     PTDNF pTdnf,
-    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY *ppRepos,
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 *ppRepos,
     uint32_t *pdwRepoCount
 );
 
 static
 void
 TDNFGoalFreeNativeSolverRepoInputs(
-    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY pRepos,
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 pRepos,
     uint32_t dwRepoCount
 );
 
@@ -718,7 +718,7 @@ TDNFGoalObserveNativeSolver(
     uint32_t dwRepoCount = 0, dwJobCount = 0, dwEraseJobCount = 0;
     uint32_t dwHiddenAvailableCount = 0;
     int nUpdateAll = 0, nDistSyncAll = 0;
-    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY pRepos = NULL;
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 pRepos = NULL;
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJobs = NULL, pEraseJobs = NULL, pHiddenAvailable = NULL;
     char **ppszInstallOnlyPkgs = NULL;
     char **ppszUserInstalledPkgs = NULL;
@@ -775,7 +775,7 @@ TDNFGoalObserveNativeSolver(
     dwError = TDNFGoalBuildNativeSolverHiddenAvailable(
                   pTdnf, &pHiddenAvailable, &dwHiddenAvailableCount);
     BAIL_ON_TDNF_ERROR(dwError);
-    dwError = TDNFRepoMdNativeSolverLiveCompareV15(
+    dwError = TDNFRepoMdNativeSolverLiveCompareV16(
                   pRepos, dwRepoCount, pJobs, dwJobCount,
                   pEraseJobs, dwEraseJobCount, pHiddenAvailable, dwHiddenAvailableCount,
                   pTdnf->pArgs->nAllDeps, pTdnf->pArgs->nBest, nAutoErase, pTdnf->pArgs->nSkipBroken, nAllowErasing,
@@ -838,13 +838,13 @@ static
 uint32_t
 TDNFGoalBuildNativeSolverRepoInputs(
     PTDNF pTdnf,
-    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY *ppRepos,
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 *ppRepos,
     uint32_t *pdwRepoCount
     )
 {
     uint32_t dwError = 0;
     uint32_t dwCount = 0;
-    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY pRepos = NULL;
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 pRepos = NULL;
     PTDNF_REPO_DATA pRepoData = NULL;
 
     if(!pTdnf || !ppRepos || !pdwRepoCount)
@@ -856,7 +856,8 @@ TDNFGoalBuildNativeSolverRepoInputs(
     for(pRepoData = pTdnf->pRepos; pRepoData; pRepoData = pRepoData->pNext)
     {
         if(pRepoData->nEnabled &&
-           pRepoData->nHasMetaData &&
+           (pRepoData->nHasMetaData ||
+            TDNF_REPO_RPM_DIRECTORY(pRepoData)) &&
            pRepoData->pRepo &&
            !IsNullOrEmptyString(pRepoData->pszId))
         {
@@ -876,16 +877,21 @@ TDNFGoalBuildNativeSolverRepoInputs(
     for(pRepoData = pTdnf->pRepos; pRepoData; pRepoData = pRepoData->pNext)
     {
         if(!pRepoData->nEnabled ||
-           !pRepoData->nHasMetaData ||
+           (!pRepoData->nHasMetaData &&
+            !TDNF_REPO_RPM_DIRECTORY(pRepoData)) ||
            !pRepoData->pRepo ||
            IsNullOrEmptyString(pRepoData->pszId))
         {
             continue;
         }
-        dwError = TDNFGetCachePath(
-                      pTdnf, pRepoData, NULL, NULL,
-                      (char **)&pRepos[dwCount].pszCacheDir);
-        BAIL_ON_TDNF_ERROR(dwError);
+        pRepos[dwCount].pszDirectory = TDNF_REPO_RPM_DIRECTORY(pRepoData);
+        if(!pRepos[dwCount].pszDirectory)
+        {
+            dwError = TDNFGetCachePath(
+                          pTdnf, pRepoData, NULL, NULL,
+                          (char **)&pRepos[dwCount].pszCacheDir);
+            BAIL_ON_TDNF_ERROR(dwError);
+        }
 
         pRepos[dwCount].pszId = pRepoData->pszId;
         pRepos[dwCount].pszSnapshotFile = pRepoData->pszSnapshotFile;
@@ -908,7 +914,7 @@ error:
 static
 void
 TDNFGoalFreeNativeSolverRepoInputs(
-    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY pRepos,
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 pRepos,
     uint32_t dwRepoCount
     )
 {
