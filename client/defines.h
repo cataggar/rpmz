@@ -131,3 +131,14 @@ typedef void (*TDNF_ML_FREE_FUNC) (void* data);
 #define TAG_NAME_SIZE "size"
 #define TAG_NAME_HASH "hash"
 #define TAG_NAME_URL  "url"
+
+//goal.c
+/* A repository declared with --repofromdir carries no downloaded metadata:
+   its packages are the .rpm files under its single base URL. The command-line
+   pseudo-repository also has no metadata, but it has no base URL either, so
+   the base URL is what tells the two apart. Evaluates to the directory, or
+   NULL when the repository is metadata-backed. */
+#define TDNF_REPO_RPM_DIRECTORY(pRepo) \
+    (!(pRepo)->nHasMetaData && (pRepo)->ppszBaseUrls && \
+     !IsNullOrEmptyString((pRepo)->ppszBaseUrls[0]) ? \
+     (pRepo)->ppszBaseUrls[0] : NULL)
