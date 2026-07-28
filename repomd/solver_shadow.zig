@@ -15,7 +15,9 @@ const status_invalid: u32 = 4;
 
 const reason_none: u32 = 0;
 const reason_native_problems: u32 = 1;
-const reason_skipped_jobs: u32 = 2;
+// 2 was `reason_skipped_jobs`. The codes are a stable diagnostic vocabulary --
+// they are read off `native-solver-shadow: comparison unsupported reason=N`
+// lines in old logs -- so the retired one is not reused.
 const reason_prior_action: u32 = 3;
 const reason_native_action_kind: u32 = 4;
 const reason_legacy_action_bucket: u32 = 5;
@@ -62,10 +64,6 @@ pub fn compare(
 
     if (native.dwProblemCount != 0) {
         setUnsupported(output, reason_native_problems, 0);
-        return;
-    }
-    if (native.dwSkippedJobCount != 0) {
-        setUnsupported(output, reason_skipped_jobs, 0);
         return;
     }
     if (sharedPriorAction(native)) |action_kind| {
@@ -1207,14 +1205,6 @@ test "shadow comparator preserves unsupported distinctions" {
 
     native.dwProblemCount = 0;
     native.pProblems = null;
-    native.dwSkippedJobCount = 1;
-    var skipped_jobs = [_]u32{0};
-    native.pdwSkippedJobIds = &skipped_jobs;
-    try compare(std.testing.allocator, &native, &legacy, &output);
-    try std.testing.expectEqual(reason_skipped_jobs, output.dwReason);
-
-    native.dwSkippedJobCount = 0;
-    native.pdwSkippedJobIds = null;
     actions[0].dwPriorCount = 1;
     var prior_refs = [_]u32{0};
     var prior_hnums = [_]u32{7};
