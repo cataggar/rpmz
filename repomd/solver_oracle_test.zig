@@ -4703,3 +4703,57 @@ test "install-only erase with clean deps removes every installed instance" {
     defer materialized.deinit();
     try expectNativeMatchesOracle(&materialized, &observation);
 }
+
+test "clean deps keeps a locked automatic dependency" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{
+        .name = "requested",
+        .version = "1",
+        .requires = &.{ relation("kept-dependency"), relation("gone-dependency") },
+    });
+    try builder.addPackage(installed, .{ .name = "kept-dependency" });
+    try builder.addPackage(installed, .{ .name = "gone-dependency" });
+    builder.repos.items[installed].installed_states.items[0].reason = .user;
+    builder.repos.items[installed].installed_states.items[1].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[2].reason = .automatic;
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{ .{
+        .action = .erase,
+        .selection = .{ .package = @enumFromInt(0) },
+    }, .{
+        .action = .lock,
+        .selection = .{ .name = "kept-dependency" },
+    } } };
+    var cleanup_policy = policy();
+    cleanup_policy.clean_deps = true;
+    cleanup_policy.allow_erasing = true;
+
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer observation.deinit();
+    // The lock pins the automatic dependency that clean-deps would otherwise
+    // collect, while the unlocked one is still removed.
+    try testing.expect(
+        containsSelectedName(&graph, &observation, "kept-dependency"),
+    );
+    try testing.expect(
+        !containsSelectedName(&graph, &observation, "gone-dependency"),
+    );
+
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
+}

@@ -297,6 +297,9 @@ pub fn prepareWithOptions(
     const protected = try allocator.alloc(bool, package_count);
     defer allocator.free(protected);
     try markProtectedPackages(base, options.protected_names, protected);
+    const locked = try allocator.alloc(bool, package_count);
+    defer allocator.free(locked);
+    try markLockedInstalled(base, locked);
 
     const replacement_candidates = try allocator.alloc(
         PackageIdList,
@@ -443,6 +446,7 @@ pub fn prepareWithOptions(
             directly_erased,
             cleanup_seeds,
             protected,
+            locked,
         )
     else
         try allocator.alloc(bool, package_count);
@@ -729,6 +733,44 @@ pub fn prepareWithOptions(
     };
 }
 
+/// Marks the installed packages pinned by `.lock` jobs. libsolv's cleandeps
+/// add-back pass (`cleandeps.c`, "ADDBACK PASS") pushes every positive literal
+/// of every job rule back onto the install queue, and a lock job on an
+/// installed package contributes exactly such a literal. A locked installed
+/// package therefore never lands in the cleandeps removal map.
+fn markLockedInstalled(
+    base: *const solver_rules.OwnedFormula,
+    locked: []bool,
+) PrepareError!void {
+    if (locked.len != base.universe.packages.len) {
+        return error.InvalidFormula;
+    }
+    @memset(locked, false);
+    for (base.jobs) |job| {
+        if (job.action != .lock) continue;
+        switch (job.selection) {
+            .package => |package_id| {
+                const package_index = try packageIndex(
+                    package_id,
+                    locked.len,
+                );
+                if (base.universe.packages[package_index].installed != null) {
+                    locked[package_index] = true;
+                }
+            },
+            .name => |name| {
+                for (base.universe.packages, 0..) |package, package_index| {
+                    if (package.installed == null) continue;
+                    if (std.mem.eql(u8, package.source.nevra.name, name)) {
+                        locked[package_index] = true;
+                    }
+                }
+            },
+            else => return error.UnsupportedPolicy,
+        }
+    }
+}
+
 fn markProtectedPackages(
     base: *const solver_rules.OwnedFormula,
     protected_names: []const []const u8,
@@ -984,6 +1026,22 @@ fn validateCleanupPolicy(
                     return error.UnsupportedPolicy;
                 }
             },
+            .lock => {
+                // Handled by `markLockedInstalled`: the locked package is
+                // cleanup-immune, exactly as libsolv's add-back pass makes it.
+                switch (job.selection) {
+                    .package, .name => {},
+                    else => return error.UnsupportedPolicy,
+                }
+                if (job.flags.clean_deps or
+                    job.flags.force_best or
+                    job.flags.targeted or
+                    job.flags.not_by_user or
+                    job.flags.weak)
+                {
+                    return error.UnsupportedPolicy;
+                }
+            },
             else => return error.UnsupportedPolicy,
         }
     }
@@ -1010,11 +1068,13 @@ fn computeCleanupRemovals(
     directly_erased: []const bool,
     cleanup_seeds: []const bool,
     protected: []const bool,
+    locked: []const bool,
 ) PrepareError![]bool {
     const package_count = base.universe.packages.len;
     if (directly_erased.len != package_count or
         cleanup_seeds.len != package_count or
-        protected.len != package_count)
+        protected.len != package_count or
+        locked.len != package_count)
     {
         return error.InvalidFormula;
     }
@@ -1043,6 +1103,10 @@ fn computeCleanupRemovals(
         const package = base.universe.package(package_id) orelse
             return error.InvalidFormula;
         if (package.installed == null) continue;
+        // A locked installed package survives libsolv's cleandeps add-back pass
+        // unconditionally, so it is never a removal candidate and its
+        // requirements stay reachable through the add-back walk below.
+        if (locked[package_index]) continue;
         // libsolv clears the user-installed bit for every cleanup candidate it
         // seeds, so a seed is always a cleanup root even when the user asked
         // for it explicitly.
