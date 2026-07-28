@@ -1414,6 +1414,264 @@ test "clean deps cascades through a chain of unsupplemented packages" {
     try expectNativeMatchesOracle(&native, &observation);
 }
 
+test "update all with clean deps keeps packages a surviving holder still needs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{
+        .name = "holder-up",
+        .recommends = &.{relation("orphan-up")},
+    });
+    try builder.addPackage(installed, .{ .name = "orphan-up" });
+    try builder.addPackage(installed, .{
+        .name = "holder-static",
+        .recommends = &.{relation("orphan-static")},
+    });
+    try builder.addPackage(installed, .{
+        .name = "orphan-static",
+        .requires = &.{relation("orphan-static-dep")},
+    });
+    try builder.addPackage(installed, .{ .name = "orphan-static-dep" });
+    for (builder.repos.items[installed].installed_states.items) |*state| {
+        state.reason = .automatic;
+    }
+    const available = try builder.addRepo("base", .available, 99);
+    try builder.addPackage(available, .{ .name = "holder-up", .version = "2" });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var cleanup_policy = policy();
+    cleanup_policy.clean_deps = true;
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .update,
+        .selection = .all,
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer observation.deinit();
+    // `holder-static` is not replaced, so everything it still recommends -- and
+    // everything that recommendation transitively requires -- stays installed.
+    // Only the chain below the replaced `holder-up` is shed.
+    try testing.expect(actionForName(&graph, &observation, "orphan-static") == null);
+    try testing.expect(
+        actionForName(&graph, &observation, "orphan-static-dep") == null,
+    );
+    try testing.expectEqual(
+        solver_model.ActionKind.erase,
+        actionForName(&graph, &observation, "orphan-up").?.kind,
+    );
+
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
+}
+
+test "update all with clean deps sheds a no longer recommended package" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{
+        .name = "app",
+        .recommends = &.{relation("helper")},
+    });
+    try builder.addPackage(installed, .{ .name = "helper" });
+    builder.repos.items[installed].installed_states.items[0].reason = .user;
+    builder.repos.items[installed].installed_states.items[1].reason = .automatic;
+    const available = try builder.addRepo("base", .available, 99);
+    try builder.addPackage(available, .{ .name = "app", .version = "2" });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var cleanup_policy = policy();
+    cleanup_policy.clean_deps = true;
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .update,
+        .selection = .all,
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer observation.deinit();
+    try testing.expect(actionForName(&graph, &observation, "helper") != null);
+    try testing.expectEqual(
+        solver_model.ActionKind.erase,
+        actionForName(&graph, &observation, "helper").?.kind,
+    );
+
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
+}
+
+test "update all with clean deps sheds a chain below a dropped recommendation" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{
+        .name = "app",
+        .recommends = &.{relation("helper")},
+    });
+    try builder.addPackage(installed, .{
+        .name = "helper",
+        .requires = &.{relation("helper-dep")},
+    });
+    try builder.addPackage(installed, .{ .name = "helper-dep" });
+    builder.repos.items[installed].installed_states.items[0].reason = .user;
+    builder.repos.items[installed].installed_states.items[1].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[2].reason = .automatic;
+    const available = try builder.addRepo("base", .available, 99);
+    try builder.addPackage(available, .{ .name = "app", .version = "2" });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var cleanup_policy = policy();
+    cleanup_policy.clean_deps = true;
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .update,
+        .selection = .all,
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer observation.deinit();
+
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
+}
+
+test "update all with clean deps keeps a package nothing else pulls in" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{
+        .name = "app",
+        .recommends = &.{relation("helper")},
+    });
+    try builder.addPackage(installed, .{ .name = "helper" });
+    try builder.addPackage(installed, .{ .name = "standalone" });
+    builder.repos.items[installed].installed_states.items[0].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[1].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[2].reason = .automatic;
+    const available = try builder.addRepo("base", .available, 99);
+    try builder.addPackage(available, .{ .name = "app", .version = "2" });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var cleanup_policy = policy();
+    cleanup_policy.clean_deps = true;
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .update,
+        .selection = .all,
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer observation.deinit();
+    // `standalone` is a `filter_unneeded` survivor, so it seeds the update and
+    // is kept; `helper` is reachable from `app` and is not a seed.
+    try testing.expect(actionForName(&graph, &observation, "standalone") == null);
+    try testing.expectEqual(
+        solver_model.ActionKind.erase,
+        actionForName(&graph, &observation, "helper").?.kind,
+    );
+
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
+}
+
+test "update all with clean deps keeps an unreferenced dependency cycle" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{
+        .name = "app",
+        .recommends = &.{relation("helper")},
+    });
+    try builder.addPackage(installed, .{ .name = "helper" });
+    try builder.addPackage(installed, .{
+        .name = "free-a",
+        .requires = &.{relation("free-b")},
+    });
+    try builder.addPackage(installed, .{
+        .name = "free-b",
+        .requires = &.{relation("free-a")},
+    });
+    for (builder.repos.items[installed].installed_states.items) |*state| {
+        state.reason = .automatic;
+    }
+    const available = try builder.addRepo("base", .available, 99);
+    try builder.addPackage(available, .{ .name = "app", .version = "2" });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var cleanup_policy = policy();
+    cleanup_policy.clean_deps = true;
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .update,
+        .selection = .all,
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer observation.deinit();
+    // The cycle is a root strongly connected component, so it seeds the update
+    // and survives whole even though each member is only required from inside
+    // the cycle. `helper` is reachable from `app` and is shed.
+    try testing.expect(actionForName(&graph, &observation, "free-a") == null);
+    try testing.expect(actionForName(&graph, &observation, "free-b") == null);
+    try testing.expectEqual(
+        solver_model.ActionKind.erase,
+        actionForName(&graph, &observation, "helper").?.kind,
+    );
+
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
+}
+
 test "clean deps removes only the automatic dependency closure of an exact erase" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     var builder = GraphBuilder.init(arena_state.allocator());

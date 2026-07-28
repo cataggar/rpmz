@@ -260,10 +260,21 @@ pub fn prepareWithOptions(
             break;
         }
     }
+    var update_all = false;
+    for (base.jobs) |job| {
+        if (job.action == .update and
+            std.meta.activeTag(job.selection) == .all and
+            (options.clean_deps or job.flags.clean_deps))
+        {
+            update_all = true;
+            break;
+        }
+    }
     const clean_deps = try validateCleanupPolicy(
         base,
         options,
         has_install_cleanup_seed,
+        update_all,
     );
     if (clean_deps and
         options.protected_names.len != 0 and
@@ -439,6 +450,14 @@ pub fn prepareWithOptions(
     for (cleanup_seeds, install_cleanup_seeds) |*seed, install_seed| {
         if (install_seed) seed.* = true;
     }
+    if (update_all) {
+        // `SOLVER_UPDATE | SOLVER_SOLVABLE_ALL | SOLVER_CLEANDEPS` pushes every
+        // installed package onto libsolv's cleandeps removal queue and clears
+        // its user-installed bit (`solver.c`, `cleandeps.c`).
+        for (base.universe.packages, cleanup_seeds) |package, *seed| {
+            if (package.installed != null) seed.* = true;
+        }
+    }
     const cleanup_removals = if (clean_deps)
         try computeCleanupRemovals(
             allocator,
@@ -447,6 +466,8 @@ pub fn prepareWithOptions(
             cleanup_seeds,
             protected,
             locked,
+            update_all,
+            replacement_candidates,
         )
     else
         try allocator.alloc(bool, package_count);
@@ -936,6 +957,7 @@ fn validateCleanupPolicy(
     base: *const solver_rules.OwnedFormula,
     options: PrepareOptions,
     has_install_cleanup_seed: bool,
+    update_all: bool,
 ) PrepareError!bool {
     var clean_deps = options.clean_deps;
     var erase_count: usize = 0;
@@ -945,9 +967,10 @@ fn validateCleanupPolicy(
         }
     }
     if (!clean_deps) return false;
-    // Cleanup is seeded from erase jobs and from install jobs that replace an
-    // installed package. A clean-deps request with neither cannot remove
-    // anything and is inert rather than unsupported.
+    // Cleanup is seeded from erase jobs, from install jobs that replace an
+    // installed package, and -- for a global update -- from every installed
+    // package. A clean-deps request with none of those cannot remove anything
+    // and is inert rather than unsupported.
     var has_erase_job = false;
     for (base.jobs) |job| {
         if (job.action == .erase) {
@@ -955,8 +978,16 @@ fn validateCleanupPolicy(
             break;
         }
     }
-    if (!has_erase_job and !has_install_cleanup_seed) return false;
-    if (options.best or base.replacement_kind != .none) {
+    if (!has_erase_job and !has_install_cleanup_seed and !update_all) {
+        return false;
+    }
+    if (options.best) return error.UnsupportedPolicy;
+    // A global update replaces installed packages, which the search's
+    // replacement machinery drives independently of the cleanup preference.
+    // Other replacement shapes (distro-sync) are not modelled yet.
+    if (base.replacement_kind != .none and
+        !(update_all and base.replacement_kind == .update))
+    {
         return error.UnsupportedPolicy;
     }
 
@@ -1042,10 +1073,25 @@ fn validateCleanupPolicy(
                     return error.UnsupportedPolicy;
                 }
             },
+            .update => {
+                // A global update with clean-deps seeds cleanup from every
+                // installed package; `computeUpdateSeeds` then restores the
+                // ones libsolv keeps.
+                if (std.meta.activeTag(job.selection) != .all) {
+                    return error.UnsupportedPolicy;
+                }
+                if (job.flags.force_best or
+                    job.flags.targeted or
+                    job.flags.not_by_user or
+                    job.flags.weak)
+                {
+                    return error.UnsupportedPolicy;
+                }
+            },
             else => return error.UnsupportedPolicy,
         }
     }
-    if (erase_count == 0 and !has_install_cleanup_seed) {
+    if (erase_count == 0 and !has_install_cleanup_seed and !update_all) {
         return error.UnsupportedPolicy;
     }
 
@@ -1062,6 +1108,8 @@ fn computeCleanupRemovals(
     cleanup_seeds: []const bool,
     protected: []const bool,
     locked: []const bool,
+    update_all: bool,
+    replacements: []const PackageIdList,
 ) PrepareError![]bool {
     const package_count = base.universe.packages.len;
     if (directly_erased.len != package_count or
@@ -1131,6 +1179,27 @@ fn computeCleanupRemovals(
         if (!progressed) break;
     }
 
+    // For a global update libsolv suppresses the add-back pass entirely -- every
+    // installed package sits in its prune set -- and instead restores the update
+    // seeds and then, through `solver_check_cleandeps_mistakes`, every candidate
+    // still required, recommended or supplemented by a package that survives the
+    // transaction. Restoring the seeds before the add-back walk below reaches the
+    // same fixed point in a single pass. A seed that has a replacement available
+    // does not survive at its installed version, so it contributes its
+    // replacement's dependencies rather than its own.
+    const update_seeds = if (update_all) try computeUpdateSeeds(
+        allocator,
+        base,
+        &dependencies,
+        protected,
+    ) else null;
+    defer if (update_seeds) |seeds| allocator.free(seeds);
+    if (update_seeds) |seeds| {
+        for (seeds, removals) |seed, *removal| {
+            if (seed) removal.* = false;
+        }
+    }
+
     const kept = try allocator.alloc(bool, package_count);
     defer allocator.free(kept);
     var addback = PackageIdList.init(allocator);
@@ -1138,7 +1207,27 @@ fn computeCleanupRemovals(
     for (base.universe.packages, 0..) |package, package_index| {
         kept[package_index] = package.installed != null and
             !removals[package_index];
-        if (kept[package_index]) try addback.append(package.id);
+        if (!kept[package_index]) continue;
+        // A seed that has a replacement available does not survive at its
+        // installed version, so the surviving version contributes the
+        // dependencies instead. Its own are dropped from the walk.
+        if (update_seeds != null and
+            replacements[package_index].items.len != 0)
+        {
+            continue;
+        }
+        try addback.append(package.id);
+    }
+    if (update_seeds) |seeds| {
+        for (seeds, replacements) |seed, candidates| {
+            if (!seed) continue;
+            for (candidates.items) |candidate| {
+                const candidate_index: usize = @intFromEnum(candidate);
+                if (kept[candidate_index]) continue;
+                kept[candidate_index] = true;
+                try addback.append(candidate);
+            }
+        }
     }
 
     cursor = 0;
@@ -1382,6 +1471,315 @@ const CleanupDependencyIndex = struct {
         self.* = undefined;
     }
 };
+
+/// Mirrors libsolv's `filter_unneeded(solv, q, NULL, justone)` (`cleandeps.c`),
+/// which keeps only the roots of the dependency graph spanned by `candidates`.
+/// An edge runs from a candidate to a candidate it requires, recommends, or is
+/// supplemented by; `justone` means an edge is only drawn when the dependency
+/// has exactly one provider, so ambiguous dependencies never root anything.
+/// `pruned[i]` reports whether `candidates[i]` was dropped.
+fn filterUnneededCandidates(
+    allocator: std.mem.Allocator,
+    base: *const solver_rules.OwnedFormula,
+    dependencies: *const CleanupDependencyIndex,
+    candidates: []const solver_model.PackageId,
+    pruned: []bool,
+) PrepareError!void {
+    const count = candidates.len;
+    if (pruned.len != count) return error.InvalidFormula;
+    @memset(pruned, false);
+    if (count < 2) return;
+    if (count > std.math.maxInt(i32) / 4) return error.TooManyClauses;
+
+    const slot = try allocator.alloc(i32, base.universe.packages.len);
+    defer allocator.free(slot);
+    @memset(slot, -1);
+    for (candidates, 0..) |package_id, index| {
+        slot[@intFromEnum(package_id)] = @intCast(index);
+    }
+
+    var edges = std.array_list.Managed(i32).init(allocator);
+    defer edges.deinit();
+    // libsolv leaves element zero empty so that a node index is never zero and
+    // an edge list can be terminated with zero; the per-node offsets live in
+    // elements 1..count and the lists follow.
+    try edges.appendNTimes(0, count + 2);
+    const requires_counts = try allocator.alloc(i32, count);
+    defer allocator.free(requires_counts);
+    @memset(requires_counts, 0);
+
+    for (candidates, 0..) |owner, index| {
+        const owner_index: usize = @intFromEnum(owner);
+        const list_start: i32 = @intCast(edges.items.len);
+        edges.items[index + 1] = list_start;
+        for (dependencies.requirements[owner_index].items) |clause_index| {
+            const literals = try checkedClauseLiterals(
+                base,
+                base.clauses[clause_index],
+            );
+            try appendUnneededEdges(base, literals, owner, slot, &edges);
+        }
+        requires_counts[index] =
+            @as(i32, @intCast(edges.items.len)) - list_start;
+        for (dependencies.recommends[owner_index].items) |request_index| {
+            const request = base.weak_requests[request_index];
+            try appendUnneededCandidateEdges(
+                base,
+                request.candidates.slice(base.weak_candidates),
+                owner,
+                slot,
+                &edges,
+            );
+        }
+        try edges.append(0);
+    }
+
+    // A supplements entry points the other way: the supplemented package drags
+    // in the supplementing one, so the edge is inserted into the supplemented
+    // package's list, right behind its requires.
+    for (candidates, 0..) |owner, index| {
+        const owner_index: usize = @intFromEnum(owner);
+        for (dependencies.supplements[owner_index].items) |request_index| {
+            const request = base.weak_requests[request_index];
+            const providers = request.candidates.slice(base.weak_candidates);
+            if (!supplementsRequestSatisfied(base, request, providers)) continue;
+            if (providers.len != 1) continue;
+            for (providers) |provider| {
+                if (provider == owner) continue;
+                const provider_index: usize = @intFromEnum(provider);
+                if (base.universe.packages[provider_index].installed == null) {
+                    continue;
+                }
+                const target = slot[provider_index];
+                if (target < 0) continue;
+                const position: usize = @intCast(
+                    edges.items[@as(usize, @intCast(target)) + 1] +
+                        requires_counts[@intCast(target)],
+                );
+                try edges.insert(position, @intCast(index + 1));
+                var following: usize = @as(usize, @intCast(target)) + 2;
+                while (following < count + 1) : (following += 1) {
+                    edges.items[following] += 1;
+                }
+            }
+        }
+    }
+
+    const low = try allocator.alloc(i32, 2 * (count + 1));
+    defer allocator.free(low);
+    var pass: usize = 0;
+    while (pass < 2) : (pass += 1) {
+        @memset(low, 0);
+        if (pass == 1) {
+            // Re-run without the requires edges to shed candidates that are
+            // only held up by recommends or supplements.
+            for (0..count) |index| {
+                edges.items[index + 1] += requires_counts[index];
+                if (pruned[index]) low[index + 1] = -1;
+            }
+        }
+        var state = TarjanState{
+            .idx = @intCast(count + 1),
+            .nstack = @intCast(count + 1),
+            .firstidx = @intCast(count + 1),
+        };
+        var node: usize = 1;
+        while (node <= count) : (node += 1) {
+            if (low[node] != 0) continue;
+            if (edges.items[@intCast(edges.items[node])] != 0) {
+                state.firstidx = state.idx;
+                state.nstack = state.idx;
+                tarjanVisit(edges.items, low, &state, @intCast(node));
+            } else {
+                const myidx = state.idx;
+                state.idx += 1;
+                low[node] = myidx;
+                low[@intCast(myidx)] = @intCast(node);
+            }
+        }
+        for (0..count) |index| {
+            if (low[index + 1] <= 0) pruned[index] = true;
+        }
+    }
+}
+
+const TarjanState = struct {
+    idx: i32,
+    nstack: i32,
+    firstidx: i32,
+};
+
+/// libsolv's `trj_visit` (`cleandeps.c`): Tarjan's strongly connected component
+/// search, modified so that only the component rooted at the search start keeps
+/// a positive `low` value. Everything reachable from another candidate is
+/// marked `-1` and pruned.
+fn tarjanVisit(
+    edges: []const i32,
+    low: []i32,
+    state: *TarjanState,
+    node: i32,
+) void {
+    const node_index: usize = @intCast(node);
+    const myidx = state.idx;
+    state.idx += 1;
+    low[node_index] = myidx;
+    const stackstart = state.nstack;
+    state.nstack += 1;
+    low[@intCast(stackstart)] = node;
+
+    var cursor: usize = @intCast(edges[node_index]);
+    while (edges[cursor] != 0) : (cursor += 1) {
+        const next = edges[cursor];
+        const next_index: usize = @intCast(next);
+        var value = low[next_index];
+        if (value == 0) {
+            if (edges[@intCast(edges[next_index])] == 0) {
+                state.idx += 1;
+                low[next_index] = -1;
+                continue;
+            }
+            tarjanVisit(edges, low, state, next);
+            value = low[next_index];
+        }
+        if (value < 0) continue;
+        if (value < state.firstidx) {
+            var cell: i32 = value;
+            while (low[@intCast(low[@intCast(cell)])] == value) : (cell += 1) {
+                low[@intCast(low[@intCast(cell)])] = -1;
+            }
+        } else if (value < low[node_index]) {
+            low[node_index] = value;
+        }
+    }
+
+    if (low[node_index] == myidx) {
+        const marker: i32 = if (myidx != state.firstidx) -1 else myidx;
+        var cell = stackstart;
+        while (cell < state.nstack) : (cell += 1) {
+            low[@intCast(low[@intCast(cell)])] = marker;
+        }
+        state.nstack = stackstart;
+    }
+}
+
+fn appendUnneededEdges(
+    base: *const solver_rules.OwnedFormula,
+    literals: []const solver_rules.Literal,
+    owner: solver_model.PackageId,
+    slot: []const i32,
+    edges: *std.array_list.Managed(i32),
+) PrepareError!void {
+    var installed_providers: usize = 0;
+    for (literals) |literal| {
+        if (!literal.positive()) continue;
+        const package = literal.package();
+        if (package == owner) continue;
+        if (base.universe.packages[@intFromEnum(package)].installed == null) {
+            continue;
+        }
+        installed_providers += 1;
+    }
+    if (installed_providers != 1) return;
+    for (literals) |literal| {
+        if (!literal.positive()) continue;
+        try appendUnneededEdge(base, literal.package(), owner, slot, edges);
+    }
+}
+
+fn appendUnneededCandidateEdges(
+    base: *const solver_rules.OwnedFormula,
+    providers: []const solver_model.PackageId,
+    owner: solver_model.PackageId,
+    slot: []const i32,
+    edges: *std.array_list.Managed(i32),
+) PrepareError!void {
+    var installed_providers: usize = 0;
+    for (providers) |provider| {
+        if (provider == owner) continue;
+        if (base.universe.packages[@intFromEnum(provider)].installed == null) {
+            continue;
+        }
+        installed_providers += 1;
+    }
+    if (installed_providers != 1) return;
+    for (providers) |provider| {
+        try appendUnneededEdge(base, provider, owner, slot, edges);
+    }
+}
+
+fn appendUnneededEdge(
+    base: *const solver_rules.OwnedFormula,
+    provider: solver_model.PackageId,
+    owner: solver_model.PackageId,
+    slot: []const i32,
+    edges: *std.array_list.Managed(i32),
+) PrepareError!void {
+    if (provider == owner) return;
+    const provider_index: usize = @intFromEnum(provider);
+    if (base.universe.packages[provider_index].installed == null) return;
+    const target = slot[provider_index];
+    if (target < 0) return;
+    const value = target + 1;
+    if (edges.items[edges.items.len - 1] == value) return;
+    try edges.append(value);
+}
+
+fn supplementsRequestSatisfied(
+    base: *const solver_rules.OwnedFormula,
+    request: solver_rules.WeakRequest,
+    providers: []const solver_model.PackageId,
+) bool {
+    if (request.system_satisfied) return true;
+    for (providers) |provider| {
+        if (base.universe.packages[@intFromEnum(provider)].installed != null) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// libsolv's `find_update_seeds` (`cleandeps.c`): the packages that a global
+/// `update` with clean-deps must never drop. Those are the dependency-graph
+/// roots among the installed packages, plus every user-installed package.
+fn computeUpdateSeeds(
+    allocator: std.mem.Allocator,
+    base: *const solver_rules.OwnedFormula,
+    dependencies: *const CleanupDependencyIndex,
+    protected: []const bool,
+) PrepareError![]bool {
+    const package_count = base.universe.packages.len;
+    var candidates = PackageIdList.init(allocator);
+    defer candidates.deinit();
+    for (base.universe.packages) |package| {
+        if (package.installed != null) try candidates.append(package.id);
+    }
+    const pruned = try allocator.alloc(bool, candidates.items.len);
+    defer allocator.free(pruned);
+    try filterUnneededCandidates(
+        allocator,
+        base,
+        dependencies,
+        candidates.items,
+        pruned,
+    );
+
+    const seeds = try allocator.alloc(bool, package_count);
+    errdefer allocator.free(seeds);
+    @memset(seeds, false);
+    for (candidates.items, pruned) |package_id, is_pruned| {
+        const package_index: usize = @intFromEnum(package_id);
+        if (is_pruned) continue;
+        if (installedIsUserRoot(base, package_index, protected)) continue;
+        seeds[package_index] = true;
+    }
+    for (base.universe.packages, 0..) |package, package_index| {
+        if (package.installed == null) continue;
+        if (installedIsUserRoot(base, package_index, protected)) {
+            seeds[package_index] = true;
+        }
+    }
+    return seeds;
+}
 
 fn installedIsUserRoot(
     base: *const solver_rules.OwnedFormula,
