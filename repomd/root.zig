@@ -961,21 +961,6 @@ fn nativeSolverLiveCompare(
         setError("null native live erase jobs", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
     }
-    const has_locked_names = if (raw_locked_names) |names|
-        names[0] != null
-    else
-        false;
-    const has_installonly_names = if (raw_installonly_names) |names|
-        names[0] != null
-    else
-        false;
-    if (job_count == 0 and erase_job_count == 0 and
-        !update_all and !dist_sync_all and
-        !has_locked_names and !has_installonly_names)
-    {
-        setError("empty native live input", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
-    }
     const config = rpm_config orelse {
         setError("null native live rpm configuration", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
