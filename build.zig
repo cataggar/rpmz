@@ -1518,6 +1518,24 @@ pub fn build(b: *Build) void {
 
     {
         const test_mod = b.createModule(.{
+            .root_source_file = b.path("repomd/cmdline_repository.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+            },
+        });
+        test_mod.addImport("rpm_header", rpmzig_header_mod);
+        test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+        test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    {
+        const test_mod = b.createModule(.{
             .root_source_file = b.path("repomd/installed_repository.zig"),
             .target = target,
             .optimize = optimize,

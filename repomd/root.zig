@@ -164,6 +164,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompare(
         null,
         null,
         null,
+        null,
     );
 }
 
@@ -201,6 +202,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV2(
         comparison,
         false,
         false,
+        null,
         null,
         null,
         null,
@@ -242,6 +244,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV3(
         comparison,
         false,
         false,
+        null,
         null,
         null,
         null,
@@ -287,6 +290,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV4(
         null,
         null,
         null,
+        null,
     );
 }
 
@@ -327,6 +331,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV5(
         comparison,
         false,
         false,
+        null,
         null,
         null,
         null,
@@ -374,6 +379,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV6(
         null,
         null,
         null,
+        null,
     );
 }
 
@@ -416,6 +422,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV7(
         comparison,
         false,
         false,
+        null,
         null,
         null,
         null,
@@ -466,6 +473,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV8(
         null,
         null,
         null,
+        null,
     );
 }
 
@@ -511,6 +519,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV9(
         comparison,
         false,
         false,
+        null,
         null,
         null,
         null,
@@ -563,6 +572,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV10(
         null,
         null,
         null,
+        null,
     );
 }
 
@@ -610,6 +620,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV11(
         comparison,
         update_all != 0,
         dist_sync_all != 0,
+        null,
         null,
         null,
         null,
@@ -664,6 +675,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV12(
         raw_locked_names,
         null,
         null,
+        null,
     );
 }
 
@@ -715,6 +727,7 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV13(
         dist_sync_all != 0,
         raw_locked_names,
         raw_installonly_names,
+        null,
         null,
     );
 }
@@ -769,6 +782,62 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV14(
         raw_locked_names,
         raw_installonly_names,
         raw_user_installed_names,
+        null,
+    );
+}
+
+pub export fn TDNFRepoMdNativeSolverLiveCompareV15(
+    raw_repositories: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY,
+    repository_count: u32,
+    raw_jobs: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    job_count: u32,
+    raw_erase_jobs: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    erase_job_count: u32,
+    raw_hidden_available: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    hidden_available_count: u32,
+    all_deps: c_int,
+    best: c_int,
+    clean_deps: c_int,
+    skip_broken: c_int,
+    allow_erasing: c_int,
+    update_all: c_int,
+    dist_sync_all: c_int,
+    raw_locked_names: ?[*:null]const ?[*:0]const u8,
+    raw_installonly_names: ?[*:null]const ?[*:0]const u8,
+    raw_protected_names: ?[*:null]const ?[*:0]const u8,
+    raw_user_installed_names: ?[*:null]const ?[*:0]const u8,
+    raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
+    rpm_config: ?*const c.tdnf_rpm_config,
+    raw_native_arch: ?[*:0]const u8,
+    legacy: ?*const c.TDNF_SOLVED_PKG_INFO,
+    comparison: ?*c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT,
+) u32 {
+    return nativeSolverLiveCompare(
+        raw_repositories,
+        repository_count,
+        raw_jobs,
+        job_count,
+        raw_erase_jobs,
+        erase_job_count,
+        raw_hidden_available,
+        hidden_available_count,
+        true,
+        all_deps != 0,
+        best != 0,
+        clean_deps != 0,
+        skip_broken != 0,
+        allow_erasing != 0,
+        raw_protected_names,
+        rpm_config,
+        raw_native_arch,
+        legacy,
+        comparison,
+        update_all != 0,
+        dist_sync_all != 0,
+        raw_locked_names,
+        raw_installonly_names,
+        raw_user_installed_names,
+        raw_cmdline_rpm_paths,
     );
 }
 
@@ -797,6 +866,7 @@ fn nativeSolverLiveCompare(
     raw_locked_names: ?[*:null]const ?[*:0]const u8,
     raw_installonly_names: ?[*:null]const ?[*:0]const u8,
     raw_user_installed_names: ?[*:null]const ?[*:0]const u8,
+    raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
 ) u32 {
     clearError();
     const output = comparison orelse {
@@ -969,6 +1039,22 @@ fn nativeSolverLiveCompare(
             };
         }
     }
+    var cmdline_rpm_paths: []const ?[:0]const u8 = &.{};
+    if (raw_cmdline_rpm_paths) |paths_ptr| {
+        const paths = allocator.alloc(?[:0]const u8, job_count) catch {
+            setError(
+                "out of memory translating native live command-line paths",
+                .{},
+            );
+            return c.ERROR_TDNF_OUT_OF_MEMORY;
+        };
+        for (paths_ptr[0..job_count], paths) |raw, *path| {
+            path.* = if (raw) |value| std.mem.span(value) else null;
+        }
+        cmdline_rpm_paths = paths;
+    }
+    defer if (cmdline_rpm_paths.len != 0) allocator.free(cmdline_rpm_paths);
+
     const erase_jobs = allocator.alloc(
         solver_live.EraseJobInput,
         erase_job_count,
@@ -1027,6 +1113,7 @@ fn nativeSolverLiveCompare(
             .rpmdb = .{ .config = config },
             .native_arch = native_arch,
             .jobs = jobs,
+            .cmdline_rpm_paths = cmdline_rpm_paths,
             .erase_jobs = erase_jobs,
             .hidden_available = hidden_available,
             .include_installed = !all_deps,
