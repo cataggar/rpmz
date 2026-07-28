@@ -126,7 +126,6 @@ pub fn produce(
     }
     if (input.installonly_names.len != 0 and
         (!input.include_installed or
-            input.erase_jobs.len != 0 or
             input.skip_broken))
     {
         return error.UnsupportedInput;
@@ -460,7 +459,7 @@ const Fixture = struct {
         });
         defer db.close();
         try db.exec(
-            \\CREATE TABLE Packages (
+            \\CREATE TABLE IF NOT EXISTS Packages (
             \\    hnum INTEGER PRIMARY KEY,
             \\    blob BLOB NOT NULL
             \\)
@@ -884,10 +883,62 @@ test "live producer translates erase jobs with clean deps" {
     );
     input.jobs = &.{};
     input.installonly_names = &.{"leaf"};
+    input.skip_broken = true;
     try std.testing.expectError(
         error.UnsupportedInput,
         produce(std.testing.allocator, input),
     );
+}
+
+test "live producer erases every install-only instance" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalledVersion(51, "leaf", "1.0");
+    try fixture.addInstalledVersion(52, "leaf", "2.0");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    const erase_jobs = [_]EraseJobInput{ .{
+        .selector = .{
+            .repository = system_repository_id,
+            .name = "leaf",
+            .epoch = null,
+            .version = "1.0",
+            .release = "1",
+            .arch = "x86_64",
+        },
+    }, .{
+        .selector = .{
+            .repository = system_repository_id,
+            .name = "leaf",
+            .epoch = null,
+            .version = "2.0",
+            .release = "1",
+            .arch = "x86_64",
+        },
+    } };
+    input.jobs = &.{};
+    input.erase_jobs = &erase_jobs;
+    input.clean_deps = true;
+    input.allow_erasing = true;
+    input.installonly_names = &.{"leaf"};
+
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    const actions = solved.solved.result.outcome.actions;
+    try std.testing.expectEqual(@as(usize, 2), actions.len);
+    for (actions) |action| {
+        try std.testing.expectEqual(solver_model.ActionKind.erase, action.kind);
+    }
 }
 
 test "live producer erases from an installed-only universe" {

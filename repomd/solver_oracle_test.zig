@@ -4645,3 +4645,61 @@ test "generated acyclic graphs are deterministic against the canonical observati
         try testing.expect(std.mem.startsWith(u8, first_text, "schema " ++ golden_schema));
     }
 }
+
+test "install-only erase with clean deps removes every installed instance" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(installed, .{
+        .name = "tdnf-multi",
+        .version = "1.0.1",
+        .release = "1",
+    });
+    try builder.addPackage(installed, .{
+        .name = "tdnf-multi",
+        .version = "1.0.1",
+        .release = "2",
+    });
+    try builder.addPackage(available, .{
+        .name = "tdnf-multi",
+        .version = "1.0.1",
+        .release = "3",
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var installonly_policy = policy();
+    installonly_policy.installonly_names = &.{"tdnf-multi"};
+    installonly_policy.installonly_limit = 3;
+    installonly_policy.allow_erasing = true;
+    installonly_policy.clean_deps = true;
+
+    const goal: solver_model.Goal = .{ .jobs = &.{ .{
+        .action = .erase,
+        .selection = .{ .package = @enumFromInt(0) },
+    }, .{
+        .action = .erase,
+        .selection = .{ .package = @enumFromInt(1) },
+    } } };
+
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        installonly_policy,
+    );
+    defer observation.deinit();
+    try testing.expectEqual(@as(usize, 0), observation.selected.len);
+
+    var native = try coordinator.solveInstallonly(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        installonly_policy,
+    );
+    defer native.deinit();
+    var materialized = try materializeInstallonly(testing.allocator, &native);
+    defer materialized.deinit();
+    try expectNativeMatchesOracle(&materialized, &observation);
+}
