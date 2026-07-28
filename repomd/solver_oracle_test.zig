@@ -1259,6 +1259,161 @@ test "clean deps cleans up the closure displaced by an exact install replacement
     try expectNativeMatchesOracle(&native, &observation);
 }
 
+test "clean deps removes an installed package that is no longer supplemented" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{ .name = "base" });
+    try builder.addPackage(installed, .{
+        .name = "addon",
+        .supplements = &.{relation("base")},
+    });
+    try builder.addPackage(installed, .{
+        .name = "user-addon",
+        .supplements = &.{relation("base")},
+    });
+    try builder.addPackage(installed, .{
+        .name = "other-addon",
+        .supplements = &.{relation("survivor")},
+    });
+    try builder.addPackage(installed, .{ .name = "survivor" });
+    builder.repos.items[installed].installed_states.items[0].reason = .user;
+    builder.repos.items[installed].installed_states.items[1].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[2].reason = .user;
+    builder.repos.items[installed].installed_states.items[3].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[4].reason = .user;
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var cleanup_policy = policy();
+    cleanup_policy.allow_erasing = true;
+    cleanup_policy.clean_deps = true;
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .erase,
+        .selection = .{ .package = @enumFromInt(0) },
+        .flags = .{ .clean_deps = true },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer observation.deinit();
+
+    try testing.expect(actionForName(&graph, &observation, "addon") != null);
+    try testing.expect(actionForName(&graph, &observation, "user-addon") == null);
+    try testing.expect(actionForName(&graph, &observation, "other-addon") == null);
+
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
+}
+
+test "clean deps keeps a package supplemented by a surviving installed package" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{ .name = "base" });
+    try builder.addPackage(installed, .{
+        .name = "addon",
+        .supplements = &.{ relation("base"), relation("survivor") },
+    });
+    try builder.addPackage(installed, .{ .name = "survivor" });
+    builder.repos.items[installed].installed_states.items[0].reason = .user;
+    builder.repos.items[installed].installed_states.items[1].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[2].reason = .user;
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var cleanup_policy = policy();
+    cleanup_policy.allow_erasing = true;
+    cleanup_policy.clean_deps = true;
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .erase,
+        .selection = .{ .package = @enumFromInt(0) },
+        .flags = .{ .clean_deps = true },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer observation.deinit();
+
+    try testing.expect(actionForName(&graph, &observation, "addon") == null);
+
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
+}
+
+test "clean deps cascades through a chain of unsupplemented packages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{ .name = "base" });
+    try builder.addPackage(installed, .{
+        .name = "addon",
+        .supplements = &.{relation("base")},
+    });
+    try builder.addPackage(installed, .{
+        .name = "addon-addon",
+        .supplements = &.{relation("addon")},
+    });
+    try builder.addPackage(installed, .{
+        .name = "addon-dependency",
+        .requires = &.{relation("leaf")},
+    });
+    try builder.addPackage(installed, .{ .name = "leaf" });
+    builder.repos.items[installed].installed_states.items[0].reason = .user;
+    builder.repos.items[installed].installed_states.items[1].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[2].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[3].reason = .automatic;
+    builder.repos.items[installed].installed_states.items[4].reason = .automatic;
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var cleanup_policy = policy();
+    cleanup_policy.allow_erasing = true;
+    cleanup_policy.clean_deps = true;
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .erase,
+        .selection = .{ .package = @enumFromInt(0) },
+        .flags = .{ .clean_deps = true },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer observation.deinit();
+
+    try testing.expect(actionForName(&graph, &observation, "addon") != null);
+    try testing.expect(actionForName(&graph, &observation, "addon-addon") != null);
+
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        cleanup_policy,
+    );
+    defer native.deinit();
+    try expectNativeMatchesOracle(&native, &observation);
+}
+
 test "clean deps removes only the automatic dependency closure of an exact erase" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     var builder = GraphBuilder.init(arena_state.allocator());
