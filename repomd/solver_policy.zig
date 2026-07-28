@@ -1052,13 +1052,6 @@ fn validateCleanupPolicy(
     for (base.package_states) |state| {
         if (state.allow_uninstall) return error.UnsupportedPolicy;
     }
-    for (base.universe.packages) |package| {
-        if (package.installed != null and
-            package.relationEntries(base.universe, .supplements).len != 0)
-        {
-            return error.UnsupportedPolicy;
-        }
-    }
     return true;
 }
 
@@ -1097,33 +1090,45 @@ fn computeCleanupRemovals(
     }
 
     var cursor: usize = 0;
-    while (cursor < queue.items.len) : (cursor += 1) {
-        const package_id = queue.items[cursor];
-        const package_index: usize = @intFromEnum(package_id);
-        const package = base.universe.package(package_id) orelse
-            return error.InvalidFormula;
-        if (package.installed == null) continue;
-        // A locked installed package survives libsolv's cleandeps add-back pass
-        // unconditionally, so it is never a removal candidate and its
-        // requirements stay reachable through the add-back walk below.
-        if (locked[package_index]) continue;
-        // libsolv clears the user-installed bit for every cleanup candidate it
-        // seeds, so a seed is always a cleanup root even when the user asked
-        // for it explicitly.
-        if (!directly_erased[package_index] and
-            !cleanup_seeds[package_index] and
-            installedIsUserRoot(base, package_index, protected))
-        {
-            continue;
+    while (true) {
+        while (cursor < queue.items.len) : (cursor += 1) {
+            const package_id = queue.items[cursor];
+            const package_index: usize = @intFromEnum(package_id);
+            const package = base.universe.package(package_id) orelse
+                return error.InvalidFormula;
+            if (package.installed == null) continue;
+            // A locked installed package survives libsolv's cleandeps add-back
+            // pass unconditionally, so it is never a removal candidate and its
+            // requirements stay reachable through the add-back walk below.
+            if (locked[package_index]) continue;
+            // libsolv clears the user-installed bit for every cleanup candidate
+            // it seeds, so a seed is always a cleanup root even when the user
+            // asked for it explicitly.
+            if (!directly_erased[package_index] and
+                !cleanup_seeds[package_index] and
+                installedIsUserRoot(base, package_index, protected))
+            {
+                continue;
+            }
+            removals[package_index] = true;
+            try queueCleanupDependencies(
+                base,
+                &dependencies,
+                package_id,
+                scheduled,
+                &queue,
+            );
         }
-        removals[package_index] = true;
-        try queueCleanupDependencies(
+        const progressed = try queueUnsupplementedPackages(
             base,
             &dependencies,
-            package_id,
+            removals,
+            protected,
+            locked,
             scheduled,
             &queue,
         );
+        if (!progressed) break;
     }
 
     const kept = try allocator.alloc(bool, package_count);
@@ -1137,24 +1142,143 @@ fn computeCleanupRemovals(
     }
 
     cursor = 0;
-    while (cursor < addback.items.len) : (cursor += 1) {
-        try addBackCleanupDependencies(
+    while (true) {
+        while (cursor < addback.items.len) : (cursor += 1) {
+            try addBackCleanupDependencies(
+                base,
+                &dependencies,
+                addback.items[cursor],
+                directly_erased,
+                removals,
+                kept,
+                &addback,
+            );
+        }
+        const progressed = try addBackSupplementedPackages(
             base,
             &dependencies,
-            addback.items[cursor],
             directly_erased,
             removals,
             kept,
             &addback,
         );
+        if (!progressed) break;
     }
     return removals;
+}
+
+/// Mirrors the supplements phase of libsolv's cleandeps REMOVE PASS
+/// (`cleandeps.c`): an installed package whose `Supplements` were satisfied by
+/// the installed set but are no longer satisfied by the surviving set is no
+/// longer supplemented and is removed as well.
+fn queueUnsupplementedPackages(
+    base: *const solver_rules.OwnedFormula,
+    dependencies: *const CleanupDependencyIndex,
+    removals: []const bool,
+    protected: []const bool,
+    locked: []const bool,
+    scheduled: []bool,
+    queue: *PackageIdList,
+) PrepareError!bool {
+    var progressed = false;
+    for (base.universe.packages, 0..) |package, package_index| {
+        if (package.installed == null) continue;
+        if (dependencies.supplements[package_index].items.len == 0) continue;
+        if (removals[package_index] or scheduled[package_index]) continue;
+        if (locked[package_index]) continue;
+        if (installedIsUserRoot(base, package_index, protected)) continue;
+        if (supplementsSatisfied(base, dependencies, package_index, removals)) {
+            continue;
+        }
+        if (!supplementsSatisfied(base, dependencies, package_index, null)) {
+            continue;
+        }
+        scheduled[package_index] = true;
+        try queue.append(package.id);
+        progressed = true;
+    }
+    return progressed;
+}
+
+/// Mirrors the supplements phase of libsolv's cleandeps ADDBACK PASS
+/// (`cleandeps.c`): a package scheduled for cleanup whose `Supplements` are
+/// satisfied by the surviving set is supplemented after all and stays.
+fn addBackSupplementedPackages(
+    base: *const solver_rules.OwnedFormula,
+    dependencies: *const CleanupDependencyIndex,
+    directly_erased: []const bool,
+    removals: []bool,
+    kept: []bool,
+    queue: *PackageIdList,
+) PrepareError!bool {
+    var progressed = false;
+    for (base.universe.packages, 0..) |package, package_index| {
+        if (package.installed == null) continue;
+        if (dependencies.supplements[package_index].items.len == 0) continue;
+        if (!removals[package_index] or directly_erased[package_index]) continue;
+        if (!supplementsSatisfiedByKept(base, dependencies, package_index, kept)) {
+            continue;
+        }
+        removals[package_index] = false;
+        kept[package_index] = true;
+        try queue.append(package.id);
+        progressed = true;
+    }
+    return progressed;
+}
+
+/// Reports whether any `Supplements` entry of `package_index` is satisfied by
+/// an installed candidate. When `removals` is given, candidates scheduled for
+/// cleanup do not count, which is libsolv's `solver_dep_possible(sup, &im)`;
+/// when it is null the whole installed set counts, which is
+/// `solver_dep_possible(sup, &installedm)`.
+fn supplementsSatisfied(
+    base: *const solver_rules.OwnedFormula,
+    dependencies: *const CleanupDependencyIndex,
+    package_index: usize,
+    removals: ?[]const bool,
+) bool {
+    for (dependencies.supplements[package_index].items) |request_index| {
+        const request = base.weak_requests[request_index];
+        if (request.system_satisfied) return true;
+        for (request.candidates.slice(base.weak_candidates)) |candidate| {
+            const candidate_index: usize = @intFromEnum(candidate);
+            if (candidate_index >= base.universe.packages.len) continue;
+            if (base.universe.packages[candidate_index].installed == null) {
+                continue;
+            }
+            if (removals) |scheduled_for_removal| {
+                if (scheduled_for_removal[candidate_index]) continue;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+fn supplementsSatisfiedByKept(
+    base: *const solver_rules.OwnedFormula,
+    dependencies: *const CleanupDependencyIndex,
+    package_index: usize,
+    kept: []const bool,
+) bool {
+    for (dependencies.supplements[package_index].items) |request_index| {
+        const request = base.weak_requests[request_index];
+        if (request.system_satisfied) return true;
+        for (request.candidates.slice(base.weak_candidates)) |candidate| {
+            const candidate_index: usize = @intFromEnum(candidate);
+            if (candidate_index >= kept.len) continue;
+            if (kept[candidate_index]) return true;
+        }
+    }
+    return false;
 }
 
 const CleanupDependencyIndex = struct {
     allocator: std.mem.Allocator,
     requirements: []std.array_list.Managed(u32),
     recommends: []std.array_list.Managed(u32),
+    supplements: []std.array_list.Managed(u32),
 
     fn init(
         allocator: std.mem.Allocator,
@@ -1187,6 +1311,19 @@ const CleanupDependencyIndex = struct {
             list.* = std.array_list.Managed(u32).init(allocator);
             recommends_initialized += 1;
         }
+        const supplements = try allocator.alloc(
+            std.array_list.Managed(u32),
+            package_count,
+        );
+        errdefer allocator.free(supplements);
+        var supplements_initialized: usize = 0;
+        errdefer for (supplements[0..supplements_initialized]) |*list| {
+            list.deinit();
+        };
+        for (supplements) |*list| {
+            list.* = std.array_list.Managed(u32).init(allocator);
+            supplements_initialized += 1;
+        }
 
         for (base.clauses, 0..) |clause, clause_index| {
             const dependency = switch (clause.origin) {
@@ -1204,28 +1341,40 @@ const CleanupDependencyIndex = struct {
             try requirements[package_index].append(@intCast(clause_index));
         }
         for (base.weak_requests, 0..) |request, request_index| {
-            if (request.direction != .forward or
-                request.dependency.kind != .recommends)
-            {
-                continue;
-            }
-            const package_index = try packageIndex(
-                request.dependency.package,
-                package_count,
-            );
             if (request_index > std.math.maxInt(u32)) {
                 return error.TooManyClauses;
             }
-            try recommends[package_index].append(@intCast(request_index));
+            if (request.direction == .forward and
+                request.dependency.kind == .recommends)
+            {
+                const package_index = try packageIndex(
+                    request.dependency.package,
+                    package_count,
+                );
+                try recommends[package_index].append(@intCast(request_index));
+                continue;
+            }
+            if (request.direction == .reverse and
+                request.dependency.kind == .supplements)
+            {
+                const package_index = try packageIndex(
+                    request.dependency.package,
+                    package_count,
+                );
+                try supplements[package_index].append(@intCast(request_index));
+            }
         }
         return .{
             .allocator = allocator,
             .requirements = requirements,
             .recommends = recommends,
+            .supplements = supplements,
         };
     }
 
     fn deinit(self: *CleanupDependencyIndex) void {
+        for (self.supplements) |*list| list.deinit();
+        self.allocator.free(self.supplements);
         for (self.recommends) |*list| list.deinit();
         self.allocator.free(self.recommends);
         for (self.requirements) |*list| list.deinit();
@@ -7300,7 +7449,7 @@ test "clean deps preserves user roots and all providers needed by survivors" {
     );
 }
 
-test "clean deps honors explicit user-installed roots and rejects supplements" {
+test "clean deps honors explicit user-installed roots alongside supplements" {
     var installed_relations = [_]metadata.Relation{
         .{ .name = "dependency" },
         .{ .name = "condition" },
@@ -7357,13 +7506,18 @@ test "clean deps honors explicit user-installed roots and rejects supplements" {
     );
     defer base.deinit();
 
-    try std.testing.expectError(
-        error.UnsupportedPolicy,
-        prepareWithOptions(
-            std.testing.allocator,
-            &base,
-            .{ .clean_deps = true },
-        ),
+    // Nothing provides `condition`, so the supplements were never satisfied by
+    // the installed set and the supplementing package is not a cleanup
+    // candidate; the outcome must match the supplements-free universe below.
+    var supplemented = try prepareWithOptions(
+        std.testing.allocator,
+        &base,
+        .{ .clean_deps = true },
+    );
+    defer supplemented.deinit();
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        supplemented.cleanup_packages.len,
     );
 
     installed_packages[1].supplements = .{};
