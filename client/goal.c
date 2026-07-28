@@ -764,7 +764,7 @@ TDNFGoalObserveNativeSolver(
                   &nUpdateAll,
                   &nDistSyncAll);
     BAIL_ON_TDNF_ERROR(dwError);
-    if((ppszInstallOnlyPkgs && *ppszInstallOnlyPkgs && dwEraseJobCount) || (dwEraseJobCount && dwJobCount) ||
+    if((dwEraseJobCount && dwJobCount) ||
        (!nAllowErasing && dwEraseJobCount))
     {
         dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;

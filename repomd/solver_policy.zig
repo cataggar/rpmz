@@ -966,6 +966,24 @@ fn validateCleanupPolicy(
                     return error.UnsupportedPolicy;
                 }
             },
+            .multiversion => {
+                // libsolv's `solver_createcleandepsmap` (`cleandeps.c`) never
+                // inspects multiversion jobs: they only mark packages as
+                // non-obsoleting, and the install-job seeding above already
+                // skips multiversion literals. A multiversion job therefore
+                // seeds nothing and is inert for cleanup.
+                if (std.meta.activeTag(job.selection) != .name) {
+                    return error.UnsupportedPolicy;
+                }
+                if (job.flags.clean_deps or
+                    job.flags.force_best or
+                    job.flags.targeted or
+                    job.flags.not_by_user or
+                    job.flags.weak)
+                {
+                    return error.UnsupportedPolicy;
+                }
+            },
             else => return error.UnsupportedPolicy,
         }
     }
