@@ -66,24 +66,6 @@ SolvGetPkgNameFromId(
     char** ppszName);
 
 uint32_t
-SolvGetPkgArchFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppszArch);
-
-uint32_t
-SolvGetPkgVersionFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char ** ppszVersion);
-
-uint32_t
-SolvGetPkgReleaseFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppszRelease);
-
-uint32_t
 SolvGetPkgRepoNameFromId(
     PSolvSack pSack,
     uint32_t dwPkgId,
@@ -165,11 +147,6 @@ SolvCreatePackageList(
     );
 
 void
-SolvEmptyPackageList(
-    PSolvPackageList pPkgList
-    );
-
-void
 SolvFreePackageList(
     PSolvPackageList pPkgList
     );
@@ -199,14 +176,6 @@ SolvGetPkgChecksumFromId(
     uint32_t dwPkgId,
     int *checksumType,
     unsigned char** ppbChecksum
-    );
-
-uint32_t
-SolvGetLatest(
-    PSolvSack pSack,
-    Queue* pPkgList,
-    Id dwPpkg,
-    Id* pdwResult
     );
 
 uint32_t
@@ -381,19 +350,6 @@ SolvApplyListQuery(
     );
 
 uint32_t
-SolvApplyProvidesQuery(
-    PSolvQuery pQuery
-    );
-
-uint32_t
-SolvApplySearch(
-    PSolvQuery pQuery,
-    char** ppszSearchStrings,
-    int dwStartIndex,
-    int dwCount
-    );
-
-uint32_t
 SolvGenerateCommonJob(
     PSolvQuery pQuery,
     uint32_t dwSelectFlags
@@ -463,35 +419,6 @@ SolvFindAllUpDownCandidates(
     int up,
     Queue *pQueueResult
     );
-
-uint32_t
-SolvApplyDepsFilter(
-    PSolvQuery pQuery,
-    char **ppszDeps,
-    REPOQUERY_WHAT_KEY whatKey);
-
-uint32_t
-SolvApplyExtrasFilter(
-    PSolvQuery pQuery);
-
-uint32_t
-SolvApplyDuplicatesFilter(
-    PSolvQuery pQuery);
-
-uint32_t
-SolvApplyFileProvidesFilter(
-    PSolvQuery pQuery,
-    char *pszFile);
-
-uint32_t
-SolvApplyUserInstalledFilter(
-    PSolvQuery pQuery,
-    struct history_ctx *pHistoryCtx);
-
-uint32_t
-SolvApplyArchFilter(
-    PSolvQuery pQuery,
-    char **ppszArchs);
 
 // tdnfrepo.c
 uint32_t
