@@ -729,6 +729,40 @@ TDNFRepoMdNativeSolverLiveCompareV16(
     );
 
 /*
+ * Produce the authoritative native transaction for a live request. Takes the
+ * same universe, jobs, and policy inputs as
+ * TDNFRepoMdNativeSolverLiveCompareV16 but returns the solved package sets
+ * instead of a verdict against a legacy result. On success the caller owns
+ * *ppSolved and releases it with TDNFFreeSolvedPackageInfo.
+ */
+uint32_t
+TDNFRepoMdNativeSolverLiveSolve(
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 *pRepositories,
+    uint32_t dwRepositoryCount,
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pJobs,
+    uint32_t dwJobCount,
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pEraseJobs,
+    uint32_t dwEraseJobCount,
+    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pHiddenAvailable,
+    uint32_t dwHiddenAvailableCount,
+    int nAllDeps,
+    int nBest,
+    int nCleanDeps,
+    int nSkipBroken,
+    int nAllowErasing,
+    int nUpdateAll,
+    int nDistSyncAll,
+    const char *const *ppszLockedPackages,
+    const char *const *ppszInstallOnlyPackages,
+    const char *const *ppszProtectedPackages,
+    const char *const *ppszUserInstalledPackages,
+    const char *const *ppszCmdLineRpmPaths,
+    const tdnf_rpm_config *pRpmConfig,
+    const char *pszNativeArch,
+    PTDNF_SOLVED_PKG_INFO *ppSolved
+    );
+
+/*
  * Run the native metadata-backed implementation of repoquery-style
  * selectors and field population. `pRepoqueryArgs` uses the public
  * TDNF_REPOQUERY_ARGS layout from tdnftypes.h.

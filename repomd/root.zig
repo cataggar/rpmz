@@ -32,6 +32,7 @@ pub const solver_coordinator = @import("solver_coordinator.zig");
 pub const solver_policy = @import("solver_policy.zig");
 pub const solver_result = @import("solver_result.zig");
 pub const solver_result_c = @import("solver_result_c.zig");
+pub const solver_legacy_result = @import("solver_legacy_result.zig");
 pub const solver_shadow = @import("solver_shadow.zig");
 pub const solver_shadow_mode = @import("solver_shadow_mode.zig");
 pub const solver_rules = @import("solver_rules.zig");
@@ -182,6 +183,73 @@ pub export fn TDNFRepoMdNativeSolverLiveCompareV16(
         raw_user_installed_names,
         raw_cmdline_rpm_paths,
         raw_repositories,
+        null,
+    );
+}
+
+/// Produce the authoritative native transaction for a live request. Takes the
+/// same universe, jobs, and policy inputs as
+/// `TDNFRepoMdNativeSolverLiveCompareV16` but returns the solved package sets
+/// instead of a verdict against a legacy result. The caller owns `*ppSolved`
+/// and releases it with `TDNFFreeSolvedPackageInfo`.
+pub export fn TDNFRepoMdNativeSolverLiveSolve(
+    raw_repositories: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
+    repository_count: u32,
+    raw_jobs: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    job_count: u32,
+    raw_erase_jobs: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    erase_job_count: u32,
+    raw_hidden_available: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    hidden_available_count: u32,
+    all_deps: c_int,
+    best: c_int,
+    clean_deps: c_int,
+    skip_broken: c_int,
+    allow_erasing: c_int,
+    update_all: c_int,
+    dist_sync_all: c_int,
+    raw_locked_names: ?[*:null]const ?[*:0]const u8,
+    raw_installonly_names: ?[*:null]const ?[*:0]const u8,
+    raw_protected_names: ?[*:null]const ?[*:0]const u8,
+    raw_user_installed_names: ?[*:null]const ?[*:0]const u8,
+    raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
+    rpm_config: ?*const c.tdnf_rpm_config,
+    raw_native_arch: ?[*:0]const u8,
+    solved: ?*c.PTDNF_SOLVED_PKG_INFO,
+) u32 {
+    const output = solved orelse {
+        clearError();
+        setError("null native live solve output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    return nativeSolverLiveCompare(
+        null,
+        repository_count,
+        raw_jobs,
+        job_count,
+        raw_erase_jobs,
+        erase_job_count,
+        raw_hidden_available,
+        hidden_available_count,
+        true,
+        all_deps != 0,
+        best != 0,
+        clean_deps != 0,
+        skip_broken != 0,
+        allow_erasing != 0,
+        raw_protected_names,
+        rpm_config,
+        raw_native_arch,
+        null,
+        null,
+        update_all != 0,
+        dist_sync_all != 0,
+        raw_locked_names,
+        raw_installonly_names,
+        raw_user_installed_names,
+        raw_cmdline_rpm_paths,
+        raw_repositories,
+        output,
     );
 }
 
@@ -212,14 +280,24 @@ fn nativeSolverLiveCompare(
     raw_user_installed_names: ?[*:null]const ?[*:0]const u8,
     raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
     raw_repositories_v16: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
+    solved_out: ?*c.PTDNF_SOLVED_PKG_INFO,
 ) u32 {
     clearError();
-    const output = comparison orelse {
-        setError("null native live comparison output", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
-    };
-    output.* = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT);
-    output.dwStatus = c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_INVALID;
+    // Exactly one of the two outputs is in play: `solved_out` produces the
+    // transaction, `comparison` measures it against the legacy one.
+    var output: ?*c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT = null;
+    if (solved_out) |solved| {
+        solved.* = null;
+    } else {
+        output = comparison orelse {
+            setError("null native live comparison output", .{});
+            return c.ERROR_TDNF_INVALID_PARAMETER;
+        };
+        output.?.* = std.mem.zeroes(
+            c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT,
+        );
+        output.?.dwStatus = c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_INVALID;
+    }
     if (repository_count != 0 and
         raw_repositories == null and raw_repositories_v16 == null)
     {
@@ -248,10 +326,10 @@ fn nativeSolverLiveCompare(
         setError("empty native live architecture", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
     }
-    const legacy_result = legacy orelse {
+    const legacy_result = if (solved_out == null) legacy orelse {
         setError("null native live legacy result", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
-    };
+    } else null;
 
     const allocator = std.heap.c_allocator;
     const protected_names = namesFromC(
@@ -464,30 +542,58 @@ fn nativeSolverLiveCompare(
         hidden_available = hidden;
     }
 
+    const solver_input: solver_live.Input = .{
+        .repositories = repositories,
+        .rpmdb = .{ .config = config },
+        .native_arch = native_arch,
+        .jobs = jobs,
+        .cmdline_rpm_paths = cmdline_rpm_paths,
+        .erase_jobs = erase_jobs,
+        .hidden_available = hidden_available,
+        .include_installed = !all_deps,
+        .update_all = update_all,
+        .dist_sync_all = dist_sync_all,
+        .locked_names = locked_names,
+        .installonly_names = installonly_names,
+        .user_installed_names = user_installed_names,
+        .best = best,
+        .allow_erasing = allow_erasing,
+        .clean_deps = clean_deps,
+        .skip_broken = skip_broken,
+        .protected_names = protected_names,
+    };
+
+    if (solved_out) |solved| {
+        const native = solver_live.solveOwnedC(
+            allocator,
+            solver_input,
+        ) catch |err| {
+            setError("native live solve unavailable: {t}", .{err});
+            return if (err == error.OutOfMemory)
+                c.ERROR_TDNF_OUT_OF_MEMORY
+            else
+                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+        };
+        defer solver_result_c.freeOwnedResult(native);
+        solver_legacy_result.build(
+            allocator,
+            @ptrCast(native),
+            @ptrCast(solved),
+        ) catch |err| {
+            setError("native live solve result unavailable: {t}", .{err});
+            return if (err == error.OutOfMemory)
+                c.ERROR_TDNF_OUT_OF_MEMORY
+            else
+                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+        };
+        return 0;
+    }
+
     solver_live.compare(
         allocator,
-        .{
-            .repositories = repositories,
-            .rpmdb = .{ .config = config },
-            .native_arch = native_arch,
-            .jobs = jobs,
-            .cmdline_rpm_paths = cmdline_rpm_paths,
-            .erase_jobs = erase_jobs,
-            .hidden_available = hidden_available,
-            .include_installed = !all_deps,
-            .update_all = update_all,
-            .dist_sync_all = dist_sync_all,
-            .locked_names = locked_names,
-            .installonly_names = installonly_names,
-            .user_installed_names = user_installed_names,
-            .best = best,
-            .allow_erasing = allow_erasing,
-            .clean_deps = clean_deps,
-            .skip_broken = skip_broken,
-            .protected_names = protected_names,
-        },
-        @ptrCast(@alignCast(legacy_result)),
-        @ptrCast(output),
+        solver_input,
+        @ptrCast(@alignCast(legacy_result.?)),
+        @ptrCast(output.?),
     ) catch |err| {
         setError("native live comparison unavailable: {t}", .{err});
         return if (err == error.OutOfMemory)
@@ -750,6 +856,7 @@ comptime {
     _ = @import("solver_policy.zig");
     _ = @import("solver_result.zig");
     _ = @import("solver_result_c.zig");
+    _ = @import("solver_legacy_result.zig");
     _ = @import("solver_shadow.zig");
     _ = @import("solver_shadow_mode.zig");
     _ = @import("solver_rules.zig");
