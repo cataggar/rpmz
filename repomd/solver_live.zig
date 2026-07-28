@@ -122,7 +122,7 @@ pub fn produce(
             input.jobs.len != 0 or
             input.erase_jobs.len != 0 or
             !input.include_installed or
-            input.clean_deps))
+            (input.clean_deps and input.dist_sync_all)))
     {
         return error.UnsupportedInput;
     }
@@ -726,9 +726,13 @@ test "live producer translates a single update-all job" {
     );
     input.jobs = &.{};
     input.clean_deps = true;
-    try std.testing.expectError(
-        error.UnsupportedInput,
-        produce(std.testing.allocator, input),
+    var cleaned = try produce(std.testing.allocator, input);
+    defer cleaned.deinit();
+    const cleaned_actions = cleaned.solved.result.outcome.actions;
+    try std.testing.expectEqual(@as(usize, 1), cleaned_actions.len);
+    try std.testing.expectEqual(
+        solver_model.ActionKind.upgrade,
+        cleaned_actions[0].kind,
     );
 }
 
