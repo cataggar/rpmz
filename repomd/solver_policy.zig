@@ -276,12 +276,6 @@ pub fn prepareWithOptions(
         has_install_cleanup_seed,
         update_all,
     );
-    if (clean_deps and
-        options.protected_names.len != 0 and
-        !options.allow_erasing)
-    {
-        return error.UnsupportedPolicy;
-    }
     for (base.package_states) |state| {
         if (state.multiversion and !options.installonly_policy) {
             return error.UnsupportedPolicy;
@@ -308,6 +302,21 @@ pub fn prepareWithOptions(
     const protected = try allocator.alloc(bool, package_count);
     defer allocator.free(protected);
     try markProtectedPackages(base, options.protected_names, protected);
+    // libsolv only hears about protected packages when tdnf runs with erasing
+    // allowed: `TDNFSolv` calls `TDNFSolvAddProtectPkgs` from inside
+    // `if (nAllowErasing)` (`client/goal.c`), and that call is what turns
+    // protected names into `SOLVER_USERINSTALLED` jobs and every other
+    // installed package into `SOLVER_ALLOWUNINSTALL`. Without those jobs the
+    // solve itself is free to remove a protected package;
+    // `TDNFSolvCheckProtectPkgsInTrans` then rejects the finished transaction,
+    // which `protectedRemoval` models separately and unconditionally.
+    const job_protected = try allocator.alloc(bool, package_count);
+    defer allocator.free(job_protected);
+    if (options.allow_erasing) {
+        @memcpy(job_protected, protected);
+    } else {
+        @memset(job_protected, false);
+    }
     const locked = try allocator.alloc(bool, package_count);
     defer allocator.free(locked);
     try markLockedInstalled(base, locked);
@@ -464,7 +473,7 @@ pub fn prepareWithOptions(
             base,
             directly_erased,
             cleanup_seeds,
-            protected,
+            job_protected,
             locked,
             update_all,
             replacement_candidates,
@@ -497,10 +506,10 @@ pub fn prepareWithOptions(
         if ((directly_erased[package_index] and
             !installonly_update_eviction) or
             (cleanup_removals[package_index] and
-                !protected[package_index]) or
+                !job_protected[package_index]) or
             ((options.allow_erasing or
                 base.package_states[package_index].allow_uninstall) and
-                !protected[package_index] and
+                !job_protected[package_index] and
                 base.package_states[package_index].replacement.kind == .none))
         {
             continue;
@@ -8584,16 +8593,28 @@ test "protected automatic dependencies remain clean-deps roots" {
         testArchitecture(),
     );
     defer base.deinit();
-    try std.testing.expectError(
-        error.UnsupportedPolicy,
-        prepareWithOptions(
-            std.testing.allocator,
-            &base,
-            .{
-                .clean_deps = true,
-                .protected_names = &.{"protected"},
-            },
-        ),
+    // libsolv only learns which packages are protected when tdnf allows
+    // erasing (`TDNFSolvAddProtectPkgs` runs inside `if (nAllowErasing)`), so
+    // without it the clean-deps walk is free to schedule the protected
+    // package. `protectedRemoval` is what rejects the finished transaction.
+    var unguarded = try prepareWithOptions(
+        std.testing.allocator,
+        &base,
+        .{
+            .clean_deps = true,
+            .protected_names = &.{"protected"},
+        },
+    );
+    defer unguarded.deinit();
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        unguarded.cleanup_packages.len,
+    );
+    var unguarded_result = try unguarded.solve(std.testing.allocator);
+    defer unguarded_result.deinit();
+    try std.testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(1)),
+        unguarded.protectedRemoval(unguarded_result.satisfiable),
     );
     var prepared = try prepareWithOptions(
         std.testing.allocator,

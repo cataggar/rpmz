@@ -270,16 +270,6 @@ fn validateInputs(
     if (!policy.architecture.allow_multilib) {
         return error.UnsupportedPolicy;
     }
-    var clean_deps = policy.clean_deps;
-    for (goal.jobs) |job| {
-        clean_deps = clean_deps or job.flags.clean_deps;
-    }
-    if (clean_deps and
-        policy.protected_names.len != 0 and
-        !policy.allow_erasing)
-    {
-        return error.UnsupportedPolicy;
-    }
     if (goal.jobs.len > std.math.maxInt(u32)) {
         return error.InvalidModel;
     }

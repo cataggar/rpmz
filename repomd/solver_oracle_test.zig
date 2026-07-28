@@ -1841,14 +1841,56 @@ test "protected policy rejects unsupported boundaries" {
     );
 
     protected_policy.skip_broken = false;
+}
+
+test "clean deps without allow erasing leaves protection to the transaction check" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    try builder.addPackage(installed, .{
+        .name = "requested",
+        .requires = &.{relation("protected")},
+    });
+    try builder.addPackage(installed, .{ .name = "protected" });
+    builder.repos.items[installed].installed_states.items[1].reason =
+        .automatic;
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    // `TDNFSolvAddProtectPkgs` only runs when tdnf allows erasing, so without
+    // it libsolv never hears that `protected` is special and the clean-deps
+    // walk removes it. `TDNFSolvCheckProtectPkgsInTrans` rejects the finished
+    // transaction instead, which both solvers report as a protected problem.
+    var protected_policy = policy();
+    protected_policy.clean_deps = true;
+    protected_policy.protected_names = &.{"protected"};
     const clean_goal = solver_model.Goal{ .jobs = &.{.{
         .action = .erase,
         .selection = .{ .package = @enumFromInt(0) },
         .flags = .{ .clean_deps = true },
     }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        clean_goal,
+        protected_policy,
+    );
+    defer observation.deinit();
+    try testing.expectEqual(
+        @as(usize, 1),
+        observation.outcome.problems.len,
+    );
+    try testing.expectEqual(
+        solver_model.ProblemKind.protected_package,
+        observation.outcome.problems[0].kind,
+    );
+    try testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(1)),
+        observation.outcome.problems[0].package,
+    );
     try testing.expectError(
-        error.UnsupportedPolicy,
-        oracle.solve(
+        error.ProtectedPackage,
+        solveNative(
             testing.allocator,
             &graph.universe,
             clean_goal,
