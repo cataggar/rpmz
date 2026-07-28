@@ -973,7 +973,7 @@ TDNFGoalBuildNativeSolverJobs(
        !pTdnf->pSack->pPool || !pQueueJobs || !ppJobs || !pdwJobCount ||
        !ppEraseJobs || !pdwEraseJobCount || !pppszInstallOnlyPkgs ||
        !pppszUserInstalledPkgs || !pppszLockedPkgs || !pppszCmdLinePaths ||
-       !pnUpdateAll || !pnDistSyncAll || pQueueJobs->count <= 0 ||
+       !pnUpdateAll || !pnDistSyncAll || pQueueJobs->count < 0 ||
        pQueueJobs->count % 2 != 0)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
@@ -982,8 +982,11 @@ TDNFGoalBuildNativeSolverJobs(
 
     pPool = pTdnf->pSack->pPool;
     dwCount = (uint32_t)pQueueJobs->count / 2;
+    /* One spare element throughout: an empty job queue is a real request --
+       `history undo` and `history rollback` reach an already-satisfied target
+       -- and TDNFAllocateMemory rejects a zero-element allocation. */
     dwError = TDNFAllocateMemory(
-                  dwCount,
+                  dwCount + 1,
                   sizeof(*pJobs),
                   (void **)&pJobs);
     BAIL_ON_TDNF_ERROR(dwError);
@@ -995,7 +998,7 @@ TDNFGoalBuildNativeSolverJobs(
     BAIL_ON_TDNF_ERROR(dwError);
 
     dwError = TDNFAllocateMemory(
-                  dwCount,
+                  dwCount + 1,
                   sizeof(*ppszCmdLinePaths),
                   (void **)&ppszCmdLinePaths);
     BAIL_ON_TDNF_ERROR(dwError);

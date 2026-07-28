@@ -116,10 +116,11 @@ pub fn produce(
         @as(usize, @intFromBool(input.update_all)) +
         @as(usize, @intFromBool(input.dist_sync_all));
     // A universe with no repositories is still solvable when the installed set
-    // is included: that is what `--disablerepo=*` produces.
+    // is included: that is what `--disablerepo=*` produces. A request with no
+    // jobs at all is likewise solvable, and its answer is an empty
+    // transaction: `history undo` and `history rollback` reach a target whose
+    // delta is already satisfied and issue nothing.
     if ((input.repositories.len == 0 and !input.include_installed) or
-        input.jobs.len + input.erase_jobs.len + input.locked_names.len +
-            input.installonly_names.len + global_job_count == 0 or
         input.native_arch.len == 0)
     {
         return error.InvalidInput;
@@ -1564,5 +1565,44 @@ test "live producer rejects an empty repository directory path" {
     try std.testing.expectError(
         error.InvalidInput,
         produce(std.testing.allocator, input),
+    );
+}
+
+test "live producer answers an empty request with an empty transaction" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalled(51, "leaf");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    // `history undo` and `history rollback` reach a target whose delta is
+    // already satisfied and hand the solver nothing to do.
+    input.jobs = &.{};
+
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        solved.solved.result.outcome.actions.len,
+    );
+    // Nothing is touched, so the installed package is simply kept.
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        solved.solved.result.selected.len,
+    );
+    try std.testing.expectEqualStrings(
+        "leaf",
+        solved.universe.package(
+            solved.solved.result.selected[0],
+        ).?.source.nevra.name,
     );
 }
