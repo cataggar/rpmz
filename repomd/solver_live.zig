@@ -424,6 +424,18 @@ fn applyInstallReasons(
     installed_states.* = states;
 }
 
+/// Produce the native transaction for `input` in the C ABI result shape and
+/// hand ownership to the caller, who must release it with
+/// `solver_result_c.freeOwnedResult`.
+pub fn solveOwnedC(
+    parent_allocator: std.mem.Allocator,
+    input: Input,
+) (ProduceError || solver_result_c.BuildError)!*solver_result_abi.Result {
+    var solved = try produce(parent_allocator, input);
+    defer solved.deinit();
+    return solved.buildOwnedC();
+}
+
 pub fn compare(
     parent_allocator: std.mem.Allocator,
     input: Input,
