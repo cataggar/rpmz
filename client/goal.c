@@ -37,7 +37,7 @@ TDNFGoalFreeNativeSolverRepoInputs(
 static
 uint32_t
 TDNFGoalBuildNativeSolverJobs(
-    PTDNF pTdnf, const Queue *pQueueJobs,
+    PTDNF pTdnf, const Queue *pQueueJobs, int nAutoErase,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppJobs, uint32_t *pdwJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppEraseJobs, uint32_t *pdwEraseJobCount,
     char ***pppszInstallOnlyPkgs, char ***pppszUserInstalledPkgs,
@@ -759,6 +759,7 @@ TDNFGoalObserveNativeSolver(
     dwError = TDNFGoalBuildNativeSolverJobs(
                   pTdnf,
                   pQueueJobs,
+                  nAutoErase,
                   &pJobs,
                   &dwJobCount,
                   &pEraseJobs,
@@ -934,6 +935,7 @@ uint32_t
 TDNFGoalBuildNativeSolverJobs(
     PTDNF pTdnf,
     const Queue *pQueueJobs,
+    int nAutoErase,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppJobs,
     uint32_t *pdwJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppEraseJobs,
@@ -994,11 +996,13 @@ TDNFGoalBuildNativeSolverJobs(
 
     for(dwIndex = 0; dwIndex < dwCount; dwIndex++)
     {
-        /* XOR removes only expected policy bits; wrong shapes stay set. */
+        /* XOR removes only expected policy bits; wrong shapes stay set. The
+           cleandeps expectation must be the nAutoErase TDNFSolv handed to
+           SolvAddFlagsToJobs: autoremove sets it from nAlterType alone, and
+           history passes 0 even when clean_requirements_on_remove is on. */
         Id rawHow = pQueueJobs->elements[dwIndex * 2];
         Id how = rawHow ^ (pTdnf->pArgs->nBest ? SOLVER_FORCEBEST : 0) ^
-                 (pTdnf->pConf->nCleanRequirementsOnRemove &&
-                  !pTdnf->pArgs->nNoAutoRemove ? SOLVER_CLEANDEPS : 0);
+                 (nAutoErase ? SOLVER_CLEANDEPS : 0);
         Id dwPkgId = pQueueJobs->elements[dwIndex * 2 + 1];
         Solvable *pSolvable = NULL;
         PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob = NULL;
