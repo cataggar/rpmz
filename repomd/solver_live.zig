@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const available_loader = @import("available_loader.zig");
+const cmdline_repository = @import("cmdline_repository.zig");
 const installed_repository = @import("installed_repository.zig");
 const model = @import("model.zig");
 const rpmpkg = if (builtin.is_test) @import("rpmpkg.zig") else struct {};
@@ -17,6 +18,11 @@ const solver_shadow_abi = @import("solver_shadow_abi.zig");
 const solver_visibility = @import("solver_visibility.zig");
 
 pub const system_repository_id = "@System";
+
+/// libsolv's pseudo-repository for packages named directly on the command
+/// line. Job selectors carrying this repository id resolve against the
+/// synthetic repository built from `Input.cmdline_rpm_paths`.
+pub const cmdline_repository_id = "@cmdline";
 
 pub const RepositoryInput = struct {
     id: []const u8,
@@ -39,6 +45,10 @@ pub const Input = struct {
     rpmdb: installed_repository.Source,
     native_arch: []const u8,
     jobs: []const JobInput,
+    /// Filesystem path of the `.rpm` file backing each entry of `jobs`, or
+    /// null when that job targets an ordinary repository. Either empty or
+    /// exactly as long as `jobs`.
+    cmdline_rpm_paths: []const ?[:0]const u8 = &.{},
     erase_jobs: []const EraseJobInput = &.{},
     /// Null means the caller did not provide install-reason data, so every
     /// installed package keeps `.unknown` and stays a clean-deps root.
@@ -59,6 +69,7 @@ pub const Input = struct {
 
 pub const ProduceError =
     available_loader.LoadError ||
+    cmdline_repository.LoadError ||
     installed_repository.LoadError ||
     solver_model.UniverseInitError ||
     solver_identity.InitError ||
@@ -130,18 +141,25 @@ pub fn produce(
     {
         return error.UnsupportedInput;
     }
+    if (input.cmdline_rpm_paths.len != 0 and
+        input.cmdline_rpm_paths.len != input.jobs.len)
+    {
+        return error.InvalidInput;
+    }
 
     var arena_state = std.heap.ArenaAllocator.init(parent_allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
+    const cmdline_paths = try collectCmdlineRpmPaths(arena, input);
     const available_offset: usize = @intFromBool(input.include_installed);
+    const cmdline_count: usize = @intFromBool(cmdline_paths.len != 0);
     const repository_inputs = try arena.alloc(
         solver_model.RepositoryInput,
-        input.repositories.len + available_offset,
+        input.repositories.len + available_offset + cmdline_count,
     );
     const models = try arena.alloc(
         @import("model.zig").RepositoryModel,
-        input.repositories.len + available_offset,
+        input.repositories.len + available_offset + cmdline_count,
     );
 
     if (input.include_installed) {
@@ -172,7 +190,9 @@ pub fn produce(
         };
     }
 
-    for (input.repositories, models[available_offset..], 0..) |
+    const available_models =
+        models[available_offset..][0..input.repositories.len];
+    for (input.repositories, available_models, 0..) |
         repository,
         *loaded,
         index,
@@ -204,6 +224,19 @@ pub fn produce(
             .model = loaded,
             .priority = repository.priority,
             .cost = repository.cost,
+        };
+    }
+
+    if (cmdline_count != 0) {
+        const last = repository_inputs.len - 1;
+        models[last] = try cmdline_repository.loadModel(arena, cmdline_paths);
+        repository_inputs[last] = .{
+            .id = cmdline_repository_id,
+            .model = &models[last],
+            // libsolv gives the command-line repository the default priority
+            // and cost; only the explicit job makes its packages reachable.
+            .priority = solver_model.default_repository_priority,
+            .cost = solver_model.default_repository_cost,
         };
     }
 
@@ -317,6 +350,44 @@ pub fn produce(
 /// Mirrors the libsolv `SOLVER_USERINSTALLED` feed: names present in
 /// `user_installed_names` were requested by the user, everything else on the
 /// system arrived as a dependency and is therefore clean-deps eligible.
+/// Collects the distinct `.rpm` paths named on the command line, preserving
+/// argument order. Duplicates are folded because libsolv resolves repeated
+/// arguments to the same solvable, and two identical NEVRAs in one repository
+/// would make the job selector ambiguous.
+fn collectCmdlineRpmPaths(
+    arena: std.mem.Allocator,
+    input: Input,
+) ProduceError![]const [:0]const u8 {
+    if (input.cmdline_rpm_paths.len == 0) return &.{};
+    var paths = try std.ArrayList([:0]const u8).initCapacity(
+        arena,
+        input.cmdline_rpm_paths.len,
+    );
+    for (input.cmdline_rpm_paths, input.jobs) |maybe_path, job| {
+        const is_cmdline_job = std.mem.eql(
+            u8,
+            job.selector.repository,
+            cmdline_repository_id,
+        );
+        const path = maybe_path orelse "";
+        if (!is_cmdline_job) {
+            // A path is meaningless for any other repository, so the caller
+            // and the selector disagree about where this package came from.
+            if (path.len != 0) return error.InvalidInput;
+            continue;
+        }
+        // libsolv can hold a command-line solvable with no recorded location;
+        // the native side simply has no way to rebuild it.
+        if (path.len == 0) return error.UnsupportedInput;
+        for (paths.items) |seen| {
+            if (std.mem.eql(u8, seen, path)) break;
+        } else {
+            paths.appendAssumeCapacity(path);
+        }
+    }
+    return paths.items;
+}
+
 fn applyInstallReasons(
     arena: std.mem.Allocator,
     packages: []const model.Package,
@@ -473,6 +544,32 @@ const Fixture = struct {
         );
         defer std.testing.allocator.free(sql);
         try db.exec(sql, .{});
+    }
+
+    fn addCmdlineRpm(
+        self: *Fixture,
+        buffer: *[std.Io.Dir.max_path_bytes]u8,
+        name: []const u8,
+    ) ![:0]const u8 {
+        const bytes = try rpmpkg.makeMinimalRpmBytesForTest(
+            std.testing.allocator,
+            name,
+            "1.0",
+            "1",
+            "x86_64",
+        );
+        defer std.testing.allocator.free(bytes);
+        var sub_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const sub_path = try std.fmt.bufPrint(
+            &sub_path_buffer,
+            "{s}.rpm",
+            .{name},
+        );
+        try self.tmp.dir.writeFile(std.testing.io, .{
+            .sub_path = sub_path,
+            .data = bytes,
+        });
+        return self.path(buffer, sub_path);
     }
 
     fn path(
@@ -1297,5 +1394,89 @@ test "live comparison cleans every allocation failure" {
         std.testing.allocator,
         comparisonAllocationFailureCase,
         .{ input, &legacy },
+    );
+}
+
+test "live producer installs a package named on the command line" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var rpm_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    const rpm_path = try fixture.addCmdlineRpm(&rpm_buffer, "cmdline-pkg");
+    jobs[0] = .{ .selector = .{
+        .repository = cmdline_repository_id,
+        .name = "cmdline-pkg",
+        .epoch = null,
+        .version = "1.0",
+        .release = "1",
+        .arch = "x86_64",
+    } };
+    const cmdline_rpm_paths = [_]?[:0]const u8{rpm_path};
+    input.cmdline_rpm_paths = &cmdline_rpm_paths;
+
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    const actions = solved.solved.result.outcome.actions;
+    try std.testing.expectEqual(@as(usize, 1), actions.len);
+    try std.testing.expectEqual(
+        solver_model.ActionKind.install,
+        actions[0].kind,
+    );
+    try std.testing.expectEqualStrings(
+        "cmdline-pkg",
+        solved.universe.package(actions[0].package).?.source.nevra.name,
+    );
+}
+
+test "live producer rejects inconsistent command-line paths" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var rpm_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    const rpm_path = try fixture.addCmdlineRpm(&rpm_buffer, "cmdline-pkg");
+
+    // A path handed to an ordinary repository job is a bridge bug.
+    const stray = [_]?[:0]const u8{rpm_path};
+    input.cmdline_rpm_paths = &stray;
+    try std.testing.expectError(
+        error.InvalidInput,
+        produce(std.testing.allocator, input),
+    );
+
+    // A command-line job with no backing file cannot be rebuilt.
+    jobs[0].selector.repository = cmdline_repository_id;
+    const missing = [_]?[:0]const u8{null};
+    input.cmdline_rpm_paths = &missing;
+    try std.testing.expectError(
+        error.UnsupportedInput,
+        produce(std.testing.allocator, input),
+    );
+
+    // The array must be parallel to the job list.
+    input.cmdline_rpm_paths = &.{};
+    try std.testing.expectError(
+        error.PackageNotFound,
+        produce(std.testing.allocator, input),
     );
 }

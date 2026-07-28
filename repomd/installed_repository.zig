@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const model = @import("model.zig");
+const repository_builder = @import("repository_builder.zig");
 const rpmpkg = @import("rpmpkg.zig");
 const rpm_header = @import("rpm_header");
 const solver_model = @import("solver_model.zig");
@@ -82,7 +83,7 @@ pub fn loadModel(
     source: Source,
     options: LoadOptions,
 ) LoadError!Repository {
-    var builder = RepositoryBuilder.init(allocator);
+    var builder = repository_builder.RepositoryBuilder.init(allocator);
     defer builder.deinit();
     var installed_states = std.array_list.Managed(InstalledState).init(
         allocator,
@@ -142,65 +143,6 @@ pub fn loadModel(
         .installed_states = states,
     };
 }
-
-const RepositoryBuilder = struct {
-    allocator: std.mem.Allocator,
-    packages: std.array_list.Managed(model.Package),
-    relations: std.array_list.Managed(model.Relation),
-    files: std.array_list.Managed(model.FileEntry),
-    changelogs: std.array_list.Managed(model.ChangelogEntry),
-
-    fn init(allocator: std.mem.Allocator) RepositoryBuilder {
-        return .{
-            .allocator = allocator,
-            .packages = std.array_list.Managed(model.Package).init(allocator),
-            .relations = std.array_list.Managed(model.Relation).init(allocator),
-            .files = std.array_list.Managed(model.FileEntry).init(allocator),
-            .changelogs = std.array_list.Managed(model.ChangelogEntry).init(
-                allocator,
-            ),
-        };
-    }
-
-    fn deinit(self: *RepositoryBuilder) void {
-        self.packages.deinit();
-        self.relations.deinit();
-        self.files.deinit();
-        self.changelogs.deinit();
-    }
-
-    fn appendBuiltPackage(
-        self: *RepositoryBuilder,
-        built: rpmpkg.BuiltPackage,
-    ) std.mem.Allocator.Error!void {
-        var pkg = built.package;
-        const relation_base = self.relations.items.len;
-        const file_base = self.files.items.len;
-        const changelog_base = self.changelogs.items.len;
-
-        try self.relations.appendSlice(built.relations);
-        try self.files.appendSlice(built.files);
-        try self.changelogs.appendSlice(built.changelogs);
-
-        inline for (std.enums.values(model.DependencyKind)) |kind| {
-            pkg.rangePtr(kind).start += relation_base;
-        }
-        pkg.files.start += file_base;
-        pkg.changelogs.start += changelog_base;
-        try self.packages.append(pkg);
-    }
-
-    fn finish(
-        self: *RepositoryBuilder,
-    ) std.mem.Allocator.Error!model.RepositoryModel {
-        return .{
-            .packages = try self.packages.toOwnedSlice(),
-            .relations = try self.relations.toOwnedSlice(),
-            .files = try self.files.toOwnedSlice(),
-            .changelogs = try self.changelogs.toOwnedSlice(),
-        };
-    }
-};
 
 const FixtureRow = struct {
     hnum: u32,

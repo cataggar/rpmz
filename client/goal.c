@@ -40,7 +40,7 @@ TDNFGoalBuildNativeSolverJobs(
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppJobs, uint32_t *pdwJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppEraseJobs, uint32_t *pdwEraseJobCount,
     char ***pppszInstallOnlyPkgs, char ***pppszUserInstalledPkgs,
-    char ***pppszLockedPkgs,
+    char ***pppszLockedPkgs, char ***pppszCmdLinePaths,
     int *pnUpdateAll, int *pnDistSyncAll
 );
 static
@@ -723,6 +723,7 @@ TDNFGoalObserveNativeSolver(
     char **ppszInstallOnlyPkgs = NULL;
     char **ppszUserInstalledPkgs = NULL;
     char **ppszLockedPkgs = NULL;
+    char **ppszCmdLinePaths = NULL;
     const char *pszNativeArch = NULL;
     char *pszNativeArchOwned = NULL;
     TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT comparison = {0};
@@ -761,6 +762,7 @@ TDNFGoalObserveNativeSolver(
                   &ppszInstallOnlyPkgs,
                   &ppszUserInstalledPkgs,
                   &ppszLockedPkgs,
+                  &ppszCmdLinePaths,
                   &nUpdateAll,
                   &nDistSyncAll);
     BAIL_ON_TDNF_ERROR(dwError);
@@ -773,7 +775,7 @@ TDNFGoalObserveNativeSolver(
     dwError = TDNFGoalBuildNativeSolverHiddenAvailable(
                   pTdnf, &pHiddenAvailable, &dwHiddenAvailableCount);
     BAIL_ON_TDNF_ERROR(dwError);
-    dwError = TDNFRepoMdNativeSolverLiveCompareV14(
+    dwError = TDNFRepoMdNativeSolverLiveCompareV15(
                   pRepos, dwRepoCount, pJobs, dwJobCount,
                   pEraseJobs, dwEraseJobCount, pHiddenAvailable, dwHiddenAvailableCount,
                   pTdnf->pArgs->nAllDeps, pTdnf->pArgs->nBest, nAutoErase, pTdnf->pArgs->nSkipBroken, nAllowErasing,
@@ -782,6 +784,7 @@ TDNFGoalObserveNativeSolver(
                   (const char *const *)ppszInstallOnlyPkgs,
                   (const char *const *)pTdnf->pConf->ppszProtectedPkgs,
                   (const char *const *)ppszUserInstalledPkgs,
+                  (const char *const *)ppszCmdLinePaths,
                   pTdnf->pRpmConfig, pszNativeArch, pInfo, &comparison);
     if(dwError && !IsNullOrEmptyString(TDNFRepoMdLastError()))
     {
@@ -820,6 +823,7 @@ TDNFGoalObserveNativeSolver(
 cleanup:
     TDNF_SAFE_FREE_MEMORY(pszNativeArchOwned);
     TDNF_SAFE_FREE_MEMORY(ppszLockedPkgs);
+    TDNF_SAFE_FREE_MEMORY(ppszCmdLinePaths);
     TDNF_SAFE_FREE_MEMORY(ppszUserInstalledPkgs);
     TDNF_SAFE_FREE_MEMORY(ppszInstallOnlyPkgs);
     TDNFGoalFreeNativeSolverJobs(pHiddenAvailable, dwHiddenAvailableCount);
@@ -936,6 +940,7 @@ TDNFGoalBuildNativeSolverJobs(
     char ***pppszInstallOnlyPkgs,
     char ***pppszUserInstalledPkgs,
     char ***pppszLockedPkgs,
+    char ***pppszCmdLinePaths,
     int *pnUpdateAll,
     int *pnDistSyncAll
     )
@@ -950,16 +955,18 @@ TDNFGoalBuildNativeSolverJobs(
     uint32_t dwUserInstalledCount = 0;
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJobs = NULL;
     char **ppszLockedPkgs = NULL;
+    char **ppszCmdLinePaths = NULL;
     char **ppszInstallOnlyPkgs = NULL;
     char **ppszUserInstalledPkgs = NULL;
     Pool *pPool = NULL;
+    unsigned int nMediaNr = 0;
     int nUpdateAll = 0;
     int nDistSyncAll = 0;
 
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
        !pTdnf->pSack->pPool || !pQueueJobs || !ppJobs || !pdwJobCount ||
        !ppEraseJobs || !pdwEraseJobCount || !pppszInstallOnlyPkgs ||
-       !pppszUserInstalledPkgs || !pppszLockedPkgs ||
+       !pppszUserInstalledPkgs || !pppszLockedPkgs || !pppszCmdLinePaths ||
        !pnUpdateAll || !pnDistSyncAll || pQueueJobs->count <= 0 ||
        pQueueJobs->count % 2 != 0)
     {
@@ -979,6 +986,12 @@ TDNFGoalBuildNativeSolverJobs(
                   dwCount + 1,
                   sizeof(*ppszLockedPkgs),
                   (void **)&ppszLockedPkgs);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = TDNFAllocateMemory(
+                  dwCount,
+                  sizeof(*ppszCmdLinePaths),
+                  (void **)&ppszCmdLinePaths);
     BAIL_ON_TDNF_ERROR(dwError);
 
     dwError = TDNFAllocateMemory(
@@ -1049,9 +1062,7 @@ TDNFGoalBuildNativeSolverJobs(
         }
         pSolvable = pool_id2solvable(pPool, dwPkgId);
         if(!pSolvable || !pSolvable->repo ||
-           pSolvable->repo == pTdnf->pSolvCmdLineRepo ||
            IsNullOrEmptyString(pSolvable->repo->name) ||
-           !strcmp(pSolvable->repo->name, CMDLINE_REPO_NAME) ||
            (nInstall && pSolvable->repo == pPool->installed) ||
            (!nInstall && pSolvable->repo != pPool->installed))
         {
@@ -1073,6 +1084,14 @@ TDNFGoalBuildNativeSolverJobs(
             ? &pJobs[dwInstallCount++]
             : &pJobs[dwCount - ++dwEraseCount];
         pJob->pszRepository = pSolvable->repo->name;
+        /* A command-line solvable has no downloadable metadata, so the native
+           solver rebuilds it from the .rpm that libsolv itself read. */
+        if(pSolvable->repo == pTdnf->pSolvCmdLineRepo ||
+           !strcmp(pSolvable->repo->name, CMDLINE_REPO_NAME))
+        {
+            ppszCmdLinePaths[dwInstallCount - 1] =
+                (char *)solvable_get_location(pSolvable, &nMediaNr);
+        }
         dwError = SolvGetNevraFromId(
                       pTdnf->pSack,
                       dwPkgId,
@@ -1101,12 +1120,14 @@ TDNFGoalBuildNativeSolverJobs(
     *pppszInstallOnlyPkgs = ppszInstallOnlyPkgs;
     *pppszUserInstalledPkgs = ppszUserInstalledPkgs;
     *pppszLockedPkgs = ppszLockedPkgs;
+    *pppszCmdLinePaths = ppszCmdLinePaths;
     *pnUpdateAll = nUpdateAll;
     *pnDistSyncAll = nDistSyncAll;
 cleanup:
     return dwError;
 error:
     TDNF_SAFE_FREE_MEMORY(ppszLockedPkgs);
+    TDNF_SAFE_FREE_MEMORY(ppszCmdLinePaths);
     TDNF_SAFE_FREE_MEMORY(ppszUserInstalledPkgs);
     TDNF_SAFE_FREE_MEMORY(ppszInstallOnlyPkgs);
     TDNFGoalFreeNativeSolverJobs(pJobs, dwCount);
