@@ -5212,3 +5212,512 @@ test "clean deps keeps a locked automatic dependency" {
     defer native.deinit();
     try expectNativeMatchesOracle(&native, &observation);
 }
+
+/// A randomised, seed-driven dependency graph and the handles a request needs.
+///
+/// The fixture corpus above covers the shapes somebody thought to write down.
+/// These cover the combinations nobody wrote down: several providers for one
+/// capability, versioned requirements, weak dependencies and installed
+/// predecessors, mixed in proportions the seed picks. Every graph is a DAG
+/// rooted at `node-0` and every requirement has a provider, so the request
+/// always has a solution -- a failure is therefore attributable to a solver
+/// divergence and never to an unsatisfiable generated request.
+const GeneratedGraph = struct {
+    graph: OwnedGraph,
+    root_name: []const u8,
+    installed_names: []const []const u8,
+
+    fn deinit(self: *GeneratedGraph) void {
+        self.graph.deinit();
+    }
+};
+
+const GeneratedNode = struct {
+    name: []const u8,
+    provides: []const metadata.Relation,
+    requires: []const metadata.Relation,
+    recommends: []const metadata.Relation,
+    /// Index of the earlier node this one requires by name, if any.
+    dependency: ?usize,
+    /// True when this node requires the shared capability, which only the
+    /// every-third nodes answer.
+    needs_capability: bool,
+    upgradable: bool,
+};
+
+const GenerateOptions = struct {
+    /// Permutes the order the nodes are handed to the builder, leaving the
+    /// graph itself untouched. Package identifiers, and therefore every hash
+    /// map keyed on them, are assigned in insertion order, so a result that
+    /// survives permutation cannot have been read out of a map's iteration
+    /// order.
+    permutation_seed: ?u64 = null,
+};
+
+fn generateGraph(
+    arena_state: *std.heap.ArenaAllocator,
+    seed: u64,
+    options: GenerateOptions,
+) !GeneratedGraph {
+    const arena = arena_state.allocator();
+    var builder = GraphBuilder.init(arena);
+    const installed = try builder.addRepo("@System", .installed, 50);
+    const available = try builder.addRepo("generated", .available, 50);
+    var random = SplitMix64{ .state = seed };
+
+    const node_count: usize = 6 + @as(usize, @intCast(random.next() % 5));
+    const nodes = try arena.alloc(GeneratedNode, node_count);
+
+    for (nodes, 0..) |*node, index| {
+        var requires = std.array_list.Managed(metadata.Relation).init(arena);
+        var provides = std.array_list.Managed(metadata.Relation).init(arena);
+        var recommends = std.array_list.Managed(metadata.Relation).init(arena);
+        var dependency: ?usize = null;
+        var needs_capability = false;
+
+        // Every node but the first requires an earlier one, so the graph is a
+        // DAG and the last node reaches an arbitrary part of it.
+        if (index > 0) {
+            const target: usize = @intCast(random.next() % index);
+            dependency = target;
+            const dependency_name = try std.fmt.allocPrint(
+                arena,
+                "node-{d}",
+                .{target},
+            );
+            try requires.append(if (random.next() % 2 == 0)
+                relation(dependency_name)
+            else
+                versionedRelation(dependency_name, .ge, "1"));
+        }
+
+        // Every third node answers a shared capability, and later nodes may ask
+        // for it, so most graphs make the solver break a provider tie.
+        if (index % 3 == 0) {
+            try provides.append(relation("shared-capability"));
+        } else if (index > 3 and random.next() % 3 == 0) {
+            try requires.append(relation("shared-capability"));
+            needs_capability = true;
+        }
+
+        const name = try std.fmt.allocPrint(arena, "node-{d}", .{index});
+        if (random.next() % 4 == 0) {
+            const addon = try std.fmt.allocPrint(arena, "addon-{d}", .{index});
+            try builder.addPackage(available, .{ .name = addon });
+            try recommends.append(relation(addon));
+        }
+
+        node.* = .{
+            .name = name,
+            .provides = try provides.toOwnedSlice(),
+            .requires = try requires.toOwnedSlice(),
+            .recommends = try recommends.toOwnedSlice(),
+            .dependency = dependency,
+            .needs_capability = needs_capability,
+            // An upgradable node is published one version ahead of the copy
+            // that is already installed, which gives update and erase requests
+            // something to work with without making install trivial.
+            .upgradable = random.next() % 3 == 0,
+        };
+    }
+
+    // An rpmdb is dependency-closed: nothing is installed whose requirements
+    // are missing. Generating an installed set that violates that would test
+    // repair behaviour -- which the two solvers are entitled to differ on and
+    // which no `install`/`update`/`erase` request is responsible for -- rather
+    // than the resolution being crosschecked. `node-0` is always installed so
+    // the shared capability always has an installed provider.
+    const is_installed = try arena.alloc(bool, node_count);
+    for (nodes, 0..) |node, index| {
+        is_installed[index] = if (index == 0)
+            true
+        else if (node.dependency) |target|
+            node.upgradable and is_installed[target]
+        else
+            node.upgradable;
+    }
+
+    const order = try arena.alloc(usize, node_count);
+    for (order, 0..) |*slot, index| slot.* = index;
+    if (options.permutation_seed) |permutation_seed| {
+        var shuffle = SplitMix64{ .state = permutation_seed };
+        var index = node_count;
+        while (index > 1) {
+            index -= 1;
+            const target: usize = @intCast(shuffle.next() % (index + 1));
+            std.mem.swap(usize, &order[index], &order[target]);
+        }
+    }
+
+    var installed_names = std.array_list.Managed([]const u8).init(arena);
+    for (order) |index| {
+        const node = nodes[index];
+        try builder.addPackage(available, .{
+            .name = node.name,
+            .version = if (node.upgradable) "2" else "1",
+            .provides = node.provides,
+            .requires = node.requires,
+            .recommends = node.recommends,
+        });
+        if (!is_installed[index]) continue;
+        try builder.addPackage(installed, .{
+            .name = node.name,
+            .version = "1",
+            .provides = node.provides,
+            .requires = node.requires,
+            .recommends = node.recommends,
+        });
+        try installed_names.append(node.name);
+    }
+
+    return .{
+        .graph = try builder.finish(arena_state),
+        .root_name = try std.fmt.allocPrint(arena, "node-{d}", .{node_count - 1}),
+        .installed_names = try installed_names.toOwnedSlice(),
+    };
+}
+
+const generated_seeds = [_]u64{
+    0x13604001, 0x13604002, 0x13604003, 0x13604004,
+    0x13604005, 0x13604006, 0x13604007, 0x13604008,
+    0x13604009, 0x1360400a, 0x1360400b, 0x1360400c,
+    0x1360400d, 0x1360400e, 0x1360400f, 0x13604010,
+};
+
+fn expectGeneratedCrosscheck(
+    seed: u64,
+    goal: solver_model.Goal,
+    graph: *const OwnedGraph,
+    solve_policy: solver_model.SolvePolicy,
+) !void {
+    var observation = oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        solve_policy,
+    ) catch |err| {
+        std.debug.print("seed 0x{x} oracle failed: {t}\n", .{ seed, err });
+        return err;
+    };
+    defer observation.deinit();
+
+    var native = solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        solve_policy,
+    ) catch |err| {
+        std.debug.print("seed 0x{x} native failed: {t}\n", .{ seed, err });
+        return err;
+    };
+    defer native.deinit();
+
+    expectNativeMatchesOracle(&native, &observation) catch |err| {
+        std.debug.print("seed 0x{x} diverged\n", .{seed});
+        printSelection(graph, "oracle", observation.selected);
+        printSelection(graph, "native", native.selected);
+        printActions(graph, "oracle", observation.outcome.actions);
+        printActions(graph, "native", native.outcome.actions);
+        return err;
+    };
+}
+
+fn printSelection(
+    graph: *const OwnedGraph,
+    label: []const u8,
+    selected: []const solver_model.PackageId,
+) void {
+    for (selected) |package_id| {
+        const package = graph.universe.package(package_id).?;
+        std.debug.print("  {s} selected {s}-{s}\n", .{
+            label,
+            package.source.nevra.name,
+            package.source.nevra.version,
+        });
+    }
+}
+
+fn printActions(
+    graph: *const OwnedGraph,
+    label: []const u8,
+    actions: []const solver_model.Action,
+) void {
+    for (actions) |action| {
+        const package = graph.universe.package(action.package).?;
+        std.debug.print("  {s} action {t} {t} {s}-{s}\n", .{
+            label,
+            action.kind,
+            action.reason,
+            package.source.nevra.name,
+            package.source.nevra.version,
+        });
+    }
+}
+
+test "generated graphs install identically to the oracle" {
+    for (generated_seeds) |seed| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        var generated = try generateGraph(&arena_state, seed, .{});
+        defer generated.deinit();
+
+        try expectGeneratedCrosscheck(
+            seed,
+            .{ .jobs = &.{.{
+                .action = .install,
+                .selection = .{ .name = generated.root_name },
+            }} },
+            &generated.graph,
+            policy(),
+        );
+    }
+}
+
+test "generated graphs update all identically to the oracle" {
+    for (generated_seeds) |seed| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        var generated = try generateGraph(&arena_state, seed, .{});
+        defer generated.deinit();
+        if (generated.installed_names.len == 0) continue;
+
+        try expectGeneratedCrosscheck(
+            seed,
+            .{ .jobs = &.{.{
+                .action = .update,
+                .selection = .all,
+            }} },
+            &generated.graph,
+            policy(),
+        );
+    }
+}
+
+test "generated graphs erase identically to the oracle" {
+    for (generated_seeds) |seed| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        var generated = try generateGraph(&arena_state, seed, .{});
+        defer generated.deinit();
+        if (generated.installed_names.len == 0) continue;
+
+        var erase_policy = policy();
+        erase_policy.allow_erasing = true;
+        try expectGeneratedCrosscheck(
+            seed,
+            .{ .jobs = &.{.{
+                .action = .erase,
+                .selection = .{ .name = generated.installed_names[0] },
+            }} },
+            &generated.graph,
+            erase_policy,
+        );
+    }
+}
+
+test "an installed provider satisfies a new dependency without being upgraded" {
+    // libsolv keeps every installed package that no job marked for update, so
+    // it never even considers `dep-2` here. Ranking the newest candidate first
+    // made the native solver upgrade `dep` as a side effect of installing
+    // `app`, which the generated graphs caught and no fixture did.
+    for ([_]bool{ false, true }) |versioned| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        var builder = GraphBuilder.init(arena_state.allocator());
+        const installed = try builder.addRepo("@System", .installed, 50);
+        const available = try builder.addRepo("available", .available, 50);
+        try builder.addPackage(installed, .{ .name = "dep", .version = "1" });
+        try builder.addPackage(available, .{ .name = "dep", .version = "2" });
+        try builder.addPackage(available, .{
+            .name = "app",
+            .version = "1",
+            .requires = if (versioned)
+                &.{versionedRelation("dep", .ge, "1")}
+            else
+                &.{relation("dep")},
+        });
+        var graph = try builder.finish(&arena_state);
+        defer graph.deinit();
+
+        const goal = solver_model.Goal{ .jobs = &.{.{
+            .action = .install,
+            .selection = .{ .name = "app" },
+        }} };
+        var observation = try oracle.solve(
+            testing.allocator,
+            &graph.universe,
+            goal,
+            policy(),
+        );
+        defer observation.deinit();
+        var native = try solveNative(
+            testing.allocator,
+            &graph.universe,
+            goal,
+            policy(),
+        );
+        defer native.deinit();
+
+        try expectNativeMatchesOracle(&native, &observation);
+        const dep = selectedPackageByName(&graph, &observation, "dep").?;
+        try testing.expectEqualStrings("1", dep.source.nevra.version);
+    }
+}
+
+fn appendNativeCanonicalText(
+    out: *std.array_list.Managed(u8),
+    allocator: std.mem.Allocator,
+    graph: *const OwnedGraph,
+    native: *const solver_result.OwnedResult,
+) !void {
+    for (native.selected) |package_id| {
+        const package = graph.universe.package(package_id).?;
+        try appendFmt(out, allocator, "selected {s}-{s}-{s}.{s}\n", .{
+            package.source.nevra.name,
+            package.source.nevra.version,
+            package.source.nevra.release,
+            package.source.nevra.arch,
+        });
+    }
+    for (native.outcome.actions) |action| {
+        const package = graph.universe.package(action.package).?;
+        try appendFmt(out, allocator, "action {t} {t} {s}-{s}-{s}.{s}\n", .{
+            action.kind,
+            action.reason,
+            package.source.nevra.name,
+            package.source.nevra.version,
+            package.source.nevra.release,
+            package.source.nevra.arch,
+        });
+    }
+}
+
+fn nativeCanonicalText(
+    allocator: std.mem.Allocator,
+    graph: *const OwnedGraph,
+    native: *const solver_result.OwnedResult,
+) ![]const u8 {
+    var out = std.array_list.Managed(u8).init(allocator);
+    try appendNativeCanonicalText(&out, allocator, graph, native);
+    return out.toOwnedSlice();
+}
+
+test "generated graphs resolve identically under input permutation" {
+    // Package identifiers are handed out in insertion order, so permuting the
+    // input permutes every hash map keyed on them. The answer is still allowed
+    // to change -- libsolv breaks an exact tie by solvid, which is insertion
+    // order -- but it has to change the same way the oracle's does. Anything
+    // read out of a map's iteration order would drift away from the oracle
+    // instead.
+    const permutation_seeds = [_]u64{
+        0x13605001, 0x13605002, 0x13605003, 0x13605004,
+    };
+    for (generated_seeds) |seed| {
+        for (permutation_seeds) |permutation_seed| {
+            var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+            var generated = try generateGraph(
+                &arena_state,
+                seed,
+                .{ .permutation_seed = permutation_seed },
+            );
+            defer generated.deinit();
+
+            try expectGeneratedCrosscheck(
+                seed ^ permutation_seed,
+                .{ .jobs = &.{.{
+                    .action = .install,
+                    .selection = .{ .name = generated.root_name },
+                }} },
+                &generated.graph,
+                policy(),
+            );
+        }
+    }
+}
+
+test "generated graphs resolve identically on every repeated solve" {
+    for (generated_seeds) |seed| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        var generated = try generateGraph(&arena_state, seed, .{});
+        defer generated.deinit();
+
+        const goal = solver_model.Goal{ .jobs = &.{.{
+            .action = .install,
+            .selection = .{ .name = generated.root_name },
+        }} };
+
+        var first = try solveNative(
+            testing.allocator,
+            &generated.graph.universe,
+            goal,
+            policy(),
+        );
+        defer first.deinit();
+        const first_text = try nativeCanonicalText(
+            testing.allocator,
+            &generated.graph,
+            &first,
+        );
+        defer testing.allocator.free(first_text);
+
+        for (0..3) |_| {
+            var repeat = try solveNative(
+                testing.allocator,
+                &generated.graph.universe,
+                goal,
+                policy(),
+            );
+            defer repeat.deinit();
+            const repeat_text = try nativeCanonicalText(
+                testing.allocator,
+                &generated.graph,
+                &repeat,
+            );
+            defer testing.allocator.free(repeat_text);
+            try testing.expectEqualStrings(first_text, repeat_text);
+        }
+    }
+}
+
+test "an installed provider satisfies a new capability without a second provider" {
+    // Same rule as the version case, across names: `prov-a` sorts first and is
+    // no older, but `prov-b` is already installed and already answers `cap`,
+    // so libsolv never puts a provider choice to the solver at all.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(installed, .{
+        .name = "prov-b",
+        .provides = &.{relation("cap")},
+    });
+    try builder.addPackage(available, .{
+        .name = "prov-a",
+        .provides = &.{relation("cap")},
+    });
+    try builder.addPackage(available, .{
+        .name = "app",
+        .requires = &.{relation("cap")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .install,
+        .selection = .{ .name = "app" },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try solveNative(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectNativeMatchesOracle(&native, &observation);
+    try testing.expect(containsSelectedName(&graph, &observation, "prov-b"));
+    try testing.expect(!containsSelectedName(&graph, &observation, "prov-a"));
+}
