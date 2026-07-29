@@ -134,10 +134,39 @@ pub const OwnedSolve = struct {
     }
 };
 
-pub fn produce(
+/// Move-only owner for a native live universe that has not been solved yet.
+/// The capture layer needs one of these to describe a request that failed
+/// before, or instead of, a solve.
+pub const Prepared = struct {
+    arena_state: std.heap.ArenaAllocator,
+    universe: *solver_model.Universe,
+    /// The jobs the request translated to, in the order they would be queued.
+    jobs: []const solver_model.Job,
+    /// Available packages an `--exclude`-style filter would keep out of the
+    /// solve. Empty when nothing was filtered.
+    hidden: []const solver_model.PackageId,
+    /// Parallel to `jobs`: the libsolv job-queue pair each job was built
+    /// from. Null marks a job the request layer never queued.
+    job_origins: []const ?u32,
+    /// What the filtered universe looks like to the solver.
+    visibility: solver_visibility.Projection,
+    /// Owned by the arena, so it outlives `input`.
+    native_arch: []const u8,
+
+    pub fn deinit(self: *Prepared) void {
+        self.visibility.deinit();
+        // Universe arrays share the enclosing arena and are released below.
+        self.arena_state.deinit();
+        self.* = undefined;
+    }
+};
+
+/// Builds the universe and translates the request into jobs, stopping short
+/// of the solve itself.
+pub fn prepare(
     parent_allocator: std.mem.Allocator,
     input: Input,
-) ProduceError!OwnedSolve {
+) ProduceError!Prepared {
     const global_job_count: usize =
         @as(usize, @intFromBool(input.update_all)) +
         @as(usize, @intFromBool(input.dist_sync_all));
@@ -394,15 +423,31 @@ pub fn produce(
         universe,
         .{},
     );
-    defer visibility.deinit();
-    const native_arch = try arena.dupe(u8, input.native_arch);
-    var solved = try solver_native.solveProjected(
+    errdefer visibility.deinit();
+
+    return .{
+        .arena_state = arena_state,
+        .universe = universe,
+        .jobs = jobs,
+        .job_origins = job_origins,
+        .hidden = hidden_packages,
+        .visibility = visibility,
+        .native_arch = try arena.dupe(u8, input.native_arch),
+    };
+}
+
+pub fn produce(
+    parent_allocator: std.mem.Allocator,
+    input: Input,
+) ProduceError!OwnedSolve {
+    var prepared = try prepare(parent_allocator, input);
+    var solved = solver_native.solveProjected(
         parent_allocator,
-        universe,
-        &visibility,
-        .{ .jobs = jobs },
+        prepared.universe,
+        &prepared.visibility,
+        .{ .jobs = prepared.jobs },
         .{
-            .architecture = .{ .native_arch = native_arch },
+            .architecture = .{ .native_arch = prepared.native_arch },
             .best = input.best,
             .allow_erasing = input.allow_erasing or input.erase_jobs.len != 0,
             .clean_deps = input.clean_deps,
@@ -411,16 +456,23 @@ pub fn produce(
             .installonly_limit = input.installonly_limit,
             .installonly_names = input.installonly_names,
         },
-    );
+    ) catch |err| {
+        prepared.deinit();
+        return err;
+    };
     errdefer solved.deinit();
 
+    // The projection is only an input to the solve, and a retained solve is
+    // held for as long as the caller reads the plan, so drop it here rather
+    // than carrying it.
+    prepared.visibility.deinit();
     return .{
-        .arena_state = arena_state,
-        .universe = universe,
+        .arena_state = prepared.arena_state,
+        .universe = prepared.universe,
         .solved = solved,
-        .jobs = jobs,
-        .job_origins = job_origins,
-        .hidden = hidden_packages,
+        .jobs = prepared.jobs,
+        .job_origins = prepared.job_origins,
+        .hidden = prepared.hidden,
     };
 }
 
@@ -1061,6 +1113,76 @@ test "live producer records the queue pair every job was built from" {
     );
 }
 
+test "preparing a request builds the universe and jobs without solving" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalled(51, "leaf");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    jobs[0].queue_pair = 4;
+    input.jobs = jobs[0..];
+
+    var prepared = try prepare(std.testing.allocator, input);
+    defer prepared.deinit();
+
+    // The installed row and the candidate are both reachable, which is what
+    // a capture of a request that never solved has to describe.
+    try std.testing.expect(prepared.universe.packages.len >= 2);
+    try std.testing.expectEqual(@as(usize, 1), prepared.jobs.len);
+    try std.testing.expectEqual(
+        solver_model.JobAction.install,
+        prepared.jobs[0].action,
+    );
+    try std.testing.expectEqual(prepared.jobs.len, prepared.job_origins.len);
+    try std.testing.expectEqual(@as(?u32, 4), prepared.job_origins[0]);
+    try std.testing.expectEqual(@as(usize, 0), prepared.hidden.len);
+    // The architecture is copied into the arena so it outlives the caller's
+    // input.
+    try std.testing.expectEqualStrings("x86_64", prepared.native_arch);
+    try std.testing.expect(prepared.native_arch.ptr != input.native_arch.ptr);
+}
+
+test "a prepared request matches what the producer would solve" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalled(51, "leaf");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    const input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+
+    var prepared = try prepare(std.testing.allocator, input);
+    defer prepared.deinit();
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    try std.testing.expectEqual(solved.jobs.len, prepared.jobs.len);
+    for (solved.jobs, prepared.jobs) |solved_job, prepared_job| {
+        try std.testing.expectEqual(solved_job.action, prepared_job.action);
+        try std.testing.expectEqual(solved_job.reason, prepared_job.reason);
+    }
+    try std.testing.expectEqual(
+        solved.universe.packages.len,
+        prepared.universe.packages.len,
+    );
+}
+
 test "live producer rejects lock origins that do not match the lock names" {
     var fixture = try Fixture.create();
     defer fixture.cleanup();
@@ -1514,6 +1636,15 @@ fn allocationFailureCase(
     );
 }
 
+fn prepareAllocationFailureCase(
+    allocator: std.mem.Allocator,
+    input: Input,
+) !void {
+    var prepared = try prepare(allocator, input);
+    defer prepared.deinit();
+    try std.testing.expectEqual(@as(usize, 1), prepared.jobs.len);
+}
+
 fn legacyResultAllocationFailureCase(
     allocator: std.mem.Allocator,
     input: Input,
@@ -1542,6 +1673,28 @@ test "live producer cleans every allocation failure" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         allocationFailureCase,
+        .{input},
+    );
+}
+
+test "preparing a request cleans every allocation failure" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    input.hidden_available = &.{};
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        prepareAllocationFailureCase,
         .{input},
     );
 }
