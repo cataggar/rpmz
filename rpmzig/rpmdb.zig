@@ -2738,7 +2738,9 @@ export fn tdnf_rpm_header_name_equals(
         setError("empty header blob", .{});
         return -1;
     }
-    const hdr = header.Header.parse(blob_ptr[0..header_len]) catch |err| {
+    // Only the name is read, so the framing checks are enough; see
+    // `Header.parseProbe`.
+    const hdr = header.Header.parseProbe(blob_ptr[0..header_len]) catch |err| {
         setError("header.parse: {t}", .{err});
         return -1;
     };
@@ -3977,7 +3979,9 @@ export fn tdnf_rpm_header_has_file_trigger_metadata(
             return -1;
         },
     };
-    const hdr = header.Header.parse(blob[0..header_len]) catch |err| {
+    // `hasFileTriggerMetadata` only asks which tags are present, which is an
+    // index walk; see `Header.parseProbe`.
+    const hdr = header.Header.parseProbe(blob[0..header_len]) catch |err| {
         setError("file trigger metadata header.parse: {t}", .{err});
         return -1;
     };

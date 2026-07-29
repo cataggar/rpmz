@@ -397,14 +397,14 @@ fn appendFiles(
     const dirindex_entry = hdr.find(.dirindexes) orelse return .{};
     if (dirindex_entry.count != basename_count) return .{};
 
-    const mode_count = if (hdr.find(.filemodes)) |entry|
-        if (@as(rpm_header.TypeId, @enumFromInt(entry.typ)) == .int16) entry.count else 0
+    const mode_entry = if (hdr.find(.filemodes)) |entry|
+        if (@as(rpm_header.TypeId, @enumFromInt(entry.typ)) == .int16) entry else null
     else
-        0;
-    const flag_count = if (hdr.find(.fileflags)) |entry|
-        if (@as(rpm_header.TypeId, @enumFromInt(entry.typ)) == .int32) entry.count else 0
+        null;
+    const flag_entry = if (hdr.find(.fileflags)) |entry|
+        if (@as(rpm_header.TypeId, @enumFromInt(entry.typ)) == .int32) entry else null
     else
-        0;
+        null;
 
     const dirnames = allocator.alloc([]const u8, dirname_count) catch
         return error.OutOfMemory;
@@ -422,7 +422,8 @@ fn appendFiles(
 
     const start = files.items.len;
     for (0..basename_count) |index| {
-        const dirname_index = hdr.u32ArrayItem(.dirindexes, index) orelse return error.InvalidRpmHeader;
+        const dirname_index = (hdr.entryU32Item(dirindex_entry, index) catch null) orelse
+            return error.InvalidRpmHeader;
         const basename_raw = (basename_iter.next() catch
             return error.InvalidRpmHeader) orelse return error.InvalidRpmHeader;
         if (dirname_index >= dirname_count) continue;
@@ -432,7 +433,7 @@ fn appendFiles(
 
         files.append(.{
             .path = try joinPath(allocator, dirname, basename),
-            .kind = fileKindForIndex(hdr, index, mode_count, flag_count),
+            .kind = fileKindForIndex(hdr, index, mode_entry, flag_entry),
         }) catch return error.OutOfMemory;
     }
 
@@ -561,17 +562,17 @@ fn parseEvr(allocator: std.mem.Allocator, evr: []const u8) Error!ParsedEvr {
 fn fileKindForIndex(
     hdr: rpm_header.Header,
     index: usize,
-    mode_count: u32,
-    flag_count: u32,
+    mode_entry: ?rpm_header.IndexEntry,
+    flag_entry: ?rpm_header.IndexEntry,
 ) model.FileKind {
-    if (index < flagCountToUsize(flag_count)) {
-        if (hdr.u32ArrayItem(.fileflags, index)) |flags| {
+    if (flag_entry) |entry| {
+        if ((hdr.entryU32Item(entry, index) catch null)) |flags| {
             if ((flags & fileflag_ghost) != 0) return .ghost;
         }
     }
 
-    if (index < flagCountToUsize(mode_count)) {
-        if (hdr.u16ArrayItem(.filemodes, index)) |mode| {
+    if (mode_entry) |entry| {
+        if ((hdr.entryU16Item(entry, index) catch null)) |mode| {
             if ((mode & mode_mask) == mode_dir) return .dir;
         }
     }
@@ -640,10 +641,6 @@ fn dupHexLower(allocator: std.mem.Allocator, bytes: []const u8) Error![]const u8
 
 fn hexDigit(value: u8) u8 {
     return if (value < 10) '0' + value else 'a' + (value - 10);
-}
-
-fn flagCountToUsize(count: u32) usize {
-    return @intCast(count);
 }
 
 const TestEntryType = enum(u32) {
