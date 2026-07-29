@@ -1178,7 +1178,7 @@ TDNFInitRepoWithResult(
     } while (0)
 
 #define TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(                  \
-    _tdnf, _jobs, _solver, _transaction, _problems, _unresolved,        \
+    _tdnf, _jobs, _solver, _transaction, _native, _problems, _unresolved, \
     _problem_kind, _excludes, _allow_erasing, _clean_deps, _error)      \
     do {                                                                 \
         uint32_t _terminal_error = (_error);                             \
@@ -1187,7 +1187,7 @@ TDNFInitRepoWithResult(
             (_jobs)->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);         \
         (_error) = 0;                                                    \
         TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(                            \
-            (_tdnf), (_jobs), (_solver), (_transaction), NULL,           \
+            (_tdnf), (_jobs), (_solver), (_transaction), (_native),       \
             (_problems), 0, (_unresolved), (_problem_kind), (_excludes), \
             (_allow_erasing), (_clean_deps), (_error));                 \
         if ((_error)) { TDNFTransactionPlanStateClear((_tdnf)->pTransactionPlanState); (_error) = _terminal_error; goto error; } \

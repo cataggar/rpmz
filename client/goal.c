@@ -16,6 +16,18 @@ TDNFGoalSolveNative(
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
     PTDNF_SOLVED_PKG_INFO *ppInfo,
+    int nPrepareOnly,
+    void **ppHandle
+);
+
+static
+void
+TDNFGoalCaptureNativeSolve(
+    PTDNF pTdnf,
+    const Queue *pQueueJobs,
+    int nAllowErasing,
+    int nAutoErase, int nStampFlags, int nStampedJobCount,
+    int nPrepareOnly,
     void **ppHandle
 );
 
@@ -217,8 +229,14 @@ TDNFSolv(
             dwError = TDNFSolvAddProtectPkgs(pTdnf, pQueueJobs, pTdnf->pSack->pPool);
             if (dwError == ERROR_TDNF_PROTECTED)
             {
+                /* Nothing has been solved yet, so the plan describes the
+                   request and the packages it names. */
+                TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
+                                           nAutoErase, nFlags,
+                                           nStampedJobCount, 1, &pNativeSolve);
                 TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
-                    pTdnf, pQueueJobs, pSolv, NULL, 0, nUnresolved,
+                    pTdnf, pQueueJobs, pSolv, NULL, pNativeSolve, 0,
+                    nUnresolved,
                     TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE,
                     ppszExcludes, nAllowErasing, nAutoErase, dwError);
             }
@@ -267,8 +285,14 @@ TDNFSolv(
             dwError = TDNFSolvCheckProtectPkgsInTrans(pTdnf, pTrans, pTdnf->pSack->pPool);
             if (dwError == ERROR_TDNF_PROTECTED)
             {
+                /* The offending package is only named by a transaction that
+                   resolves it away, which the native solver refuses to
+                   produce because protection is a solve policy for it. That
+                   plan stays libsolv's until native problem diagnostics can
+                   describe the refusal directly. */
                 TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
-                    pTdnf, pQueueJobs, pSolv, pTrans, nProblems, nUnresolved,
+                    pTdnf, pQueueJobs, pSolv, pTrans, NULL, nProblems,
+                    nUnresolved,
                     TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE,
                     ppszExcludes, nAllowErasing, nAutoErase, dwError);
             }
@@ -285,8 +309,12 @@ TDNFSolv(
     } while (dwError == ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED && retries < 2);
     if (dwError == ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED)
     {
+        TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
+                                   nAutoErase, nFlags, nStampedJobCount, 0,
+                                   &pNativeSolve);
         TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
-            pTdnf, pQueueJobs, pSolv, pTrans, nProblems, nUnresolved,
+            pTdnf, pQueueJobs, pSolv, pTrans, pNativeSolve, nProblems,
+            nUnresolved,
             TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_INSTALLONLY_LIMIT,
             ppszExcludes, nAllowErasing, nAutoErase, dwError);
     }
@@ -304,6 +332,7 @@ TDNFSolv(
        when something is going to read it. */
     dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
                                   nFlags, nStampedJobCount, nReInstall, &pInfo,
+                                  0,
                                   TDNFTransactionPlanStateIsEnabled(
                                       pTdnf->pTransactionPlanState)
                                       ? &pNativeSolve : NULL);
@@ -487,6 +516,42 @@ cleanup:
 error:
     goto cleanup;
 }
+
+/* Best-effort native snapshot for a request that is about to fail. The plan
+   is not worth the operation's error code, so a failure here just leaves the
+   capture to fall back to libsolv. */
+static
+void
+TDNFGoalCaptureNativeSolve(
+    PTDNF pTdnf,
+    const Queue *pQueueJobs,
+    int nAllowErasing,
+    int nAutoErase, int nStampFlags, int nStampedJobCount,
+    int nPrepareOnly,
+    void **ppHandle
+    )
+{
+    PTDNF_SOLVED_PKG_INFO pInfo = NULL;
+
+    if(!ppHandle || *ppHandle ||
+       !TDNFTransactionPlanStateIsEnabled(
+           pTdnf ? pTdnf->pTransactionPlanState : NULL))
+    {
+        return;
+    }
+    if(TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
+                           nStampFlags, nStampedJobCount, 0,
+                           nPrepareOnly ? NULL : &pInfo, nPrepareOnly,
+                           ppHandle))
+    {
+        *ppHandle = NULL;
+    }
+    if(pInfo)
+    {
+        TDNFFreeSolvedPackageInfo(pInfo);
+    }
+}
+
 static
 uint32_t
 TDNFGoalSolveNative(
@@ -495,6 +560,7 @@ TDNFGoalSolveNative(
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
     PTDNF_SOLVED_PKG_INFO *ppInfo,
+    int nPrepareOnly,
     void **ppHandle
     )
 {
@@ -515,7 +581,8 @@ TDNFGoalSolveNative(
     char *pszNativeArchOwned = NULL;
     PTDNF_SOLVED_PKG_INFO pInfo = NULL;
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
-       !pTdnf->pSack->pPool || !pTdnf->pRpmConfig || !pQueueJobs || !ppInfo)
+       !pTdnf->pSack->pPool || !pTdnf->pRpmConfig || !pQueueJobs ||
+       (!nPrepareOnly && !ppInfo) || (nPrepareOnly && !ppHandle))
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -578,14 +645,18 @@ TDNFGoalSolveNative(
                   (const char *const *)pTdnf->pConf->ppszProtectedPkgs,
                   (const char *const *)ppszUserInstalledPkgs,
                   (const char *const *)ppszCmdLinePaths, nReInstall,
-                  pTdnf->pRpmConfig, pszNativeArch, &pInfo, ppHandle);
+                  pTdnf->pRpmConfig, pszNativeArch, nPrepareOnly,
+                  nPrepareOnly ? NULL : &pInfo, ppHandle);
     if(dwError && !IsNullOrEmptyString(TDNFRepoMdLastError()))
     {
         pr_err("native-solver: %s\n", TDNFRepoMdLastError());
     }
     BAIL_ON_TDNF_ERROR(dwError);
-    *ppInfo = pInfo;
-    pInfo = NULL;
+    if(!nPrepareOnly)
+    {
+        *ppInfo = pInfo;
+        pInfo = NULL;
+    }
 cleanup:
     if(pInfo)
     {

@@ -113,7 +113,7 @@ pub const Input = struct {
     /// Present whenever the request resolved, which is the only case that
     /// records a transaction; a request that failed before the native solver
     /// ran records problems instead.
-    native_solve: ?*const solver_live.OwnedSolve = null,
+    native_solve: ?*const repository_metadata.RetainedSolve = null,
     trace: *const abi.RequestTraceView,
     solve_status: c_int,
     problem_count: u32,
@@ -2433,11 +2433,20 @@ fn captureSolverFacts(
     input: Input,
     installonly_names: []const []const u8,
 ) IntegrationError!SolverCapture {
-    if (input.native_solve) |solve| {
-        return .{ .native = try native_capture.create(
-            allocator,
-            .fromSolve(solve, solve.job_origins, input.trace),
-        ) };
+    if (input.native_solve) |retained| {
+        const native_input: native_capture.Input = switch (retained.*) {
+            .solved => |*solve| .fromSolve(
+                solve,
+                solve.job_origins,
+                input.trace,
+            ),
+            .prepared => |*prepared| .fromPrepared(
+                prepared,
+                prepared.job_origins,
+                input.trace,
+            ),
+        };
+        return .{ .native = try native_capture.create(allocator, native_input) };
     }
     return .{ .libsolv = try libsolv_capture.create(allocator, .{
         .pool = input.pool,
