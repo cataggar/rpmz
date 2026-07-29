@@ -2763,6 +2763,9 @@ test "native transaction detects conflicts across trusted root aliases" {
     const config = c.tdnf_rpm_config_create("/") orelse
         return error.TestUnexpectedResult;
     defer c.tdnf_rpm_config_destroy(config);
+    // Only hosts that merged /lib into /usr/lib, with both owned by the same
+    // uid as /, have the alias this covers. Everywhere else canonicalization
+    // refuses the path rather than resolving it somewhere else.
     var canonical_buf: [4096]u8 = undefined;
     if (c.tdnf_rpm_canonical_path_config(
         config,
@@ -2770,7 +2773,7 @@ test "native transaction detects conflicts across trusted root aliases" {
         &canonical_buf,
         canonical_buf.len,
     ) != 0) {
-        return error.TestUnexpectedResult;
+        return error.SkipZigTest;
     }
     if (!std.mem.eql(
         u8,
