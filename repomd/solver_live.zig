@@ -97,6 +97,12 @@ pub const OwnedSolve = struct {
     arena_state: std.heap.ArenaAllocator,
     universe: *solver_model.Universe,
     solved: solver_native.OwnedSolveResult,
+    /// The jobs the solve ran, in the order they were queued. Callers that
+    /// snapshot the solve need them; the solver itself reads them off `solved`.
+    jobs: []const solver_model.Job,
+    /// Available packages an `--exclude`-style filter kept out of the solve.
+    /// Empty when nothing was filtered.
+    hidden: []const solver_model.PackageId,
 
     pub fn deinit(self: *OwnedSolve) void {
         self.solved.deinit();
@@ -327,15 +333,19 @@ pub fn produce(
         };
     }
 
+    var hidden_packages: []const solver_model.PackageId = &.{};
     var visibility = if (input.hidden_available) |hidden| blk: {
         const considered = try arena.alloc(bool, universe.packages.len);
         @memset(considered, true);
-        for (hidden) |item| {
+        const hidden_ids = try arena.alloc(solver_model.PackageId, hidden.len);
+        for (hidden, hidden_ids) |item, *hidden_id| {
             const package = try identity.resolveAvailable(item.selector);
             const package_index: usize = @intFromEnum(package);
             if (!considered[package_index]) return error.InvalidInput;
             considered[package_index] = false;
+            hidden_id.* = package;
         }
+        hidden_packages = hidden_ids;
         break :blk try solver_visibility.Projection.initConsidered(
             parent_allocator,
             universe,
@@ -370,6 +380,8 @@ pub fn produce(
         .arena_state = arena_state,
         .universe = universe,
         .solved = solved,
+        .jobs = jobs,
+        .hidden = hidden_packages,
     };
 }
 

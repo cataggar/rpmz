@@ -1,0 +1,1751 @@
+//! Produces the transaction-plan capture from a native solver result.
+//!
+//! `transaction_plan_libsolv.zig` fills the same `abi.Capture` by walking a
+//! libsolv `Solver` and `Transaction`. Since the native solver became the
+//! authority for what tdnf actually installs, the plan has to describe *that*
+//! transaction, so this module reads the native result instead.
+//!
+//! Almost every field maps straight across, because the native model was
+//! shaped for it: `abi.job_action` matches `solver_model.JobAction` element
+//! for element, and `abi.request_reason` matches `RequestReason`. The
+//! alphabetised enums (`action_kind`, `action_reason`, `repository_kind`,
+//! `problem_kind`, `compare_op`) get explicit maps below.
+//!
+//! Ordering is reproduced from the libsolv producer exactly, because the plan
+//! digest is part of the published schema and must not move.
+
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+
+const abi = @import("transaction_plan_capture_abi");
+const error_codes = @import("tdnf_error");
+const repomd = @import("repomd");
+
+const metadata = repomd.metadata_model;
+const solver_live = repomd.solver_live;
+const solver_model = repomd.solver_model;
+
+pub const CaptureError = Allocator.Error || error{
+    AmbiguousPackageMapping,
+    InvalidInput,
+    InvalidTrace,
+    JobMismatch,
+    UnsupportedResult,
+};
+
+pub const Input = struct {
+    universe: *const solver_model.Universe,
+    jobs: []const solver_model.Job,
+    outcome: *const solver_model.Outcome,
+    selected: []const solver_model.PackageId,
+    /// Available packages an `--exclude`-style filter kept out of the solve.
+    hidden: []const solver_model.PackageId = &.{},
+    /// Parallel to `jobs`: the libsolv job-queue pair each native job came
+    /// from, which is how a job is tied back to the user request that produced
+    /// it. `null` marks a job the request layer never saw, such as the policy
+    /// jobs tdnf synthesises from `tdnf.conf`.
+    job_origins: []const ?u32,
+    trace: *const abi.RequestTraceView,
+    /// Problems were reported and the caller chose to continue anyway.
+    problems_accepted: bool = false,
+    /// The caller failed the request for a reason the solver itself did not
+    /// raise, so the plan records problems rather than a transaction.
+    synthetic_terminal: bool = false,
+
+    /// Projects a completed native live solve onto the capture inputs.
+    pub fn fromSolve(
+        solve: *const solver_live.OwnedSolve,
+        job_origins: []const ?u32,
+        trace: *const abi.RequestTraceView,
+    ) Input {
+        return .{
+            .universe = solve.universe,
+            .jobs = solve.jobs,
+            .outcome = &solve.solved.result.outcome,
+            .selected = solve.solved.result.selected,
+            .hidden = solve.hidden,
+            .job_origins = job_origins,
+            .trace = trace,
+        };
+    }
+};
+
+pub const Owner = struct {
+    backing_allocator: Allocator,
+    arena_state: std.heap.ArenaAllocator,
+    facts: abi.Capture,
+
+    pub fn destroy(self: *Owner) void {
+        const allocator = self.backing_allocator;
+        self.arena_state.deinit();
+        allocator.destroy(self);
+    }
+
+    pub fn view(self: *const Owner) *const abi.Capture {
+        return &self.facts;
+    }
+};
+
+pub fn create(
+    backing_allocator: Allocator,
+    input: Input,
+) CaptureError!*Owner {
+    const owner = try backing_allocator.create(Owner);
+    owner.* = .{
+        .backing_allocator = backing_allocator,
+        .arena_state = std.heap.ArenaAllocator.init(backing_allocator),
+        .facts = .{},
+    };
+    errdefer owner.destroy();
+
+    var state = try BuildState.init(owner.arena_state.allocator(), input);
+    owner.facts = try state.build();
+    return owner;
+}
+
+pub fn mapCaptureError(err: anyerror) u32 {
+    return switch (err) {
+        error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
+        error.UnsupportedResult => error_codes.ERROR_TDNF_CALL_NOT_SUPPORTED,
+        else => error_codes.ERROR_TDNF_INVALID_PARAMETER,
+    };
+}
+
+const RawRepository = struct {
+    id: solver_model.RepositoryId,
+    value: abi.Repository,
+};
+
+const RawPackage = struct {
+    id: solver_model.PackageId,
+    repository_name: []const u8,
+    value: abi.Package,
+};
+
+const BuildState = struct {
+    arena: Allocator,
+    input: Input,
+    universe: *const solver_model.Universe,
+    outcome: *const solver_model.Outcome,
+    trace_requests: []const abi.Request,
+    trace_jobs: []const abi.RequestTraceJob,
+    trace_satisfied_selections: []const abi.RequestTraceSatisfiedSelection,
+    resolution_status: u32,
+    /// One entry per universe package: whether the plan mentions it at all.
+    /// Only referenced packages are published, which keeps the plan
+    /// proportional to the transaction rather than to the repositories.
+    referenced: []bool,
+
+    fn init(arena: Allocator, input: Input) CaptureError!BuildState {
+        if (input.job_origins.len != input.jobs.len) {
+            return error.JobMismatch;
+        }
+        const trace = input.trace;
+        const requests = try borrowedArray(
+            abi.Request,
+            trace.requests,
+            trace.request_count,
+        );
+        const jobs = try borrowedArray(
+            abi.RequestTraceJob,
+            trace.jobs,
+            trace.job_count,
+        );
+        const satisfied = try borrowedArray(
+            abi.RequestTraceSatisfiedSelection,
+            trace.satisfied_selections,
+            trace.satisfied_selection_count,
+        );
+        const problem_count = input.outcome.problems.len;
+        return .{
+            .arena = arena,
+            .input = input,
+            .universe = input.universe,
+            .outcome = input.outcome,
+            .trace_requests = requests,
+            .trace_jobs = jobs,
+            .trace_satisfied_selections = satisfied,
+            .resolution_status = if (input.synthetic_terminal)
+                abi.resolution_status.problems
+            else if (problem_count == 0)
+                abi.resolution_status.resolved
+            else if (input.problems_accepted)
+                abi.resolution_status.resolved_with_skips
+            else
+                abi.resolution_status.problems,
+            .referenced = try arena.alloc(bool, input.universe.packages.len),
+        };
+    }
+
+    fn build(self: *BuildState) CaptureError!abi.Capture {
+        @memset(self.referenced, false);
+        try self.validateTrace();
+
+        const resolved = self.resolution_status !=
+            abi.resolution_status.problems;
+        // A plan that records problems records no transaction, so only the
+        // inputs and the problems themselves reference packages.
+        try self.markJobSelections();
+        try self.markProblems();
+        if (resolved) {
+            try self.markActions();
+            try self.markSelected();
+        }
+        try self.markHidden();
+
+        const repositories = try self.captureRepositories();
+        const raw_packages = try self.capturePackages(repositories);
+        const package_refs = try self.buildPackageRefMap(raw_packages);
+        const requests = try self.captureRequests();
+        const jobs = try self.captureJobs(package_refs);
+        const actions = if (resolved)
+            try self.captureActions(package_refs)
+        else
+            MaterializedActions{ .values = &.{}, .priors = &.{} };
+        const selected = if (resolved)
+            try self.captureSelected(package_refs)
+        else
+            &.{};
+        const hidden = try self.captureHidden(package_refs);
+        const skipped = try self.captureSkipped();
+        const problems = try self.captureProblems(package_refs);
+        const packages = try self.packageValues(raw_packages);
+        const repository_values = try self.repositoryValues(repositories);
+
+        return .{
+            .environment = .{
+                .resolution_status = self.resolution_status,
+            },
+            .repositories = optionalPointer(abi.Repository, repository_values),
+            .requests = optionalPointer(abi.Request, requests),
+            .jobs = optionalPointer(abi.Job, jobs),
+            .packages = optionalPointer(abi.Package, packages),
+            .actions = optionalPointer(abi.Action, actions.values),
+            .prior_package_refs = optionalPointer(u32, actions.priors),
+            .selected_package_refs = optionalPointer(u32, selected),
+            .skipped_job_refs = optionalPointer(u32, skipped),
+            .hidden_package_refs = optionalPointer(u32, hidden),
+            .problems = optionalPointer(abi.Problem, problems),
+            .repository_count = try countU32(repository_values.len),
+            .request_count = try countU32(requests.len),
+            .job_count = try countU32(jobs.len),
+            .package_count = try countU32(packages.len),
+            .action_count = try countU32(actions.values.len),
+            .prior_package_ref_count = try countU32(actions.priors.len),
+            .selected_package_ref_count = try countU32(selected.len),
+            .skipped_job_ref_count = try countU32(skipped.len),
+            .hidden_package_ref_count = try countU32(hidden.len),
+            .problem_count = try countU32(problems.len),
+        };
+    }
+
+    fn validateTrace(self: *BuildState) CaptureError!void {
+        _ = try flagValue(self.input.trace.allow_erasing);
+        for (self.trace_requests) |request| {
+            _ = try bytesSlice(request.id);
+            if (request.outcome == abi.request_outcome.pending or
+                request.outcome > abi.request_outcome.no_candidate)
+            {
+                return error.InvalidTrace;
+            }
+            if (try flagValue(request.has_subject)) {
+                _ = try bytesSlice(request.subject);
+            } else if (!bytesEmpty(request.subject)) {
+                return error.InvalidTrace;
+            }
+            if (request.kind > abi.request_kind.update_all) {
+                return error.InvalidTrace;
+            }
+        }
+        for (self.trace_jobs) |job| {
+            if (try flagValue(job.has_request_ref) and
+                job.request_ref >= self.trace_requests.len)
+            {
+                return error.InvalidTrace;
+            }
+        }
+        for (self.input.job_origins) |origin| {
+            if (origin) |value| {
+                if (value >= self.trace_jobs.len) return error.JobMismatch;
+            }
+        }
+    }
+
+    fn markPackage(
+        self: *BuildState,
+        id: solver_model.PackageId,
+    ) CaptureError!void {
+        const index: usize = @intFromEnum(id);
+        if (index >= self.referenced.len) return error.UnsupportedResult;
+        self.referenced[index] = true;
+    }
+
+    fn markJobSelections(self: *BuildState) CaptureError!void {
+        for (self.input.jobs) |job| {
+            switch (job.selection) {
+                .package => |id| try self.markPackage(id),
+                else => {},
+            }
+        }
+    }
+
+    fn markActions(self: *BuildState) CaptureError!void {
+        for (self.outcome.actions) |action| {
+            try self.markPackage(action.package);
+            for (action.priors) |prior| try self.markPackage(prior);
+        }
+    }
+
+    fn markSelected(self: *BuildState) CaptureError!void {
+        for (self.input.selected) |id| {
+            try self.markPackage(id);
+        }
+    }
+
+    fn markProblems(self: *BuildState) CaptureError!void {
+        for (self.outcome.problems) |problem| {
+            if (problem.package) |id| try self.markPackage(id);
+            if (problem.related_package) |id| try self.markPackage(id);
+        }
+    }
+
+    fn markHidden(self: *BuildState) CaptureError!void {
+        for (self.input.hidden) |id| try self.markPackage(id);
+    }
+
+    fn captureRepositories(
+        self: *BuildState,
+    ) CaptureError![]RawRepository {
+        var repositories = std.ArrayList(RawRepository).empty;
+        for (self.referenced, 0..) |referenced, index| {
+            if (!referenced) continue;
+            const package = self.universe.package(
+                @enumFromInt(index),
+            ) orelse return error.UnsupportedResult;
+            var found = false;
+            for (repositories.items) |existing| {
+                if (existing.id == package.repository) {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) continue;
+            const repository = self.universe.repository(
+                package.repository,
+            ) orelse return error.UnsupportedResult;
+            try repositories.append(self.arena, .{
+                .id = package.repository,
+                .value = .{
+                    .id = try ownBytes(self.arena, repository.name),
+                    .priority = repository.priority,
+                    .kind = repositoryKind(repository.kind),
+                },
+            });
+        }
+        std.sort.pdq(
+            RawRepository,
+            repositories.items,
+            {},
+            repositoryLessThan,
+        );
+        for (repositories.items, 0..) |repository, index| {
+            for (repositories.items[0..index]) |prior| {
+                if (abiBytesOrder(repository.value.id, prior.value.id) ==
+                    .eq)
+                {
+                    return error.AmbiguousPackageMapping;
+                }
+            }
+        }
+        return repositories.toOwnedSlice(self.arena);
+    }
+
+    fn capturePackages(
+        self: *BuildState,
+        repositories: []const RawRepository,
+    ) CaptureError![]RawPackage {
+        var packages = std.ArrayList(RawPackage).empty;
+        for (self.referenced, 0..) |referenced, index| {
+            if (!referenced) continue;
+            const id: solver_model.PackageId = @enumFromInt(index);
+            const package = self.universe.package(id) orelse
+                return error.UnsupportedResult;
+            const repository = self.universe.repository(
+                package.repository,
+            ) orelse return error.UnsupportedResult;
+            const repository_ref = findRepositoryRef(
+                repositories,
+                package.repository,
+            ) orelse return error.UnsupportedResult;
+            try packages.append(self.arena, .{
+                .id = id,
+                .repository_name = try self.arena.dupe(u8, repository.name),
+                .value = try self.capturePackage(
+                    package,
+                    repository.kind,
+                    repository_ref,
+                ),
+            });
+        }
+        std.sort.pdq(RawPackage, packages.items, {}, packageLessThan);
+        if (packages.items.len > 1) {
+            for (packages.items[1..], 1..) |package, index| {
+                if (packageMappingsEqual(packages.items[index - 1], package)) {
+                    return error.AmbiguousPackageMapping;
+                }
+            }
+        }
+        return packages.toOwnedSlice(self.arena);
+    }
+
+    fn capturePackage(
+        self: *BuildState,
+        package: *const solver_model.UniversePackage,
+        kind: solver_model.RepositoryKind,
+        repository_ref: u32,
+    ) CaptureError!abi.Package {
+        const source = package.source;
+        const nevra = source.nevra;
+        if (nevra.name.len == 0 or nevra.arch.len == 0 or
+            nevra.version.len == 0 or nevra.release.len == 0)
+        {
+            return error.UnsupportedResult;
+        }
+        var output = abi.Package{
+            .identity = .{
+                .name = try ownBytes(self.arena, nevra.name),
+                .arch = try ownBytes(self.arena, nevra.arch),
+                .version = try ownBytes(self.arena, nevra.version),
+                .release = try ownBytes(self.arena, nevra.release),
+            },
+            .repository_ref = repository_ref,
+            .state = if (kind == .installed)
+                abi.package_state.installed
+            else
+                abi.package_state.available,
+        };
+        if (nevra.epoch) |epoch| {
+            output.identity.epoch = epoch;
+            output.identity.has_epoch = 1;
+        }
+        if (kind == .installed) {
+            const installed = package.installed orelse
+                return error.UnsupportedResult;
+            if (installed.rpmdb_hnum == 0) return error.UnsupportedResult;
+            output.rpmdb_hnum = installed.rpmdb_hnum;
+            output.has_rpmdb_hnum = 1;
+            return output;
+        }
+
+        if (source.checksum.kind.len == 0 or
+            source.checksum.value.len == 0)
+        {
+            return error.UnsupportedResult;
+        }
+        output.source = .{
+            .checksum = .{
+                .kind = try ownBytes(self.arena, source.checksum.kind),
+                .value = try ownBytes(self.arena, source.checksum.value),
+                .is_pkgid = @intFromBool(source.checksum.is_pkgid),
+            },
+        };
+        // A command-line package is named by path, not by a location relative
+        // to a repository, so libsolv publishes no location for it either.
+        if (kind != .command_line) {
+            if (source.location.href.len == 0) {
+                return error.UnsupportedResult;
+            }
+            output.source.location.href = try ownBytes(
+                self.arena,
+                source.location.href,
+            );
+            if (source.location.xml_base) |xml_base| {
+                output.source.location.xml_base = try ownBytes(
+                    self.arena,
+                    xml_base,
+                );
+                output.source.location.has_xml_base = 1;
+            }
+            output.source.has_location = 1;
+        }
+        if (source.size.package) |size| {
+            output.source.size = size;
+            output.source.has_size = 1;
+        }
+        output.has_source = 1;
+        return output;
+    }
+
+    fn buildPackageRefMap(
+        self: *BuildState,
+        packages: []const RawPackage,
+    ) CaptureError![]u32 {
+        const refs = try self.arena.alloc(u32, self.referenced.len);
+        @memset(refs, std.math.maxInt(u32));
+        for (packages, 0..) |package, index| {
+            refs[@intFromEnum(package.id)] = try countU32(index);
+        }
+        return refs;
+    }
+
+    fn captureRequests(self: *BuildState) CaptureError![]abi.Request {
+        const output = try self.arena.alloc(
+            abi.Request,
+            self.trace_requests.len,
+        );
+        for (self.trace_requests, output) |request, *destination| {
+            destination.* = .{
+                .id = try ownBytes(self.arena, try bytesSlice(request.id)),
+                .kind = request.kind,
+            };
+            if (try flagValue(request.has_subject)) {
+                destination.subject = try ownBytes(
+                    self.arena,
+                    try bytesSlice(request.subject),
+                );
+                destination.has_subject = 1;
+            }
+        }
+        return output;
+    }
+
+    fn captureJobs(
+        self: *BuildState,
+        package_refs: []const u32,
+    ) CaptureError![]abi.Job {
+        const jobs = self.input.jobs;
+        const output = try self.arena.alloc(abi.Job, jobs.len);
+        for (jobs, self.input.job_origins, output) |job, origin, *destination| {
+            destination.* = .{
+                .action = jobAction(job.action),
+                .reason = requestReason(job.reason),
+                .clean_deps = @intFromBool(job.flags.clean_deps),
+                .force_best = @intFromBool(job.flags.force_best),
+                .targeted = @intFromBool(job.flags.targeted),
+                .not_by_user = @intFromBool(job.flags.not_by_user),
+                .weak = @intFromBool(job.flags.weak),
+            };
+            switch (job.selection) {
+                .all => destination.selection_kind = abi.selection_kind.all,
+                .package => |id| {
+                    destination.selection_kind = abi.selection_kind.package;
+                    destination.selection_package_ref = try packageRef(
+                        package_refs,
+                        id,
+                    );
+                },
+                .name => |name| {
+                    destination.selection_kind = abi.selection_kind.name;
+                    destination.selection_value = try ownBytes(
+                        self.arena,
+                        name,
+                    );
+                },
+                .capability => |relation| {
+                    destination.selection_kind =
+                        abi.selection_kind.capability;
+                    destination.capability = try self.captureCapability(
+                        relation,
+                    );
+                },
+            }
+            // The request layer only knows the jobs it queued itself. Policy
+            // jobs -- locks, install-only limits, user-installed marks -- come
+            // from configuration and belong to no request.
+            if (origin) |trace_job_ref| {
+                const trace_job = self.trace_jobs[trace_job_ref];
+                if (try flagValue(trace_job.has_request_ref)) {
+                    destination.request_ref = trace_job.request_ref;
+                    destination.has_request_ref = 1;
+                }
+            }
+        }
+        return output;
+    }
+
+    fn captureCapability(
+        self: *BuildState,
+        relation: metadata.Relation,
+    ) CaptureError!abi.Capability {
+        if (relation.name.len == 0) return error.UnsupportedResult;
+        var output = abi.Capability{
+            .name = try ownBytes(self.arena, relation.name),
+            .comparison = compareOp(relation.comparison),
+            .sense = relation.sense,
+            .pre = @intFromBool(relation.pre),
+        };
+        if (relation.flags) |flags| {
+            output.flags = try ownBytes(self.arena, flags);
+            output.has_flags = 1;
+        }
+        if (relation.epoch) |epoch| {
+            output.epoch = epoch;
+            output.has_epoch = 1;
+        }
+        if (relation.version) |version| {
+            output.version = try ownBytes(self.arena, version);
+            output.has_version = 1;
+        }
+        if (relation.release) |release| {
+            output.release = try ownBytes(self.arena, release);
+            output.has_release = 1;
+        }
+        return output;
+    }
+
+    const MaterializedActions = struct {
+        values: []abi.Action,
+        priors: []u32,
+    };
+
+    fn captureActions(
+        self: *BuildState,
+        package_refs: []const u32,
+    ) CaptureError!MaterializedActions {
+        const actions = self.outcome.actions;
+        const order = try self.arena.alloc(u32, actions.len);
+        for (order, 0..) |*slot, index| slot.* = try countU32(index);
+        std.sort.pdq(u32, order, ActionSort{
+            .actions = actions,
+            .package_refs = package_refs,
+        }, actionOrderLessThan);
+
+        var prior_count: usize = 0;
+        for (actions) |action| {
+            prior_count = std.math.add(
+                usize,
+                prior_count,
+                action.priors.len,
+            ) catch return error.UnsupportedResult;
+        }
+        const values = try self.arena.alloc(abi.Action, actions.len);
+        const priors = try self.arena.alloc(u32, prior_count);
+        var prior_offset: usize = 0;
+        for (order, values) |source_index, *destination| {
+            const action = actions[source_index];
+            destination.* = .{
+                .target_package_ref = try packageRef(
+                    package_refs,
+                    action.package,
+                ),
+                .kind = actionKind(action.kind),
+                .reason = actionReason(action.reason),
+                .prior_offset = try countU32(prior_offset),
+                .prior_count = try countU32(action.priors.len),
+            };
+            if (action.requested_by) |job_id| {
+                const job_ref: usize = @intFromEnum(job_id);
+                if (job_ref >= self.input.jobs.len) {
+                    return error.UnsupportedResult;
+                }
+                destination.requested_job_ref = try countU32(job_ref);
+                destination.has_requested_job_ref = 1;
+            }
+            const sorted_priors = try self.arena.dupe(
+                solver_model.PackageId,
+                action.priors,
+            );
+            std.sort.pdq(
+                solver_model.PackageId,
+                sorted_priors,
+                package_refs,
+                priorRefLessThan,
+            );
+            for (sorted_priors) |prior| {
+                priors[prior_offset] = try packageRef(package_refs, prior);
+                prior_offset += 1;
+            }
+        }
+        return .{ .values = values, .priors = priors };
+    }
+
+    fn capturePackageRefs(
+        self: *BuildState,
+        raw: []const solver_model.PackageId,
+        package_refs: []const u32,
+    ) CaptureError![]u32 {
+        const output = try self.arena.alloc(u32, raw.len);
+        for (raw, output) |id, *destination| {
+            destination.* = try packageRef(package_refs, id);
+        }
+        std.mem.sort(u32, output, {}, std.sort.asc(u32));
+        if (output.len > 1) {
+            for (output[1..], 1..) |value, index| {
+                if (output[index - 1] == value) {
+                    return error.AmbiguousPackageMapping;
+                }
+            }
+        }
+        return output;
+    }
+
+    fn captureSelected(
+        self: *BuildState,
+        package_refs: []const u32,
+    ) CaptureError![]u32 {
+        return self.capturePackageRefs(
+            self.input.selected,
+            package_refs,
+        );
+    }
+
+    fn captureHidden(
+        self: *BuildState,
+        package_refs: []const u32,
+    ) CaptureError![]u32 {
+        return self.capturePackageRefs(self.input.hidden, package_refs);
+    }
+
+    fn captureSkipped(self: *BuildState) CaptureError![]u32 {
+        const skipped = self.outcome.skipped_jobs;
+        const output = try self.arena.alloc(u32, skipped.len);
+        for (skipped, output) |job_id, *destination| {
+            const job_ref: usize = @intFromEnum(job_id);
+            if (job_ref >= self.input.jobs.len) {
+                return error.UnsupportedResult;
+            }
+            destination.* = try countU32(job_ref);
+        }
+        std.mem.sort(u32, output, {}, std.sort.asc(u32));
+        if (output.len > 1) {
+            for (output[1..], 1..) |value, index| {
+                if (output[index - 1] == value) return error.JobMismatch;
+            }
+        }
+        return output;
+    }
+
+    fn captureProblems(
+        self: *BuildState,
+        package_refs: []const u32,
+    ) CaptureError![]abi.Problem {
+        var output = std.ArrayList(abi.Problem).empty;
+        for (self.outcome.problems) |problem| {
+            var value = abi.Problem{
+                .kind = problemKind(problem.kind),
+                .count = problem.count,
+            };
+            if (problem.capability) |capability| {
+                value.capability = try self.captureCapability(capability);
+                value.has_capability = 1;
+            }
+            if (problem.job) |job_id| {
+                const job_ref: usize = @intFromEnum(job_id);
+                if (job_ref >= self.input.jobs.len) {
+                    return error.UnsupportedResult;
+                }
+                value.job_ref = try countU32(job_ref);
+                value.has_job_ref = 1;
+            }
+            if (problem.package) |id| {
+                value.package_ref = try packageRef(package_refs, id);
+                value.has_package_ref = 1;
+            }
+            if (problem.related_package) |id| {
+                value.related_package_ref = try packageRef(package_refs, id);
+                value.has_related_package_ref = 1;
+            }
+            try output.append(self.arena, value);
+        }
+        std.sort.pdq(abi.Problem, output.items, {}, problemLessThan);
+        var write_index: usize = 0;
+        for (output.items) |problem| {
+            if (write_index != 0 and
+                problemsEqual(output.items[write_index - 1], problem))
+            {
+                output.items[write_index - 1].count = std.math.add(
+                    u32,
+                    output.items[write_index - 1].count,
+                    problem.count,
+                ) catch return error.UnsupportedResult;
+                continue;
+            }
+            output.items[write_index] = problem;
+            write_index += 1;
+        }
+        output.items.len = write_index;
+        return output.toOwnedSlice(self.arena);
+    }
+
+    fn packageValues(
+        self: *BuildState,
+        raw: []const RawPackage,
+    ) CaptureError![]abi.Package {
+        const output = try self.arena.alloc(abi.Package, raw.len);
+        for (raw, output) |package, *destination| {
+            destination.* = package.value;
+        }
+        return output;
+    }
+
+    fn repositoryValues(
+        self: *BuildState,
+        raw: []const RawRepository,
+    ) CaptureError![]abi.Repository {
+        const output = try self.arena.alloc(abi.Repository, raw.len);
+        for (raw, output) |repository, *destination| {
+            destination.* = repository.value;
+        }
+        return output;
+    }
+};
+
+fn jobAction(action: solver_model.JobAction) u32 {
+    return switch (action) {
+        .install => abi.job_action.install,
+        .erase => abi.job_action.erase,
+        .update => abi.job_action.update,
+        .downgrade => abi.job_action.downgrade,
+        .dist_sync => abi.job_action.dist_sync,
+        .reinstall => abi.job_action.reinstall,
+        .lock => abi.job_action.lock,
+        .multiversion => abi.job_action.multiversion,
+        .user_installed => abi.job_action.user_installed,
+        .allow_uninstall => abi.job_action.allow_uninstall,
+    };
+}
+
+fn requestReason(reason: solver_model.RequestReason) u32 {
+    return switch (reason) {
+        .user => abi.request_reason.user,
+        .dependency => abi.request_reason.dependency,
+        .weak_dependency => abi.request_reason.weak_dependency,
+        .cleanup => abi.request_reason.cleanup,
+        .installonly_limit => abi.request_reason.installonly_limit,
+        .policy => abi.request_reason.policy,
+    };
+}
+
+fn actionKind(kind: solver_model.ActionKind) u32 {
+    return switch (kind) {
+        .install => abi.action_kind.install,
+        .upgrade => abi.action_kind.upgrade,
+        .downgrade => abi.action_kind.downgrade,
+        .erase => abi.action_kind.erase,
+        .reinstall => abi.action_kind.reinstall,
+        .obsolete => abi.action_kind.obsolete,
+    };
+}
+
+fn actionReason(reason: solver_model.TransactionReason) u32 {
+    return switch (reason) {
+        .user => abi.action_reason.user,
+        .dependency => abi.action_reason.dependency,
+        .weak_dependency => abi.action_reason.weak_dependency,
+        .cleanup => abi.action_reason.cleanup,
+        .obsoletes => abi.action_reason.obsoletes,
+        .installonly_limit => abi.action_reason.installonly_limit,
+        .policy => abi.action_reason.policy,
+    };
+}
+
+fn problemKind(kind: solver_model.ProblemKind) u32 {
+    return switch (kind) {
+        .unsatisfied_requirement => abi.problem_kind.unsatisfied_requirement,
+        .conflict => abi.problem_kind.conflict,
+        .obsoletes => abi.problem_kind.obsoletes,
+        .no_candidate => abi.problem_kind.no_candidate,
+        .not_installable => abi.problem_kind.not_installable,
+        .protected_package => abi.problem_kind.protected_package,
+        .installonly_limit => abi.problem_kind.installonly_limit,
+    };
+}
+
+fn repositoryKind(kind: solver_model.RepositoryKind) u32 {
+    return switch (kind) {
+        .available => abi.repository_kind.available,
+        .installed => abi.repository_kind.installed,
+        .command_line => abi.repository_kind.command_line,
+    };
+}
+
+fn compareOp(comparison: metadata.CompareOp) u32 {
+    return switch (comparison) {
+        .none => abi.compare_op.none,
+        .eq => abi.compare_op.eq,
+        .lt => abi.compare_op.lt,
+        .le => abi.compare_op.le,
+        .gt => abi.compare_op.gt,
+        .ge => abi.compare_op.ge,
+    };
+}
+
+fn findRepositoryRef(
+    repositories: []const RawRepository,
+    id: solver_model.RepositoryId,
+) ?u32 {
+    for (repositories, 0..) |repository, index| {
+        if (repository.id == id) return @intCast(index);
+    }
+    return null;
+}
+
+fn packageRef(
+    refs: []const u32,
+    id: solver_model.PackageId,
+) CaptureError!u32 {
+    const index: usize = @intFromEnum(id);
+    if (index >= refs.len) return error.UnsupportedResult;
+    const ref = refs[index];
+    if (ref == std.math.maxInt(u32)) return error.UnsupportedResult;
+    return ref;
+}
+
+fn priorRefLessThan(
+    refs: []const u32,
+    left: solver_model.PackageId,
+    right: solver_model.PackageId,
+) bool {
+    return refs[@intFromEnum(left)] < refs[@intFromEnum(right)];
+}
+
+const ActionSort = struct {
+    actions: []const solver_model.Action,
+    package_refs: []const u32,
+};
+
+fn actionOrderLessThan(context: ActionSort, left: u32, right: u32) bool {
+    const a = context.actions[left];
+    const b = context.actions[right];
+    const left_ref = context.package_refs[@intFromEnum(a.package)];
+    const right_ref = context.package_refs[@intFromEnum(b.package)];
+    if (left_ref != right_ref) return left_ref < right_ref;
+    const left_kind = actionKind(a.kind);
+    const right_kind = actionKind(b.kind);
+    if (left_kind != right_kind) return left_kind < right_kind;
+    return actionReason(a.reason) < actionReason(b.reason);
+}
+
+fn repositoryLessThan(
+    _: void,
+    left: RawRepository,
+    right: RawRepository,
+) bool {
+    if (left.value.kind != right.value.kind) {
+        return left.value.kind < right.value.kind;
+    }
+    return abiBytesOrder(left.value.id, right.value.id) == .lt;
+}
+
+fn packageLessThan(_: void, left: RawPackage, right: RawPackage) bool {
+    return packageOrder(left, right) == .lt;
+}
+
+fn packageOrder(left: RawPackage, right: RawPackage) std.math.Order {
+    var order: std.math.Order = .eq;
+    if (left.value.state != right.value.state) {
+        return if (left.value.state == abi.package_state.installed)
+            .lt
+        else
+            .gt;
+    }
+    order = std.mem.order(u8, left.repository_name, right.repository_name);
+    if (order != .eq) return order;
+    if (left.value.has_rpmdb_hnum != right.value.has_rpmdb_hnum) {
+        return std.math.order(
+            left.value.has_rpmdb_hnum,
+            right.value.has_rpmdb_hnum,
+        );
+    }
+    if (left.value.has_rpmdb_hnum != 0) {
+        order = std.math.order(
+            left.value.rpmdb_hnum,
+            right.value.rpmdb_hnum,
+        );
+        if (order != .eq) return order;
+    }
+    order = abiBytesOrder(
+        left.value.identity.name,
+        right.value.identity.name,
+    );
+    if (order != .eq) return order;
+    if (left.value.state == abi.package_state.available) {
+        order = std.math.order(
+            effectiveEpoch(left.value.identity),
+            effectiveEpoch(right.value.identity),
+        );
+        if (order != .eq) return order;
+        order = abiBytesOrder(
+            left.value.identity.version,
+            right.value.identity.version,
+        );
+        if (order != .eq) return order;
+        order = abiBytesOrder(
+            left.value.identity.release,
+            right.value.identity.release,
+        );
+        if (order != .eq) return order;
+        order = abiBytesOrder(
+            left.value.identity.arch,
+            right.value.identity.arch,
+        );
+        if (order != .eq) return order;
+        order = abiBytesOrder(
+            left.value.source.checksum.kind,
+            right.value.source.checksum.kind,
+        );
+        if (order != .eq) return order;
+        order = abiBytesOrder(
+            left.value.source.checksum.value,
+            right.value.source.checksum.value,
+        );
+        if (order != .eq) return order;
+    }
+    return order;
+}
+
+fn effectiveEpoch(identity: abi.PackageIdentity) u32 {
+    return if (identity.has_epoch != 0) identity.epoch else 0;
+}
+
+fn packageMappingsEqual(left: RawPackage, right: RawPackage) bool {
+    if (left.value.state != right.value.state or
+        !std.mem.eql(u8, left.repository_name, right.repository_name))
+    {
+        return false;
+    }
+    if (left.value.state == abi.package_state.installed) {
+        return left.value.has_rpmdb_hnum != 0 and
+            right.value.has_rpmdb_hnum != 0 and
+            left.value.rpmdb_hnum == right.value.rpmdb_hnum;
+    }
+    if (!abiBytesEqual(
+        left.value.identity.name,
+        right.value.identity.name,
+    ) or
+        effectiveEpoch(left.value.identity) !=
+            effectiveEpoch(right.value.identity) or
+        !abiBytesEqual(
+            left.value.identity.version,
+            right.value.identity.version,
+        ) or
+        !abiBytesEqual(
+            left.value.identity.release,
+            right.value.identity.release,
+        ) or
+        !abiBytesEqual(left.value.identity.arch, right.value.identity.arch) or
+        left.value.has_source == 0 or right.value.has_source == 0)
+    {
+        return false;
+    }
+    return abiBytesEqual(
+        left.value.source.checksum.kind,
+        right.value.source.checksum.kind,
+    ) and abiBytesEqual(
+        left.value.source.checksum.value,
+        right.value.source.checksum.value,
+    ) and left.value.source.checksum.is_pkgid ==
+        right.value.source.checksum.is_pkgid;
+}
+
+fn problemLessThan(_: void, left: abi.Problem, right: abi.Problem) bool {
+    return problemOrder(left, right) == .lt;
+}
+
+fn problemOrder(left: abi.Problem, right: abi.Problem) std.math.Order {
+    var order = std.math.order(left.kind, right.kind);
+    if (order != .eq) return order;
+    inline for (.{
+        .{ "has_package_ref", "package_ref" },
+        .{ "has_related_package_ref", "related_package_ref" },
+        .{ "has_job_ref", "job_ref" },
+    }) |fields| {
+        order = std.math.order(
+            @field(left, fields[0]),
+            @field(right, fields[0]),
+        );
+        if (order != .eq) return order;
+        order = std.math.order(
+            @field(left, fields[1]),
+            @field(right, fields[1]),
+        );
+        if (order != .eq) return order;
+    }
+    order = std.math.order(left.has_capability, right.has_capability);
+    if (order != .eq) return order;
+    if (left.has_capability != 0) {
+        order = capabilityOrder(left.capability, right.capability);
+    }
+    return order;
+}
+
+fn problemsEqual(left: abi.Problem, right: abi.Problem) bool {
+    return problemOrder(left, right) == .eq;
+}
+
+fn capabilityOrder(
+    left: abi.Capability,
+    right: abi.Capability,
+) std.math.Order {
+    var order = abiBytesOrder(left.name, right.name);
+    if (order != .eq) return order;
+    inline for (.{ "comparison", "has_epoch", "epoch", "has_flags" }) |field| {
+        order = std.math.order(@field(left, field), @field(right, field));
+        if (order != .eq) return order;
+    }
+    order = abiBytesOrder(left.flags, right.flags);
+    if (order != .eq) return order;
+    inline for (.{ "has_version", "has_release" }) |field| {
+        order = std.math.order(@field(left, field), @field(right, field));
+        if (order != .eq) return order;
+    }
+    order = abiBytesOrder(left.version, right.version);
+    if (order != .eq) return order;
+    order = abiBytesOrder(left.release, right.release);
+    if (order != .eq) return order;
+    order = std.math.order(left.sense, right.sense);
+    if (order != .eq) return order;
+    return std.math.order(left.pre, right.pre);
+}
+
+fn abiBytesOrder(left: abi.Bytes, right: abi.Bytes) std.math.Order {
+    return std.mem.order(u8, bytesOrEmpty(left), bytesOrEmpty(right));
+}
+
+fn abiBytesEqual(left: abi.Bytes, right: abi.Bytes) bool {
+    return abiBytesOrder(left, right) == .eq;
+}
+
+fn bytesOrEmpty(value: abi.Bytes) []const u8 {
+    return if (value.length == 0) "" else value.data.?[0..value.length];
+}
+
+fn bytesEmpty(value: abi.Bytes) bool {
+    return value.length == 0;
+}
+
+fn bytesSlice(value: abi.Bytes) CaptureError![]const u8 {
+    if (value.length == 0) return "";
+    const data = value.data orelse return error.InvalidTrace;
+    return data[0..value.length];
+}
+
+fn borrowedArray(
+    comptime T: type,
+    pointer: ?[*]const T,
+    count: u32,
+) CaptureError![]const T {
+    if (count == 0) return &.{};
+    const values = pointer orelse return error.InvalidTrace;
+    return values[0..count];
+}
+
+fn ownBytes(allocator: Allocator, value: []const u8) CaptureError!abi.Bytes {
+    if (value.len == 0) return .{};
+    const owned = try allocator.dupe(u8, value);
+    return .{ .data = owned.ptr, .length = owned.len };
+}
+
+fn optionalPointer(comptime T: type, values: []const T) ?[*]const T {
+    return if (values.len == 0) null else values.ptr;
+}
+
+fn countU32(value: usize) CaptureError!u32 {
+    return std.math.cast(u32, value) orelse error.UnsupportedResult;
+}
+
+fn flagValue(value: u32) CaptureError!bool {
+    return switch (value) {
+        0 => false,
+        1 => true,
+        else => error.InvalidTrace,
+    };
+}
+
+const testing = std.testing;
+
+fn testPackage(
+    name: []const u8,
+    version: []const u8,
+    arch: []const u8,
+) metadata.Package {
+    return .{
+        .pkg_id = name,
+        .nevra = .{
+            .name = name,
+            .version = version,
+            .release = "1",
+            .arch = arch,
+        },
+        .checksum = .{
+            .kind = "sha256",
+            .value = name,
+            .is_pkgid = true,
+        },
+        .location = .{ .href = name },
+        .size = .{ .package = 1024 },
+    };
+}
+
+const Harness = struct {
+    arena_state: std.heap.ArenaAllocator,
+    universe: solver_model.Universe,
+
+    fn deinit(self: *Harness) void {
+        self.universe.deinit();
+        self.arena_state.deinit();
+    }
+};
+
+fn buildUniverse(
+    inputs: []const solver_model.RepositoryInput,
+) !Harness {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    errdefer arena_state.deinit();
+    const universe = try solver_model.Universe.init(
+        arena_state.allocator(),
+        inputs,
+    );
+    return .{ .arena_state = arena_state, .universe = universe };
+}
+
+fn emptyTrace() abi.RequestTraceView {
+    return .{};
+}
+
+test "a capture publishes only the packages the transaction references" {
+    var installed = [_]metadata.Package{
+        testPackage("kept", "1", "x86_64"),
+    };
+    var available = [_]metadata.Package{
+        testPackage("wanted", "2", "x86_64"),
+        testPackage("untouched", "3", "x86_64"),
+    };
+    const installed_model = metadata.RepositoryModel{ .packages = &installed };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    const installed_states = [_]solver_model.InstalledState{
+        .{ .rpmdb_hnum = 7, .reason = .user },
+    };
+    var harness = try buildUniverse(&.{
+        .{
+            .id = "@System",
+            .model = &installed_model,
+            .kind = .installed,
+            .installed_states = &installed_states,
+        },
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const wanted: solver_model.PackageId = @enumFromInt(1);
+    const jobs = [_]solver_model.Job{
+        .{ .action = .install, .selection = .{ .package = wanted } },
+    };
+    const actions = [_]solver_model.Action{
+        .{
+            .package = wanted,
+            .kind = .install,
+            .reason = .user,
+            .requested_by = @enumFromInt(0),
+        },
+    };
+    const outcome = solver_model.Outcome{
+        .actions = &actions,
+        .problems = &.{},
+        .skipped_jobs = &.{},
+    };
+    const selected = [_]solver_model.PackageId{wanted};
+    const origins = [_]?u32{null};
+    const trace = emptyTrace();
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .outcome = &outcome,
+        .selected = &selected,
+        .job_origins = &origins,
+        .trace = &trace,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(
+        abi.resolution_status.resolved,
+        facts.environment.resolution_status,
+    );
+    // "untouched" is never named, so it stays out of the plan entirely.
+    try testing.expectEqual(@as(u32, 1), facts.package_count);
+    try testing.expectEqual(@as(u32, 1), facts.repository_count);
+    try testing.expectEqualStrings(
+        "base",
+        bytesOrEmpty(facts.repositories.?[0].id),
+    );
+    try testing.expectEqual(
+        abi.repository_kind.available,
+        facts.repositories.?[0].kind,
+    );
+    const package = facts.packages.?[0];
+    try testing.expectEqualStrings("wanted", bytesOrEmpty(package.identity.name));
+    try testing.expectEqual(abi.package_state.available, package.state);
+    try testing.expectEqual(@as(u32, 1), package.has_source);
+    try testing.expectEqualStrings(
+        "wanted",
+        bytesOrEmpty(package.source.location.href),
+    );
+    try testing.expectEqual(@as(u64, 1024), package.source.size);
+    try testing.expectEqual(@as(u32, 1), facts.action_count);
+    try testing.expectEqual(abi.action_kind.install, facts.actions.?[0].kind);
+    try testing.expectEqual(abi.action_reason.user, facts.actions.?[0].reason);
+    try testing.expectEqual(
+        @as(u32, 1),
+        facts.actions.?[0].has_requested_job_ref,
+    );
+    try testing.expectEqual(@as(u32, 1), facts.selected_package_ref_count);
+    try testing.expectEqual(@as(u32, 1), facts.job_count);
+    try testing.expectEqual(abi.job_action.install, facts.jobs.?[0].action);
+    try testing.expectEqual(
+        abi.selection_kind.package,
+        facts.jobs.?[0].selection_kind,
+    );
+}
+
+test "installed packages sort ahead of available ones and carry their rpmdb row" {
+    var installed = [_]metadata.Package{
+        testPackage("zzz-installed", "1", "x86_64"),
+    };
+    var available = [_]metadata.Package{
+        testPackage("aaa-available", "2", "x86_64"),
+    };
+    const installed_model = metadata.RepositoryModel{ .packages = &installed };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    const installed_states = [_]solver_model.InstalledState{
+        .{ .rpmdb_hnum = 42, .reason = .user },
+    };
+    var harness = try buildUniverse(&.{
+        .{
+            .id = "@System",
+            .model = &installed_model,
+            .kind = .installed,
+            .installed_states = &installed_states,
+        },
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const old: solver_model.PackageId = @enumFromInt(0);
+    const new: solver_model.PackageId = @enumFromInt(1);
+    const priors = [_]solver_model.PackageId{old};
+    const actions = [_]solver_model.Action{
+        .{
+            .package = new,
+            .priors = &priors,
+            .kind = .upgrade,
+            .reason = .user,
+        },
+    };
+    const outcome = solver_model.Outcome{
+        .actions = &actions,
+        .problems = &.{},
+        .skipped_jobs = &.{},
+    };
+    const selected = [_]solver_model.PackageId{new};
+    const trace = emptyTrace();
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &.{},
+        .outcome = &outcome,
+        .selected = &selected,
+        .job_origins = &.{},
+        .trace = &trace,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(@as(u32, 2), facts.package_count);
+    // Installed first regardless of name, matching the published ordering.
+    try testing.expectEqual(
+        abi.package_state.installed,
+        facts.packages.?[0].state,
+    );
+    try testing.expectEqual(@as(u32, 42), facts.packages.?[0].rpmdb_hnum);
+    try testing.expectEqual(@as(u32, 1), facts.packages.?[0].has_rpmdb_hnum);
+    try testing.expectEqual(@as(u32, 0), facts.packages.?[0].has_source);
+    try testing.expectEqual(
+        abi.package_state.available,
+        facts.packages.?[1].state,
+    );
+    // Repositories sort by kind, and `installed` sorts after `available`.
+    try testing.expectEqual(@as(u32, 2), facts.repository_count);
+    try testing.expectEqual(
+        abi.repository_kind.available,
+        facts.repositories.?[0].kind,
+    );
+    try testing.expectEqual(@as(u32, 1), facts.prior_package_ref_count);
+    try testing.expectEqual(@as(u32, 0), facts.prior_package_refs.?[0]);
+    try testing.expectEqual(abi.action_kind.upgrade, facts.actions.?[0].kind);
+}
+
+test "a problem transaction publishes problems and no actions" {
+    var available = [_]metadata.Package{
+        testPackage("broken", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const broken: solver_model.PackageId = @enumFromInt(0);
+    const jobs = [_]solver_model.Job{
+        .{ .action = .install, .selection = .{ .name = "broken" } },
+    };
+    const problems = [_]solver_model.Problem{
+        .{
+            .kind = .unsatisfied_requirement,
+            .package = broken,
+            .capability = .{ .name = "missing-capability" },
+            .job = @enumFromInt(0),
+            .count = 1,
+        },
+    };
+    const actions = [_]solver_model.Action{
+        .{ .package = broken, .kind = .install, .reason = .user },
+    };
+    const outcome = solver_model.Outcome{
+        .actions = &actions,
+        .problems = &problems,
+        .skipped_jobs = &.{},
+    };
+    const origins = [_]?u32{null};
+    const trace = emptyTrace();
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .outcome = &outcome,
+        .selected = &.{},
+        .job_origins = &origins,
+        .trace = &trace,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(
+        abi.resolution_status.problems,
+        facts.environment.resolution_status,
+    );
+    try testing.expectEqual(@as(u32, 0), facts.action_count);
+    try testing.expectEqual(@as(u32, 0), facts.selected_package_ref_count);
+    try testing.expectEqual(@as(u32, 1), facts.problem_count);
+    const problem = facts.problems.?[0];
+    try testing.expectEqual(
+        abi.problem_kind.unsatisfied_requirement,
+        problem.kind,
+    );
+    try testing.expectEqual(@as(u32, 1), problem.has_capability);
+    try testing.expectEqualStrings(
+        "missing-capability",
+        bytesOrEmpty(problem.capability.name),
+    );
+    try testing.expectEqual(@as(u32, 1), problem.has_job_ref);
+    try testing.expectEqual(
+        abi.selection_kind.name,
+        facts.jobs.?[0].selection_kind,
+    );
+    try testing.expectEqualStrings(
+        "broken",
+        bytesOrEmpty(facts.jobs.?[0].selection_value),
+    );
+}
+
+test "accepted problems resolve with skips and keep the transaction" {
+    var available = [_]metadata.Package{
+        testPackage("wanted", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const wanted: solver_model.PackageId = @enumFromInt(0);
+    const jobs = [_]solver_model.Job{
+        .{ .action = .install, .selection = .{ .package = wanted } },
+        .{ .action = .install, .selection = .{ .name = "absent" } },
+    };
+    const problems = [_]solver_model.Problem{
+        .{ .kind = .no_candidate, .job = @enumFromInt(1), .count = 1 },
+    };
+    const actions = [_]solver_model.Action{
+        .{ .package = wanted, .kind = .install, .reason = .user },
+    };
+    const skipped = [_]solver_model.JobId{@enumFromInt(1)};
+    const outcome = solver_model.Outcome{
+        .actions = &actions,
+        .problems = &problems,
+        .skipped_jobs = &skipped,
+    };
+    const selected = [_]solver_model.PackageId{wanted};
+    const origins = [_]?u32{ null, null };
+    const trace = emptyTrace();
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .outcome = &outcome,
+        .selected = &selected,
+        .job_origins = &origins,
+        .trace = &trace,
+        .problems_accepted = true,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(
+        abi.resolution_status.resolved_with_skips,
+        facts.environment.resolution_status,
+    );
+    try testing.expectEqual(@as(u32, 1), facts.action_count);
+    try testing.expectEqual(@as(u32, 1), facts.skipped_job_ref_count);
+    try testing.expectEqual(@as(u32, 1), facts.skipped_job_refs.?[0]);
+}
+
+test "hidden packages are published even though no action names them" {
+    var available = [_]metadata.Package{
+        testPackage("excluded", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const excluded: solver_model.PackageId = @enumFromInt(0);
+    const hidden = [_]solver_model.PackageId{excluded};
+    const outcome = solver_model.Outcome{
+        .actions = &.{},
+        .problems = &.{},
+        .skipped_jobs = &.{},
+    };
+    const trace = emptyTrace();
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &.{},
+        .outcome = &outcome,
+        .selected = &.{},
+        .hidden = &hidden,
+        .job_origins = &.{},
+        .trace = &trace,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(@as(u32, 1), facts.hidden_package_ref_count);
+    try testing.expectEqual(@as(u32, 0), facts.hidden_package_refs.?[0]);
+    try testing.expectEqual(@as(u32, 1), facts.package_count);
+}
+
+test "a job origin binds its request through the trace" {
+    var available = [_]metadata.Package{
+        testPackage("wanted", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const wanted: solver_model.PackageId = @enumFromInt(0);
+    const jobs = [_]solver_model.Job{
+        .{ .action = .install, .selection = .{ .package = wanted } },
+        .{ .action = .lock, .selection = .{ .name = "wanted" }, .reason = .policy },
+    };
+    const outcome = solver_model.Outcome{
+        .actions = &.{},
+        .problems = &.{},
+        .skipped_jobs = &.{},
+    };
+    const requests = [_]abi.Request{
+        .{
+            .id = .{ .data = "request-0".ptr, .length = "request-0".len },
+            .subject = .{ .data = "wanted".ptr, .length = "wanted".len },
+            .kind = abi.request_kind.install,
+            .has_subject = 1,
+            .outcome = abi.request_outcome.satisfied,
+        },
+    };
+    const trace_jobs = [_]abi.RequestTraceJob{
+        .{ .request_ref = 0, .has_request_ref = 1 },
+    };
+    const trace = abi.RequestTraceView{
+        .requests = &requests,
+        .jobs = &trace_jobs,
+        .request_count = requests.len,
+        .job_count = trace_jobs.len,
+    };
+    // The lock job comes from tdnf.conf, so it belongs to no request.
+    const origins = [_]?u32{ 0, null };
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .outcome = &outcome,
+        .selected = &.{},
+        .job_origins = &origins,
+        .trace = &trace,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(@as(u32, 1), facts.request_count);
+    try testing.expectEqualStrings(
+        "request-0",
+        bytesOrEmpty(facts.requests.?[0].id),
+    );
+    try testing.expectEqual(@as(u32, 1), facts.jobs.?[0].has_request_ref);
+    try testing.expectEqual(@as(u32, 0), facts.jobs.?[0].request_ref);
+    try testing.expectEqual(@as(u32, 0), facts.jobs.?[1].has_request_ref);
+    try testing.expectEqual(abi.job_action.lock, facts.jobs.?[1].action);
+    try testing.expectEqual(abi.request_reason.policy, facts.jobs.?[1].reason);
+}
+
+test "a job origin outside the trace is rejected" {
+    var available = [_]metadata.Package{
+        testPackage("wanted", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const jobs = [_]solver_model.Job{
+        .{ .action = .install, .selection = .all },
+    };
+    const outcome = solver_model.Outcome{
+        .actions = &.{},
+        .problems = &.{},
+        .skipped_jobs = &.{},
+    };
+    const origins = [_]?u32{3};
+    const trace = emptyTrace();
+
+    try testing.expectError(error.JobMismatch, create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .outcome = &outcome,
+        .selected = &.{},
+        .job_origins = &origins,
+        .trace = &trace,
+    }));
+}
+
+test "job origins must line up with the jobs the solve ran" {
+    var available = [_]metadata.Package{
+        testPackage("wanted", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const jobs = [_]solver_model.Job{
+        .{ .action = .install, .selection = .all },
+    };
+    const outcome = solver_model.Outcome{
+        .actions = &.{},
+        .problems = &.{},
+        .skipped_jobs = &.{},
+    };
+    const trace = emptyTrace();
+
+    try testing.expectError(error.JobMismatch, create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .outcome = &outcome,
+        .selected = &.{},
+        .job_origins = &.{},
+        .trace = &trace,
+    }));
+}
+
+test "duplicate problems fold into a single entry with a summed count" {
+    var available = [_]metadata.Package{
+        testPackage("wanted", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const problems = [_]solver_model.Problem{
+        .{ .kind = .no_candidate, .count = 2 },
+        .{ .kind = .no_candidate, .count = 3 },
+    };
+    const outcome = solver_model.Outcome{
+        .actions = &.{},
+        .problems = &problems,
+        .skipped_jobs = &.{},
+    };
+    const trace = emptyTrace();
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &.{},
+        .outcome = &outcome,
+        .selected = &.{},
+        .job_origins = &.{},
+        .trace = &trace,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(@as(u32, 1), facts.problem_count);
+    try testing.expectEqual(@as(u32, 5), facts.problems.?[0].count);
+}
+
+test "a command line package publishes a checksum but no location" {
+    var command_line = [_]metadata.Package{
+        testPackage("local", "1", "x86_64"),
+    };
+    const command_line_model = metadata.RepositoryModel{
+        .packages = &command_line,
+    };
+    var harness = try buildUniverse(&.{
+        .{
+            .id = "@commandline",
+            .model = &command_line_model,
+            .kind = .command_line,
+        },
+    });
+    defer harness.deinit();
+
+    const local: solver_model.PackageId = @enumFromInt(0);
+    const actions = [_]solver_model.Action{
+        .{ .package = local, .kind = .install, .reason = .user },
+    };
+    const outcome = solver_model.Outcome{
+        .actions = &actions,
+        .problems = &.{},
+        .skipped_jobs = &.{},
+    };
+    const selected = [_]solver_model.PackageId{local};
+    const trace = emptyTrace();
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &.{},
+        .outcome = &outcome,
+        .selected = &selected,
+        .job_origins = &.{},
+        .trace = &trace,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    const package = facts.packages.?[0];
+    try testing.expectEqual(@as(u32, 1), package.has_source);
+    try testing.expectEqual(@as(u32, 0), package.source.has_location);
+    try testing.expectEqualStrings(
+        "sha256",
+        bytesOrEmpty(package.source.checksum.kind),
+    );
+    try testing.expectEqual(
+        abi.repository_kind.command_line,
+        facts.repositories.?[0].kind,
+    );
+}
