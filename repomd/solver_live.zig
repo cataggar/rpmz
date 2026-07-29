@@ -138,9 +138,6 @@ pub fn produce(
     {
         return error.UnsupportedInput;
     }
-    if (input.erase_jobs.len != 0 and input.jobs.len != 0) {
-        return error.UnsupportedInput;
-    }
     if (input.locked_names.len != 0 and
         (!input.include_installed or
             (global_job_count != 0 and input.best)))
@@ -1005,13 +1002,24 @@ test "live producer translates erase jobs with clean deps" {
     try std.testing.expectEqual(solver_model.ActionKind.erase, actions[0].kind);
     try std.testing.expectEqual(@as(usize, 0), actions[0].priors.len);
 
-    // clean deps stays rejected where it is still combined with an unsupported
-    // shape, so lifting the erase restriction does not widen the others
+    // `history rollback` reaches its target by installing and erasing in one
+    // request, so an erase job alongside an install job is a real shape.
     input.jobs = jobs[0..];
-    try std.testing.expectError(
-        error.UnsupportedInput,
-        produce(std.testing.allocator, input),
-    );
+    var mixed = try produce(std.testing.allocator, input);
+    defer mixed.deinit();
+    const mixed_actions = mixed.solved.result.outcome.actions;
+    try std.testing.expectEqual(@as(usize, 2), mixed_actions.len);
+    var saw_install = false;
+    var saw_erase = false;
+    for (mixed_actions) |action| {
+        switch (action.kind) {
+            .install => saw_install = true,
+            .erase => saw_erase = true,
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    try std.testing.expect(saw_install and saw_erase);
+
     input.jobs = &.{};
     input.installonly_names = &.{"leaf"};
     input.skip_broken = true;

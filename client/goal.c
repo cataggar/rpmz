@@ -768,8 +768,7 @@ TDNFGoalObserveNativeSolver(
                   &nUpdateAll,
                   &nDistSyncAll);
     BAIL_ON_TDNF_ERROR(dwError);
-    if((dwEraseJobCount && dwJobCount) ||
-       (!nAllowErasing && dwEraseJobCount))
+    if(!nAllowErasing && dwEraseJobCount)
     {
         dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
         BAIL_ON_TDNF_ERROR(dwError);
