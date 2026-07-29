@@ -1829,7 +1829,11 @@ test "file trigger matching canonicalizes trusted root aliases" {
         null,
     );
     defer root.deinit();
-    const probe = try root.canonicalPathOwned("/lib/alias-trigger");
+    // Only hosts that merged /lib into /usr/lib, with both owned by the same
+    // uid as /, have the alias this covers. Everywhere else canonicalization
+    // refuses the path rather than resolving it somewhere else.
+    const probe = root.canonicalPathOwned("/lib/alias-trigger") catch
+        return error.SkipZigTest;
     if (!std.mem.eql(u8, probe, "/usr/lib/alias-trigger")) {
         return error.SkipZigTest;
     }
