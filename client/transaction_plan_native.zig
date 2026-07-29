@@ -173,11 +173,17 @@ const BuildState = struct {
             .trace_jobs = jobs,
             .queue_origins = queue_origins,
             .trace_satisfied_selections = satisfied,
+            // A native solve that returned at all had every problem it
+            // reports tolerated, because an intolerable one fails the solve
+            // outright. What it dropped instead shows up as skipped jobs, so
+            // those alone are enough to make the plan a partial one.
             .resolution_status = if (input.synthetic_terminal)
                 abi.resolution_status.problems
-            else if (problem_count == 0)
+            else if (problem_count == 0 and
+                input.outcome.skipped_jobs.len == 0)
                 abi.resolution_status.resolved
-            else if (input.problems_accepted)
+            else if (input.problems_accepted or
+                input.outcome.skipped_jobs.len != 0)
                 abi.resolution_status.resolved_with_skips
             else
                 abi.resolution_status.problems,
@@ -1736,6 +1742,55 @@ test "accepted problems resolve with skips and keep the transaction" {
     try testing.expectEqual(@as(u32, 1), facts.action_count);
     try testing.expectEqual(@as(u32, 1), facts.skipped_job_ref_count);
     try testing.expectEqual(@as(u32, 1), facts.skipped_job_refs.?[0]);
+}
+
+test "a solve that only skipped a job still records a partial plan" {
+    var available = [_]metadata.Package{
+        testPackage("wanted", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const wanted: solver_model.PackageId = @enumFromInt(0);
+    const jobs = [_]solver_model.Job{
+        .{ .action = .install, .selection = .{ .package = wanted } },
+        .{ .action = .install, .selection = .{ .name = "absent" } },
+    };
+    const actions = [_]solver_model.Action{
+        .{ .package = wanted, .kind = .install, .reason = .user },
+    };
+    const skipped = [_]solver_model.JobId{@enumFromInt(1)};
+    // `--skip-broken` drops the job without raising a problem for it.
+    const outcome = solver_model.Outcome{
+        .actions = &actions,
+        .problems = &.{},
+        .skipped_jobs = &skipped,
+    };
+    const selected = [_]solver_model.PackageId{wanted};
+    const origins = [_]?u32{ 0, 1 };
+    const trace = installPairTrace();
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .outcome = &outcome,
+        .selected = &selected,
+        .job_origins = &origins,
+        .trace = &trace,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(
+        abi.resolution_status.resolved_with_skips,
+        facts.environment.resolution_status,
+    );
+    // The transaction is still published: the plan is partial, not absent.
+    try testing.expectEqual(@as(u32, 1), facts.action_count);
+    try testing.expectEqual(@as(u32, 1), facts.skipped_job_ref_count);
 }
 
 test "hidden packages are published even though no action names them" {

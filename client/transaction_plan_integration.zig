@@ -6,14 +6,17 @@ const abi = @import("transaction_plan_capture_abi");
 const capture_adapter = @import("transaction_plan_capture");
 const error_codes = @import("tdnf_error");
 const libsolv_capture = @import("transaction_plan_libsolv");
+const native_capture = @import("transaction_plan_native");
 const repository_capture = @import("transaction_plan_repository");
 const repository_metadata = @import("repository_metadata");
 const rpm_header = @import("rpm_header");
 const transaction_plan = @import("transaction_plan");
 
 const c = libsolv_capture.libsolv;
+const solver_live = repository_metadata.solver_live;
 
 const IntegrationError = libsolv_capture.CaptureError ||
+    native_capture.CaptureError ||
     repository_capture.CaptureError ||
     transaction_plan.InitError ||
     Allocator.Error ||
@@ -106,6 +109,11 @@ pub const Input = struct {
     solver: *c.Solver,
     transaction: ?*c.Transaction,
     jobs: *const c.Queue,
+    /// The native solve that produced the transaction tdnf is about to run.
+    /// Present whenever the request resolved, which is the only case that
+    /// records a transaction; a request that failed before the native solver
+    /// ran records problems instead.
+    native_solve: ?*const solver_live.OwnedSolve = null,
     trace: *const abi.RequestTraceView,
     solve_status: c_int,
     problem_count: u32,
@@ -2396,16 +2404,42 @@ pub fn capturePending(state: *State, input: Input) IntegrationError!void {
     state.pending_plan = plan;
 }
 
-fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.Plan {
-    const allocator = state.allocator;
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const installonly_names = try cStringArray(
-        arena,
-        input.environment.installonly_names,
-    );
-    const solver_owner = try libsolv_capture.create(allocator, .{
+/// Owns whichever producer filled the solver half of the capture.
+///
+/// A resolved request is described by the native solve tdnf is about to run,
+/// because that is the transaction the plan is a plan of. A request that
+/// failed before the native solver ran has no such result, so its problems
+/// are still read off libsolv until native diagnostics replace
+/// `SolvReportProblems`.
+const SolverCapture = union(enum) {
+    libsolv: *libsolv_capture.Owner,
+    native: *native_capture.Owner,
+
+    fn destroy(self: SolverCapture) void {
+        switch (self) {
+            inline else => |owner| owner.destroy(),
+        }
+    }
+
+    fn view(self: SolverCapture) *const abi.Capture {
+        return switch (self) {
+            inline else => |owner| owner.view(),
+        };
+    }
+};
+
+fn captureSolverFacts(
+    allocator: Allocator,
+    input: Input,
+    installonly_names: []const []const u8,
+) IntegrationError!SolverCapture {
+    if (input.native_solve) |solve| {
+        return .{ .native = try native_capture.create(
+            allocator,
+            .fromSolve(solve, solve.job_origins, input.trace),
+        ) };
+    }
+    return .{ .libsolv = try libsolv_capture.create(allocator, .{
         .pool = input.pool,
         .solver = input.solver,
         .transaction = input.transaction,
@@ -2423,7 +2457,23 @@ fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.P
         else
             .none,
         .installonly_names = installonly_names,
-    });
+    }) };
+}
+
+fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.Plan {
+    const allocator = state.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const installonly_names = try cStringArray(
+        arena,
+        input.environment.installonly_names,
+    );
+    const solver_owner = try captureSolverFacts(
+        allocator,
+        input,
+        installonly_names,
+    );
     defer solver_owner.destroy();
 
     const solver_data = try capture_adapter.decodeData(
@@ -5036,6 +5086,7 @@ fn integrationCapturePending(
     raw_solver: ?*anyopaque,
     raw_transaction: ?*anyopaque,
     raw_jobs: ?*const anyopaque,
+    raw_native_solve: ?*const anyopaque,
     trace: ?*const abi.RequestTraceView,
     solve_status: c_int,
     problem_count: u32,
@@ -5066,6 +5117,10 @@ fn integrationCapturePending(
             null,
         .jobs = @ptrCast(@alignCast(raw_jobs orelse
             return error_codes.ERROR_TDNF_INVALID_PARAMETER)),
+        .native_solve = if (raw_native_solve) |solve|
+            @ptrCast(@alignCast(solve))
+        else
+            null,
         .trace = trace orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER,
         .solve_status = solve_status,
         .problem_count = problem_count,
