@@ -170,13 +170,55 @@ pub const Root = struct {
     tmp: std.testing.TmpDir,
     path: []const u8,
     conf: []const u8,
+    /// The `[main]` section, kept here so a test can change one option and have
+    /// the file re-rendered — the counterpart of pytest's `utils.edit_config`.
+    /// Because the root is private to the test, editing in place is safe.
+    main: std.StringArrayHashMapUnmanaged([]const u8),
 
     pub fn deinit(self: *Root) void {
+        var it = self.main.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.main.deinit(self.allocator);
         self.allocator.free(self.conf);
         self.allocator.free(self.path);
         self.environ.deinit();
         self.tmp.cleanup();
         self.* = undefined;
+    }
+
+    /// Sets a `[main]` option and rewrites `tdnf.conf`.
+    pub fn setMainOption(self: *Root, key: []const u8, value: []const u8) !void {
+        const owned_value = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(owned_value);
+
+        if (self.main.getEntry(key)) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+            entry.value_ptr.* = owned_value;
+        } else {
+            const owned_key = try self.allocator.dupe(u8, key);
+            errdefer self.allocator.free(owned_key);
+            try self.main.put(self.allocator, owned_key, owned_value);
+        }
+        try self.writeConf();
+    }
+
+    fn writeConf(self: *Root) !void {
+        var body: std.ArrayList(u8) = .empty;
+        defer body.deinit(self.allocator);
+
+        try body.appendSlice(self.allocator, "[main]\n");
+        var it = self.main.iterator();
+        while (it.next()) |entry| {
+            try body.print(
+                self.allocator,
+                "{s}={s}\n",
+                .{ entry.key_ptr.*, entry.value_ptr.* },
+            );
+        }
+        try self.tmp.dir.writeFile(io, .{ .sub_path = "tdnf.conf", .data = body.items });
     }
 
     /// Runs `tdnf` against this root. `-c <conf>`, `--installroot <root>` and
@@ -214,10 +256,35 @@ pub const Root = struct {
     /// True when `name` is installed in this root. It asks `tdnf`, so the
     /// assertion exercises the same code path the test is about.
     pub fn isInstalled(self: *Root, name: []const u8) !bool {
+        return self.isInstalledVersion(name, null);
+    }
+
+    /// True when `name` is installed, at `version` when one is given. Versions
+    /// are compared as whole whitespace-delimited columns so that `1.0.1-1`
+    /// does not match `1.0.1-10`.
+    pub fn isInstalledVersion(
+        self: *Root,
+        name: []const u8,
+        version: ?[]const u8,
+    ) !bool {
         var result = try self.run(&.{ "--disablerepo=*", "list", "--installed", name });
         defer result.deinit();
         if (result.code != 0) return false;
-        return result.stdoutContains(name);
+
+        var lines = std.mem.splitScalar(u8, result.stdout, '\n');
+        while (lines.next()) |line| {
+            var columns = std.mem.tokenizeAny(u8, line, " \t");
+            const first = columns.next() orelse continue;
+            // The name column is `<name>.<arch>`.
+            if (!std.mem.startsWith(u8, first, name)) continue;
+            if (first.len == name.len or first[name.len] != '.') continue;
+
+            const wanted = version orelse return true;
+            while (columns.next()) |column| {
+                if (std.mem.eql(u8, column, wanted)) return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -263,34 +330,37 @@ pub const Harness = struct {
             .data = repo_file,
         });
 
-        const conf_body = try std.fmt.allocPrint(self.allocator,
-            \\[main]
-            \\gpgcheck=0
-            \\installonly_limit=3
-            \\clean_requirements_on_remove=true
-            \\repodir={s}/etc/yum.repos.d
-            \\cachedir={s}/var/cache/tdnf
-            \\
-        , .{ path, path });
-        defer self.allocator.free(conf_body);
-        try tmp.dir.writeFile(io, .{ .sub_path = "tdnf.conf", .data = conf_body });
-
-        const conf = try std.fs.path.join(self.allocator, &.{ path, "tdnf.conf" });
-        errdefer self.allocator.free(conf);
+        const conf_file = try std.fs.path.join(self.allocator, &.{ path, "tdnf.conf" });
+        errdefer self.allocator.free(conf_file);
 
         var environ: std.process.Environ.Map = .init(self.allocator);
         errdefer environ.deinit();
         try environ.putPosixBlock(std.testing.environ.block.view());
         try environ.put("LD_LIBRARY_PATH", self.layout.lib_dir);
 
-        return .{
+        var created: Root = .{
             .allocator = self.allocator,
             .layout = &self.layout,
             .environ = environ,
             .tmp = tmp,
             .path = path,
-            .conf = conf,
+            .conf = conf_file,
+            .main = .empty,
         };
+        errdefer created.main.deinit(self.allocator);
+
+        const repodir = try std.fs.path.join(self.allocator, &.{ path, "etc/yum.repos.d" });
+        defer self.allocator.free(repodir);
+        const cachedir = try std.fs.path.join(self.allocator, &.{ path, "var/cache/tdnf" });
+        defer self.allocator.free(cachedir);
+
+        try created.setMainOption("gpgcheck", "0");
+        try created.setMainOption("installonly_limit", "3");
+        try created.setMainOption("clean_requirements_on_remove", "true");
+        try created.setMainOption("repodir", repodir);
+        try created.setMainOption("cachedir", cachedir);
+
+        return created;
     }
 };
 
