@@ -1,6 +1,6 @@
 const std = @import("std");
 const solver_result_abi = @import("solver_result_abi");
-const solver_shadow_abi = @import("solver_shadow_abi");
+const solver_legacy_abi = @import("solver_legacy_abi");
 const solver_live_abi = @import("solver_live_abi");
 const capture_abi = @import("transaction_plan_capture_abi");
 pub const c = @cImport({
@@ -238,7 +238,7 @@ test "legacy native transaction item layout remains stable" {
 test "native solver package layout remains stable" {
     const pointer_size = @sizeOf(*anyopaque);
     const scalar_offset = 10 * pointer_size;
-    const expected_size: usize = if (pointer_size == 8) 136 else 96;
+    const expected_size: usize = if (pointer_size == 8) 144 else 104;
 
     try std.testing.expect(pointer_size == 4 or pointer_size == 8);
     try std.testing.expectEqual(pointer_size, @alignOf(
@@ -329,9 +329,13 @@ test "native solver package layout remains stable" {
     ));
     try std.testing.expectEqual(scalar_offset + 48, @offsetOf(
         c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
-        "nHasPackageSize",
+        "nChecksumIsHeaderOnly",
     ));
     try std.testing.expectEqual(scalar_offset + 52, @offsetOf(
+        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        "nHasPackageSize",
+    ));
+    try std.testing.expectEqual(scalar_offset + 56, @offsetOf(
         c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nHasInstalledSize",
     ));
@@ -494,6 +498,7 @@ test "native solver Zig ABI mirror matches the public C layouts" {
             "nHasEpoch",
             "nHasRpmDbHnum",
             "nChecksumIsPkgId",
+            "nChecksumIsHeaderOnly",
             "nHasPackageSize",
             "nHasInstalledSize",
         },
@@ -565,7 +570,7 @@ test "native solver Zig ABI mirror matches the public C layouts" {
 
 test "native solver shadow ABI mirror matches the public C layouts" {
     try expectSameLayout(
-        solver_shadow_abi.LegacyPackage,
+        solver_legacy_abi.LegacyPackage,
         c.TDNF_PKG_INFO,
         .{
             "dwEpoch",
@@ -594,7 +599,7 @@ test "native solver shadow ABI mirror matches the public C layouts" {
         },
     );
     try expectSameLayout(
-        solver_shadow_abi.LegacyResult,
+        solver_legacy_abi.LegacyResult,
         c.TDNF_SOLVED_PKG_INFO,
         .{
             "nNeedAction",
@@ -614,32 +619,9 @@ test "native solver shadow ABI mirror matches the public C layouts" {
             "ppszPkgsUserInstall",
         },
     );
-    try expectSameLayout(
-        solver_shadow_abi.Comparison,
-        c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT,
-        .{
-            "dwStatus",
-            "dwReason",
-            "dwActionKind",
-            "dwDifferenceIndex",
-            "dwNativeCount",
-            "dwLegacyCount",
-        },
-    );
 }
 
 test "native solver live ABI mirrors match the public C layouts" {
-    try expectSameLayout(
-        solver_live_abi.Repository,
-        c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY,
-        .{
-            "pszId",
-            "pszCacheDir",
-            "pszSnapshotFile",
-            "nPriority",
-            "dwCost",
-        },
-    );
     try expectSameLayout(
         solver_live_abi.Job,
         c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
@@ -737,26 +719,6 @@ test "native solver shadow C layouts remain stable" {
         try std.testing.expectEqual(
             result_pointer_offset + field[1] * pointer_size,
             @offsetOf(c.TDNF_SOLVED_PKG_INFO, field[0]),
-        );
-    }
-
-    try std.testing.expectEqual(@as(usize, 24), @sizeOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT,
-    ));
-    try std.testing.expectEqual(@as(usize, 4), @alignOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT,
-    ));
-    inline for (.{
-        .{ "dwStatus", 0 },
-        .{ "dwReason", 4 },
-        .{ "dwActionKind", 8 },
-        .{ "dwDifferenceIndex", 12 },
-        .{ "dwNativeCount", 16 },
-        .{ "dwLegacyCount", 20 },
-    }) |field| {
-        try std.testing.expectEqual(
-            @as(usize, field[1]),
-            @offsetOf(c.TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT, field[0]),
         );
     }
 }

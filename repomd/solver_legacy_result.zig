@@ -1,9 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const result_abi = @import("solver_result_abi.zig");
-const shadow_abi = @import("solver_shadow_abi.zig");
+const legacy_abi = @import("solver_legacy_abi.zig");
 
-const RefList = std.array_list.Managed(u32);
+/// A bucket entry: the package the action names plus the job that asked for
+/// it, which is what orders the bucket.
+const BucketRef = struct {
+    ref: u32,
+    job: ?u32,
+};
+
+const RefList = std.array_list.Managed(BucketRef);
 
 /// `libcommon` owns the shipped size formatter, but the repomd unit-test
 /// binary does not link it. Only the rendering of a byte count is stubbed
@@ -55,11 +62,11 @@ const Bucket = struct {
 
 /// The legacy buckets, in the order `TDNF_SOLVED_PKG_INFO` declares them.
 ///
-/// These mirror `solver_shadow.zig`'s `projectsIntoBucket` exactly, which is
-/// what the corpus-wide crosscheck validated against libsolv. An obsoleting
-/// package therefore reaches `pPkgsToInstall` as a target, while the package
-/// it obsoletes reaches both `pPkgsToRemove` and `pPkgsObsoleted` as a prior,
-/// which is how libsolv's transaction reports it.
+/// The projection the corpus-wide crosscheck validated against libsolv before
+/// the native solver became authoritative. An obsoleting package reaches
+/// `pPkgsToInstall` as a target, while the package it obsoletes reaches both
+/// `pPkgsToRemove` and `pPkgsObsoleted` as a prior, which is how libsolv's
+/// transaction reported it.
 const buckets = [_]Bucket{
     .{ .kinds = &.{ action_install, action_obsolete }, .side = .target },
     .{ .kinds = &.{action_upgrade}, .side = .target },
@@ -70,19 +77,24 @@ const buckets = [_]Bucket{
     .{ .kinds = &.{action_downgrade}, .side = .prior },
 };
 
+/// `include_reinstall` mirrors tdnf's `nReInstall`: the legacy path only ever
+/// asked libsolv for `SOLVER_TRANSACTION_REINSTALL` when the caller had asked
+/// for a reinstall, so without it a reinstalled package is absent from the
+/// plan entirely rather than reported in some other bucket.
 pub fn build(
     allocator: std.mem.Allocator,
     result: *const result_abi.Result,
-    output: *[*c]shadow_abi.LegacyResult,
+    include_reinstall: bool,
+    output: *[*c]legacy_abi.LegacyResult,
 ) BuildError!void {
     output.* = null;
 
-    const raw = std.c.calloc(1, @sizeOf(shadow_abi.LegacyResult)) orelse
+    const raw = std.c.calloc(1, @sizeOf(legacy_abi.LegacyResult)) orelse
         return error.OutOfMemory;
-    const solved: *shadow_abi.LegacyResult = @ptrCast(@alignCast(raw));
+    const solved: *legacy_abi.LegacyResult = @ptrCast(@alignCast(raw));
     errdefer freeSolved(solved);
 
-    const targets = [_]*[*c]shadow_abi.LegacyPackage{
+    const targets = [_]*[*c]legacy_abi.LegacyPackage{
         &solved.pPkgsToInstall,
         &solved.pPkgsToUpgrade,
         &solved.pPkgsToDowngrade,
@@ -93,6 +105,11 @@ pub fn build(
     };
 
     for (buckets, targets) |bucket, slot| {
+        if (!include_reinstall and
+            bucket.kinds.len == 1 and bucket.kinds[0] == action_reinstall)
+        {
+            continue;
+        }
         slot.* = try buildBucket(allocator, result, bucket);
     }
 
@@ -103,7 +120,7 @@ fn buildBucket(
     allocator: std.mem.Allocator,
     result: *const result_abi.Result,
     bucket: Bucket,
-) BuildError![*c]shadow_abi.LegacyPackage {
+) BuildError![*c]legacy_abi.LegacyPackage {
     var refs = RefList.init(allocator);
     defer refs.deinit();
 
@@ -111,20 +128,36 @@ fn buildBucket(
         for (result.pActions[0..result.dwActionCount]) |action| {
             if (!containsKind(bucket.kinds, action.dwKind)) continue;
             const ref = try packageRef(result, action, bucket.side);
-            try refs.append(ref);
+            try refs.append(.{
+                .ref = ref,
+                .job = if (action.nHasRequestedJobId != 0)
+                    action.dwRequestedJobId
+                else
+                    null,
+            });
         }
     }
     if (refs.items.len == 0) return null;
 
-    std.mem.sort(u32, refs.items, result, packageRefLessThan);
+    std.mem.sort(BucketRef, refs.items, result, packageRefLessThan);
 
-    var head: [*c]shadow_abi.LegacyPackage = null;
-    var tail: [*c]shadow_abi.LegacyPackage = null;
+    var head: [*c]legacy_abi.LegacyPackage = null;
+    var tail: [*c]legacy_abi.LegacyPackage = null;
     errdefer freePackageList(head);
 
-    for (refs.items) |ref| {
+    // Emit the reverse of the canonical order. TDNFPopulatePkgInfos built
+    // every bucket by prepending, so the list handed to the transaction
+    // executor was the reverse of the order libsolv walked. That order is the
+    // executor's last tie-break between packages with no dependency edge
+    // between them (transaction_native.lessPhaseNode), and rpm's own tie-break
+    // is likewise the reverse of the order packages entered the transaction,
+    // so reversing here is what keeps the installed-file and file-trigger
+    // sequence identical to what rpm itself produces.
+    var index = refs.items.len;
+    while (index > 0) {
+        index -= 1;
         const package: *const result_abi.Package = @ptrCast(
-            &result.pPackages[ref],
+            &result.pPackages[refs.items[index].ref],
         );
         const node = try buildPackage(package);
         if (tail) |previous| {
@@ -167,11 +200,27 @@ fn containsKind(kinds: []const u32, kind: u32) bool {
     return false;
 }
 
+/// Orders a bucket so that reversing it reproduces the legacy list.
+///
+/// Packages nobody asked for by name sort first, then the packages a job named
+/// in job order -- jobs are built from the command line in order, so reversing
+/// the result hands the transaction executor the packages in the reverse of
+/// the order the user wrote them, which is what libsolv plus
+/// TDNFPopulatePkgInfos used to produce and what rpm's own ordering expects.
 fn packageRefLessThan(
     result: *const result_abi.Result,
-    left: u32,
-    right: u32,
+    left_ref: BucketRef,
+    right_ref: BucketRef,
 ) bool {
+    if ((left_ref.job == null) != (right_ref.job == null)) {
+        return left_ref.job == null;
+    }
+    if (left_ref.job) |left_job| {
+        const right_job = right_ref.job.?;
+        if (left_job != right_job) return left_job < right_job;
+    }
+    const left = left_ref.ref;
+    const right = right_ref.ref;
     const a: *const result_abi.Package = @ptrCast(&result.pPackages[left]);
     const b: *const result_abi.Package = @ptrCast(&result.pPackages[right]);
     const name_order = std.mem.order(u8, span(a.pszName), span(b.pszName));
@@ -186,10 +235,10 @@ fn packageRefLessThan(
     return left < right;
 }
 
-fn buildPackage(package: *const result_abi.Package) BuildError![*c]shadow_abi.LegacyPackage {
-    const raw = std.c.calloc(1, @sizeOf(shadow_abi.LegacyPackage)) orelse
+fn buildPackage(package: *const result_abi.Package) BuildError![*c]legacy_abi.LegacyPackage {
+    const raw = std.c.calloc(1, @sizeOf(legacy_abi.LegacyPackage)) orelse
         return error.OutOfMemory;
-    const info: [*c]shadow_abi.LegacyPackage = @ptrCast(@alignCast(raw));
+    const info: [*c]legacy_abi.LegacyPackage = @ptrCast(@alignCast(raw));
     errdefer freePackageList(info);
 
     info[0].dwEpoch = if (package.nHasEpoch != 0) package.dwEpoch else 0;
@@ -238,7 +287,7 @@ fn buildPackage(package: *const result_abi.Package) BuildError![*c]shadow_abi.Le
 }
 
 fn fillLocation(
-    info: [*c]shadow_abi.LegacyPackage,
+    info: [*c]legacy_abi.LegacyPackage,
     package: *const result_abi.Package,
 ) BuildError!void {
     const href = span(package.pszLocationHref);
@@ -262,9 +311,16 @@ fn fillLocation(
 }
 
 fn fillChecksum(
-    info: [*c]shadow_abi.LegacyPackage,
+    info: [*c]legacy_abi.LegacyPackage,
     package: *const result_abi.Package,
 ) BuildError!void {
+    // A header-only digest is not the digest of the package file, so it must
+    // not reach the download verifier. Only repository metadata advertises a
+    // file digest; packages recovered from an on-disk RPM or from the rpmdb
+    // carry a header digest instead, which is what libsolv exposed as
+    // SOLVABLE_PKGID rather than SOLVABLE_CHECKSUM.
+    if (package.nChecksumIsHeaderOnly != 0) return;
+
     const digest = span(package.pszChecksumValue);
     if (digest.len == 0 or digest.len % 2 != 0) return;
 
@@ -364,11 +420,15 @@ fn truncate(value: u64) u32 {
         @intCast(value);
 }
 
-/// Release a partially built result. This module allocates every field it
-/// sets with `calloc`, exactly as `TDNFFreePackageInfoContents` expects, so a
-/// caller is free to release a returned result with
-/// `TDNFFreeSolvedPackageInfo` instead.
-fn freeSolved(solved: *shadow_abi.LegacyResult) void {
+/// Release a result. This module allocates every field it sets with `calloc`,
+/// exactly as `TDNFFreePackageInfoContents` expects, so a caller is free to
+/// release a returned result with `TDNFFreeSolvedPackageInfo` instead.
+pub fn free(solved: [*c]legacy_abi.LegacyResult) void {
+    const result: ?*legacy_abi.LegacyResult = @ptrCast(solved);
+    if (result) |value| freeSolved(value);
+}
+
+fn freeSolved(solved: *legacy_abi.LegacyResult) void {
     freePackageList(solved.pPkgsToInstall);
     freePackageList(solved.pPkgsToUpgrade);
     freePackageList(solved.pPkgsToDowngrade);
@@ -379,7 +439,7 @@ fn freeSolved(solved: *shadow_abi.LegacyResult) void {
     std.c.free(solved);
 }
 
-fn freePackageList(head: [*c]shadow_abi.LegacyPackage) void {
+fn freePackageList(head: [*c]legacy_abi.LegacyPackage) void {
     var node = head;
     while (node != null) {
         const next = node[0].pNext;
@@ -414,6 +474,7 @@ const TestPackage = struct {
     epoch: u32 = 0,
     checksum_type: [:0]const u8 = "sha256",
     checksum_value: [:0]const u8 = "",
+    checksum_is_header_only: bool = false,
     location_href: [:0]const u8 = "",
     location_base: [:0]const u8 = "",
     summary: [:0]const u8 = "",
@@ -443,6 +504,7 @@ fn testPackage(source: TestPackage) result_abi.Package {
         .nHasEpoch = @intFromBool(source.epoch != 0),
         .nHasRpmDbHnum = 0,
         .nChecksumIsPkgId = 0,
+        .nChecksumIsHeaderOnly = @intFromBool(source.checksum_is_header_only),
         .nHasPackageSize = @intFromBool(source.package_size != 0),
         .nHasInstalledSize = @intFromBool(source.installed_size != 0),
     };
@@ -450,7 +512,7 @@ fn testPackage(source: TestPackage) result_abi.Package {
 
 fn listNames(
     allocator: std.mem.Allocator,
-    head: [*c]shadow_abi.LegacyPackage,
+    head: [*c]legacy_abi.LegacyPackage,
 ) ![]const []const u8 {
     var names: std.array_list.Managed([]const u8) = .init(allocator);
     errdefer names.deinit();
@@ -523,8 +585,8 @@ test "projects install, erase, and upgrade actions into legacy buckets" {
         .dwSkippedJobCount = 0,
     };
 
-    var solved: [*c]shadow_abi.LegacyResult = null;
-    try build(testing.allocator, &result, &solved);
+    var solved: [*c]legacy_abi.LegacyResult = null;
+    try build(testing.allocator, &result, true, &solved);
     defer freeSolved(solved);
 
     const install = try listNames(testing.allocator, solved[0].pPkgsToInstall);
@@ -596,8 +658,8 @@ test "an obsoleting action reaches install, remove, and obsoleted" {
         .dwSkippedJobCount = 0,
     };
 
-    var solved: [*c]shadow_abi.LegacyResult = null;
-    try build(testing.allocator, &result, &solved);
+    var solved: [*c]legacy_abi.LegacyResult = null;
+    try build(testing.allocator, &result, true, &solved);
     defer freeSolved(solved);
 
     try testing.expectEqualStrings(
@@ -666,8 +728,8 @@ test "a downgrade names the displaced package in its own bucket" {
         .dwSkippedJobCount = 0,
     };
 
-    var solved: [*c]shadow_abi.LegacyResult = null;
-    try build(testing.allocator, &result, &solved);
+    var solved: [*c]legacy_abi.LegacyResult = null;
+    try build(testing.allocator, &result, true, &solved);
     defer freeSolved(solved);
 
     try testing.expectEqualStrings(
@@ -681,7 +743,7 @@ test "a downgrade names the displaced package in its own bucket" {
     try testing.expect(solved[0].pPkgsToRemove == null);
 }
 
-test "buckets are ordered by name so output does not depend on action order" {
+test "buckets are ordered by descending name so output does not depend on action order" {
     var packages = [_]result_abi.Package{
         testPackage(.{
             .repository = "base",
@@ -750,16 +812,114 @@ test "buckets are ordered by name so output does not depend on action order" {
         .dwSkippedJobCount = 0,
     };
 
-    var solved: [*c]shadow_abi.LegacyResult = null;
-    try build(testing.allocator, &result, &solved);
+    var solved: [*c]legacy_abi.LegacyResult = null;
+    try build(testing.allocator, &result, true, &solved);
     defer freeSolved(solved);
 
     const install = try listNames(testing.allocator, solved[0].pPkgsToInstall);
     defer testing.allocator.free(install);
     try testing.expectEqual(@as(usize, 3), install.len);
-    try testing.expectEqualStrings("alpha", install[0]);
+    try testing.expectEqualStrings("gamma", install[0]);
     try testing.expectEqualStrings("beta", install[1]);
-    try testing.expectEqualStrings("gamma", install[2]);
+    try testing.expectEqualStrings("alpha", install[2]);
+}
+
+test "requested packages are emitted in reverse job order ahead of their dependencies" {
+    var packages = [_]result_abi.Package{
+        testPackage(.{
+            .repository = "base",
+            .name = "owner",
+            .version = "1",
+            .release = "1",
+            .arch = "x86_64",
+        }),
+        testPackage(.{
+            .repository = "base",
+            .name = "shared-a",
+            .version = "1",
+            .release = "1",
+            .arch = "x86_64",
+        }),
+        testPackage(.{
+            .repository = "base",
+            .name = "shared-b",
+            .version = "1",
+            .release = "1",
+            .arch = "x86_64",
+        }),
+        testPackage(.{
+            .repository = "base",
+            .name = "pulled-in",
+            .version = "1",
+            .release = "1",
+            .arch = "x86_64",
+        }),
+    };
+    var actions = [_]result_abi.Action{
+        .{
+            .dwPackageRef = 3,
+            .dwKind = action_install,
+            .dwReason = 0,
+            .dwPriorOffset = 0,
+            .dwPriorCount = 0,
+            .dwRequestedJobId = 0,
+            .nHasRequestedJobId = 0,
+        },
+        .{
+            .dwPackageRef = 2,
+            .dwKind = action_install,
+            .dwReason = 0,
+            .dwPriorOffset = 0,
+            .dwPriorCount = 0,
+            .dwRequestedJobId = 2,
+            .nHasRequestedJobId = 1,
+        },
+        .{
+            .dwPackageRef = 0,
+            .dwKind = action_install,
+            .dwReason = 0,
+            .dwPriorOffset = 0,
+            .dwPriorCount = 0,
+            .dwRequestedJobId = 0,
+            .nHasRequestedJobId = 1,
+        },
+        .{
+            .dwPackageRef = 1,
+            .dwKind = action_install,
+            .dwReason = 0,
+            .dwPriorOffset = 0,
+            .dwPriorCount = 0,
+            .dwRequestedJobId = 1,
+            .nHasRequestedJobId = 1,
+        },
+    };
+    const result = result_abi.Result{
+        .pPackages = &packages,
+        .pdwSelectedPackageRefs = undefined,
+        .pActions = &actions,
+        .pdwPriorPackageRefs = undefined,
+        .pdwPriorHnums = undefined,
+        .pProblems = undefined,
+        .pdwSkippedJobIds = undefined,
+        .dwPackageCount = packages.len,
+        .dwSelectedPackageCount = 0,
+        .dwActionCount = actions.len,
+        .dwPriorPackageRefCount = 0,
+        .dwProblemCount = 0,
+        .dwSkippedJobCount = 0,
+    };
+
+    var solved: [*c]legacy_abi.LegacyResult = null;
+    try build(testing.allocator, &result, true, &solved);
+    defer freeSolved(solved);
+
+    const install = try listNames(testing.allocator, solved[0].pPkgsToInstall);
+    defer testing.allocator.free(install);
+    try testing.expectEqual(@as(usize, 4), install.len);
+    try testing.expectEqualStrings("shared-b", install[0]);
+    try testing.expectEqualStrings("shared-a", install[1]);
+    try testing.expectEqualStrings("owner", install[2]);
+    try testing.expectEqualStrings("pulled-in", install[3]);
 }
 
 test "an empty transaction produces empty buckets" {
@@ -779,8 +939,8 @@ test "an empty transaction produces empty buckets" {
         .dwSkippedJobCount = 0,
     };
 
-    var solved: [*c]shadow_abi.LegacyResult = null;
-    try build(testing.allocator, &result, &solved);
+    var solved: [*c]legacy_abi.LegacyResult = null;
+    try build(testing.allocator, &result, true, &solved);
     defer freeSolved(solved);
 
     try testing.expect(solved != null);
@@ -824,8 +984,8 @@ test "a checksum becomes raw digest bytes with a hash kind" {
         .dwSkippedJobCount = 0,
     };
 
-    var solved: [*c]shadow_abi.LegacyResult = null;
-    try build(testing.allocator, &result, &solved);
+    var solved: [*c]legacy_abi.LegacyResult = null;
+    try build(testing.allocator, &result, true, &solved);
     defer freeSolved(solved);
 
     const info = solved[0].pPkgsToInstall;
@@ -834,4 +994,48 @@ test "a checksum becomes raw digest bytes with a hash kind" {
     try testing.expectEqual(@as(u8, 0x0a), digest[0]);
     try testing.expectEqual(@as(u8, 0x1b), digest[1]);
     try testing.expectEqual(@as(u8, 0x2c), digest[2]);
+}
+
+test "omits a header-only digest so it never reaches the download verifier" {
+    var packages = [_]result_abi.Package{testPackage(.{
+        .repository = "synced-repo",
+        .name = "alpha",
+        .version = "1",
+        .release = "1",
+        .arch = "x86_64",
+        .checksum_value = "0a1b2c",
+        .checksum_is_header_only = true,
+    })};
+    var actions = [_]result_abi.Action{.{
+        .dwPackageRef = 0,
+        .dwKind = 1,
+        .dwReason = 0,
+        .dwPriorOffset = 0,
+        .dwPriorCount = 0,
+        .dwRequestedJobId = 0,
+        .nHasRequestedJobId = 0,
+    }};
+    const result = result_abi.Result{
+        .pPackages = &packages,
+        .pdwSelectedPackageRefs = undefined,
+        .pActions = &actions,
+        .pdwPriorPackageRefs = undefined,
+        .pdwPriorHnums = undefined,
+        .pProblems = undefined,
+        .pdwSkippedJobIds = undefined,
+        .dwPackageCount = packages.len,
+        .dwSelectedPackageCount = 0,
+        .dwActionCount = actions.len,
+        .dwPriorPackageRefCount = 0,
+        .dwProblemCount = 0,
+        .dwSkippedJobCount = 0,
+    };
+
+    var solved: [*c]legacy_abi.LegacyResult = null;
+    try build(testing.allocator, &result, true, &solved);
+    defer freeSolved(solved);
+
+    const info = solved[0].pPkgsToInstall;
+    try testing.expect(info[0].pbChecksum == null);
+    try testing.expectEqual(@as(c_int, 0), info[0].nChecksumType);
 }

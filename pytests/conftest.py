@@ -36,23 +36,6 @@ from cli_testlib import (
 ARCH = platform.machine()
 sys.modules.setdefault('conftest', sys.modules[__name__])
 _SESSION_REPOS = {}
-_SHADOW_LOG = os.environ.get('TDNF_SHADOW_LOG')
-
-
-def _collect_shadow_verdicts(cmd, result):
-    if not _SHADOW_LOG:
-        return
-    lines = []
-    for stream in (result.get('stdout') or '', result.get('stderr') or ''):
-        for line in stream.splitlines():
-            if 'native-solver-shadow' in line:
-                lines.append(line.strip())
-    if not lines:
-        return
-    label = ' '.join(cmd) if isinstance(cmd, list) else str(cmd)
-    with open(_SHADOW_LOG, 'a') as stream:
-        for line in lines:
-            stream.write('{}\t{}\n'.format(line, label))
 
 
 def _cleanup_session_repo(path):
@@ -487,8 +470,6 @@ class TestUtils(object):
             return {'retval': process.returncode}
 
         result = normalize_command_result(process.returncode, out, err)
-
-        _collect_shadow_verdicts(cmd, result)
 
         ret = {}
         ret['stdout'] = split_output_lines(result['stdout'])

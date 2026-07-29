@@ -291,6 +291,7 @@ fn buildChecksum(
                 .kind = try model.dup(allocator, "sha1"),
                 .value = try model.dup(allocator, value),
                 .is_pkgid = true,
+                .header_only = true,
             };
         }
         if (value.len == 64) {
@@ -298,6 +299,7 @@ fn buildChecksum(
                 .kind = try model.dup(allocator, "sha256"),
                 .value = try model.dup(allocator, value),
                 .is_pkgid = true,
+                .header_only = true,
             };
         }
     }
@@ -308,6 +310,7 @@ fn buildChecksum(
                 .kind = try model.dup(allocator, "sha256"),
                 .value = try model.dup(allocator, value),
                 .is_pkgid = true,
+                .header_only = true,
             };
         }
     }
@@ -318,6 +321,7 @@ fn buildChecksum(
         .kind = try model.dup(allocator, "sha256"),
         .value = try dupHexLower(allocator, &digest),
         .is_pkgid = true,
+        .header_only = true,
     };
 }
 
@@ -1024,6 +1028,7 @@ test "builds package from rpm header tags" {
     try testing.expectEqualStrings("2.3.4", built.package.nevra.version);
     try testing.expectEqualStrings("5", built.package.nevra.release);
     try testing.expectEqualStrings("x86_64", built.package.nevra.arch);
+    try testing.expect(built.package.checksum.header_only);
     try testing.expectEqualStrings("sha1", built.package.checksum.kind);
     try testing.expectEqualStrings("0123456789abcdef0123456789abcdef01234567", built.package.checksum.value);
     try testing.expect(built.package.checksum.is_pkgid);
@@ -1127,6 +1132,7 @@ test "builds packages from rpm file and rpmdb iterator" {
     try testing.expectEqual(@as(?u32, null), from_file.package.nevra.epoch);
     try testing.expectEqualStrings("sha256", from_file.package.checksum.kind);
     try testing.expectEqualStrings("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", from_file.package.checksum.value);
+    try testing.expect(from_file.package.checksum.header_only);
     try testing.expectEqualStrings("local/pkg-two-1.0-2.noarch.rpm", from_file.package.location.href);
     try testing.expectEqual(@as(?u64, 1234), from_file.package.size.installed);
     try testing.expectEqual(@as(?u64, rpm_bytes.len), from_file.package.size.package);
@@ -1171,6 +1177,7 @@ test "builds packages from rpm file and rpmdb iterator" {
     const from_rpmdb = try buildFromHeader(arena_state.allocator(), rpmdb_header, .{});
     try testing.expectEqualStrings("pkg-two", from_rpmdb.package.nevra.name);
     try testing.expectEqual(@as(?u32, null), from_rpmdb.package.nevra.epoch);
+    try testing.expect(from_rpmdb.package.checksum.header_only);
     try testing.expectEqualStrings("sha256", from_rpmdb.package.checksum.kind);
     try testing.expectEqualStrings("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", from_rpmdb.package.checksum.value);
     try testing.expectEqualStrings("", from_rpmdb.package.location.href);

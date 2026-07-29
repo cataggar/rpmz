@@ -126,6 +126,10 @@ pub const PackageChecksum = struct {
     kind: []const u8,
     value: []const u8,
     is_pkgid: bool = false,
+    /// The digest covers only the RPM header, not the whole package file.
+    /// Repository metadata advertises a file digest; digests recovered from
+    /// an on-disk RPM or from the rpmdb only ever cover the header.
+    header_only: bool = false,
 };
 
 pub const Nevra = struct {

@@ -462,6 +462,7 @@ fn serializePackage(
     if (pkg.size.archive != null) flags |= 1 << 5;
     if (pkg.rpm.header_range != null) flags |= 1 << 6;
     if (pkg.checksum.is_pkgid) flags |= 1 << 7;
+    if (pkg.checksum.header_only) flags |= 1 << 8;
     try appendU32(out, flags);
 
     try appendRangeRef(out, try relationRangeRef(pkg.provides, repository.relations.len));
@@ -745,6 +746,7 @@ fn decodePackages(
                 .kind = checksum_kind,
                 .value = checksum_value,
                 .is_pkgid = (flags & (1 << 7)) != 0,
+                .header_only = (flags & (1 << 8)) != 0,
             },
             .summary = summary,
             .description = description,

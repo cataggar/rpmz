@@ -677,7 +677,7 @@ fn readVerifiedMetadataFile(
         allocator,
         path,
         raw,
-        try output_budget.fileLimit(try metadataOutputLimit(record)),
+        try output_budget.fileLimit(max_metadata_bytes + 1),
     ) catch |err|
         return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
@@ -686,25 +686,24 @@ fn readVerifiedMetadataFile(
             error.DecompressFailed => error.DecompressFailed,
         };
     try output_budget.consume(open.len);
-    if (record.nHasOpenSize != 0 and open.len != record.nOpenSize) {
-        return error.InvalidRepoMetadata;
-    }
-
-    if ((record.openChecksum.pszType != null or
-        record.openChecksum.pszValue != null) and
-        !metadata_integrity.digestMatches(record.openChecksum, open))
-    {
+    if (hasOpenChecksum(record.openChecksum)) {
+        if (!metadata_integrity.digestMatches(record.openChecksum, open)) {
+            return error.InvalidRepoMetadata;
+        }
+    } else if (record.nHasOpenSize != 0 and open.len != record.nOpenSize) {
         return error.InvalidRepoMetadata;
     }
     return open;
 }
 
-fn metadataOutputLimit(record: *const model.Record) LoadError!usize {
-    if (record.nHasOpenSize == 0) return max_metadata_bytes + 1;
-    if (record.nOpenSize > max_metadata_bytes) {
-        return error.InvalidRepoMetadata;
-    }
-    return @intCast(record.nOpenSize + 1);
+/// An advertised open-size is an untrusted hint, and libsolv ignores it
+/// outright. It is worth checking only when the repository advertises no
+/// open-checksum, because a verified open-checksum already proves the exact
+/// bytes -- a disagreeing open-size then says the repomd is sloppy, not that
+/// the content is wrong, and rejecting the repository over it would refuse
+/// metadata every other package manager loads.
+fn hasOpenChecksum(checksum: model.Checksum) bool {
+    return checksum.pszType != null or checksum.pszValue != null;
 }
 
 fn parseResolvedModel(
@@ -950,10 +949,7 @@ fn readCacheMetadataFile(
         allocator,
         path,
         raw,
-        try output_budget.fileLimit(if (record) |metadata|
-            try metadataOutputLimit(metadata)
-        else
-            max_metadata_bytes + 1),
+        try output_budget.fileLimit(max_metadata_bytes + 1),
     ) catch |err| return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.StreamTooLong => error.StreamTooLong,
@@ -962,17 +958,15 @@ fn readCacheMetadataFile(
     };
     try output_budget.consume(open.len);
     if (record) |metadata| {
-        if (metadata.nHasOpenSize != 0 and
-            open.len != metadata.nOpenSize)
-        {
-            return error.InvalidRepoMetadata;
-        }
-        if ((metadata.openChecksum.pszType != null or
-            metadata.openChecksum.pszValue != null) and
-            !metadata_integrity.digestMatches(
+        if (hasOpenChecksum(metadata.openChecksum)) {
+            if (!metadata_integrity.digestMatches(
                 metadata.openChecksum,
                 open,
-            ))
+            )) {
+                return error.InvalidRepoMetadata;
+            }
+        } else if (metadata.nHasOpenSize != 0 and
+            open.len != metadata.nOpenSize)
         {
             return error.InvalidRepoMetadata;
         }

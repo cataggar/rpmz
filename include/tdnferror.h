@@ -159,6 +159,9 @@ extern "C" {
 #define ERROR_TDNF_RPMTS_FDDUP_FAILED        1529
 #define ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED 1530
 #define ERROR_TDNF_RPM_UNSIGNED              1531
+/* Reserved: raised while the native solver ran as a crosscheck against
+   libsolv. The native solver is now authoritative, so nothing raises this,
+   but the code stays allocated because error codes are part of the API. */
 #define ERROR_TDNF_NATIVE_SOLVER_MISMATCH    1532
 
 /* event context */

@@ -221,6 +221,7 @@ typedef struct _TDNF_REPOMD_NATIVE_SOLVER_PACKAGE
     int nHasEpoch;
     int nHasRpmDbHnum;
     int nChecksumIsPkgId;
+    int nChecksumIsHeaderOnly;
     int nHasPackageSize;
     int nHasInstalledSize;
 } TDNF_REPOMD_NATIVE_SOLVER_PACKAGE;
@@ -290,85 +291,12 @@ typedef struct _TDNF_REPOMD_NATIVE_SOLVER_RESULT
     uint32_t dwSkippedJobCount;
 } TDNF_REPOMD_NATIVE_SOLVER_RESULT;
 
-typedef enum _TDNF_REPOMD_NATIVE_SOLVER_COMPARE_STATUS
-{
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_PROJECTED_MATCH = 1,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_MISMATCH = 2,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_UNSUPPORTED = 3,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_INVALID = 4
-} TDNF_REPOMD_NATIVE_SOLVER_COMPARE_STATUS;
-
-typedef enum _TDNF_REPOMD_NATIVE_SOLVER_COMPARE_REASON
-{
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_REASON_NONE = 0,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_REASON_NATIVE_PROBLEMS = 1,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_REASON_SKIPPED_JOBS = 2,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_REASON_PRIOR_ACTION = 3,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_REASON_NATIVE_ACTION_KIND = 4,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_REASON_LEGACY_ACTION_BUCKET = 5,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_REASON_DUPLICATE_KEY = 6
-} TDNF_REPOMD_NATIVE_SOLVER_COMPARE_REASON;
-
-typedef struct _TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT
-{
-    uint32_t dwStatus;
-    uint32_t dwReason;
-    uint32_t dwActionKind;
-    uint32_t dwDifferenceIndex;
-    uint32_t dwNativeCount;
-    uint32_t dwLegacyCount;
-} TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT;
-
-typedef enum _TDNF_REPOMD_NATIVE_SOLVER_SHADOW_MODE
-{
-    TDNF_REPOMD_NATIVE_SOLVER_SHADOW_OFF = 0,
-    TDNF_REPOMD_NATIVE_SOLVER_SHADOW_OBSERVE = 1,
-    TDNF_REPOMD_NATIVE_SOLVER_SHADOW_STRICT = 2
-} TDNF_REPOMD_NATIVE_SOLVER_SHADOW_MODE;
-
-/**
- * Report whether the diagnostic native-solver crosscheck is enabled.
- *
- * Controlled by the TDNF_NATIVE_SOLVER_SHADOW environment variable so an
- * entire test corpus can opt in without changing each invocation:
- *
- *   unset, "", "0", "off", "false", "no"  -> OFF
- *   "1", "on", "true", "yes", "observe"   -> OBSERVE (compare and log)
- *   "strict"                              -> STRICT  (also fail on mismatch)
- *
- * Any other non-empty value is treated as OBSERVE, so a typo can never
- * silently disable the crosscheck. The shadow never influences package
- * selection; STRICT only turns a reported mismatch into an error.
- */
-uint32_t
-TDNFRepoMdNativeSolverShadowMode(
-    void
-    );
-
-typedef struct _TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY
-{
-    const char *pszId;
-    const char *pszCacheDir;
-    const char *pszSnapshotFile;
-    int32_t nPriority;
-    uint32_t dwCost;
-} TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY,
- *PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY;
-
 /*
- * Repository input accepted by TDNFRepoMdNativeSolverLiveCompareV16. It
- * extends TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY with pszDirectory, which
- * describes a repository that has no downloaded metadata and is instead backed
- * by the .rpm files sitting in a directory -- what --repofromdir produces, and
- * what libsolv loads with repo_add_rpmdb-style directory scanning.
- *
- * Exactly one of pszCacheDir and pszDirectory is set. A metadata-backed
- * repository sets pszCacheDir and leaves pszDirectory NULL; a directory-backed
- * repository does the reverse.
- *
- * This is a distinct type rather than a new field on
- * TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY because that struct is passed as
- * an array to versions 2 through 15, whose callers depend on its stride.
+ * Repository input accepted by TDNFRepoMdNativeSolverLiveSolve. A repository
+ * is backed either by downloaded metadata (pszCacheDir) or by the .rpm files
+ * sitting in a directory (pszDirectory) -- what --repofromdir produces, and
+ * what libsolv loads with repo_add_rpmdb-style directory scanning. Exactly
+ * one of the two is set; the other is NULL.
  */
 typedef struct _TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16
 {
@@ -672,73 +600,10 @@ TDNFRepoMdNativeSolverResultFree(
     );
 
 /*
- * Compare the exact install/erase/reinstall target projection of a native
- * result with the authoritative legacy solved-package buckets. Reinstall
- * actions require exactly one same-NEVRA installed prior. This deliberately
- * ignores selected packages, action reasons/request provenance, unresolved/
- * user-install names, and UI flags. Other priors/action kinds, native
- * problems, skipped jobs, richer legacy buckets, and duplicate projected
- * identities produce UNSUPPORTED rather than MATCH.
- *
- * A successful call returns zero and always sets pComparison. Mismatch and
- * unsupported statuses are comparison outcomes, not API errors.
- */
-uint32_t
-TDNFRepoMdNativeSolverResultCompare(
-    const TDNF_REPOMD_NATIVE_SOLVER_RESULT *pNative,
-    const TDNF_SOLVED_PKG_INFO *pLegacy,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT *pComparison
-    );
-
-/*
- * Produce a strict native solve from live cached metadata and rpmdb inputs,
- * then compare its exact install/erase/reinstall projection with the
- * authoritative legacy result. This operation is observational: it does not
- * mutate any input and returns mismatch or unsupported as comparison statuses.
- *
- * Repositories may be backed either by downloaded metadata (pszCacheDir) or
- * by a directory of .rpm files (pszDirectory), as
- * TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 describes.
- *
- * dwInstallOnlyLimit caps how many versions of an ppszInstallOnlyPackages
- * entry may stay installed; the native solver derives the evictions that
- * enforce it, so the caller must not supply them as erase jobs.
- */
-uint32_t
-TDNFRepoMdNativeSolverLiveCompareV16(
-    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 *pRepositories,
-    uint32_t dwRepositoryCount,
-    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pJobs,
-    uint32_t dwJobCount,
-    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pEraseJobs,
-    uint32_t dwEraseJobCount,
-    const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *pHiddenAvailable,
-    uint32_t dwHiddenAvailableCount,
-    int nAllDeps,
-    int nBest,
-    int nCleanDeps,
-    int nSkipBroken,
-    int nAllowErasing,
-    int nUpdateAll,
-    int nDistSyncAll,
-    const char *const *ppszLockedPackages,
-    const char *const *ppszInstallOnlyPackages,
-    uint32_t dwInstallOnlyLimit,
-    const char *const *ppszProtectedPackages,
-    const char *const *ppszUserInstalledPackages,
-    const char *const *ppszCmdLineRpmPaths,
-    const tdnf_rpm_config *pRpmConfig,
-    const char *pszNativeArch,
-    const TDNF_SOLVED_PKG_INFO *pLegacy,
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT *pComparison
-    );
-
-/*
- * Produce the authoritative native transaction for a live request. Takes the
- * same universe, jobs, and policy inputs as
- * TDNFRepoMdNativeSolverLiveCompareV16 but returns the solved package sets
- * instead of a verdict against a legacy result. On success the caller owns
- * *ppSolved and releases it with TDNFFreeSolvedPackageInfo.
+ * Produce the authoritative native transaction for a live request from cached
+ * repository metadata and the rpmdb. On success the caller owns *ppSolved and
+ * releases it with TDNFFreeSolvedPackageInfo. nReInstall mirrors tdnf's own
+ * flag: without it the reinstall bucket is left empty.
  */
 uint32_t
 TDNFRepoMdNativeSolverLiveSolve(
@@ -763,6 +628,7 @@ TDNFRepoMdNativeSolverLiveSolve(
     const char *const *ppszProtectedPackages,
     const char *const *ppszUserInstalledPackages,
     const char *const *ppszCmdLineRpmPaths,
+    int nReInstall,
     const tdnf_rpm_config *pRpmConfig,
     const char *pszNativeArch,
     PTDNF_SOLVED_PKG_INFO *ppSolved
