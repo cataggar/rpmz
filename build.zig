@@ -1924,6 +1924,32 @@ pub fn build(b: *Build) void {
     run_pytest.step.dependOn(b.getInstallStep());
     check_step.dependOn(&run_pytest.step);
 
+    // The Zig integration suite. It drives the same installed binaries as
+    // `check`, but each test owns an install root instead of sharing the
+    // host's, so it neither mutates the machine it runs on nor has to run
+    // serially. It reuses the RPM fixtures `pytests/repo/setup-repo.sh`
+    // generates and skips itself when they are absent.
+    const ztest_step = b.step(
+        "ztest",
+        "Run Zig integration tests against the installed tree",
+    );
+    {
+        const ztest_mod = b.createModule(.{
+            .root_source_file = b.path("ztests/root.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const ztests = b.addTest(.{ .root_module = ztest_mod });
+        const run_ztests = b.addRunArtifact(ztests);
+        run_ztests.setEnvironmentVariable(
+            "TDNF_ZTEST_PREFIX",
+            b.getInstallPath(.prefix, ""),
+        );
+        run_ztests.step.dependOn(b.getInstallStep());
+        run_ztests.has_side_effects = true;
+        ztest_step.dependOn(&run_ztests.step);
+    }
+
     const lint_step = b.step("lint", "Run flake8 on pytests/");
     const run_flake8 = b.addSystemCommand(&.{ "flake8", "pytests" });
     run_flake8.setCwd(b.path("."));
