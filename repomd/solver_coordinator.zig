@@ -1,6 +1,7 @@
 //! Multi-round policy coordination for the native package solver.
 
 const std = @import("std");
+const query_index = @import("index.zig");
 const metadata = @import("model.zig");
 const solver_model = @import("solver_model.zig");
 const solver_policy = @import("solver_policy.zig");
@@ -410,11 +411,49 @@ fn unexpectedInstallonlyRemoval(
             !nameInList(package.source.nevra.name, installonly_names) or
             (model.value(package.id) orelse return true) or
             containsPackage(allowed_evictions, package.id) or
-            explicitlyErased(goal, package))
+            explicitlyErased(goal, package) or
+            replacedBySameNevra(universe, model, package))
         {
             continue;
         }
         return true;
+    }
+    return false;
+}
+
+/// A reinstall selects the repository copy of an already installed nevra. rpm
+/// cannot hold two instances of one nevra, so the same-name rule drops the
+/// installed one -- that removal is the reinstall itself, not an unexpected
+/// eviction of another install-only version.
+fn replacedBySameNevra(
+    universe: *const solver_model.Universe,
+    model: solver_search.Model,
+    installed: solver_model.UniversePackage,
+) bool {
+    for (universe.packages) |package| {
+        if (package.id == installed.id) continue;
+        if (!(model.value(package.id) orelse false)) continue;
+        if (!std.mem.eql(
+            u8,
+            package.source.nevra.name,
+            installed.source.nevra.name,
+        ) or !std.mem.eql(
+            u8,
+            package.source.nevra.arch,
+            installed.source.nevra.arch,
+        )) {
+            continue;
+        }
+        if (query_index.compareEvr(
+            package.source.nevra.epoch,
+            package.source.nevra.version,
+            package.source.nevra.release,
+            installed.source.nevra.epoch,
+            installed.source.nevra.version,
+            installed.source.nevra.release,
+        ) == 0) {
+            return true;
+        }
     }
     return false;
 }
@@ -496,6 +535,7 @@ fn cloneOptionalString(
 const TestPackage = struct {
     name: []const u8,
     version: []const u8,
+    epoch: ?u32 = null,
     arch: []const u8 = "x86_64",
 };
 
@@ -552,6 +592,7 @@ const TestGraphBuilder = struct {
                 .name = package.name,
                 .version = package.version,
                 .release = "1",
+                .epoch = package.epoch,
                 .arch = package.arch,
             },
             .checksum = .{
@@ -905,6 +946,51 @@ test "explicit erase is not selected again for install-only eviction" {
     try std.testing.expectEqualSlices(
         bool,
         &.{ false, false, true },
+        solved.weak_result.result.satisfiable.values,
+    );
+}
+
+test "install-only reinstall replaces the matching installed instance" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var builder = TestGraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepository("@System", .installed);
+    const available = try builder.addRepository("available", .available);
+    // The rpmdb reports no epoch where the repository metadata reports 0.
+    _ = try builder.addPackage(installed, .{
+        .name = "kernel",
+        .version = "1",
+    });
+    _ = try builder.addPackage(installed, .{
+        .name = "kernel",
+        .version = "2",
+    });
+    _ = try builder.addPackage(available, .{
+        .name = "kernel",
+        .version = "1",
+        .epoch = 0,
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var solved = try solveInstallonly(
+        std.testing.allocator,
+        &graph.universe,
+        .{ .jobs = &.{.{
+            .action = .reinstall,
+            .selection = .{ .package = @enumFromInt(2) },
+        }} },
+        testPolicy(3),
+    );
+    defer solved.deinit();
+
+    try std.testing.expectEqualSlices(
+        solver_model.PackageId,
+        &.{},
+        solved.eviction_packages,
+    );
+    try std.testing.expectEqualSlices(
+        bool,
+        &.{ false, true, true },
         solved.weak_result.result.satisfiable.values,
     );
 }
