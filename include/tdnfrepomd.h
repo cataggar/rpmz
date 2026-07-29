@@ -699,6 +699,10 @@ TDNFRepoMdNativeSolverResultCompare(
  * Repositories may be backed either by downloaded metadata (pszCacheDir) or
  * by a directory of .rpm files (pszDirectory), as
  * TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 describes.
+ *
+ * dwInstallOnlyLimit caps how many versions of an ppszInstallOnlyPackages
+ * entry may stay installed; the native solver derives the evictions that
+ * enforce it, so the caller must not supply them as erase jobs.
  */
 uint32_t
 TDNFRepoMdNativeSolverLiveCompareV16(
@@ -719,6 +723,7 @@ TDNFRepoMdNativeSolverLiveCompareV16(
     int nDistSyncAll,
     const char *const *ppszLockedPackages,
     const char *const *ppszInstallOnlyPackages,
+    uint32_t dwInstallOnlyLimit,
     const char *const *ppszProtectedPackages,
     const char *const *ppszUserInstalledPackages,
     const char *const *ppszCmdLineRpmPaths,
@@ -754,6 +759,7 @@ TDNFRepoMdNativeSolverLiveSolve(
     int nDistSyncAll,
     const char *const *ppszLockedPackages,
     const char *const *ppszInstallOnlyPackages,
+    uint32_t dwInstallOnlyLimit,
     const char *const *ppszProtectedPackages,
     const char *const *ppszUserInstalledPackages,
     const char *const *ppszCmdLineRpmPaths,

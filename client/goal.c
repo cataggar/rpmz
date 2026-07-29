@@ -15,7 +15,7 @@ TDNFGoalObserveNativeSolver(
     const Queue *pQueueJobs,
     const TDNF_SOLVED_PKG_INFO *pInfo,
     int nAllowErasing,
-    int nAutoErase
+    int nAutoErase, int nStampFlags, int nStampedJobCount
 );
 
 static
@@ -36,7 +36,7 @@ TDNFGoalFreeNativeSolverRepoInputs(
 static
 uint32_t
 TDNFGoalBuildNativeSolverJobs(
-    PTDNF pTdnf, const Queue *pQueueJobs, int nAutoErase,
+    PTDNF pTdnf, const Queue *pQueueJobs, int nStampFlags, int nStampedJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppJobs, uint32_t *pdwJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppEraseJobs, uint32_t *pdwEraseJobCount,
     char ***pppszInstallOnlyPkgs, char ***pppszUserInstalledPkgs,
@@ -361,6 +361,7 @@ TDNFSolv(
     int nFlags = 0;
     int nProblems = 0;
     int retries = 0;
+    int nStampedJobCount = 0;
 
     if(!pTdnf || !ppInfo)
     {
@@ -381,6 +382,7 @@ TDNFSolv(
         nFlags = nFlags | SOLVER_CLEANDEPS;
     }
 
+    nStampedJobCount = pQueueJobs->count;
     dwError = SolvAddFlagsToJobs(pQueueJobs, nFlags);
     BAIL_ON_TDNF_ERROR(dwError);
 
@@ -524,7 +526,7 @@ TDNFSolv(
                                      pQueueJobs,
                                      pInfo,
                                      nAllowErasing,
-                                     nAutoErase);
+                                     nAutoErase, nFlags, nStampedJobCount);
         if(dwShadowError == ERROR_TDNF_NATIVE_SOLVER_MISMATCH)
         {
             dwError = dwShadowError;
@@ -711,7 +713,7 @@ TDNFGoalObserveNativeSolver(
     const Queue *pQueueJobs,
     const TDNF_SOLVED_PKG_INFO *pInfo,
     int nAllowErasing,
-    int nAutoErase
+    int nAutoErase, int nStampFlags, int nStampedJobCount
     )
 {
     uint32_t dwError = 0;
@@ -754,7 +756,7 @@ TDNFGoalObserveNativeSolver(
     dwError = TDNFGoalBuildNativeSolverJobs(
                   pTdnf,
                   pQueueJobs,
-                  nAutoErase,
+                  nStampFlags, nStampedJobCount,
                   &pJobs,
                   &dwJobCount,
                   &pEraseJobs,
@@ -782,6 +784,7 @@ TDNFGoalObserveNativeSolver(
                   nUpdateAll, nDistSyncAll,
                   (const char *const *)ppszLockedPkgs,
                   (const char *const *)ppszInstallOnlyPkgs,
+                  (uint32_t)pTdnf->pConf->nInstallOnlyLimit,
                   (const char *const *)pTdnf->pConf->ppszProtectedPkgs,
                   (const char *const *)ppszUserInstalledPkgs,
                   (const char *const *)ppszCmdLinePaths,
@@ -938,7 +941,7 @@ uint32_t
 TDNFGoalBuildNativeSolverJobs(
     PTDNF pTdnf,
     const Queue *pQueueJobs,
-    int nAutoErase,
+    int nStampFlags, int nStampedJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppJobs,
     uint32_t *pdwJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppEraseJobs,
@@ -974,7 +977,7 @@ TDNFGoalBuildNativeSolverJobs(
        !ppEraseJobs || !pdwEraseJobCount || !pppszInstallOnlyPkgs ||
        !pppszUserInstalledPkgs || !pppszLockedPkgs || !pppszCmdLinePaths ||
        !pnUpdateAll || !pnDistSyncAll || pQueueJobs->count < 0 ||
-       pQueueJobs->count % 2 != 0)
+       pQueueJobs->count % 2 != 0 || nStampedJobCount % 2 != 0 || nStampedJobCount < 0 || nStampedJobCount > pQueueJobs->count)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -1017,18 +1020,19 @@ TDNFGoalBuildNativeSolverJobs(
 
     for(dwIndex = 0; dwIndex < dwCount; dwIndex++)
     {
-        /* XOR removes only expected policy bits; wrong shapes stay set. The
-           cleandeps expectation must be the nAutoErase TDNFSolv handed to
-           SolvAddFlagsToJobs: autoremove sets it from nAlterType alone, and
-           history passes 0 even when clean_requirements_on_remove is on. */
+        /* XOR removes exactly the bits SolvAddFlagsToJobs set; wrong shapes
+           stay set. Jobs appended after it carry no policy bits, so XORing
+           them would wrongly *add* cleandeps. Those late erases are the
+           install-only evictions TDNFSolvCheckInstallOnlyLimitInTrans pushes
+           from the retry loop, which the native solver derives itself. */
+        int nStamped = (int)(dwIndex * 2) < nStampedJobCount;
         Id rawHow = pQueueJobs->elements[dwIndex * 2];
-        Id how = rawHow ^ (pTdnf->pArgs->nBest ? SOLVER_FORCEBEST : 0) ^
-                 (nAutoErase ? SOLVER_CLEANDEPS : 0);
+        Id how = nStamped ? rawHow ^ nStampFlags : rawHow;
         Id dwPkgId = pQueueJobs->elements[dwIndex * 2 + 1];
         Solvable *pSolvable = NULL;
         PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob = NULL;
         int nInstall = how == (SOLVER_SOLVABLE | SOLVER_INSTALL),
-            nErase = how == (SOLVER_SOLVABLE | SOLVER_ERASE),
+            nErase = nStamped && how == (SOLVER_SOLVABLE | SOLVER_ERASE),
             nUserInstalled = how == (SOLVER_SOLVABLE | SOLVER_USERINSTALLED) ||
                 rawHow == (SOLVER_SOLVABLE | SOLVER_USERINSTALLED),
             nAllowUninstall = rawHow == (SOLVER_SOLVABLE | SOLVER_ALLOWUNINSTALL),
@@ -1037,6 +1041,7 @@ TDNFGoalBuildNativeSolverJobs(
                 rawHow == (SOLVER_SOLVABLE_NAME | SOLVER_MULTIVERSION),
             nUpdateAllJob = how == (SOLVER_SOLVABLE_ALL | SOLVER_UPDATE),
             nDistSyncAllJob = how == (SOLVER_SOLVABLE_ALL | SOLVER_DISTUPGRADE);
+        if(!nStamped && how == (SOLVER_SOLVABLE | SOLVER_ERASE)) continue;
         if((nUpdateAllJob || nDistSyncAllJob) && !dwPkgId && !nUpdateAll && !nDistSyncAll)
         {
             nUpdateAll = nUpdateAllJob;
