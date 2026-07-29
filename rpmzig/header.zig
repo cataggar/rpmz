@@ -316,6 +316,24 @@ pub const Header = struct {
         return parseInternal(blob, null, false);
     }
 
+    /// Parse a header's framing only, for callers that read a single tag.
+    ///
+    /// `parse` walks every index entry, and validating a string array entry
+    /// scans its whole data run for terminators, so a full parse costs
+    /// O(header size). The transaction executor asks every installed package
+    /// "is your name X?" and "do you carry file triggers?" on each pass, and
+    /// those questions are answered from the index alone. This variant keeps
+    /// the framing checks that make addressing safe — the index and data
+    /// sections are proven to fit, and `bytes` is truncated to the declared
+    /// header — and leaves per-entry validation to the `*Checked` accessors,
+    /// which bounds-check whatever they read.
+    ///
+    /// Use `parse` for anything that consumes a header rather than probes it:
+    /// only `parse` proves that *every* entry is well formed.
+    pub fn parseProbe(blob: []const u8) Error!Header {
+        return parseFraming(blob, null);
+    }
+
     /// Parse a raw header and require its first entry to describe the
     /// requested immutable region. `full_coverage` additionally requires
     /// the region to cover every index and data byte, as package headers do.
@@ -677,6 +695,14 @@ pub const Header = struct {
 
     pub fn u32ArrayItemRawChecked(self: Header, tag: u32, i: usize) AccessError!?u32 {
         const e = self.findRaw(tag) orelse return null;
+        return self.entryU32Item(e, i);
+    }
+
+    /// Read the `i`th item of an INT32 array whose index entry the caller
+    /// already located. `findRaw` is a linear walk of the index, so a loop
+    /// over an array must look the tag up once and come here, rather than
+    /// calling `u32ArrayItem` per item and rescanning the whole index.
+    pub fn entryU32Item(self: Header, e: IndexEntry, i: usize) AccessError!?u32 {
         if (@as(TypeId, @enumFromInt(e.typ)) != .int32) return error.Malformed;
         const count = std.math.cast(usize, e.count) orelse return error.Malformed;
         if (i >= count) return null;
@@ -698,6 +724,11 @@ pub const Header = struct {
 
     pub fn u16ArrayItemChecked(self: Header, tag: TagId, i: usize) AccessError!?u16 {
         const e = self.find(tag) orelse return null;
+        return self.entryU16Item(e, i);
+    }
+
+    /// INT16 counterpart of `entryU32Item`.
+    pub fn entryU16Item(self: Header, e: IndexEntry, i: usize) AccessError!?u16 {
         if (@as(TypeId, @enumFromInt(e.typ)) != .int16) return error.Malformed;
         const count = std.math.cast(usize, e.count) orelse return error.Malformed;
         if (i >= count) return null;
@@ -819,11 +850,13 @@ pub const Header = struct {
     }
 };
 
-fn parseInternal(
-    blob: []const u8,
-    expected_region: ?u32,
-    full_coverage: bool,
-) Error!Header {
+/// Checks a header's framing: the index count, the data size, and that the
+/// index and data sections both fit inside `blob`. The returned header is
+/// therefore safe to *address* — `entry` stays inside the index, `find` only
+/// ever walks the index, and every `*Checked` accessor bounds-checks the
+/// data it reads against `dataEnd`. It is not proof that each entry is well
+/// formed; only `parseInternal` establishes that.
+fn parseFraming(blob: []const u8, expected_region: ?u32) Error!Header {
     if (blob.len < 8) return error.Truncated;
     const nindex = readU32(blob, 0);
     const hsize = readU32(blob, 4);
@@ -861,10 +894,19 @@ fn parseInternal(
         .data_off = data_off,
         .data_size = hsize,
     };
+    return parsed;
+}
+
+fn parseInternal(
+    blob: []const u8,
+    expected_region: ?u32,
+    full_coverage: bool,
+) Error!Header {
+    const parsed = try parseFraming(blob, expected_region);
 
     var marker: ?IndexEntry = null;
     var i: u32 = 0;
-    while (i < nindex) : (i += 1) {
+    while (i < parsed.index_count) : (i += 1) {
         const e = parsed.entry(i);
         if (isRegionTag(e.tag)) {
             if (i != 0 or marker != null) return error.InvalidRegion;
@@ -1237,6 +1279,100 @@ fn writeTestU32(buf: []u8, off: usize, value: u32) void {
     buf[off + 1] = @truncate(value >> 16);
     buf[off + 2] = @truncate(value >> 8);
     buf[off + 3] = @truncate(value);
+}
+
+test "parseProbe reads a tag from a header a full parse rejects" {
+    // Two entries: a well-formed NAME, and a SUMMARY whose string runs past
+    // the declared data section. `parse` has to reject the header because it
+    // proves every entry; a probe that only reads NAME still answers.
+    var blob = [_]u8{0} ** 48;
+    writeTestU32(&blob, 0, 2);
+    writeTestU32(&blob, 4, 8);
+    writeTestU32(&blob, 8, @intFromEnum(TagId.name));
+    writeTestU32(&blob, 12, @intFromEnum(TypeId.string));
+    writeTestU32(&blob, 16, 0);
+    writeTestU32(&blob, 20, 1);
+    writeTestU32(&blob, 24, @intFromEnum(TagId.summary));
+    writeTestU32(&blob, 28, @intFromEnum(TypeId.string));
+    writeTestU32(&blob, 32, 4);
+    writeTestU32(&blob, 36, 1);
+    const data = blob[40..48];
+    @memcpy(data[0..4], "abc\x00");
+    @memcpy(data[4..8], "defg");
+
+    try std.testing.expectError(error.UnterminatedString, Header.parse(&blob));
+
+    const probe = try Header.parseProbe(&blob);
+    try std.testing.expectEqualStrings("abc", (try probe.getStringChecked(.name)).?);
+    // The malformed entry is still refused, just at access time.
+    try std.testing.expectError(
+        error.Malformed,
+        probe.getStringChecked(.summary),
+    );
+}
+
+test "parseProbe keeps the framing checks that make accessors safe" {
+    var intro = [_]u8{0} ** 8;
+    writeTestU32(&intro, 0, 0);
+    try std.testing.expectError(error.BadIndexCount, Header.parseProbe(&intro));
+    writeTestU32(&intro, 0, 1);
+    writeTestU32(&intro, 4, 0xffffffff);
+    try std.testing.expectError(error.BadDataSize, Header.parseProbe(&intro));
+
+    // A header whose declared data section runs past the blob is truncated,
+    // which is what stops accessors from reading beyond it.
+    var blob = [_]u8{0} ** 28;
+    writeTestU32(&blob, 0, 1);
+    writeTestU32(&blob, 4, 16);
+    try std.testing.expectError(error.Truncated, Header.parseProbe(&blob));
+}
+
+test "entry array accessors agree with the tag lookups" {
+    const blob = [_]u8{
+        0,    0,    0,    2, // nindex = 2
+        0,    0,    0,    14, // hsize = 14
+        // FILEFLAGS tag=1037 type=4 (int32) offset=0 count=2
+        0,    0,    0x04, 0x0d,
+        0,    0,    0,    4,
+        0,    0,    0,    0,
+        0,    0,    0,    2,
+        // FILEMODES tag=1030 type=3 (int16) offset=8 count=3
+        0,    0,    0x04, 0x06,
+        0,    0,    0,    3,
+        0,    0,    0,    8,
+        0,    0,    0,    3,
+        // data
+        0,    0,    0,    0x40,
+        0,    0,    0,    0x02,
+        0x41, 0x00, 0x81, 0xa4,
+        0x40, 0x00,
+    };
+    const h = try Header.parse(&blob);
+
+    const flags = h.find(.fileflags).?;
+    const modes = h.find(.filemodes).?;
+
+    for (0..2) |i| {
+        try std.testing.expectEqual(
+            h.u32ArrayItem(.fileflags, i),
+            try h.entryU32Item(flags, i),
+        );
+    }
+    try std.testing.expectEqual(@as(?u32, 0x40), try h.entryU32Item(flags, 0));
+    try std.testing.expectEqual(@as(?u32, null), try h.entryU32Item(flags, 2));
+
+    for (0..3) |i| {
+        try std.testing.expectEqual(
+            h.u16ArrayItem(.filemodes, i),
+            try h.entryU16Item(modes, i),
+        );
+    }
+    try std.testing.expectEqual(@as(?u16, 0x4100), try h.entryU16Item(modes, 0));
+    try std.testing.expectEqual(@as(?u16, null), try h.entryU16Item(modes, 3));
+
+    // A mistyped entry is reported rather than reinterpreted.
+    try std.testing.expectError(error.Malformed, h.entryU32Item(modes, 0));
+    try std.testing.expectError(error.Malformed, h.entryU16Item(flags, 0));
 }
 
 test "parse rejects malformed entries table" {
