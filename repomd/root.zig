@@ -103,6 +103,9 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
     update_all: c_int,
     dist_sync_all: c_int,
     raw_locked_names: ?[*:null]const ?[*:0]const u8,
+    raw_locked_queue_pairs: ?[*]const u32,
+    global_queue_pair: u32,
+    has_global_queue_pair: c_int,
     raw_installonly_names: ?[*:null]const ?[*:0]const u8,
     installonly_limit: u32,
     raw_protected_names: ?[*:null]const ?[*:0]const u8,
@@ -112,12 +115,14 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
     rpm_config: ?*const c.tdnf_rpm_config,
     raw_native_arch: ?[*:0]const u8,
     solved: ?*c.PTDNF_SOLVED_PKG_INFO,
+    handle: ?*?*anyopaque,
 ) u32 {
     const output = solved orelse {
         clearError();
         setError("null native live solve output", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
     };
+    if (handle) |slot| slot.* = null;
     return nativeSolverLiveSolve(
         repository_count,
         raw_jobs,
@@ -137,6 +142,8 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
         update_all != 0,
         dist_sync_all != 0,
         raw_locked_names,
+        raw_locked_queue_pairs,
+        if (has_global_queue_pair != 0) global_queue_pair else null,
         raw_installonly_names,
         installonly_limit,
         raw_user_installed_names,
@@ -144,7 +151,18 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
         raw_repositories,
         reinstall != 0,
         output,
+        handle,
     );
+}
+
+/// Release a solve retained by `TDNFRepoMdNativeSolverLiveSolve`.
+pub export fn TDNFRepoMdNativeSolverLiveSolveRelease(
+    handle: ?*anyopaque,
+) void {
+    const raw = handle orelse return;
+    const solve: *solver_live.OwnedSolve = @ptrCast(@alignCast(raw));
+    solve.deinit();
+    std.heap.c_allocator.destroy(solve);
 }
 
 fn nativeSolverLiveSolve(
@@ -166,6 +184,8 @@ fn nativeSolverLiveSolve(
     update_all: bool,
     dist_sync_all: bool,
     raw_locked_names: ?[*:null]const ?[*:0]const u8,
+    raw_locked_queue_pairs: ?[*]const u32,
+    global_queue_pair: ?u32,
     raw_installonly_names: ?[*:null]const ?[*:0]const u8,
     installonly_limit: u32,
     raw_user_installed_names: ?[*:null]const ?[*:0]const u8,
@@ -173,6 +193,7 @@ fn nativeSolverLiveSolve(
     raw_repositories: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
     reinstall: bool,
     solved: *c.PTDNF_SOLVED_PKG_INFO,
+    handle: ?*?*anyopaque,
 ) u32 {
     clearError();
     solved.* = null;
@@ -383,6 +404,18 @@ fn nativeSolverLiveSolve(
         }
     }
 
+    const locked_queue_pairs = if (raw_locked_queue_pairs) |pairs| blk: {
+        const values = allocator.alloc(?u32, locked_names.len) catch {
+            setError("out of memory translating lock queue pairs", .{});
+            return c.ERROR_TDNF_OUT_OF_MEMORY;
+        };
+        for (pairs[0..locked_names.len], values) |pair, *value| {
+            value.* = pair;
+        }
+        break :blk values;
+    } else &.{};
+    defer if (locked_queue_pairs.len != 0) allocator.free(locked_queue_pairs);
+
     const solver_input: solver_live.Input = .{
         .repositories = repositories,
         .rpmdb = .{ .config = config },
@@ -395,6 +428,8 @@ fn nativeSolverLiveSolve(
         .update_all = update_all,
         .dist_sync_all = dist_sync_all,
         .locked_names = locked_names,
+        .locked_queue_pairs = locked_queue_pairs,
+        .global_queue_pair = global_queue_pair,
         .installonly_names = installonly_names,
         .installonly_limit = installonly_limit,
         .user_installed_names = user_installed_names,
@@ -405,10 +440,38 @@ fn nativeSolverLiveSolve(
         .protected_names = protected_names,
     };
 
-    const native = solver_live.solveOwnedC(
-        allocator,
-        solver_input,
-    ) catch |err| {
+    var solve = solver_live.produce(allocator, solver_input) catch |err| {
+        setError("native live solve unavailable: {t}", .{err});
+        return if (err == error.OutOfMemory)
+            c.ERROR_TDNF_OUT_OF_MEMORY
+        else
+            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+    };
+    // A caller asking for the handle snapshots the solve after this returns,
+    // so it outlives the call and moves to the heap.
+    var retained: ?*solver_live.OwnedSolve = null;
+    errdefer if (retained) |owned| {
+        owned.deinit();
+        allocator.destroy(owned);
+    } else solve.deinit();
+    if (handle != null) {
+        const owned = allocator.create(solver_live.OwnedSolve) catch {
+            solve.deinit();
+            setError("out of memory retaining the native live solve", .{});
+            return c.ERROR_TDNF_OUT_OF_MEMORY;
+        };
+        owned.* = solve;
+        retained = owned;
+    }
+    defer if (retained == null) solve.deinit();
+    const active = retained orelse &solve;
+
+    const native = active.buildOwnedC() catch |err| {
+        if (retained) |owned| {
+            owned.deinit();
+            allocator.destroy(owned);
+            retained = null;
+        }
         setError("native live solve unavailable: {t}", .{err});
         return if (err == error.OutOfMemory)
             c.ERROR_TDNF_OUT_OF_MEMORY
@@ -422,12 +485,18 @@ fn nativeSolverLiveSolve(
         reinstall,
         @ptrCast(solved),
     ) catch |err| {
+        if (retained) |owned| {
+            owned.deinit();
+            allocator.destroy(owned);
+            retained = null;
+        }
         setError("native live solve result unavailable: {t}", .{err});
         return if (err == error.OutOfMemory)
             c.ERROR_TDNF_OUT_OF_MEMORY
         else
             c.ERROR_TDNF_CALL_NOT_SUPPORTED;
     };
+    if (handle) |slot| slot.* = @ptrCast(retained);
     return 0;
 }
 
@@ -467,15 +536,18 @@ fn liveJobFromC(
             return null
     else
         return null;
-    return .{ .selector = .{
-        .repository = spanRequired(raw.pszRepository) orelse return null,
-        .name = spanRequired(raw.pszName) orelse return null,
-        .epoch = raw.dwEpoch,
-        .version = spanRequired(raw.pszVersion) orelse return null,
-        .release = spanRequired(raw.pszRelease) orelse return null,
-        .arch = spanRequired(raw.pszArch) orelse return null,
-        .checksum = checksum,
-    } };
+    return .{
+        .selector = .{
+            .repository = spanRequired(raw.pszRepository) orelse return null,
+            .name = spanRequired(raw.pszName) orelse return null,
+            .epoch = raw.dwEpoch,
+            .version = spanRequired(raw.pszVersion) orelse return null,
+            .release = spanRequired(raw.pszRelease) orelse return null,
+            .arch = spanRequired(raw.pszArch) orelse return null,
+            .checksum = checksum,
+        },
+        .queue_pair = if (raw.nHasQueuePair != 0) raw.dwQueuePair else null,
+    };
 }
 
 fn liveEraseJobFromC(
@@ -491,7 +563,7 @@ fn liveEraseJobFromC(
     {
         return null;
     }
-    return .{ .selector = job.selector };
+    return .{ .selector = job.selector, .queue_pair = job.queue_pair };
 }
 
 fn spanRequired(value: ?[*:0]const u8) ?[]const u8 {
@@ -736,10 +808,14 @@ test "native live solve wrapper rejects a null output" {
         null,
         null,
         0,
+        0,
+        null,
+        0,
         null,
         null,
         null,
         0,
+        null,
         null,
         null,
         null,
@@ -764,6 +840,34 @@ test "translates exact installed erase selectors" {
     try std.testing.expectEqual(@as(?u32, 0), job.selector.epoch);
     raw.pszRepository = "available";
     try std.testing.expect(liveEraseJobFromC(raw) == null);
+}
+
+test "carries the job queue pair across the C translation" {
+    var raw = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB);
+    raw.pszRepository = "@System";
+    raw.pszName = "installed";
+    raw.pszVersion = "1";
+    raw.pszRelease = "2";
+    raw.pszArch = "x86_64";
+
+    // Without the flag the pair is absent, which is what the hidden-available
+    // feed sends: those entries never entered the job queue.
+    raw.dwQueuePair = 7;
+    try std.testing.expectEqual(
+        @as(?u32, null),
+        liveJobFromC(raw).?.queue_pair,
+    );
+    try std.testing.expectEqual(
+        @as(?u32, null),
+        liveEraseJobFromC(raw).?.queue_pair,
+    );
+
+    raw.nHasQueuePair = 1;
+    try std.testing.expectEqual(@as(?u32, 7), liveJobFromC(raw).?.queue_pair);
+    try std.testing.expectEqual(
+        @as(?u32, 7),
+        liveEraseJobFromC(raw).?.queue_pair,
+    );
 }
 
 test "translates null-terminated protected package names" {

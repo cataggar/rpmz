@@ -40,10 +40,17 @@ pub const RepositoryInput = struct {
 
 pub const JobInput = struct {
     selector: solver_identity.AvailableSelector,
+    /// The libsolv job-queue pair this job was built from, which is how the
+    /// published transaction plan numbers jobs. Null for a job the request
+    /// layer never queued.
+    queue_pair: ?u32 = null,
 };
 
 pub const EraseJobInput = struct {
     selector: solver_identity.AvailableSelector,
+    /// See `JobInput.queue_pair`. An erase names a NEVRA the rpmdb may hold
+    /// more than once, so a single pair can expand into several jobs.
+    queue_pair: ?u32 = null,
 };
 
 pub const Input = struct {
@@ -65,6 +72,11 @@ pub const Input = struct {
     update_all: bool = false,
     dist_sync_all: bool = false,
     locked_names: []const []const u8 = &.{},
+    /// Parallel to `locked_names`: the job-queue pair each lock came from.
+    /// Either empty or exactly as long as `locked_names`.
+    locked_queue_pairs: []const ?u32 = &.{},
+    /// The job-queue pair the `update_all` or `dist_sync_all` job came from.
+    global_queue_pair: ?u32 = null,
     installonly_names: []const []const u8 = &.{},
     /// Maximum simultaneously installed versions of an `installonly_names`
     /// package. The native solver derives the evictions that keep the count
@@ -103,6 +115,10 @@ pub const OwnedSolve = struct {
     /// Available packages an `--exclude`-style filter kept out of the solve.
     /// Empty when nothing was filtered.
     hidden: []const solver_model.PackageId,
+    /// Parallel to `jobs`: the libsolv job-queue pair each job was built
+    /// from, which is how the published transaction plan numbers jobs. Null
+    /// marks a job the request layer never queued.
+    job_origins: []const ?u32,
 
     pub fn deinit(self: *OwnedSolve) void {
         self.solved.deinit();
@@ -282,11 +298,22 @@ pub fn produce(
         targets.* = try identity.resolveInstalledNevraAll(arena, job.selector);
         erase_job_count += targets.len;
     }
+    if (input.locked_queue_pairs.len != 0 and
+        input.locked_queue_pairs.len != input.locked_names.len)
+    {
+        return error.InvalidInput;
+    }
     const jobs = try arena.alloc(
         solver_model.Job,
         input.jobs.len + erase_job_count + input.locked_names.len +
             global_job_count,
     );
+    // Mirrors `jobs` exactly, so every branch below fills both.
+    const job_origins = try arena.alloc(?u32, jobs.len);
+    @memset(job_origins, null);
+    for (input.jobs, job_origins[0..input.jobs.len]) |job, *origin| {
+        origin.* = job.queue_pair;
+    }
     for (input.jobs, jobs[0..input.jobs.len]) |job, *translated| {
         translated.* = .{
             .action = .install,
@@ -297,17 +324,26 @@ pub fn produce(
         };
     }
     var erase_index = input.jobs.len;
-    for (erase_targets) |targets| {
+    for (input.erase_jobs, erase_targets) |job, targets| {
         for (targets) |package| {
             jobs[erase_index] = .{
                 .action = .erase,
                 .selection = .{ .package = package },
                 .reason = .user,
             };
+            // Every row this NEVRA expanded to came from the one pair.
+            job_origins[erase_index] = job.queue_pair;
             erase_index += 1;
         }
     }
     const exact_job_count = input.jobs.len + erase_job_count;
+    if (input.locked_queue_pairs.len != 0) {
+        @memcpy(
+            job_origins[exact_job_count .. exact_job_count +
+                input.locked_names.len],
+            input.locked_queue_pairs,
+        );
+    }
     for (
         input.locked_names,
         jobs[exact_job_count .. exact_job_count + input.locked_names.len],
@@ -325,12 +361,14 @@ pub fn produce(
             .selection = .all,
             .reason = .user,
         };
+        job_origins[jobs.len - 1] = input.global_queue_pair;
     } else if (input.dist_sync_all) {
         jobs[jobs.len - 1] = .{
             .action = .dist_sync,
             .selection = .all,
             .reason = .user,
         };
+        job_origins[jobs.len - 1] = input.global_queue_pair;
     }
 
     var hidden_packages: []const solver_model.PackageId = &.{};
@@ -381,6 +419,7 @@ pub fn produce(
         .universe = universe,
         .solved = solved,
         .jobs = jobs,
+        .job_origins = job_origins,
         .hidden = hidden_packages,
     };
 }
@@ -965,6 +1004,87 @@ test "install reasons follow the user-installed name feed" {
             &mismatched,
             &.{},
         ),
+    );
+}
+
+test "live producer records the queue pair every job was built from" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalled(51, "leaf");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    jobs[0].queue_pair = 3;
+    const erase_jobs = [_]EraseJobInput{.{
+        .selector = .{
+            .repository = system_repository_id,
+            .name = "leaf",
+            .epoch = null,
+            .version = "1.0",
+            .release = "1",
+            .arch = "x86_64",
+        },
+        .queue_pair = 7,
+    }};
+    // Locking the package the erase targets would make the request
+    // unsatisfiable, so lock an unrelated name.
+    const locked_names = [_][]const u8{"unrelated"};
+    const locked_pairs = [_]?u32{11};
+    input.jobs = jobs[0..];
+    input.erase_jobs = &erase_jobs;
+    input.locked_names = &locked_names;
+    input.locked_queue_pairs = &locked_pairs;
+
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    // Install, then the erase rows, then the locks: the origins array mirrors
+    // the job list position for position.
+    try std.testing.expectEqual(solved.jobs.len, solved.job_origins.len);
+    try std.testing.expectEqual(@as(?u32, 3), solved.job_origins[0]);
+    try std.testing.expectEqual(@as(?u32, 7), solved.job_origins[1]);
+    try std.testing.expectEqual(
+        @as(?u32, 11),
+        solved.job_origins[solved.job_origins.len - 1],
+    );
+    try std.testing.expectEqual(
+        solver_model.JobAction.lock,
+        solved.jobs[solved.jobs.len - 1].action,
+    );
+}
+
+test "live producer rejects lock origins that do not match the lock names" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalled(51, "leaf");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    const locked_names = [_][]const u8{ "leaf", "other" };
+    const locked_pairs = [_]?u32{11};
+    input.jobs = &.{};
+    input.locked_names = &locked_names;
+    input.locked_queue_pairs = &locked_pairs;
+
+    try std.testing.expectError(
+        error.InvalidInput,
+        produce(std.testing.allocator, input),
     );
 }
 

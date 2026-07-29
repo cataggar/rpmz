@@ -320,6 +320,11 @@ typedef struct _TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB
     const char *pszChecksumValue;
     uint32_t dwEpoch;
     int nChecksumIsPkgId;
+    /* The libsolv job-queue pair this job was built from, which is how the
+       published transaction plan numbers jobs. Only meaningful when
+       nHasQueuePair is set. */
+    uint32_t dwQueuePair;
+    int nHasQueuePair;
 } TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
  *PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB;
 
@@ -604,6 +609,14 @@ TDNFRepoMdNativeSolverResultFree(
  * repository metadata and the rpmdb. On success the caller owns *ppSolved and
  * releases it with TDNFFreeSolvedPackageInfo. nReInstall mirrors tdnf's own
  * flag: without it the reinstall bucket is left empty.
+ *
+ * pdwLockedQueuePairs, dwGlobalQueuePair and the per-job dwQueuePair carry the
+ * libsolv job-queue pair each job was built from, which is how the published
+ * transaction plan numbers jobs.
+ *
+ * ppHandle is optional. When supplied, the solve itself is retained so the
+ * caller can snapshot it after the fact, and *ppHandle must be released with
+ * TDNFRepoMdNativeSolverLiveSolveRelease.
  */
 uint32_t
 TDNFRepoMdNativeSolverLiveSolve(
@@ -623,6 +636,9 @@ TDNFRepoMdNativeSolverLiveSolve(
     int nUpdateAll,
     int nDistSyncAll,
     const char *const *ppszLockedPackages,
+    const uint32_t *pdwLockedQueuePairs,
+    uint32_t dwGlobalQueuePair,
+    int nHasGlobalQueuePair,
     const char *const *ppszInstallOnlyPackages,
     uint32_t dwInstallOnlyLimit,
     const char *const *ppszProtectedPackages,
@@ -631,7 +647,16 @@ TDNFRepoMdNativeSolverLiveSolve(
     int nReInstall,
     const tdnf_rpm_config *pRpmConfig,
     const char *pszNativeArch,
-    PTDNF_SOLVED_PKG_INFO *ppSolved
+    PTDNF_SOLVED_PKG_INFO *ppSolved,
+    void **ppHandle
+    );
+
+/*
+ * Release a solve retained by TDNFRepoMdNativeSolverLiveSolve. Safe on NULL.
+ */
+void
+TDNFRepoMdNativeSolverLiveSolveRelease(
+    void *pHandle
     );
 
 /*
