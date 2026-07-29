@@ -40,10 +40,10 @@ pub const Input = struct {
     selected: []const solver_model.PackageId,
     /// Available packages an `--exclude`-style filter kept out of the solve.
     hidden: []const solver_model.PackageId = &.{},
-    /// Parallel to `jobs`: the libsolv job-queue pair each native job came
-    /// from, which is how a job is tied back to the user request that produced
-    /// it. `null` marks a job the request layer never saw, such as the policy
-    /// jobs tdnf synthesises from `tdnf.conf`.
+    /// Parallel to `jobs`: the libsolv job-queue pair each native job was
+    /// built from, which is how a job is tied back to the request that
+    /// produced it. `null` marks a job the request layer never queued, such
+    /// as the policy jobs tdnf synthesises from `tdnf.conf`.
     job_origins: []const ?u32,
     trace: *const abi.RequestTraceView,
     /// Problems were reported and the caller chose to continue anyway.
@@ -129,6 +129,8 @@ const BuildState = struct {
     outcome: *const solver_model.Outcome,
     trace_requests: []const abi.Request,
     trace_jobs: []const abi.RequestTraceJob,
+    /// Binds each libsolv job-queue pair to the trace job that queued it.
+    queue_origins: []const abi.RequestTraceQueueOrigin,
     trace_satisfied_selections: []const abi.RequestTraceSatisfiedSelection,
     resolution_status: u32,
     /// One entry per universe package: whether the plan mentions it at all.
@@ -151,6 +153,11 @@ const BuildState = struct {
             trace.jobs,
             trace.job_count,
         );
+        const queue_origins = try borrowedArray(
+            abi.RequestTraceQueueOrigin,
+            trace.queue_origins,
+            trace.queue_origin_count,
+        );
         const satisfied = try borrowedArray(
             abi.RequestTraceSatisfiedSelection,
             trace.satisfied_selections,
@@ -164,6 +171,7 @@ const BuildState = struct {
             .outcome = input.outcome,
             .trace_requests = requests,
             .trace_jobs = jobs,
+            .queue_origins = queue_origins,
             .trace_satisfied_selections = satisfied,
             .resolution_status = if (input.synthetic_terminal)
                 abi.resolution_status.problems
@@ -266,7 +274,12 @@ const BuildState = struct {
         }
         for (self.input.job_origins) |origin| {
             if (origin) |value| {
-                if (value >= self.trace_jobs.len) return error.JobMismatch;
+                if (value >= self.queue_origins.len) return error.JobMismatch;
+            }
+        }
+        for (self.queue_origins) |origin| {
+            if (origin.job_ref >= self.trace_jobs.len) {
+                return error.InvalidTrace;
             }
         }
     }
@@ -509,58 +522,97 @@ const BuildState = struct {
         return output;
     }
 
+    /// The published plan numbers jobs by libsolv job-queue pair, and the
+    /// trace binds each pair to the request job that queued it. The native
+    /// job list is deliberately shaped differently -- tdnf lifts locks,
+    /// install-only marks and user-installed marks out into policy jobs,
+    /// folds `update-all` into a single global job, and orders installs
+    /// ahead of erases -- so keying on the queue keeps the plan describing
+    /// what was asked for rather than how the solver encoded it.
     fn captureJobs(
         self: *BuildState,
         package_refs: []const u32,
     ) CaptureError![]abi.Job {
-        const jobs = self.input.jobs;
-        const output = try self.arena.alloc(abi.Job, jobs.len);
-        for (jobs, self.input.job_origins, output) |job, origin, *destination| {
+        const output = try self.arena.alloc(abi.Job, self.queue_origins.len);
+        for (self.queue_origins, output, 0..) |origin, *destination, pair| {
+            const source = self.trace_jobs[origin.job_ref];
             destination.* = .{
-                .action = jobAction(job.action),
-                .reason = requestReason(job.reason),
-                .clean_deps = @intFromBool(job.flags.clean_deps),
-                .force_best = @intFromBool(job.flags.force_best),
-                .targeted = @intFromBool(job.flags.targeted),
-                .not_by_user = @intFromBool(job.flags.not_by_user),
-                .weak = @intFromBool(job.flags.weak),
+                .action = source.action,
+                .selection_kind = source.selection_kind,
+                .reason = source.reason,
+                .clean_deps = flag(
+                    source.effective_flags,
+                    abi.request_trace_flag.clean_deps,
+                ),
+                .force_best = flag(
+                    source.effective_flags,
+                    abi.request_trace_flag.force_best,
+                ),
+                .targeted = flag(
+                    source.effective_flags,
+                    abi.request_trace_flag.targeted,
+                ),
+                .not_by_user = flag(
+                    source.effective_flags,
+                    abi.request_trace_flag.not_by_user,
+                ),
+                .weak = flag(
+                    source.effective_flags,
+                    abi.request_trace_flag.weak,
+                ),
             };
-            switch (job.selection) {
-                .all => destination.selection_kind = abi.selection_kind.all,
-                .package => |id| {
-                    destination.selection_kind = abi.selection_kind.package;
+            switch (source.selection_kind) {
+                abi.selection_kind.package => {
+                    // The trace names a package the way the request layer saw
+                    // it; the identity it resolved to is on the native job
+                    // built from this queue pair.
+                    const package = self.originPackage(
+                        try countU32(pair),
+                    ) orelse return error.JobMismatch;
                     destination.selection_package_ref = try packageRef(
                         package_refs,
-                        id,
+                        package,
                     );
                 },
-                .name => |name| {
-                    destination.selection_kind = abi.selection_kind.name;
+                abi.selection_kind.name => {
                     destination.selection_value = try ownBytes(
                         self.arena,
-                        name,
+                        try bytesSlice(source.selection_value),
                     );
                 },
-                .capability => |relation| {
-                    destination.selection_kind =
-                        abi.selection_kind.capability;
-                    destination.capability = try self.captureCapability(
-                        relation,
+                abi.selection_kind.capability => {
+                    destination.capability = try cloneCapability(
+                        self.arena,
+                        source.capability,
                     );
                 },
+                abi.selection_kind.all => {},
+                else => return error.InvalidTrace,
             }
-            // The request layer only knows the jobs it queued itself. Policy
-            // jobs -- locks, install-only limits, user-installed marks -- come
-            // from configuration and belong to no request.
-            if (origin) |trace_job_ref| {
-                const trace_job = self.trace_jobs[trace_job_ref];
-                if (try flagValue(trace_job.has_request_ref)) {
-                    destination.request_ref = trace_job.request_ref;
-                    destination.has_request_ref = 1;
-                }
+            if (try flagValue(source.has_request_ref)) {
+                destination.request_ref = source.request_ref;
+                destination.has_request_ref = 1;
             }
         }
         return output;
+    }
+
+    /// The package identity the native solver resolved for a queue pair. An
+    /// erase naming a NEVRA the rpmdb holds more than once expands into one
+    /// native job per row; they share the identity the plan reports.
+    fn originPackage(
+        self: *BuildState,
+        pair: u32,
+    ) ?solver_model.PackageId {
+        for (self.input.jobs, self.input.job_origins) |job, origin| {
+            const value = origin orelse continue;
+            if (value != pair) continue;
+            switch (job.selection) {
+                .package => |id| return id,
+                else => {},
+            }
+        }
+        return null;
     }
 
     fn captureCapability(
@@ -633,13 +685,15 @@ const BuildState = struct {
                 .prior_offset = try countU32(prior_offset),
                 .prior_count = try countU32(action.priors.len),
             };
+            // `requested_by` indexes the native job list, but the published
+            // plan numbers jobs by queue pair, so translate through the
+            // origins. A native policy job was never queued and leaves the
+            // action unattributed.
             if (action.requested_by) |job_id| {
-                const job_ref: usize = @intFromEnum(job_id);
-                if (job_ref >= self.input.jobs.len) {
-                    return error.UnsupportedResult;
+                if (try self.queuePairRef(job_id)) |pair| {
+                    destination.requested_job_ref = pair;
+                    destination.has_requested_job_ref = 1;
                 }
-                destination.requested_job_ref = try countU32(job_ref);
-                destination.has_requested_job_ref = 1;
             }
             const sorted_priors = try self.arena.dupe(
                 solver_model.PackageId,
@@ -689,6 +743,20 @@ const BuildState = struct {
         );
     }
 
+    /// Translates a native job id into the queue pair the published plan
+    /// numbers jobs by. A policy job tdnf synthesised was never queued, so it
+    /// has no published number.
+    fn queuePairRef(
+        self: *BuildState,
+        job_id: solver_model.JobId,
+    ) CaptureError!?u32 {
+        const job_ref: usize = @intFromEnum(job_id);
+        if (job_ref >= self.input.job_origins.len) {
+            return error.UnsupportedResult;
+        }
+        return self.input.job_origins[job_ref];
+    }
+
     fn captureHidden(
         self: *BuildState,
         package_refs: []const u32,
@@ -698,14 +766,17 @@ const BuildState = struct {
 
     fn captureSkipped(self: *BuildState) CaptureError![]u32 {
         const skipped = self.outcome.skipped_jobs;
-        const output = try self.arena.alloc(u32, skipped.len);
-        for (skipped, output) |job_id, *destination| {
-            const job_ref: usize = @intFromEnum(job_id);
-            if (job_ref >= self.input.jobs.len) {
-                return error.UnsupportedResult;
-            }
-            destination.* = try countU32(job_ref);
+        var values = try std.ArrayList(u32).initCapacity(
+            self.arena,
+            skipped.len,
+        );
+        for (skipped) |job_id| {
+            // A skipped policy job is invisible to the request layer, so it
+            // has nothing to report against.
+            const pair = try self.queuePairRef(job_id) orelse continue;
+            values.appendAssumeCapacity(pair);
         }
+        const output = values.items;
         std.mem.sort(u32, output, {}, std.sort.asc(u32));
         if (output.len > 1) {
             for (output[1..], 1..) |value, index| {
@@ -730,12 +801,10 @@ const BuildState = struct {
                 value.has_capability = 1;
             }
             if (problem.job) |job_id| {
-                const job_ref: usize = @intFromEnum(job_id);
-                if (job_ref >= self.input.jobs.len) {
-                    return error.UnsupportedResult;
+                if (try self.queuePairRef(job_id)) |pair| {
+                    value.job_ref = pair;
+                    value.has_job_ref = 1;
                 }
-                value.job_ref = try countU32(job_ref);
-                value.has_job_ref = 1;
             }
             if (problem.package) |id| {
                 value.package_ref = try packageRef(package_refs, id);
@@ -1130,6 +1199,48 @@ fn borrowedArray(
     return values[0..count];
 }
 
+fn flag(flags: u32, mask: u32) u32 {
+    return @intFromBool(flags & mask != 0);
+}
+
+/// Copies a capability the request layer recorded, rejecting a trace whose
+/// optional parts disagree with their presence flags.
+fn cloneCapability(
+    allocator: Allocator,
+    source: abi.Capability,
+) CaptureError!abi.Capability {
+    var output = abi.Capability{
+        .name = try ownBytes(allocator, try bytesSlice(source.name)),
+        .comparison = source.comparison,
+        .sense = source.sense,
+        .epoch = source.epoch,
+        .pre = @intFromBool(try flagValue(source.pre)),
+    };
+    if (source.comparison > abi.compare_op.none) return error.InvalidTrace;
+    if (try flagValue(source.has_flags)) {
+        output.flags = try ownBytes(allocator, try bytesSlice(source.flags));
+        output.has_flags = 1;
+    } else if (!bytesEmpty(source.flags)) return error.InvalidTrace;
+    if (try flagValue(source.has_version)) {
+        output.version = try ownBytes(
+            allocator,
+            try bytesSlice(source.version),
+        );
+        output.has_version = 1;
+    } else if (!bytesEmpty(source.version)) return error.InvalidTrace;
+    if (try flagValue(source.has_release)) {
+        output.release = try ownBytes(
+            allocator,
+            try bytesSlice(source.release),
+        );
+        output.has_release = 1;
+    } else if (!bytesEmpty(source.release)) return error.InvalidTrace;
+    if (try flagValue(source.has_epoch)) {
+        output.has_epoch = 1;
+    } else if (source.epoch != 0) return error.InvalidTrace;
+    return output;
+}
+
 fn ownBytes(allocator: Allocator, value: []const u8) CaptureError!abi.Bytes {
     if (value.len == 0) return .{};
     const owned = try allocator.dupe(u8, value);
@@ -1203,6 +1314,132 @@ fn emptyTrace() abi.RequestTraceView {
     return .{};
 }
 
+const one_install_requests = [_]abi.Request{
+    .{
+        .id = .{ .data = "request-0".ptr, .length = "request-0".len },
+        .subject = .{ .data = "wanted".ptr, .length = "wanted".len },
+        .kind = abi.request_kind.install,
+        .has_subject = 1,
+        .outcome = abi.request_outcome.satisfied,
+    },
+};
+
+const one_install_jobs = [_]abi.RequestTraceJob{
+    .{
+        .action = abi.job_action.install,
+        .selection_kind = abi.selection_kind.package,
+        .reason = abi.request_reason.user,
+        .request_ref = 0,
+        .has_request_ref = 1,
+    },
+};
+
+const one_install_queue_origins = [_]abi.RequestTraceQueueOrigin{
+    .{ .queue_pair_index = 0, .job_ref = 0, .request_ref = 0, .has_request_ref = 1 },
+};
+
+/// A trace for a single `install` request that queued exactly one job.
+fn oneInstallTrace() abi.RequestTraceView {
+    return .{
+        .requests = &one_install_requests,
+        .jobs = &one_install_jobs,
+        .queue_origins = &one_install_queue_origins,
+        .request_count = one_install_requests.len,
+        .job_count = one_install_jobs.len,
+        .queue_origin_count = one_install_queue_origins.len,
+    };
+}
+
+const one_name_requests = [_]abi.Request{
+    .{
+        .id = .{ .data = "request-0".ptr, .length = "request-0".len },
+        .subject = .{ .data = "broken".ptr, .length = "broken".len },
+        .kind = abi.request_kind.install,
+        .has_subject = 1,
+        .outcome = abi.request_outcome.no_candidate,
+    },
+};
+
+const one_name_jobs = [_]abi.RequestTraceJob{
+    .{
+        .action = abi.job_action.install,
+        .selection_kind = abi.selection_kind.name,
+        .selection_value = .{ .data = "broken".ptr, .length = "broken".len },
+        .reason = abi.request_reason.user,
+        .request_ref = 0,
+        .has_request_ref = 1,
+    },
+};
+
+const one_name_queue_origins = [_]abi.RequestTraceQueueOrigin{
+    .{ .queue_pair_index = 0, .job_ref = 0, .request_ref = 0, .has_request_ref = 1 },
+};
+
+/// A trace for a single `install` request that resolved to a bare name.
+fn oneNameTrace() abi.RequestTraceView {
+    return .{
+        .requests = &one_name_requests,
+        .jobs = &one_name_jobs,
+        .queue_origins = &one_name_queue_origins,
+        .request_count = one_name_requests.len,
+        .job_count = one_name_jobs.len,
+        .queue_origin_count = one_name_queue_origins.len,
+    };
+}
+
+const install_pair_requests = [_]abi.Request{
+    .{
+        .id = .{ .data = "request-0".ptr, .length = "request-0".len },
+        .subject = .{ .data = "wanted".ptr, .length = "wanted".len },
+        .kind = abi.request_kind.install,
+        .has_subject = 1,
+        .outcome = abi.request_outcome.satisfied,
+    },
+    .{
+        .id = .{ .data = "request-1".ptr, .length = "request-1".len },
+        .subject = .{ .data = "absent".ptr, .length = "absent".len },
+        .kind = abi.request_kind.install,
+        .has_subject = 1,
+        .outcome = abi.request_outcome.no_candidate,
+    },
+};
+
+const install_pair_jobs = [_]abi.RequestTraceJob{
+    .{
+        .action = abi.job_action.install,
+        .selection_kind = abi.selection_kind.package,
+        .reason = abi.request_reason.user,
+        .request_ref = 0,
+        .has_request_ref = 1,
+    },
+    .{
+        .action = abi.job_action.install,
+        .selection_kind = abi.selection_kind.name,
+        .selection_value = .{ .data = "absent".ptr, .length = "absent".len },
+        .reason = abi.request_reason.user,
+        .request_ref = 1,
+        .has_request_ref = 1,
+    },
+};
+
+const install_pair_queue_origins = [_]abi.RequestTraceQueueOrigin{
+    .{ .queue_pair_index = 0, .job_ref = 0, .request_ref = 0, .has_request_ref = 1 },
+    .{ .queue_pair_index = 1, .job_ref = 1, .request_ref = 1, .has_request_ref = 1 },
+};
+
+/// A trace for two `install` requests, one resolved to a package and one left
+/// as a bare name the repositories do not provide.
+fn installPairTrace() abi.RequestTraceView {
+    return .{
+        .requests = &install_pair_requests,
+        .jobs = &install_pair_jobs,
+        .queue_origins = &install_pair_queue_origins,
+        .request_count = install_pair_requests.len,
+        .job_count = install_pair_jobs.len,
+        .queue_origin_count = install_pair_queue_origins.len,
+    };
+}
+
 test "a capture publishes only the packages the transaction references" {
     var installed = [_]metadata.Package{
         testPackage("kept", "1", "x86_64"),
@@ -1245,8 +1482,8 @@ test "a capture publishes only the packages the transaction references" {
         .skipped_jobs = &.{},
     };
     const selected = [_]solver_model.PackageId{wanted};
-    const origins = [_]?u32{null};
-    const trace = emptyTrace();
+    const origins = [_]?u32{0};
+    const trace = oneInstallTrace();
 
     const owner = try create(testing.allocator, .{
         .universe = &harness.universe,
@@ -1407,8 +1644,8 @@ test "a problem transaction publishes problems and no actions" {
         .problems = &problems,
         .skipped_jobs = &.{},
     };
-    const origins = [_]?u32{null};
-    const trace = emptyTrace();
+    const origins = [_]?u32{0};
+    const trace = oneNameTrace();
 
     const owner = try create(testing.allocator, .{
         .universe = &harness.universe,
@@ -1477,8 +1714,8 @@ test "accepted problems resolve with skips and keep the transaction" {
         .skipped_jobs = &skipped,
     };
     const selected = [_]solver_model.PackageId{wanted};
-    const origins = [_]?u32{ null, null };
-    const trace = emptyTrace();
+    const origins = [_]?u32{ 0, 1 };
+    const trace = installPairTrace();
 
     const owner = try create(testing.allocator, .{
         .universe = &harness.universe,
@@ -1537,7 +1774,7 @@ test "hidden packages are published even though no action names them" {
     try testing.expectEqual(@as(u32, 1), facts.package_count);
 }
 
-test "a job origin binds its request through the trace" {
+test "a policy job the request layer never queued is absent from the plan" {
     var available = [_]metadata.Package{
         testPackage("wanted", "1", "x86_64"),
     };
@@ -1552,31 +1789,101 @@ test "a job origin binds its request through the trace" {
         .{ .action = .install, .selection = .{ .package = wanted } },
         .{ .action = .lock, .selection = .{ .name = "wanted" }, .reason = .policy },
     };
+    const actions = [_]solver_model.Action{
+        .{
+            .package = wanted,
+            .kind = .install,
+            .reason = .user,
+            .requested_by = @enumFromInt(1),
+        },
+    };
     const outcome = solver_model.Outcome{
-        .actions = &.{},
+        .actions = &actions,
         .problems = &.{},
         .skipped_jobs = &.{},
     };
-    const requests = [_]abi.Request{
+    const selected = [_]solver_model.PackageId{wanted};
+    const trace = oneInstallTrace();
+    // The lock comes from tdnf.conf, so the request layer never queued it.
+    const origins = [_]?u32{ 0, null };
+
+    const owner = try create(testing.allocator, .{
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .outcome = &outcome,
+        .selected = &selected,
+        .job_origins = &origins,
+        .trace = &trace,
+    });
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(@as(u32, 1), facts.request_count);
+    try testing.expectEqualStrings(
+        "request-0",
+        bytesOrEmpty(facts.requests.?[0].id),
+    );
+    // The plan numbers jobs by queue pair, so the synthesised lock adds none.
+    try testing.expectEqual(@as(u32, 1), facts.job_count);
+    try testing.expectEqual(abi.job_action.install, facts.jobs.?[0].action);
+    try testing.expectEqual(@as(u32, 1), facts.jobs.?[0].has_request_ref);
+    try testing.expectEqual(@as(u32, 0), facts.jobs.?[0].request_ref);
+    // An action the lock caused has no published job to point at.
+    try testing.expectEqual(
+        @as(u32, 0),
+        facts.actions.?[0].has_requested_job_ref,
+    );
+}
+
+test "an erase expanded across duplicate rpmdb rows keeps one published job" {
+    var installed = [_]metadata.Package{
+        testPackage("doomed", "1", "x86_64"),
+        testPackage("doomed", "1", "x86_64"),
+    };
+    const installed_model = metadata.RepositoryModel{ .packages = &installed };
+    const installed_states = [_]solver_model.InstalledState{
+        .{ .rpmdb_hnum = 1 },
+        .{ .rpmdb_hnum = 2 },
+    };
+    var harness = try buildUniverse(&.{
         .{
-            .id = .{ .data = "request-0".ptr, .length = "request-0".len },
-            .subject = .{ .data = "wanted".ptr, .length = "wanted".len },
-            .kind = abi.request_kind.install,
-            .has_subject = 1,
-            .outcome = abi.request_outcome.satisfied,
+            .id = "@System",
+            .model = &installed_model,
+            .kind = .installed,
+            .installed_states = &installed_states,
+        },
+    });
+    defer harness.deinit();
+
+    const first: solver_model.PackageId = @enumFromInt(0);
+    const second: solver_model.PackageId = @enumFromInt(1);
+    // One erase request naming a NEVRA the rpmdb holds twice becomes two
+    // native jobs, both built from the same queue pair.
+    const jobs = [_]solver_model.Job{
+        .{ .action = .erase, .selection = .{ .package = first } },
+        .{ .action = .erase, .selection = .{ .package = second } },
+    };
+    const actions = [_]solver_model.Action{
+        .{
+            .package = first,
+            .kind = .erase,
+            .reason = .user,
+            .requested_by = @enumFromInt(0),
+        },
+        .{
+            .package = second,
+            .kind = .erase,
+            .reason = .user,
+            .requested_by = @enumFromInt(1),
         },
     };
-    const trace_jobs = [_]abi.RequestTraceJob{
-        .{ .request_ref = 0, .has_request_ref = 1 },
+    const outcome = solver_model.Outcome{
+        .actions = &actions,
+        .problems = &.{},
+        .skipped_jobs = &.{},
     };
-    const trace = abi.RequestTraceView{
-        .requests = &requests,
-        .jobs = &trace_jobs,
-        .request_count = requests.len,
-        .job_count = trace_jobs.len,
-    };
-    // The lock job comes from tdnf.conf, so it belongs to no request.
-    const origins = [_]?u32{ 0, null };
+    const trace = oneInstallTrace();
+    const origins = [_]?u32{ 0, 0 };
 
     const owner = try create(testing.allocator, .{
         .universe = &harness.universe,
@@ -1589,16 +1896,13 @@ test "a job origin binds its request through the trace" {
     defer owner.destroy();
 
     const facts = owner.view();
-    try testing.expectEqual(@as(u32, 1), facts.request_count);
-    try testing.expectEqualStrings(
-        "request-0",
-        bytesOrEmpty(facts.requests.?[0].id),
-    );
-    try testing.expectEqual(@as(u32, 1), facts.jobs.?[0].has_request_ref);
-    try testing.expectEqual(@as(u32, 0), facts.jobs.?[0].request_ref);
-    try testing.expectEqual(@as(u32, 0), facts.jobs.?[1].has_request_ref);
-    try testing.expectEqual(abi.job_action.lock, facts.jobs.?[1].action);
-    try testing.expectEqual(abi.request_reason.policy, facts.jobs.?[1].reason);
+    try testing.expectEqual(@as(u32, 1), facts.job_count);
+    try testing.expectEqual(@as(u32, 2), facts.action_count);
+    // Both erases attribute to the single request that asked for them.
+    for (facts.actions.?[0..2]) |action| {
+        try testing.expectEqual(@as(u32, 1), action.has_requested_job_ref);
+        try testing.expectEqual(@as(u32, 0), action.requested_job_ref);
+    }
 }
 
 test "a job origin outside the trace is rejected" {
