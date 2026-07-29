@@ -617,6 +617,11 @@ TDNFRepoMdNativeSolverResultFree(
  * ppHandle is optional. When supplied, the solve itself is retained so the
  * caller can snapshot it after the fact, and *ppHandle must be released with
  * TDNFRepoMdNativeSolverLiveSolveRelease.
+ *
+ * nPrepareOnly builds the universe and translates the jobs without solving,
+ * which is what a caller describing a request that failed before or instead
+ * of a solve needs. It requires ppHandle, ignores ppSolved, and the handle it
+ * hands back is released the same way.
  */
 uint32_t
 TDNFRepoMdNativeSolverLiveSolve(
@@ -647,6 +652,7 @@ TDNFRepoMdNativeSolverLiveSolve(
     int nReInstall,
     const tdnf_rpm_config *pRpmConfig,
     const char *pszNativeArch,
+    int nPrepareOnly,
     PTDNF_SOLVED_PKG_INFO *ppSolved,
     void **ppHandle
     );

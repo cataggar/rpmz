@@ -114,15 +114,21 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
     reinstall: c_int,
     rpm_config: ?*const c.tdnf_rpm_config,
     raw_native_arch: ?[*:0]const u8,
+    prepare_only: c_int,
     solved: ?*c.PTDNF_SOLVED_PKG_INFO,
     handle: ?*?*anyopaque,
 ) u32 {
-    const output = solved orelse {
+    if (handle) |slot| slot.* = null;
+    if (prepare_only != 0 and handle == null) {
+        clearError();
+        setError("native live prepare discards its only output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    if (prepare_only == 0 and solved == null) {
         clearError();
         setError("null native live solve output", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
-    };
-    if (handle) |slot| slot.* = null;
+    }
     return nativeSolverLiveSolve(
         repository_count,
         raw_jobs,
@@ -150,19 +156,35 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
         raw_cmdline_rpm_paths,
         raw_repositories,
         reinstall != 0,
-        output,
+        prepare_only != 0,
+        solved,
         handle,
     );
 }
+
+/// What a retained `TDNFRepoMdNativeSolverLiveSolve` handle points at. A
+/// request that never reached a solve still has a universe and a job list,
+/// which is all the capture layer needs to describe it.
+pub const RetainedSolve = union(enum) {
+    solved: solver_live.OwnedSolve,
+    prepared: solver_live.Prepared,
+
+    pub fn deinit(self: *RetainedSolve) void {
+        switch (self.*) {
+            inline else => |*value| value.deinit(),
+        }
+        self.* = undefined;
+    }
+};
 
 /// Release a solve retained by `TDNFRepoMdNativeSolverLiveSolve`.
 pub export fn TDNFRepoMdNativeSolverLiveSolveRelease(
     handle: ?*anyopaque,
 ) void {
     const raw = handle orelse return;
-    const solve: *solver_live.OwnedSolve = @ptrCast(@alignCast(raw));
-    solve.deinit();
-    std.heap.c_allocator.destroy(solve);
+    const retained: *RetainedSolve = @ptrCast(@alignCast(raw));
+    retained.deinit();
+    std.heap.c_allocator.destroy(retained);
 }
 
 fn nativeSolverLiveSolve(
@@ -192,11 +214,12 @@ fn nativeSolverLiveSolve(
     raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
     raw_repositories: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
     reinstall: bool,
-    solved: *c.PTDNF_SOLVED_PKG_INFO,
+    prepare_only: bool,
+    solved: ?*c.PTDNF_SOLVED_PKG_INFO,
     handle: ?*?*anyopaque,
 ) u32 {
     clearError();
-    solved.* = null;
+    if (solved) |output| output.* = null;
     if (repository_count != 0 and raw_repositories == null) {
         setError("null native live repositories", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
@@ -440,6 +463,30 @@ fn nativeSolverLiveSolve(
         .protected_names = protected_names,
     };
 
+    if (prepare_only) {
+        // The request is being described, not run: build the universe and
+        // translate the jobs, and stop there.
+        var prepared = solver_live.prepare(allocator, solver_input) catch |err| {
+            setError("native live prepare unavailable: {t}", .{err});
+            return if (err == error.OutOfMemory)
+                c.ERROR_TDNF_OUT_OF_MEMORY
+            else
+                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+        };
+        const owned = allocator.create(RetainedSolve) catch {
+            prepared.deinit();
+            setError("out of memory retaining the native live universe", .{});
+            return c.ERROR_TDNF_OUT_OF_MEMORY;
+        };
+        owned.* = .{ .prepared = prepared };
+        handle.?.* = @ptrCast(owned);
+        return 0;
+    }
+
+    const output = solved orelse {
+        setError("null native live solve output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
     var solve = solver_live.produce(allocator, solver_input) catch |err| {
         setError("native live solve unavailable: {t}", .{err});
         return if (err == error.OutOfMemory)
@@ -449,22 +496,22 @@ fn nativeSolverLiveSolve(
     };
     // A caller asking for the handle snapshots the solve after this returns,
     // so it outlives the call and moves to the heap.
-    var retained: ?*solver_live.OwnedSolve = null;
+    var retained: ?*RetainedSolve = null;
     errdefer if (retained) |owned| {
         owned.deinit();
         allocator.destroy(owned);
     } else solve.deinit();
     if (handle != null) {
-        const owned = allocator.create(solver_live.OwnedSolve) catch {
+        const owned = allocator.create(RetainedSolve) catch {
             solve.deinit();
             setError("out of memory retaining the native live solve", .{});
             return c.ERROR_TDNF_OUT_OF_MEMORY;
         };
-        owned.* = solve;
+        owned.* = .{ .solved = solve };
         retained = owned;
     }
     defer if (retained == null) solve.deinit();
-    const active = retained orelse &solve;
+    const active = if (retained) |owned| &owned.solved else &solve;
 
     const native = active.buildOwnedC() catch |err| {
         if (retained) |owned| {
@@ -483,7 +530,7 @@ fn nativeSolverLiveSolve(
         allocator,
         @ptrCast(native),
         reinstall,
-        @ptrCast(solved),
+        @ptrCast(output),
     ) catch |err| {
         if (retained) |owned| {
             owned.deinit();
@@ -817,6 +864,47 @@ test "native live solve wrapper rejects a null output" {
         0,
         null,
         null,
+        0,
+        null,
+        null,
+    );
+
+    try std.testing.expectEqual(
+        @as(u32, c.ERROR_TDNF_INVALID_PARAMETER),
+        result,
+    );
+}
+
+test "native live prepare rejects a request with nowhere to put the handle" {
+    const result = TDNFRepoMdNativeSolverLiveSolve(
+        null,
+        0,
+        null,
+        0,
+        null,
+        0,
+        null,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        null,
+        null,
+        0,
+        0,
+        null,
+        0,
+        null,
+        null,
+        null,
+        0,
+        null,
+        null,
+        1,
         null,
         null,
     );

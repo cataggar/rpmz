@@ -52,6 +52,34 @@ pub const Input = struct {
     /// raise, so the plan records problems rather than a transaction.
     synthetic_terminal: bool = false,
 
+    /// A request that never reached a solve has no transaction, and the
+    /// caller supplies the problem that stopped it.
+    const empty_outcome: solver_model.Outcome = .{
+        .actions = &.{},
+        .problems = &.{},
+        .skipped_jobs = &.{},
+    };
+
+    /// Projects a native live universe that was never solved onto the capture
+    /// inputs. The plan describes the request and the packages it names, and
+    /// the caller records why it went no further.
+    pub fn fromPrepared(
+        prepared: *const solver_live.Prepared,
+        job_origins: []const ?u32,
+        trace: *const abi.RequestTraceView,
+    ) Input {
+        return .{
+            .universe = prepared.universe,
+            .jobs = prepared.jobs,
+            .outcome = &empty_outcome,
+            .selected = &.{},
+            .hidden = prepared.hidden,
+            .job_origins = job_origins,
+            .trace = trace,
+            .synthetic_terminal = true,
+        };
+    }
+
     /// Projects a completed native live solve onto the capture inputs.
     pub fn fromSolve(
         solve: *const solver_live.OwnedSolve,
@@ -1791,6 +1819,51 @@ test "a solve that only skipped a job still records a partial plan" {
     // The transaction is still published: the plan is partial, not absent.
     try testing.expectEqual(@as(u32, 1), facts.action_count);
     try testing.expectEqual(@as(u32, 1), facts.skipped_job_ref_count);
+}
+
+test "a request that never solved publishes its jobs and no transaction" {
+    var available = [_]metadata.Package{
+        testPackage("wanted", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const wanted: solver_model.PackageId = @enumFromInt(0);
+    const jobs = [_]solver_model.Job{
+        .{ .action = .install, .selection = .{ .package = wanted } },
+    };
+    const origins = [_]?u32{0};
+    const trace = oneInstallTrace();
+    var prepared = solver_live.Prepared{
+        .arena_state = undefined,
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .hidden = &.{},
+        .job_origins = &origins,
+        .visibility = undefined,
+        .native_arch = "x86_64",
+    };
+
+    const owner = try create(
+        testing.allocator,
+        .fromPrepared(&prepared, prepared.job_origins, &trace),
+    );
+    defer owner.destroy();
+
+    const facts = owner.view();
+    // The package the request names is still published, which is what the
+    // problem the caller records has to point at.
+    try testing.expectEqual(@as(u32, 1), facts.job_count);
+    try testing.expectEqual(@as(u32, 1), facts.package_count);
+    try testing.expectEqual(@as(u32, 0), facts.action_count);
+    try testing.expectEqual(@as(u32, 0), facts.skipped_job_ref_count);
+    try testing.expectEqual(
+        abi.resolution_status.problems,
+        facts.environment.resolution_status,
+    );
 }
 
 test "hidden packages are published even though no action names them" {
