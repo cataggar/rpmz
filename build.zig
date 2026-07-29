@@ -558,6 +558,10 @@ pub fn build(b: *Build) void {
         transaction_plan_libsolv_mod,
     );
     transaction_plan_integration_mod.addImport(
+        "transaction_plan_native",
+        transaction_plan_native_mod,
+    );
+    transaction_plan_integration_mod.addImport(
         "transaction_plan_repository",
         transaction_plan_repository_integration_mod,
     );
@@ -798,6 +802,10 @@ pub fn build(b: *Build) void {
         test_mod.addImport(
             "transaction_plan_libsolv",
             transaction_plan_libsolv_mod,
+        );
+        test_mod.addImport(
+            "transaction_plan_native",
+            transaction_plan_native_mod,
         );
         test_mod.addImport(
             "transaction_plan_repository",

@@ -887,6 +887,7 @@ TDNFTransactionPlanIntegrationCapturePending(
     void *solver,
     void *transaction,
     const void *jobs,
+    const void *native_solve,
     const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW *trace,
     int solve_status,
     uint32_t problem_count,
@@ -1066,7 +1067,7 @@ TDNFInitRepoWithResult(
 
 
 #define TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(                            \
-    _tdnf, _jobs, _solver, _transaction, _problems, _accepted,          \
+    _tdnf, _jobs, _solver, _transaction, _native, _problems, _accepted,  \
     _unresolved, _terminal_problem, _excludes, _allow_erasing,          \
     _clean_deps, _error)                                                 \
     do {                                                                 \
@@ -1146,7 +1147,8 @@ TDNFInitRepoWithResult(
                 (_error) = TDNFTransactionPlanIntegrationCapturePending( \
                     (_tdnf)->pTransactionPlanState,                       \
                     (_tdnf)->pSack->pPool, (_solver), (_transaction),    \
-                    (_jobs), TDNFTransactionPlanRequestTraceGetView(      \
+                    (_jobs), (_native),                                  \
+                    TDNFTransactionPlanRequestTraceGetView(              \
                         (_tdnf)->pRequestTrace),                          \
                     (_problems), (uint32_t)(_problems), !!(_accepted),   \
                     (uint32_t)(_unresolved), (_terminal_problem),        \
@@ -1167,7 +1169,7 @@ TDNFInitRepoWithResult(
             (_jobs)->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);         \
         (_error) = 0;                                                    \
         TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(                            \
-            (_tdnf), (_jobs), (_solver), NULL, (_problems), 0,          \
+            (_tdnf), (_jobs), (_solver), NULL, NULL, (_problems), 0,     \
             (_unresolved), UINT32_MAX, (_excludes), (_allow_erasing),   \
             (_clean_deps), (_error));                                   \
         if ((_error)) { TDNFTransactionPlanStateClear((_tdnf)->pTransactionPlanState); (_error) = _solve_error; goto error; } \
@@ -1185,8 +1187,8 @@ TDNFInitRepoWithResult(
             (_jobs)->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);         \
         (_error) = 0;                                                    \
         TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(                            \
-            (_tdnf), (_jobs), (_solver), (_transaction), (_problems),   \
-            0, (_unresolved), (_problem_kind), (_excludes),             \
+            (_tdnf), (_jobs), (_solver), (_transaction), NULL,           \
+            (_problems), 0, (_unresolved), (_problem_kind), (_excludes), \
             (_allow_erasing), (_clean_deps), (_error));                 \
         if ((_error)) { TDNFTransactionPlanStateClear((_tdnf)->pTransactionPlanState); (_error) = _terminal_error; goto error; } \
         (_error) = _terminal_error;                                      \

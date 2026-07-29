@@ -15,7 +15,8 @@ TDNFGoalSolveNative(
     const Queue *pQueueJobs,
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
-    PTDNF_SOLVED_PKG_INFO *ppInfo
+    PTDNF_SOLVED_PKG_INFO *ppInfo,
+    void **ppHandle
 );
 
 static
@@ -158,6 +159,7 @@ TDNFSolv(
     int nProblems = 0;
     int retries = 0;
     int nStampedJobCount = 0;
+    void *pNativeSolve = NULL;
 
     if(!pTdnf || !ppInfo)
     {
@@ -292,26 +294,35 @@ TDNFSolv(
         pQueueJobs->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(
-        pTdnf, pQueueJobs, pSolv, pTrans, nProblems,
-        nProblems && dwSkipProblem != SKIPPROBLEM_NONE,
-        nUnresolved, UINT32_MAX, ppszExcludes,
-        nAllowErasing, nAutoErase, dwError);
-    BAIL_ON_TDNF_ERROR(dwError);
-
     if(pTdnf->pArgs->nDebugSolver)
     {
         dwError = SolvAddDebugInfo(pSolv, "debugdata");
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
+    /* Retaining the solve keeps the whole universe alive, so only ask for it
+       when something is going to read it. */
     dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
-                                  nFlags, nStampedJobCount, nReInstall, &pInfo);
+                                  nFlags, nStampedJobCount, nReInstall, &pInfo,
+                                  TDNFTransactionPlanStateIsEnabled(
+                                      pTdnf->pTransactionPlanState)
+                                      ? &pNativeSolve : NULL);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    /* The plan describes the transaction tdnf is about to run, which is the
+       one the native solver just produced, so the capture needs the solve to
+       still be alive. */
+    TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(
+        pTdnf, pQueueJobs, pSolv, pTrans, pNativeSolve, nProblems,
+        nProblems && dwSkipProblem != SKIPPROBLEM_NONE,
+        nUnresolved, UINT32_MAX, ppszExcludes,
+        nAllowErasing, nAutoErase, dwError);
     BAIL_ON_TDNF_ERROR(dwError);
 
     *ppInfo = pInfo;
 
 cleanup:
+    TDNFRepoMdNativeSolverLiveSolveRelease(pNativeSolve);
     if(pTrans)
     {
         transaction_free(pTrans);
@@ -483,7 +494,8 @@ TDNFGoalSolveNative(
     const Queue *pQueueJobs,
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
-    PTDNF_SOLVED_PKG_INFO *ppInfo
+    PTDNF_SOLVED_PKG_INFO *ppInfo,
+    void **ppHandle
     )
 {
     uint32_t dwError = 0;
@@ -566,7 +578,7 @@ TDNFGoalSolveNative(
                   (const char *const *)pTdnf->pConf->ppszProtectedPkgs,
                   (const char *const *)ppszUserInstalledPkgs,
                   (const char *const *)ppszCmdLinePaths, nReInstall,
-                  pTdnf->pRpmConfig, pszNativeArch, &pInfo, NULL);
+                  pTdnf->pRpmConfig, pszNativeArch, &pInfo, ppHandle);
     if(dwError && !IsNullOrEmptyString(TDNFRepoMdLastError()))
     {
         pr_err("native-solver: %s\n", TDNFRepoMdLastError());
