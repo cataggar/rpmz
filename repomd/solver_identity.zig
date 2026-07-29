@@ -166,13 +166,23 @@ pub const Index = struct {
         } });
     }
 
-    pub fn resolveInstalledNevra(
+    /// Every installed package matching the selector, in index order.
+    ///
+    /// An rpmdb can hold several rows with the same name-EVR-arch, and an
+    /// erase naming that NEVRA has to take all of them: libsolv resolved the
+    /// name into a job that matched every such solvable. Callers that need a
+    /// single package must use `resolveInstalled` with the rpmdb header
+    /// number instead, which is the only unambiguous installed identity.
+    pub fn resolveInstalledNevraAll(
         self: *const Index,
+        allocator: std.mem.Allocator,
         selector: AvailableSelector,
-    ) ResolveError!solver_model.PackageId {
+    ) (ResolveError || std.mem.Allocator.Error)![]const solver_model.PackageId {
         try validateSelector(selector);
         if (selector.checksum != null) return error.InvalidPackageSelector;
-        var match: ?solver_model.PackageId = null;
+        var matches: std.array_list.Managed(solver_model.PackageId) =
+            .init(allocator);
+        errdefer matches.deinit();
         for (self.entries) |entry| {
             const installed = switch (entry.key) {
                 .installed => |value| value,
@@ -185,10 +195,10 @@ pub const Index = struct {
                 installed.repository,
                 selector.repository,
             ) or !matchesNevra(package.source.nevra, selector)) continue;
-            if (match != null) return error.AmbiguousPackageSelector;
-            match = entry.package;
+            try matches.append(entry.package);
         }
-        return match orelse error.PackageNotFound;
+        if (matches.items.len == 0) return error.PackageNotFound;
+        return matches.toOwnedSlice();
     }
 
     pub fn resolveAvailable(
@@ -458,21 +468,36 @@ test "index preserves installed duplicates and rejects ambiguous available selec
         .release = "1",
         .arch = "x86_64",
     };
-    try std.testing.expectError(
-        error.AmbiguousPackageSelector,
-        index.resolveInstalledNevra(installed_selector),
+    const duplicates = try index.resolveInstalledNevraAll(
+        std.testing.allocator,
+        installed_selector,
     );
-    const unique = try index.resolveInstalledNevra(.{
-        .repository = installed_selector.repository,
-        .name = "unique",
-        .epoch = installed_selector.epoch,
-        .version = installed_selector.version,
-        .release = installed_selector.release,
-        .arch = installed_selector.arch,
-    });
+    defer std.testing.allocator.free(duplicates);
+    try std.testing.expectEqual(@as(usize, 2), duplicates.len);
+    try std.testing.expectEqual(
+        @as(u32, 41),
+        universe.package(duplicates[0]).?.installed.?.rpmdb_hnum,
+    );
+    try std.testing.expectEqual(
+        @as(u32, 73),
+        universe.package(duplicates[1]).?.installed.?.rpmdb_hnum,
+    );
+    const unique = try index.resolveInstalledNevraAll(
+        std.testing.allocator,
+        .{
+            .repository = installed_selector.repository,
+            .name = "unique",
+            .epoch = installed_selector.epoch,
+            .version = installed_selector.version,
+            .release = installed_selector.release,
+            .arch = installed_selector.arch,
+        },
+    );
+    defer std.testing.allocator.free(unique);
+    try std.testing.expectEqual(@as(usize, 1), unique.len);
     try std.testing.expectEqual(
         @as(u32, 91),
-        universe.package(unique).?.installed.?.rpmdb_hnum,
+        universe.package(unique[0]).?.installed.?.rpmdb_hnum,
     );
 
     const selector = AvailableSelector{

@@ -1,4 +1,4 @@
-//! Owning live-input adapter for strict native shadow solves.
+//! Owning live-input adapter for native live solves.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -14,8 +14,8 @@ const solver_model = @import("solver_model.zig");
 const solver_native = @import("solver_native.zig");
 const solver_result_abi = @import("solver_result_abi.zig");
 const solver_result_c = @import("solver_result_c.zig");
-const solver_shadow = @import("solver_shadow.zig");
-const solver_shadow_abi = @import("solver_shadow_abi.zig");
+const solver_legacy_abi = @import("solver_legacy_abi.zig");
+const solver_legacy_result = @import("solver_legacy_result.zig");
 const solver_visibility = @import("solver_visibility.zig");
 
 pub const system_repository_id = "@System";
@@ -92,7 +92,7 @@ pub const ProduceError =
         UnsupportedInput,
     };
 
-/// Move-only owner for every model used by a strict live shadow solve.
+/// Move-only owner for every model used by a native live solve.
 pub const OwnedSolve = struct {
     arena_state: std.heap.ArenaAllocator,
     universe: *solver_model.Universe,
@@ -264,9 +264,21 @@ pub fn produce(
         universe,
     );
     defer identity.deinit();
+    // An erase names a NEVRA, and the rpmdb may hold several rows under it.
+    // Each row becomes its own erase job, so resolve them before sizing the
+    // job list.
+    const erase_targets = try arena.alloc(
+        []const solver_model.PackageId,
+        input.erase_jobs.len,
+    );
+    var erase_job_count: usize = 0;
+    for (input.erase_jobs, erase_targets) |job, *targets| {
+        targets.* = try identity.resolveInstalledNevraAll(arena, job.selector);
+        erase_job_count += targets.len;
+    }
     const jobs = try arena.alloc(
         solver_model.Job,
-        input.jobs.len + input.erase_jobs.len + input.locked_names.len +
+        input.jobs.len + erase_job_count + input.locked_names.len +
             global_job_count,
     );
     for (input.jobs, jobs[0..input.jobs.len]) |job, *translated| {
@@ -278,19 +290,18 @@ pub fn produce(
             .reason = .user,
         };
     }
-    for (
-        input.erase_jobs,
-        jobs[input.jobs.len .. input.jobs.len + input.erase_jobs.len],
-    ) |job, *translated| {
-        translated.* = .{
-            .action = .erase,
-            .selection = .{
-                .package = try identity.resolveInstalledNevra(job.selector),
-            },
-            .reason = .user,
-        };
+    var erase_index = input.jobs.len;
+    for (erase_targets) |targets| {
+        for (targets) |package| {
+            jobs[erase_index] = .{
+                .action = .erase,
+                .selection = .{ .package = package },
+                .reason = .user,
+            };
+            erase_index += 1;
+        }
     }
-    const exact_job_count = input.jobs.len + input.erase_jobs.len;
+    const exact_job_count = input.jobs.len + erase_job_count;
     for (
         input.locked_names,
         jobs[exact_job_count .. exact_job_count + input.locked_names.len],
@@ -435,26 +446,6 @@ pub fn solveOwnedC(
     var solved = try produce(parent_allocator, input);
     defer solved.deinit();
     return solved.buildOwnedC();
-}
-
-pub fn compare(
-    parent_allocator: std.mem.Allocator,
-    input: Input,
-    legacy: *const solver_shadow_abi.LegacyResult,
-    comparison: *solver_shadow_abi.Comparison,
-) (ProduceError ||
-    solver_result_c.BuildError ||
-    solver_shadow.CompareError)!void {
-    var solved = try produce(parent_allocator, input);
-    defer solved.deinit();
-    const native = try solved.buildOwnedC();
-    defer solver_result_c.freeOwnedResult(native);
-    try solver_shadow.compare(
-        parent_allocator,
-        native,
-        legacy,
-        comparison,
-    );
 }
 
 const fixture_repomd =
@@ -1240,7 +1231,7 @@ test "live producer records broken exact jobs under skip-broken policy" {
     );
 }
 
-test "live comparison observes the exact legacy install projection" {
+test "live solve projects the install into the legacy result" {
     var fixture = try Fixture.create();
     defer fixture.cleanup();
     var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -1254,25 +1245,42 @@ test "live comparison observes the exact legacy install projection" {
         &repositories,
         &jobs,
     );
-    var legacy_package = std.mem.zeroes(
-        solver_shadow_abi.LegacyPackage,
-    );
-    legacy_package.pszName = "candidate";
-    legacy_package.pszRepoName = "repo";
-    legacy_package.pszVersion = "1.0";
-    legacy_package.pszRelease = "1";
-    legacy_package.pszArch = "x86_64";
-    var legacy = std.mem.zeroes(solver_shadow_abi.LegacyResult);
-    legacy.pPkgsToInstall = @ptrCast(&legacy_package);
-    var comparison = std.mem.zeroes(solver_shadow_abi.Comparison);
 
-    try compare(
-        std.testing.allocator,
-        input,
-        &legacy,
-        &comparison,
+    var solved: [*c]solver_legacy_abi.LegacyResult = null;
+    try legacyResultCase(std.testing.allocator, input, &solved);
+    defer solver_legacy_result.free(solved);
+
+    const install = solved[0].pPkgsToInstall;
+    try std.testing.expect(install != null);
+    try std.testing.expect(install[0].pNext == null);
+    try std.testing.expectEqualStrings(
+        "candidate",
+        std.mem.span(install[0].pszName.?),
     );
-    try std.testing.expectEqual(@as(u32, 1), comparison.dwStatus);
+    try std.testing.expectEqualStrings(
+        "1.0",
+        std.mem.span(install[0].pszVersion.?),
+    );
+    try std.testing.expectEqualStrings(
+        "1",
+        std.mem.span(install[0].pszRelease.?),
+    );
+    try std.testing.expectEqualStrings(
+        "x86_64",
+        std.mem.span(install[0].pszArch.?),
+    );
+}
+
+/// Run the exact sequence `TDNFRepoMdNativeSolverLiveSolve` runs: solve, hand
+/// the native result to the legacy projection, and own the outcome.
+fn legacyResultCase(
+    allocator: std.mem.Allocator,
+    input: Input,
+    output: *[*c]solver_legacy_abi.LegacyResult,
+) !void {
+    const native = try solveOwnedC(allocator, input);
+    defer solver_result_c.freeOwnedResult(native);
+    try solver_legacy_result.build(allocator, native, true, output);
 }
 
 test "live producer fails closed on unsupported and ambiguous input" {
@@ -1374,14 +1382,14 @@ fn allocationFailureCase(
     );
 }
 
-fn comparisonAllocationFailureCase(
+fn legacyResultAllocationFailureCase(
     allocator: std.mem.Allocator,
     input: Input,
-    legacy: *const solver_shadow_abi.LegacyResult,
 ) !void {
-    var comparison = std.mem.zeroes(solver_shadow_abi.Comparison);
-    try compare(allocator, input, legacy, &comparison);
-    try std.testing.expectEqual(@as(u32, 1), comparison.dwStatus);
+    var solved: [*c]solver_legacy_abi.LegacyResult = null;
+    try legacyResultCase(allocator, input, &solved);
+    defer solver_legacy_result.free(solved);
+    try std.testing.expect(solved[0].pPkgsToInstall != null);
 }
 
 test "live producer cleans every allocation failure" {
@@ -1406,7 +1414,7 @@ test "live producer cleans every allocation failure" {
     );
 }
 
-test "live comparison cleans every allocation failure" {
+test "live legacy projection cleans every allocation failure" {
     var fixture = try Fixture.create();
     defer fixture.cleanup();
     var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -1421,21 +1429,11 @@ test "live comparison cleans every allocation failure" {
         &jobs,
     );
     input.hidden_available = &.{};
-    var legacy_package = std.mem.zeroes(
-        solver_shadow_abi.LegacyPackage,
-    );
-    legacy_package.pszName = "candidate";
-    legacy_package.pszRepoName = "repo";
-    legacy_package.pszVersion = "1.0";
-    legacy_package.pszRelease = "1";
-    legacy_package.pszArch = "x86_64";
-    var legacy = std.mem.zeroes(solver_shadow_abi.LegacyResult);
-    legacy.pPkgsToInstall = @ptrCast(&legacy_package);
 
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
-        comparisonAllocationFailureCase,
-        .{ input, &legacy },
+        legacyResultAllocationFailureCase,
+        .{input},
     );
 }
 

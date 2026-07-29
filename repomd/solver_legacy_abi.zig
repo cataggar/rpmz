@@ -41,12 +41,3 @@ pub const LegacyResult = extern struct {
     ppszPkgsNotResolved: ?*anyopaque,
     ppszPkgsUserInstall: ?*anyopaque,
 };
-
-pub const Comparison = extern struct {
-    dwStatus: u32,
-    dwReason: u32,
-    dwActionKind: u32,
-    dwDifferenceIndex: u32,
-    dwNativeCount: u32,
-    dwLegacyCount: u32,
-};

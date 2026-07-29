@@ -19,6 +19,7 @@ pub const Package = extern struct {
     nHasEpoch: c_int,
     nHasRpmDbHnum: c_int,
     nChecksumIsPkgId: c_int,
+    nChecksumIsHeaderOnly: c_int,
     nHasPackageSize: c_int,
     nHasInstalledSize: c_int,
 };

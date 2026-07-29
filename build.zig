@@ -370,8 +370,8 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const solver_shadow_abi_mod = b.createModule(.{
-        .root_source_file = b.path("repomd/solver_shadow_abi.zig"),
+    const solver_legacy_abi_mod = b.createModule(.{
+        .root_source_file = b.path("repomd/solver_legacy_abi.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -381,7 +381,7 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
     });
     repomd_abi_mod.addImport("solver_result_abi", solver_result_abi_mod);
-    repomd_abi_mod.addImport("solver_shadow_abi", solver_shadow_abi_mod);
+    repomd_abi_mod.addImport("solver_legacy_abi", solver_legacy_abi_mod);
     repomd_abi_mod.addImport("solver_live_abi", solver_live_abi_mod);
     repomd_abi_mod.addImport(
         "transaction_plan_capture_abi",

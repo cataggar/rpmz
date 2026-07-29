@@ -49,7 +49,7 @@ def test_install_twice(utils):
     assert utils.check_package(pkgname, version=latest)
 
 
-def test_installonly_native_shadow(utils):
+def test_installonly_limit_and_evict(utils):
     pkgname = PKGNAME
     first = PKG_VERSIONS[0]
     latest = PKG_VERSIONS[-1]
@@ -62,10 +62,7 @@ def test_installonly_native_shadow(utils):
         'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
         '--debugsolver', '--noautoremove', pkgname,
     ])
-    output = '\n'.join(ret['stdout'] + ret['stderr'])
     assert ret['retval'] == 0, ret
-    assert 'native-solver-shadow: projected match' in output
-    assert 'native-solver-shadow: unavailable' not in output
     assert utils.check_package(pkgname, version=first)
     assert not utils.check_package(pkgname, version=latest)
 
@@ -73,26 +70,18 @@ def test_installonly_native_shadow(utils):
         'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
         '--debugsolver', '--noautoremove',
     ])
-    output = '\n'.join(ret['stdout'] + ret['stderr'])
     assert ret['retval'] == 0, ret
-    assert 'native-solver-shadow: projected match' in output
-    assert 'native-solver-shadow: unavailable' not in output
     assert utils.check_package(pkgname, version=first)
     assert not utils.check_package(pkgname, version=latest)
 
-    # Lowering the limit below the installed count makes libsolv evict the
-    # excess versions through the TDNFSolv retry loop. The native solver
-    # derives the same evictions from installonly_limit itself, so this stays
-    # a match rather than the decline it used to be.
+    # Lowering the limit below the installed count must evict the excess
+    # versions; the solver derives those evictions from installonly_limit.
     utils.edit_config({"installonly_limit": "1"})
     ret = utils.run([
         'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
         '--debugsolver', '--noautoremove', pkgname,
     ])
-    output = '\n'.join(ret['stdout'] + ret['stderr'])
     assert ret['retval'] == 0, ret
-    assert 'native-solver-shadow: projected match' in output
-    assert 'native-solver-shadow: unavailable' not in output
     assert utils.check_package(pkgname, version=first)
     assert not utils.check_package(pkgname, version=latest)
 

@@ -564,55 +564,6 @@ TDNFAddGoal(
     char** ppszExcludes
     );
 
-uint32_t
-TDNFGetPackagesWithSpecifiedType(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo,
-    Id dwType
-    );
-
-uint32_t
-TDNFGetInstallPackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo
-    );
-
-uint32_t
-TDNFGetReinstallPackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo
-    );
-
-uint32_t
-TDNFGetUpgradePackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo);
-
-uint32_t
-TDNFGetErasePackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo
-    );
-
-uint32_t
-TDNFGetObsoletedPackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo
-    );
-
-uint32_t
-TDNFGetDownGradePackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo,
-    PTDNF_PKG_INFO* pRemovePkgInfo
-    );
 
 uint32_t
 TDNFPkgsToExclude(

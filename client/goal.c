@@ -10,12 +10,12 @@
 
 static
 uint32_t
-TDNFGoalObserveNativeSolver(
+TDNFGoalSolveNative(
     PTDNF pTdnf,
     const Queue *pQueueJobs,
-    const TDNF_SOLVED_PKG_INFO *pInfo,
     int nAllowErasing,
-    int nAutoErase, int nStampFlags, int nStampedJobCount
+    int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
+    PTDNF_SOLVED_PKG_INFO *ppInfo
 );
 
 static
@@ -64,212 +64,6 @@ TDNFGoalBuildNativeSolverHiddenAvailable(
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppHiddenAvailable,
     uint32_t *pdwHiddenAvailableCount
 );
-
-static
-uint32_t
-TDNFGoalGetAllResultsIgnoreNoData(
-    Transaction* pTrans,
-    const Solver* pSolv,
-    PTDNF_SOLVED_PKG_INFO* ppInfo,
-    PTDNF pTdnf,
-    int nReInstall
-);
-
-uint32_t
-TDNFGetPackagesWithSpecifiedType(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo,
-    Id dwType)
-{
-    uint32_t dwError = 0;
-    uint32_t dwCount = 0;
-    PSolvPackageList pPkgList = NULL;
-
-    if(!pTdnf || !pTdnf->pSack|| !pTrans || !pPkgInfo)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = SolvGetTransResultsWithType(
-                  pTrans,
-                  dwType,
-                  &pPkgList);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvGetPackageListSize(pPkgList, &dwCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    if(dwCount > 0)
-    {
-        dwError = TDNFPopulatePkgInfos(
-                      pTdnf->pSack,
-                      pPkgList,
-                      pPkgInfo);
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-cleanup:
-    if(pPkgList)
-    {
-        SolvFreePackageList(pPkgList);
-    }
-    return dwError;
-
-error:
-    if(dwError == ERROR_TDNF_NO_DATA)
-    {
-        dwError = 0;
-    }
-    goto cleanup;
-}
-
-uint32_t
-TDNFGetInstallPackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo)
-{
-    return TDNFGetPackagesWithSpecifiedType(
-               pTrans,
-               pTdnf,
-               pPkgInfo,
-               SOLVER_TRANSACTION_INSTALL);
-}
-
-uint32_t
-TDNFGetReinstallPackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo)
-{
-    return TDNFGetPackagesWithSpecifiedType(
-               pTrans,
-               pTdnf,
-               pPkgInfo,
-               SOLVER_TRANSACTION_REINSTALL);
-}
-
-uint32_t
-TDNFGetUpgradePackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo)
-{
-    return TDNFGetPackagesWithSpecifiedType(
-               pTrans,
-               pTdnf,
-               pPkgInfo,
-               SOLVER_TRANSACTION_UPGRADE);
-}
-
-uint32_t
-TDNFGetErasePackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo)
-{
-    return TDNFGetPackagesWithSpecifiedType(
-               pTrans,
-               pTdnf,
-               pPkgInfo,
-               SOLVER_TRANSACTION_ERASE);
-}
-
-uint32_t
-TDNFGetObsoletedPackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo)
-{
-    return TDNFGetPackagesWithSpecifiedType(
-               pTrans,
-               pTdnf,
-               pPkgInfo,
-               SOLVER_TRANSACTION_OBSOLETED);
-}
-
-uint32_t
-TDNFGetDownGradePackages(
-    Transaction* pTrans,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO* pPkgInfo,
-    PTDNF_PKG_INFO* pRemovePkgInfo)
-{
-    uint32_t dwError = 0;
-    PSolvPackageList pInstalledPkgList = NULL;
-    Id dwInstalledId = 0;
-    PSolvPackageList pRemovePkgList = NULL;
-    PTDNF_PKG_INFO pInfo = NULL;
-    Queue queuePkgToRemove = {0};
-
-    if(!pTdnf || !pTdnf->pSack|| !pTrans || !pPkgInfo || !pRemovePkgInfo)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    queue_init(&queuePkgToRemove);
-    dwError = TDNFGetPackagesWithSpecifiedType(
-                  pTrans,
-                  pTdnf,
-                  pPkgInfo,
-                  SOLVER_TRANSACTION_DOWNGRADE);
-    BAIL_ON_TDNF_ERROR(dwError);
-    pInfo = *pPkgInfo;
-    if(!pInfo)
-    {
-        dwError = ERROR_TDNF_NO_DATA;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    while(pInfo)
-    {
-        dwError = SolvFindInstalledPkgByName(
-                      pTdnf->pSack,
-                      pInfo->pszName,
-                      &pInstalledPkgList);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPackageId(pInstalledPkgList, 0, &dwInstalledId);
-        BAIL_ON_TDNF_ERROR(dwError);
-        queue_push(&queuePkgToRemove, dwInstalledId);
-        pInfo = pInfo->pNext;
-        SolvFreePackageList(pInstalledPkgList);
-        pInstalledPkgList = NULL;
-    }
-
-    if(queuePkgToRemove.count > 0)
-    {
-        dwError = SolvQueueToPackageList(&queuePkgToRemove, &pRemovePkgList);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = TDNFPopulatePkgInfos(
-                      pTdnf->pSack,
-                      pRemovePkgList,
-                      pRemovePkgInfo);
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-cleanup:
-    queue_free(&queuePkgToRemove);
-    if(pRemovePkgList)
-    {
-        SolvFreePackageList(pRemovePkgList);
-    }
-    if(pInstalledPkgList)
-    {
-        SolvFreePackageList(pInstalledPkgList);
-    }
-    return dwError;
-
-error:
-    if(dwError == ERROR_TDNF_NO_DATA)
-    {
-        dwError = 0;
-    }
-    goto cleanup;
-}
 
 static uint32_t
 SolvAddDebugInfo(
@@ -509,35 +303,9 @@ TDNFSolv(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = TDNFGoalGetAllResultsIgnoreNoData(
-                  pTrans,
-                  pSolv,
-                  &pInfo,
-                  pTdnf,
-                  nReInstall);
+    dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
+                                  nFlags, nStampedJobCount, nReInstall, &pInfo);
     BAIL_ON_TDNF_ERROR(dwError);
-
-    if(pTdnf->pArgs->nDebugSolver ||
-       TDNFRepoMdNativeSolverShadowMode() !=
-           TDNF_REPOMD_NATIVE_SOLVER_SHADOW_OFF)
-    {
-        uint32_t dwShadowError = TDNFGoalObserveNativeSolver(
-                                     pTdnf,
-                                     pQueueJobs,
-                                     pInfo,
-                                     nAllowErasing,
-                                     nAutoErase, nFlags, nStampedJobCount);
-        if(dwShadowError == ERROR_TDNF_NATIVE_SOLVER_MISMATCH)
-        {
-            dwError = dwShadowError;
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-        if(dwShadowError)
-        {
-            pr_info("native-solver-shadow: unavailable (%u)\n",
-                    dwShadowError);
-        }
-    }
 
     *ppInfo = pInfo;
 
@@ -708,12 +476,12 @@ error:
 }
 static
 uint32_t
-TDNFGoalObserveNativeSolver(
+TDNFGoalSolveNative(
     PTDNF pTdnf,
     const Queue *pQueueJobs,
-    const TDNF_SOLVED_PKG_INFO *pInfo,
     int nAllowErasing,
-    int nAutoErase, int nStampFlags, int nStampedJobCount
+    int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
+    PTDNF_SOLVED_PKG_INFO *ppInfo
     )
 {
     uint32_t dwError = 0;
@@ -728,9 +496,9 @@ TDNFGoalObserveNativeSolver(
     char **ppszCmdLinePaths = NULL;
     const char *pszNativeArch = NULL;
     char *pszNativeArchOwned = NULL;
-    TDNF_REPOMD_NATIVE_SOLVER_COMPARE_RESULT comparison = {0};
+    PTDNF_SOLVED_PKG_INFO pInfo = NULL;
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
-       !pTdnf->pSack->pPool || !pTdnf->pRpmConfig || !pQueueJobs || !pInfo)
+       !pTdnf->pSack->pPool || !pTdnf->pRpmConfig || !pQueueJobs || !ppInfo)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -776,7 +544,7 @@ TDNFGoalObserveNativeSolver(
     dwError = TDNFGoalBuildNativeSolverHiddenAvailable(
                   pTdnf, &pHiddenAvailable, &dwHiddenAvailableCount);
     BAIL_ON_TDNF_ERROR(dwError);
-    dwError = TDNFRepoMdNativeSolverLiveCompareV16(
+    dwError = TDNFRepoMdNativeSolverLiveSolve(
                   pRepos, dwRepoCount, pJobs, dwJobCount,
                   pEraseJobs, dwEraseJobCount, pHiddenAvailable, dwHiddenAvailableCount,
                   pTdnf->pArgs->nAllDeps, pTdnf->pArgs->nBest, nAutoErase, pTdnf->pArgs->nSkipBroken, nAllowErasing,
@@ -786,43 +554,20 @@ TDNFGoalObserveNativeSolver(
                   (uint32_t)pTdnf->pConf->nInstallOnlyLimit,
                   (const char *const *)pTdnf->pConf->ppszProtectedPkgs,
                   (const char *const *)ppszUserInstalledPkgs,
-                  (const char *const *)ppszCmdLinePaths,
-                  pTdnf->pRpmConfig, pszNativeArch, pInfo, &comparison);
+                  (const char *const *)ppszCmdLinePaths, nReInstall,
+                  pTdnf->pRpmConfig, pszNativeArch, &pInfo);
     if(dwError && !IsNullOrEmptyString(TDNFRepoMdLastError()))
     {
-        pr_info("native-solver-shadow: %s\n", TDNFRepoMdLastError());
+        pr_err("native-solver: %s\n", TDNFRepoMdLastError());
     }
     BAIL_ON_TDNF_ERROR(dwError);
-    switch(comparison.dwStatus)
-    {
-        case TDNF_REPOMD_NATIVE_SOLVER_COMPARE_PROJECTED_MATCH:
-            pr_info("native-solver-shadow: projected match\n");
-            break;
-        case TDNF_REPOMD_NATIVE_SOLVER_COMPARE_MISMATCH:
-            pr_err("native-solver-shadow: mismatch action=%u index=%u "
-                   "native=%u legacy=%u\n",
-                   comparison.dwActionKind,
-                   comparison.dwDifferenceIndex,
-                   comparison.dwNativeCount,
-                   comparison.dwLegacyCount);
-            if(TDNFRepoMdNativeSolverShadowMode() ==
-               TDNF_REPOMD_NATIVE_SOLVER_SHADOW_STRICT)
-            {
-                dwError = ERROR_TDNF_NATIVE_SOLVER_MISMATCH;
-                BAIL_ON_TDNF_ERROR(dwError);
-            }
-            break;
-        case TDNF_REPOMD_NATIVE_SOLVER_COMPARE_UNSUPPORTED:
-            pr_info("native-solver-shadow: comparison unsupported "
-                    "reason=%u action=%u\n",
-                    comparison.dwReason,
-                    comparison.dwActionKind);
-            break;
-        default:
-            dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
-            BAIL_ON_TDNF_ERROR(dwError);
-    }
+    *ppInfo = pInfo;
+    pInfo = NULL;
 cleanup:
+    if(pInfo)
+    {
+        TDNFFreeSolvedPackageInfo(pInfo);
+    }
     TDNF_SAFE_FREE_MEMORY(pszNativeArchOwned);
     TDNF_SAFE_FREE_MEMORY(ppszLockedPkgs);
     TDNF_SAFE_FREE_MEMORY(ppszCmdLinePaths);
@@ -1531,87 +1276,6 @@ cleanup:
     return dwError;
 
 error:
-    goto cleanup;
-}
-
-static
-uint32_t
-TDNFGoalGetAllResultsIgnoreNoData(
-    Transaction* pTrans,
-    const Solver* pSolv,
-    PTDNF_SOLVED_PKG_INFO* ppInfo,
-    PTDNF pTdnf,
-    int nReInstall
-    )
-{
-    uint32_t dwError = 0;
-    PTDNF_SOLVED_PKG_INFO pInfo = NULL;
-
-    if(!pTrans || !pSolv || !ppInfo)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFAllocateMemory(
-                  1,
-                  sizeof(TDNF_SOLVED_PKG_INFO),
-                  (void**)&pInfo);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFGetInstallPackages(
-                  pTrans,
-                  pTdnf,
-                  &pInfo->pPkgsToInstall);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFGetUpgradePackages(
-                  pTrans,
-                  pTdnf,
-                  &pInfo->pPkgsToUpgrade);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFGetDownGradePackages(
-                  pTrans,
-                  pTdnf,
-                  &pInfo->pPkgsToDowngrade,
-                  &pInfo->pPkgsRemovedByDowngrade);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFGetErasePackages(
-                  pTrans,
-                  pTdnf,
-                  &pInfo->pPkgsToRemove);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    if(nReInstall)
-    {
-        dwError = TDNFGetReinstallPackages(
-                      pTrans,
-                      pTdnf,
-                      &pInfo->pPkgsToReinstall);
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFGetObsoletedPackages(
-                  pTrans,
-                  pTdnf,
-                  &pInfo->pPkgsObsoleted);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    *ppInfo = pInfo;
-cleanup:
-    return dwError;
-
-error:
-    if(ppInfo)
-    {
-        *ppInfo = NULL;
-    }
-    if(pInfo)
-    {
-        TDNFFreeSolvedPackageInfo(pInfo);
-    }
     goto cleanup;
 }
 

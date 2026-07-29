@@ -238,6 +238,7 @@ fn fillPackage(
         out.nHasRpmDbHnum = 1;
     }
     out.nChecksumIsPkgId = @intFromBool(source.checksum.is_pkgid);
+    out.nChecksumIsHeaderOnly = @intFromBool(source.checksum.header_only);
     if (source.size.package) |size| {
         out.nPackageSize = size;
         out.nHasPackageSize = 1;

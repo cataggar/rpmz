@@ -114,8 +114,6 @@ def test_install_obsoleted_via_snapshot_does_not_pull_obsoleting(utils):
         assert ret['retval'] == 0, (
             f"install of {PKGNAME_OBSOLETED} via snapshot repo failed: {ret['stderr']}"
         )
-        assert "native-solver-shadow: projected match" in \
-            "\n".join(ret['stdout'] + ret['stderr'])
     finally:
         shutil.rmtree("debugdata", ignore_errors=True)
 
