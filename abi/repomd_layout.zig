@@ -635,6 +635,8 @@ test "native solver live ABI mirrors match the public C layouts" {
             "pszChecksumValue",
             "dwEpoch",
             "nChecksumIsPkgId",
+            "dwQueuePair",
+            "nHasQueuePair",
         },
     );
 }

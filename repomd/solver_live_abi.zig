@@ -8,4 +8,6 @@ pub const Job = extern struct {
     pszChecksumValue: ?[*:0]const u8,
     dwEpoch: u32,
     nChecksumIsPkgId: c_int,
+    dwQueuePair: u32,
+    nHasQueuePair: c_int,
 };
