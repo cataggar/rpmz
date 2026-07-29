@@ -66,6 +66,10 @@ pub const Input = struct {
     dist_sync_all: bool = false,
     locked_names: []const []const u8 = &.{},
     installonly_names: []const []const u8 = &.{},
+    /// Maximum simultaneously installed versions of an `installonly_names`
+    /// package. The native solver derives the evictions that keep the count
+    /// at or below this, exactly as the libsolv retry loop in TDNFSolv did.
+    installonly_limit: u32 = std.math.maxInt(u32),
     best: bool = false,
     allow_erasing: bool = false,
     clean_deps: bool = false,
@@ -348,7 +352,7 @@ pub fn produce(
             .clean_deps = input.clean_deps,
             .skip_broken = input.skip_broken,
             .protected_names = input.protected_names,
-            .installonly_limit = std.math.maxInt(u32),
+            .installonly_limit = input.installonly_limit,
             .installonly_names = input.installonly_names,
         },
     );
