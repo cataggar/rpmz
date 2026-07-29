@@ -93,6 +93,18 @@ Or use the convenience step:
 zig build check
 ```
 
+The Zig integration suite under `ztests/` covers the same ground for the
+commands it has been migrated to, and is much faster because each test
+installs into its own throwaway root instead of the host rpmdb: a
+disposable root starts empty, so a transaction has no installed packages
+to validate against. It reuses the RPM fixtures `pytests` generates, and
+skips itself when they are absent. Installing sets each file's owner from
+its rpm header, so like pytest it needs root:
+
+```sh
+sudo -E zig build ztest --prefix ./out
+```
+
 The CI-sized native smoke suite builds signed fixture packages with the
 host tools, then executes every `tdnf-rpm*` helper against scratch roots:
 
