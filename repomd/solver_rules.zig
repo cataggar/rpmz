@@ -1278,7 +1278,10 @@ fn containsInstalled(
 }
 
 fn sameEvra(left: metadata.Package, right: metadata.Package) bool {
-    return left.nevra.epoch == right.nevra.epoch and
+    // rpm treats an absent epoch as 0, and both libsolv readers fold the two
+    // spellings onto the same evr string, so an rpmdb package with no epoch
+    // and a repository package with epoch 0 are the same evr.
+    return (left.nevra.epoch orelse 0) == (right.nevra.epoch orelse 0) and
         std.mem.eql(u8, left.nevra.version, right.nevra.version) and
         std.mem.eql(u8, left.nevra.release, right.nevra.release) and
         std.mem.eql(u8, left.nevra.arch, right.nevra.arch);
@@ -1447,6 +1450,7 @@ const TestPackage = struct {
     name: []const u8,
     version: []const u8 = "1",
     release: []const u8 = "1",
+    epoch: ?u32 = null,
     arch: []const u8 = "x86_64",
     provides: []const metadata.Relation = &.{},
     requires: []const metadata.Relation = &.{},
@@ -1510,6 +1514,7 @@ const TestGraphBuilder = struct {
                 .name = spec.name,
                 .version = spec.version,
                 .release = spec.release,
+                .epoch = spec.epoch,
                 .arch = spec.arch,
             },
             .checksum = .{
@@ -1990,6 +1995,58 @@ test "conflicts obsoletes and multiversion same-name rules retain origins" {
                     origin.right == @as(solver_model.PackageId, @enumFromInt(3)))),
         );
     }
+}
+
+test "multiversion same-name rule spans an absent and a zero epoch" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var graph_builder = TestGraphBuilder.init(arena_state.allocator());
+    const installed = try graph_builder.addRepository("@System", .installed);
+    const available = try graph_builder.addRepository("available", .available);
+    // The rpmdb yields no epoch for a package whose spec omits Epoch, while
+    // createrepo_c writes epoch="0" for the same package, so the two halves of
+    // one identity reach the model with different spellings.
+    const installed_id = try graph_builder.addPackage(installed, .{
+        .name = "kernel",
+        .version = "1",
+    });
+    const available_id = try graph_builder.addPackage(available, .{
+        .name = "kernel",
+        .version = "1",
+        .epoch = 0,
+    });
+    const newer_id = try graph_builder.addPackage(available, .{
+        .name = "kernel",
+        .version = "2",
+        .epoch = 0,
+    });
+    var graph = try graph_builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const jobs = [_]solver_model.Job{
+        .{ .action = .multiversion, .selection = .{ .name = "kernel" } },
+    };
+    var formula = try generateBase(
+        std.testing.allocator,
+        &graph.universe,
+        .{ .jobs = &jobs },
+        testArchitecture(),
+    );
+    defer formula.deinit();
+
+    var found_same_nevra = false;
+    for (formula.clauses) |clause| {
+        if (std.meta.activeTag(clause.origin) != .same_name) continue;
+        const origin = clause.origin.same_name;
+        try std.testing.expect(
+            origin.left != newer_id and origin.right != newer_id,
+        );
+        if ((origin.left == installed_id and origin.right == available_id) or
+            (origin.left == available_id and origin.right == installed_id))
+        {
+            found_same_nevra = true;
+        }
+    }
+    try std.testing.expect(found_same_nevra);
 }
 
 test "mechanical jobs emit clauses and preserve package policy state" {
