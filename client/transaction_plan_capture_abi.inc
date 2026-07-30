@@ -364,9 +364,6 @@ typedef struct
 typedef struct TDNF_TRANSACTION_PLAN_CAPTURE_OWNER
     TDNF_TRANSACTION_PLAN_CAPTURE_OWNER;
 
-typedef struct TDNF_TRANSACTION_PLAN_LIBSOLV_CAPTURE_OWNER
-    TDNF_TRANSACTION_PLAN_LIBSOLV_CAPTURE_OWNER;
-
 typedef struct
 {
     void *repository;
@@ -630,28 +627,6 @@ TDNFTransactionPlanCaptureDestroy(
     );
 
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
-TDNFTransactionPlanLibsolvCaptureCreate(
-    void *pool,
-    void *solver,
-    void *transaction,
-    const void *jobs,
-    const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW *trace,
-    int solve_status,
-    uint32_t problem_count,
-    uint32_t problems_accepted,
-    uint32_t unresolved_count,
-    const int32_t *installonly_erases,
-    uint32_t installonly_erase_count,
-    const TDNF_TRANSACTION_PLAN_CAPTURE **facts,
-    TDNF_TRANSACTION_PLAN_LIBSOLV_CAPTURE_OWNER **owner
-    );
-
-TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
-TDNFTransactionPlanLibsolvCaptureDestroy(
-    TDNF_TRANSACTION_PLAN_LIBSOLV_CAPTURE_OWNER *owner
-    );
-
-TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
 TDNFTransactionPlanStateSetEnabled(
     TDNF_TRANSACTION_PLAN_STATE **state,
     uint32_t enabled
@@ -884,13 +859,8 @@ TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
 TDNFTransactionPlanIntegrationCapturePending(
     TDNF_TRANSACTION_PLAN_STATE *state,
     void *pool,
-    void *solver,
-    void *transaction,
-    const void *jobs,
     const void *native_solve,
     const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW *trace,
-    int solve_status,
-    uint32_t problem_count,
     uint32_t problems_accepted,
     uint32_t unresolved_count,
     uint32_t terminal_problem_kind,
@@ -1067,9 +1037,8 @@ TDNFInitRepoWithResult(
 
 
 #define TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(                            \
-    _tdnf, _jobs, _solver, _transaction, _native, _problems, _accepted,  \
-    _unresolved, _terminal_problem, _excludes, _allow_erasing,          \
-    _clean_deps, _error)                                                 \
+    _tdnf, _native, _accepted, _unresolved, _terminal_problem, _excludes,\
+    _allow_erasing, _clean_deps, _error)                                \
     do {                                                                 \
         if (TDNFTransactionPlanStateIsEnabled(                           \
                 (_tdnf)->pTransactionPlanState))                         \
@@ -1146,11 +1115,10 @@ TDNFInitRepoWithResult(
             {                                                            \
                 (_error) = TDNFTransactionPlanIntegrationCapturePending( \
                     (_tdnf)->pTransactionPlanState,                       \
-                    (_tdnf)->pSack->pPool, (_solver), (_transaction),    \
-                    (_jobs), (_native),                                  \
+                    (_tdnf)->pSack->pPool, (_native),                    \
                     TDNFTransactionPlanRequestTraceGetView(              \
                         (_tdnf)->pRequestTrace),                          \
-                    (_problems), (uint32_t)(_problems), !!(_accepted),   \
+                    !!(_accepted),                                       \
                     (uint32_t)(_unresolved), (_terminal_problem),        \
                     _capture_repos, _repo_count, &_environment);         \
             }                                                            \
@@ -1160,36 +1128,28 @@ TDNFInitRepoWithResult(
     } while (0)
 
 #define TDNF_TRANSACTION_PLAN_CAPTURE_FAILED_SOLVE(                      \
-    _tdnf, _jobs, _solver, _native, _problems, _unresolved, _excludes,  \
-    _allow_erasing, _clean_deps, _error)                                \
+    _tdnf, _native, _unresolved, _excludes, _allow_erasing, _clean_deps, \
+    _error)                                                             \
     do {                                                                 \
         uint32_t _solve_error = (_error);                                \
-        TDNFTransactionPlanRequestTraceFinalize(                         \
-            (_tdnf)->pRequestTrace, (_jobs)->elements,                   \
-            (_jobs)->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);         \
         (_error) = 0;                                                    \
         TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(                            \
-            (_tdnf), (_jobs), (_solver), NULL, (_native), (_problems), 0,\
-            (_unresolved), UINT32_MAX, (_excludes), (_allow_erasing),   \
-            (_clean_deps), (_error));                                   \
+            (_tdnf), (_native), 0, (_unresolved), UINT32_MAX,            \
+            (_excludes), (_allow_erasing), (_clean_deps), (_error));     \
         if ((_error)) { TDNFTransactionPlanStateClear((_tdnf)->pTransactionPlanState); (_error) = _solve_error; goto error; } \
         (_error) = _solve_error;                                         \
         goto error;                                                      \
     } while (0)
 
 #define TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(                  \
-    _tdnf, _jobs, _solver, _transaction, _native, _problems, _unresolved, \
-    _problem_kind, _excludes, _allow_erasing, _clean_deps, _error)      \
+    _tdnf, _native, _unresolved, _problem_kind, _excludes, _allow_erasing,\
+    _clean_deps, _error)                                                \
     do {                                                                 \
         uint32_t _terminal_error = (_error);                             \
-        TDNFTransactionPlanRequestTraceFinalize(                         \
-            (_tdnf)->pRequestTrace, (_jobs)->elements,                   \
-            (_jobs)->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);         \
         (_error) = 0;                                                    \
         TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(                            \
-            (_tdnf), (_jobs), (_solver), (_transaction), (_native),       \
-            (_problems), 0, (_unresolved), (_problem_kind), (_excludes), \
-            (_allow_erasing), (_clean_deps), (_error));                 \
+            (_tdnf), (_native), 0, (_unresolved), (_problem_kind),       \
+            (_excludes), (_allow_erasing), (_clean_deps), (_error));     \
         if ((_error)) { TDNFTransactionPlanStateClear((_tdnf)->pTransactionPlanState); (_error) = _terminal_error; goto error; } \
         (_error) = _terminal_error;                                      \
         goto error;                                                      \

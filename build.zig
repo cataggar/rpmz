@@ -485,23 +485,6 @@ pub fn build(b: *Build) void {
         libsolv_flat_include,
     );
 
-    const transaction_plan_libsolv_mod = b.createModule(.{
-        .root_source_file = b.path("client/transaction_plan_libsolv.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .pic = true,
-    });
-    transaction_plan_libsolv_mod.addImport(
-        "transaction_plan_capture_abi",
-        transaction_plan_capture_abi_mod,
-    );
-    transaction_plan_libsolv_mod.addImport("tdnf_error", tdnf_error_mod);
-    transaction_plan_libsolv_mod.addImport("repomd", repomd_mod);
-    const transaction_plan_libsolv_test_step = b.step(
-        "transaction-plan-libsolv-test",
-        "Run authoritative libsolv transaction fact capture tests",
-    );
     const transaction_plan_native_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan_native.zig"),
         .target = target,
@@ -553,10 +536,6 @@ pub fn build(b: *Build) void {
     transaction_plan_integration_mod.addImport(
         "transaction_plan_capture",
         transaction_plan_capture_test_mod,
-    );
-    transaction_plan_integration_mod.addImport(
-        "transaction_plan_libsolv",
-        transaction_plan_libsolv_mod,
     );
     transaction_plan_integration_mod.addImport(
         "transaction_plan_native",
@@ -723,36 +702,6 @@ pub fn build(b: *Build) void {
         break :blk lib;
     };
 
-    {
-        const test_mod = b.createModule(.{
-            .root_source_file = b.path(
-                "client/transaction_plan_libsolv_test.zig",
-            ),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        });
-        test_mod.addImport(
-            "transaction_plan_capture_abi",
-            transaction_plan_capture_abi_mod,
-        );
-        test_mod.addImport(
-            "transaction_plan_libsolv",
-            transaction_plan_libsolv_mod,
-        );
-        test_mod.addImport(
-            "transaction_plan_request_trace",
-            transaction_plan_request_trace_mod,
-        );
-        test_mod.addObjectFile(libsolv.getEmittedBin());
-        test_mod.addObjectFile(libsolvext.getEmittedBin());
-        test_mod.linkLibrary(rpmzig_lib);
-        const tests = b.addTest(.{ .root_module = test_mod });
-        const run_tests = b.addRunArtifact(tests);
-        transaction_plan_libsolv_test_step.dependOn(&run_tests.step);
-        zig_test_step.dependOn(&run_tests.step);
-    }
-
     const transaction_plan_native_test_step = b.step(
         "transaction-plan-native-test",
         "Run native solver transaction plan capture tests",
@@ -799,10 +748,6 @@ pub fn build(b: *Build) void {
         test_mod.addImport(
             "transaction_plan_capture",
             transaction_plan_capture_test_mod,
-        );
-        test_mod.addImport(
-            "transaction_plan_libsolv",
-            transaction_plan_libsolv_mod,
         );
         test_mod.addImport(
             "transaction_plan_native",
@@ -1345,10 +1290,6 @@ pub fn build(b: *Build) void {
         transaction_plan_capture_test_mod,
     );
     tdnf_so_mod.addImport(
-        "transaction_plan_libsolv",
-        transaction_plan_libsolv_mod,
-    );
-    tdnf_so_mod.addImport(
         "transaction_plan_integration",
         transaction_plan_integration_mod,
     );
@@ -1406,8 +1347,6 @@ pub fn build(b: *Build) void {
     });
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureCreate");
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureDestroy");
-    libtdnf.forceUndefinedSymbol("TDNFTransactionPlanLibsolvCaptureCreate");
-    libtdnf.forceUndefinedSymbol("TDNFTransactionPlanLibsolvCaptureDestroy");
     b.installArtifact(libtdnf);
 
     const transaction_plan_handle_test_step = b.step(

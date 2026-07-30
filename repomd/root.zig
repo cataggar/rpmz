@@ -188,30 +188,50 @@ pub const RetainedSolve = union(enum) {
 
 pub const RefutedSolve = struct {
     prepared: solver_live.Prepared,
-    problems: solver_result.OwnedProblems,
+    refutation: solver_native.OwnedProjectedRefutation,
+    job_origins: []const ?u32,
     outcome: solver_model.Outcome,
 
     pub fn init(
         prepared: solver_live.Prepared,
-        problems: solver_result.OwnedProblems,
+        refutation: solver_native.OwnedProjectedRefutation,
+        job_origins: []const ?u32,
     ) RefutedSolve {
         return .{
             .prepared = prepared,
-            .problems = problems,
+            .refutation = refutation,
+            .job_origins = job_origins,
             .outcome = .{
                 .actions = &.{},
-                .problems = problems.problems,
+                .problems = refutation.problems.problems,
                 .skipped_jobs = &.{},
             },
         };
     }
 
     pub fn deinit(self: *RefutedSolve) void {
-        self.problems.deinit();
+        self.refutation.deinit();
         self.prepared.deinit();
         self.* = undefined;
     }
 };
+
+fn refutedJobOrigins(
+    prepared: *solver_live.Prepared,
+    effective_jobs: []const solver_model.Job,
+) error{ OutOfMemory, InvalidInput }![]const ?u32 {
+    if (effective_jobs.len == prepared.job_origins.len) {
+        return prepared.job_origins;
+    }
+    if (effective_jobs.len < prepared.job_origins.len) {
+        return error.InvalidInput;
+    }
+    const arena = prepared.arena_state.allocator();
+    const origins = try arena.alloc(?u32, effective_jobs.len);
+    @memset(origins, null);
+    @memcpy(origins[0..prepared.job_origins.len], prepared.job_origins);
+    return origins;
+}
 
 /// Release a solve retained by `TDNFRepoMdNativeSolverLiveSolve`.
 pub export fn TDNFRepoMdNativeSolverLiveSolveRelease(
@@ -528,7 +548,7 @@ fn nativeSolverLiveSolve(
             else
                 c.ERROR_TDNF_CALL_NOT_SUPPORTED;
         };
-        var problems = solver_native.refuteProjected(
+        var refutation = solver_native.refuteProjectedWithEffectiveJobs(
             allocator,
             prepared.universe,
             &prepared.visibility,
@@ -552,13 +572,26 @@ fn nativeSolverLiveSolve(
             else
                 c.ERROR_TDNF_CALL_NOT_SUPPORTED;
         };
+        errdefer refutation.deinit();
+        const job_origins = refutedJobOrigins(
+            &prepared,
+            refutation.jobs,
+        ) catch |err| {
+            prepared.deinit();
+            setError("native live refute job origins unavailable: {t}", .{err});
+            return if (err == error.OutOfMemory)
+                c.ERROR_TDNF_OUT_OF_MEMORY
+            else
+                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+        };
         const owned = allocator.create(RetainedSolve) catch {
-            problems.deinit();
             prepared.deinit();
             setError("out of memory retaining the native live refutation", .{});
             return c.ERROR_TDNF_OUT_OF_MEMORY;
         };
-        owned.* = .{ .refuted = RefutedSolve.init(prepared, problems) };
+        owned.* = .{
+            .refuted = RefutedSolve.init(prepared, refutation, job_origins),
+        };
         handle.?.* = @ptrCast(owned);
         return 0;
     }

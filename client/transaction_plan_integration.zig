@@ -5,18 +5,20 @@ const integration_options = @import("transaction_plan_integration_options");
 const abi = @import("transaction_plan_capture_abi");
 const capture_adapter = @import("transaction_plan_capture");
 const error_codes = @import("tdnf_error");
-const libsolv_capture = @import("transaction_plan_libsolv");
 const native_capture = @import("transaction_plan_native");
 const repository_capture = @import("transaction_plan_repository");
 const repository_metadata = @import("repository_metadata");
 const rpm_header = @import("rpm_header");
 const transaction_plan = @import("transaction_plan");
 
-const c = libsolv_capture.libsolv;
+const c = repository_metadata.solv_bridge.libsolv;
+const metadata_model = repository_metadata.metadata_model;
 const solver_live = repository_metadata.solver_live;
+const solver_model = repository_metadata.solver_model;
+const solver_native = repository_metadata.solver_native;
+const solver_result = repository_metadata.solver_result;
 
-const IntegrationError = libsolv_capture.CaptureError ||
-    native_capture.CaptureError ||
+const IntegrationError = native_capture.CaptureError ||
     repository_capture.CaptureError ||
     transaction_plan.InitError ||
     Allocator.Error ||
@@ -29,6 +31,7 @@ const IntegrationError = libsolv_capture.CaptureError ||
         InvalidRepository,
         RepositoryIntegrityMismatch,
         RpmdbIdentityFailed,
+        UnsupportedResult,
     };
 
 const rpmdb_package_set_domain = "tdnf.rpmdb-package-set/v1";
@@ -106,17 +109,9 @@ extern fn tdnf_rpmdb_iter_next_header_blob_hnum(
 
 pub const Input = struct {
     pool: *c.Pool,
-    solver: *c.Solver,
-    transaction: ?*c.Transaction,
-    jobs: *const c.Queue,
     /// The native solve that produced the transaction tdnf is about to run.
-    /// Present whenever the request resolved, which is the only case that
-    /// records a transaction; a request that failed before the native solver
-    /// ran records problems instead.
-    native_solve: ?*const repository_metadata.RetainedSolve = null,
+    native_solve: *const repository_metadata.RetainedSolve,
     trace: *const abi.RequestTraceView,
-    solve_status: c_int,
-    problem_count: u32,
     problems_accepted: bool,
     unresolved_count: u32,
     terminal_problem_kind: ?transaction_plan.ProblemKind = null,
@@ -2412,74 +2407,31 @@ pub fn capturePending(state: *State, input: Input) IntegrationError!void {
     state.pending_plan = plan;
 }
 
-/// Owns whichever producer filled the solver half of the capture.
-///
-/// A resolved request is described by the native solve tdnf is about to run,
-/// because that is the transaction the plan is a plan of. Terminal native
-/// handles carry either the prepared universe or the refuted solve facts the
-/// plan needs without reading libsolv's transaction model.
-const SolverCapture = union(enum) {
-    libsolv: *libsolv_capture.Owner,
-    native: *native_capture.Owner,
-
-    fn destroy(self: SolverCapture) void {
-        switch (self) {
-            inline else => |owner| owner.destroy(),
-        }
-    }
-
-    fn view(self: SolverCapture) *const abi.Capture {
-        return switch (self) {
-            inline else => |owner| owner.view(),
-        };
-    }
-};
-
 fn captureSolverFacts(
     allocator: Allocator,
     input: Input,
-    installonly_names: []const []const u8,
-) IntegrationError!SolverCapture {
-    if (input.native_solve) |retained| {
-        const native_input: native_capture.Input = switch (retained.*) {
-            .solved => |*solve| .fromSolve(
-                solve,
-                solve.job_origins,
-                input.trace,
-            ),
-            .prepared => |*prepared| .fromPrepared(
-                prepared,
-                prepared.job_origins,
-                input.trace,
-            ),
-            .refuted => |*refuted| .fromRefuted(
-                &refuted.prepared,
-                &refuted.outcome,
-                refuted.prepared.job_origins,
-                input.trace,
-            ),
-        };
-        return .{ .native = try native_capture.create(allocator, native_input) };
-    }
-    return .{ .libsolv = try libsolv_capture.create(allocator, .{
-        .pool = input.pool,
-        .solver = input.solver,
-        .transaction = input.transaction,
-        .jobs = input.jobs,
-        .trace = input.trace,
-        .solve_status = input.solve_status,
-        .problem_count = input.problem_count,
-        .problems_accepted = input.problems_accepted,
-        .unresolved_count = 0,
-        .synthetic_terminal = input.terminal_problem_kind != null and
-            input.transaction == null,
-        .job_queue_mutation = if (input.terminal_problem_kind ==
-            transaction_plan.ProblemKind.installonly_limit)
-            .installonly_erase_tail
-        else
-            .none,
-        .installonly_names = installonly_names,
-    }) };
+) IntegrationError!*native_capture.Owner {
+    var native_input: native_capture.Input = switch (input.native_solve.*) {
+        .solved => |*solve| .fromSolve(
+            solve,
+            solve.job_origins,
+            input.trace,
+        ),
+        .prepared => |*prepared| .fromPrepared(
+            prepared,
+            prepared.job_origins,
+            input.trace,
+        ),
+        .refuted => |*refuted| .fromRefuted(
+            &refuted.prepared,
+            refuted.refutation.jobs,
+            &refuted.outcome,
+            refuted.job_origins,
+            input.trace,
+        ),
+    };
+    native_input.problems_accepted = input.problems_accepted;
+    return try native_capture.create(allocator, native_input);
 }
 
 fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.Plan {
@@ -2487,14 +2439,9 @@ fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.P
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const installonly_names = try cStringArray(
-        arena,
-        input.environment.installonly_names,
-    );
     const solver_owner = try captureSolverFacts(
         allocator,
         input,
-        installonly_names,
     );
     defer solver_owner.destroy();
 
@@ -2703,7 +2650,6 @@ fn applyRequestOutcomes(
             const selection: transaction_plan.Selection =
                 if (selection_count != 0)
                     .{ .package = try planPackageIdForSolvid(
-                        allocator,
                         pool,
                         data.*,
                         satisfied_selections[
@@ -2758,7 +2704,6 @@ fn applyRequestOutcomes(
 }
 
 fn planPackageIdForSolvid(
-    allocator: Allocator,
     pool: *c.Pool,
     data: transaction_plan.Data,
     solvid: c.Id,
@@ -2766,11 +2711,7 @@ fn planPackageIdForSolvid(
     const raw = c.pool_id2solvable(pool, solvid) orelse
         return error.InvalidPolicyTrace;
     const solvable: *c.Solvable = @ptrCast(raw);
-    const identity = try libsolv_capture.capturePackageIdentity(
-        allocator,
-        pool,
-        solvid,
-    );
+    const identity = try solvableIdentity(pool, solvable);
     const repository_id = try rawRepositoryName(
         @ptrCast(solvable.repo orelse return error.InvalidPolicyTrace),
     );
@@ -2786,23 +2727,18 @@ fn planPackageIdForSolvid(
             break repository.kind == .command_line;
     } else return error.InvalidPolicyTrace;
     const source = if (!installed)
-        try libsolv_capture.capturePackageSource(
-            allocator,
-            pool,
-            solvable,
-            command_line,
-        )
+        try solvableSource(pool, solvable, command_line)
     else
         null;
     var match: ?[]const u8 = null;
     for (data.packages) |package| {
         if (std.mem.eql(u8, package.repository_id, repository_id) and
-            try packageIdentityMatchesAbi(package.identity, identity) and
+            packageIdentityMatchesSolvable(package.identity, identity) and
             (if (installed)
                 package.rpmdb_hnum != null and
                     package.rpmdb_hnum.? == raw_hnum
             else
-                try packageSourceMatchesAbi(package.source, source.?)))
+                packageSourceMatchesSolvable(package.source, source.?)))
         {
             if (match != null) return error.InvalidPolicyTrace;
             match = package.id;
@@ -2811,36 +2747,114 @@ fn planPackageIdForSolvid(
     return match orelse error.InvalidPolicyTrace;
 }
 
-fn packageSourceMatchesAbi(
+const SolvableIdentity = struct {
+    name: []const u8,
+    arch: []const u8,
+    epoch: ?u32,
+    version: []const u8,
+    release: []const u8,
+};
+
+const SolvableSource = struct {
+    checksum_kind: []const u8,
+    checksum_value: []const u8,
+    is_pkgid: bool,
+};
+
+fn packageSourceMatchesSolvable(
     source: ?transaction_plan.PackageSource,
-    raw: abi.PackageSource,
-) IntegrationError!bool {
+    raw: SolvableSource,
+) bool {
     const value = source orelse return false;
-    return try flagValue(raw.checksum.is_pkgid) ==
-        value.checksum.is_pkgid and
+    return raw.is_pkgid == value.checksum.is_pkgid and
         std.ascii.eqlIgnoreCase(
             value.checksum.kind,
-            try bytesSlice(raw.checksum.kind),
+            raw.checksum_kind,
         ) and
         std.ascii.eqlIgnoreCase(
             value.checksum.value,
-            try bytesSlice(raw.checksum.value),
+            raw.checksum_value,
         );
 }
 
-fn packageIdentityMatchesAbi(
+fn packageIdentityMatchesSolvable(
     identity: transaction_plan.PackageIdentity,
-    raw: abi.PackageIdentity,
-) IntegrationError!bool {
-    const raw_epoch: ?u32 = if (try flagValue(raw.has_epoch))
-        raw.epoch
+    raw: SolvableIdentity,
+) bool {
+    return std.mem.eql(u8, identity.name, raw.name) and
+        std.mem.eql(u8, identity.arch, raw.arch) and
+        std.mem.eql(u8, identity.version, raw.version) and
+        std.mem.eql(u8, identity.release, raw.release) and
+        identity.epoch == raw.epoch;
+}
+
+fn solvableIdentity(
+    pool: *c.Pool,
+    solvable: *c.Solvable,
+) IntegrationError!SolvableIdentity {
+    const name = try poolString(pool, solvable.name);
+    const arch = try poolString(pool, solvable.arch);
+    const evr = try poolString(pool, solvable.evr);
+    const parts = repository_metadata.metadata_model.splitEvrQuery(evr);
+    const release = parts.release orelse return error.UnsupportedResult;
+    if (name.len == 0 or arch.len == 0 or parts.version.len == 0 or
+        release.len == 0)
+    {
+        return error.UnsupportedResult;
+    }
+    return .{
+        .name = name,
+        .arch = arch,
+        .epoch = parts.epoch,
+        .version = parts.version,
+        .release = release,
+    };
+}
+
+fn solvableSource(
+    pool: *c.Pool,
+    solvable: *c.Solvable,
+    command_line: bool,
+) IntegrationError!SolvableSource {
+    var checksum_type: c.Id = 0;
+    var checksum = c.solvable_lookup_checksum(
+        solvable,
+        c.SOLVABLE_PKGID,
+        &checksum_type,
+    );
+    var is_pkgid = checksum != null;
+    if (checksum == null) {
+        checksum = c.solvable_lookup_checksum(
+            solvable,
+            c.SOLVABLE_CHECKSUM,
+            &checksum_type,
+        );
+        is_pkgid = false;
+    }
+    const checksum_value = checksum orelse return error.UnsupportedResult;
+    const raw_kind = try poolString(pool, checksum_type);
+    const separator = std.mem.lastIndexOfScalar(u8, raw_kind, ':');
+    const checksum_kind = if (separator) |index|
+        raw_kind[index + 1 ..]
     else
-        null;
-    return std.mem.eql(u8, identity.name, try bytesSlice(raw.name)) and
-        std.mem.eql(u8, identity.arch, try bytesSlice(raw.arch)) and
-        std.mem.eql(u8, identity.version, try bytesSlice(raw.version)) and
-        std.mem.eql(u8, identity.release, try bytesSlice(raw.release)) and
-        identity.epoch == raw_epoch;
+        raw_kind;
+    if (checksum_kind.len == 0) return error.UnsupportedResult;
+    if (!command_line) {
+        var media_number: c_uint = 0;
+        _ = c.solvable_lookup_location(solvable, &media_number) orelse
+            return error.UnsupportedResult;
+    }
+    return .{
+        .checksum_kind = checksum_kind,
+        .checksum_value = std.mem.span(checksum_value),
+        .is_pkgid = is_pkgid,
+    };
+}
+
+fn poolString(pool: *c.Pool, id: c.Id) IntegrationError![]const u8 {
+    const value = c.pool_id2str(pool, id) orelse
+        return error.UnsupportedResult;
+    return std.mem.span(value);
 }
 
 fn requestHasJob(data: transaction_plan.Data, request_id: []const u8) bool {
@@ -4029,27 +4043,26 @@ fn crossCheckInstalledPackage(
     if (!include_installed) return;
     const entry = installed.fetchRemove(hnum) orelse
         return error.RpmdbIdentityFailed;
-    const identity = try libsolv_capture.capturePackageIdentity(
-        allocator,
-        pool,
-        entry.value,
-    );
-    if (!std.mem.eql(u8, try bytesSlice(identity.name), name) or
+    const raw = c.pool_id2solvable(pool, entry.value) orelse
+        return error.RpmdbIdentityFailed;
+    const solvable: *c.Solvable = @ptrCast(raw);
+    const identity = try solvableIdentity(pool, solvable);
+    if (!std.mem.eql(u8, identity.name, name) or
         !std.mem.eql(
             u8,
-            try bytesSlice(identity.version),
+            identity.version,
             header.getString(.version) orelse
                 return error.RpmdbIdentityFailed,
         ) or
         !std.mem.eql(
             u8,
-            try bytesSlice(identity.release),
+            identity.release,
             header.getString(.release) orelse
                 return error.RpmdbIdentityFailed,
         ) or
         !std.mem.eql(
             u8,
-            try bytesSlice(identity.arch),
+            identity.arch,
             header.getString(.arch) orelse
                 return error.RpmdbIdentityFailed,
         ))
@@ -4059,10 +4072,7 @@ fn crossCheckInstalledPackage(
     const epoch = repository_metadata.solv_bridge.normalizeRpmEpoch(
         header.getU32(.epoch),
     );
-    if ((identity.has_epoch == 0 and epoch != null) or
-        (identity.has_epoch == 1 and epoch != identity.epoch) or
-        identity.has_epoch > 1)
-    {
+    if (identity.epoch != epoch) {
         return error.RpmdbIdentityFailed;
     }
     const rebuilt = scratch_builder.add(header, hnum) catch |err|
@@ -5166,13 +5176,8 @@ fn testSackSnapshot(
 fn integrationCapturePending(
     state: ?*State,
     raw_pool: ?*anyopaque,
-    raw_solver: ?*anyopaque,
-    raw_transaction: ?*anyopaque,
-    raw_jobs: ?*const anyopaque,
     raw_native_solve: ?*const anyopaque,
     trace: ?*const abi.RequestTraceView,
-    solve_status: c_int,
-    problem_count: u32,
     raw_problems_accepted: u32,
     unresolved_count: u32,
     raw_terminal_problem_kind: u32,
@@ -5192,21 +5197,9 @@ fn integrationCapturePending(
     capturePending(value, .{
         .pool = @ptrCast(@alignCast(raw_pool orelse
             return error_codes.ERROR_TDNF_INVALID_PARAMETER)),
-        .solver = @ptrCast(@alignCast(raw_solver orelse
+        .native_solve = @ptrCast(@alignCast(raw_native_solve orelse
             return error_codes.ERROR_TDNF_INVALID_PARAMETER)),
-        .transaction = if (raw_transaction) |transaction|
-            @ptrCast(@alignCast(transaction))
-        else
-            null,
-        .jobs = @ptrCast(@alignCast(raw_jobs orelse
-            return error_codes.ERROR_TDNF_INVALID_PARAMETER)),
-        .native_solve = if (raw_native_solve) |solve|
-            @ptrCast(@alignCast(solve))
-        else
-            null,
         .trace = trace orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER,
-        .solve_status = solve_status,
-        .problem_count = problem_count,
         .problems_accepted = problems_accepted,
         .unresolved_count = unresolved_count,
         .terminal_problem_kind = decodeTerminalProblemKind(
@@ -5987,35 +5980,215 @@ const TestUniverse = struct {
     }
 };
 
-const TestSolve = struct {
-    solver: *c.Solver,
-    transaction: *c.Transaction,
+const TestNativeSolve = struct {
+    retained: *repository_metadata.RetainedSolve,
+    app: solver_model.PackageId,
+    local: solver_model.PackageId,
 
-    fn create(pool: *c.Pool, jobs: *c.Queue) !TestSolve {
-        const solver = c.solver_create(pool) orelse return error.OutOfMemory;
-        errdefer c.solver_free(solver);
-        _ = c.solver_set_flag(solver, c.SOLVER_FLAG_ALLOW_DOWNGRADE, 1);
-        _ = c.solver_set_flag(solver, c.SOLVER_FLAG_ALLOW_VENDORCHANGE, 1);
-        _ = c.solver_set_flag(solver, c.SOLVER_FLAG_KEEP_ORPHANS, 1);
-        _ = c.solver_set_flag(solver, c.SOLVER_FLAG_BEST_OBEY_POLICY, 1);
-        _ = c.solver_set_flag(solver, c.SOLVER_FLAG_YUM_OBSOLETES, 1);
-        _ = c.solver_set_flag(
-            solver,
-            c.SOLVER_FLAG_INSTALL_ALSO_UPDATES,
-            1,
+    fn create(
+        allocator: Allocator,
+        available: *const metadata_model.RepositoryModel,
+        cache_repository_id: []const u8,
+        cache_priority: i32,
+        local_checksum: []const u8,
+        excluded_checksum: []const u8,
+    ) !TestNativeSolve {
+        const retained = try allocator.create(repository_metadata.RetainedSolve);
+        errdefer allocator.destroy(retained);
+
+        var arena_state = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const command_line_packages = try arena.alloc(metadata_model.Package, 3);
+        command_line_packages[0] = testNativePackage(
+            "local",
+            "4",
+            "5",
+            local_checksum,
+            99,
         );
-        try std.testing.expectEqual(@as(c_int, 0), c.solver_solve(solver, jobs));
-        const transaction = c.solver_create_transaction(solver) orelse
-            return error.OutOfMemory;
-        return .{ .solver = solver, .transaction = transaction };
+        command_line_packages[1] = testNativePackage(
+            "excluded-local",
+            "1",
+            "1",
+            local_checksum,
+            77,
+        );
+        command_line_packages[2] = testNativePackage(
+            "excluded-local",
+            "1",
+            "1",
+            excluded_checksum,
+            78,
+        );
+        const command_line_model = try arena.create(
+            metadata_model.RepositoryModel,
+        );
+        command_line_model.* = .{ .packages = command_line_packages };
+
+        const repositories = try arena.alloc(solver_model.RepositoryInput, 3);
+        repositories[0] = .{
+            .id = cache_repository_id,
+            .model = available,
+            .priority = cache_priority,
+            .cost = default_repository_cost,
+        };
+        repositories[1] = .{
+            .id = "extras",
+            .model = available,
+            .priority = 20,
+            .cost = default_repository_cost,
+        };
+        repositories[2] = .{
+            .id = solver_live.cmdline_repository_id,
+            .model = command_line_model,
+            .kind = .command_line,
+        };
+
+        const universe = try arena.create(solver_model.Universe);
+        universe.* = try solver_model.Universe.init(arena, repositories);
+        const app = try findNativePackage(
+            universe,
+            cache_repository_id,
+            "app",
+            test_checksum,
+        );
+        const local = try findNativePackage(
+            universe,
+            solver_live.cmdline_repository_id,
+            "local",
+            local_checksum,
+        );
+        const excluded = try findNativePackage(
+            universe,
+            solver_live.cmdline_repository_id,
+            "excluded-local",
+            local_checksum,
+        );
+        const excluded_twin = try findNativePackage(
+            universe,
+            solver_live.cmdline_repository_id,
+            "excluded-local",
+            excluded_checksum,
+        );
+
+        const jobs = try arena.alloc(solver_model.Job, 2);
+        jobs[0] = .{
+            .action = .install,
+            .selection = .{ .package = app },
+            .reason = .user,
+        };
+        jobs[1] = .{
+            .action = .install,
+            .selection = .{ .package = local },
+            .reason = .user,
+        };
+        const job_origins = try arena.alloc(?u32, 2);
+        job_origins[0] = 0;
+        job_origins[1] = 1;
+        const hidden = try arena.alloc(solver_model.PackageId, 2);
+        hidden[0] = excluded;
+        hidden[1] = excluded_twin;
+
+        var result_arena_state = std.heap.ArenaAllocator.init(allocator);
+        errdefer result_arena_state.deinit();
+        const result_arena = result_arena_state.allocator();
+        const selected = try result_arena.alloc(solver_model.PackageId, 2);
+        selected[0] = app;
+        selected[1] = local;
+        const actions = try result_arena.alloc(solver_model.Action, 2);
+        actions[0] = .{
+            .package = app,
+            .kind = .install,
+            .reason = .user,
+            .requested_by = @enumFromInt(0),
+        };
+        actions[1] = .{
+            .package = local,
+            .kind = .install,
+            .reason = .user,
+            .requested_by = @enumFromInt(1),
+        };
+        const result = solver_result.OwnedResult{
+            .arena_state = result_arena_state,
+            .selected = selected,
+            .outcome = .{
+                .actions = actions,
+                .problems = &.{},
+                .skipped_jobs = &.{},
+            },
+        };
+
+        retained.* = .{ .solved = .{
+            .arena_state = arena_state,
+            .universe = universe,
+            .solved = .{
+                .universe = universe,
+                .result = result,
+                .effective_job_count = jobs.len,
+            },
+            .jobs = jobs,
+            .hidden = hidden,
+            .job_origins = job_origins,
+        } };
+        return .{
+            .retained = retained,
+            .app = app,
+            .local = local,
+        };
     }
 
-    fn destroy(self: *TestSolve) void {
-        c.transaction_free(self.transaction);
-        c.solver_free(self.solver);
+    fn destroy(self: *TestNativeSolve, allocator: Allocator) void {
+        self.retained.deinit();
+        allocator.destroy(self.retained);
         self.* = undefined;
     }
 };
+
+fn testNativePackage(
+    name: []const u8,
+    version: []const u8,
+    release: []const u8,
+    checksum: []const u8,
+    size: u64,
+) metadata_model.Package {
+    return .{
+        .pkg_id = checksum,
+        .nevra = .{
+            .name = name,
+            .version = version,
+            .release = release,
+            .arch = "x86_64",
+        },
+        .checksum = .{
+            .kind = "sha256",
+            .value = checksum,
+            .is_pkgid = true,
+        },
+        .size = .{ .package = size },
+        .location = .{ .href = name },
+    };
+}
+
+fn findNativePackage(
+    universe: *const solver_model.Universe,
+    repository_name: []const u8,
+    package_name: []const u8,
+    checksum: []const u8,
+) !solver_model.PackageId {
+    for (universe.packages) |package| {
+        const repository = universe.repository(package.repository) orelse
+            return error.TestUnexpectedResult;
+        if (std.mem.eql(u8, repository.name, repository_name) and
+            std.mem.eql(u8, package.source.nevra.name, package_name) and
+            std.mem.eql(u8, package.source.checksum.value, checksum))
+        {
+            return package.id;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
 
 fn digestHex(bytes: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
@@ -6491,11 +6664,12 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
     c.pool_addfileprovides(universe.pool);
     c.pool_createwhatprovides(universe.pool);
 
-    var jobs: c.Queue = undefined;
-    c.queue_init(&jobs);
-    defer c.queue_free(&jobs);
-    c.queue_push2(&jobs, c.SOLVER_SOLVABLE | c.SOLVER_INSTALL, app);
-    c.queue_push2(&jobs, c.SOLVER_SOLVABLE | c.SOLVER_INSTALL, local);
+    const jobs = [_]i32{
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+        app,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+        local,
+    };
 
     const request_trace = @import("transaction_plan_request_trace");
     var trace = request_trace.Trace.init(std.testing.allocator);
@@ -6551,9 +6725,9 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
         try trace.commitGoal(
             selection_id,
             5,
-            queueValues(&jobs),
-            @intCast(jobs.count),
-            @intCast(jobs.count),
+            &jobs,
+            jobs.len,
+            jobs.len,
         );
     }
     const excluded_capability_request = try trace.addRequest(
@@ -6577,9 +6751,9 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
         try trace.commitGoal(
             selection_id,
             5,
-            queueValues(&jobs),
-            @intCast(jobs.count),
-            @intCast(jobs.count),
+            &jobs,
+            jobs.len,
+            jobs.len,
         );
     }
     try trace.recordPolicies(
@@ -6596,14 +6770,21 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
         false,
     );
     try trace.finalize(
-        queueValues(&jobs),
+        &jobs,
         c.SOLVER_CLEANDEPS,
         c.SOLVER_FORCEBEST,
     );
 
-    var solved = try TestSolve.create(universe.pool, &jobs);
+    var solved = try TestNativeSolve.create(
+        std.testing.allocator,
+        &live_metadata.repository,
+        "base",
+        10,
+        test_checksum,
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
     var solved_live = true;
-    defer if (solved_live) solved.destroy();
+    defer if (solved_live) solved.destroy(std.testing.allocator);
     var exclude_values = [_]?[*:0]const u8{
         "ignored-*",
         "ignored-*",
@@ -6660,12 +6841,8 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
     };
     const input = Input{
         .pool = universe.pool,
-        .solver = solved.solver,
-        .transaction = solved.transaction,
-        .jobs = &jobs,
+        .native_solve = solved.retained,
         .trace = trace.getView().?,
-        .solve_status = 0,
-        .problem_count = 0,
         .problems_accepted = false,
         .unresolved_count = 0,
         .repositories = &repositories,
@@ -6933,33 +7110,32 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
     }
     try std.testing.expect(saw_app);
     try std.testing.expect(saw_local);
-    try std.testing.expectEqual(@as(c_int, 2), solved.transaction.steps.count);
-    var transaction_saw_app = false;
-    var transaction_saw_local = false;
-    for (queueValues(&solved.transaction.steps)) |solvid| {
-        const solvable: *c.Solvable = @ptrCast(
-            c.pool_id2solvable(universe.pool, solvid) orelse
-                return error.TestUnexpectedResult,
-        );
-        const name = std.mem.span(c.pool_id2str(
-            universe.pool,
-            solvable.name,
-        ) orelse return error.TestUnexpectedResult);
-        if (std.mem.eql(u8, name, "app")) transaction_saw_app = true else if (std.mem.eql(u8, name, "local")) transaction_saw_local = true else return error.TestUnexpectedResult;
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        solved.retained.solved.solved.result.outcome.actions.len,
+    );
+    var native_saw_app = false;
+    var native_saw_local = false;
+    for (solved.retained.solved.solved.result.outcome.actions) |action| {
+        if (action.package == solved.app) {
+            native_saw_app = true;
+        } else if (action.package == solved.local) {
+            native_saw_local = true;
+        } else {
+            return error.TestUnexpectedResult;
+        }
     }
-    try std.testing.expectEqual(saw_app, transaction_saw_app);
-    try std.testing.expectEqual(saw_local, transaction_saw_local);
+    try std.testing.expectEqual(saw_app, native_saw_app);
+    try std.testing.expectEqual(saw_local, native_saw_local);
 
-    var terminal_retry_jobs: c.Queue = undefined;
-    c.queue_init(&terminal_retry_jobs);
-    defer c.queue_free(&terminal_retry_jobs);
-    for (queueValues(&jobs)) |value|
-        c.queue_push(&terminal_retry_jobs, value);
-    c.queue_push2(
-        &terminal_retry_jobs,
+    const terminal_retry_jobs = [_]i32{
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+        app,
+        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
+        local,
         c.SOLVER_SOLVABLE | c.SOLVER_ERASE,
         app,
-    );
+    };
     var terminal_retry_trace = request_trace.Trace.init(
         std.testing.allocator,
     );
@@ -7015,12 +7191,11 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
         false,
     );
     try terminal_retry_trace.finalize(
-        queueValues(&terminal_retry_jobs),
+        &terminal_retry_jobs,
         c.SOLVER_CLEANDEPS,
         c.SOLVER_FORCEBEST,
     );
     var terminal_retry_input = input;
-    terminal_retry_input.jobs = &terminal_retry_jobs;
     terminal_retry_input.trace = terminal_retry_trace.getView().?;
     terminal_retry_input.terminal_problem_kind = .installonly_limit;
     try std.testing.expectError(
@@ -7131,7 +7306,7 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
 
     trace.deinit();
     trace_live = false;
-    solved.destroy();
+    solved.destroy(std.testing.allocator);
     solved_live = false;
     universe.destroy();
     universe_live = false;
