@@ -8,6 +8,7 @@ comptime {
     _ = @import("harness.zig");
     _ = @import("assumeno_test.zig");
     _ = @import("autoremove_test.zig");
+    _ = @import("checklocal_test.zig");
     _ = @import("clean_test.zig");
     _ = @import("conflict_test.zig");
     _ = @import("count_test.zig");
