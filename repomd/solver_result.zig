@@ -287,15 +287,24 @@ pub fn deriveUnsatProblems(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
 ) DeriveProblemsError!OwnedProblems {
-    var full_result = try solver_search.solve(allocator, formula);
-    defer full_result.deinit();
-    if (full_result == .satisfiable) return error.Satisfiable;
+    var refutation =
+        (try solver_search.refute(allocator, formula, &.{})) orelse
+            return error.Satisfiable;
+    defer refutation.deinit();
 
+    // The refutation is a proof core, not a minimal one, so it is still
+    // shrunk one clause at a time below. The point of extracting it first is
+    // that the shrink then costs one solve per *proof* clause instead of one
+    // per formula clause, and a proof core does not grow with the repository.
     const included = try allocator.alloc(bool, formula.clauses.len);
     defer allocator.free(included);
-    @memset(included, true);
-    for (included) |*keep| {
-        keep.* = false;
+    @memset(included, false);
+    for (refutation.clauses) |clause_index| {
+        if (clause_index >= included.len) return error.InvalidInput;
+        included[clause_index] = true;
+    }
+    for (refutation.clauses) |clause_index| {
+        included[clause_index] = false;
         var probe = try solveIncludedClauses(
             allocator,
             formula,
@@ -303,7 +312,7 @@ pub fn deriveUnsatProblems(
         );
         const remains_unsatisfiable = probe == .unsatisfiable;
         probe.deinit();
-        if (!remains_unsatisfiable) keep.* = true;
+        if (!remains_unsatisfiable) included[clause_index] = true;
     }
 
     var causal_origin: ?solver_rules.RuleOrigin = null;
@@ -1042,6 +1051,100 @@ fn problemDerivationAllocationFailureCase(
     try std.testing.expectEqualStrings(
         "missing-package",
         problem.capability.?.name,
+    );
+}
+
+test "problem derivation scales with the proof, not the repository" {
+    // A repository large enough that one solve per formula clause -- what the
+    // shrink loop used to do -- is not a viable error path. Only the two
+    // clauses naming the missing package matter, so the proof core is tiny and
+    // the number of probe solves is independent of `package_count`.
+    const allocator = std.testing.allocator;
+    const package_count = 2000;
+
+    const names = try allocator.alloc([]const u8, package_count);
+    defer {
+        for (names) |name| allocator.free(name);
+        allocator.free(names);
+    }
+    for (names, 0..) |*name, index| {
+        name.* = try std.fmt.allocPrint(allocator, "filler-{d}", .{index});
+    }
+
+    // Chain each filler onto the next so the generator emits a requirement
+    // clause per package rather than an unconstrained variable.
+    const relations = try allocator.alloc(metadata.Relation, package_count - 1);
+    defer allocator.free(relations);
+    for (relations, names[1..]) |*relation, name| {
+        relation.* = .{ .name = name };
+    }
+
+    const packages = try allocator.alloc(metadata.Package, package_count);
+    defer allocator.free(packages);
+    for (packages, names, 0..) |*package, name, index| {
+        package.* = .{
+            .pkg_id = name,
+            .nevra = .{
+                .name = name,
+                .version = "1",
+                .release = "1",
+                .arch = "x86_64",
+            },
+            .checksum = .{
+                .kind = "sha256",
+                .value = name,
+                .is_pkgid = true,
+            },
+            .location = .{ .href = name },
+            .provides = .{ .start = index, .len = 0 },
+            .requires = if (index + 1 < package_count)
+                .{ .start = index, .len = 1 }
+            else
+                .{},
+        };
+    }
+
+    const repository_model = metadata.RepositoryModel{
+        .packages = packages,
+        .relations = relations,
+    };
+    var universe = try solver_model.Universe.init(
+        allocator,
+        &.{.{
+            .id = "available",
+            .model = &repository_model,
+        }},
+    );
+    defer universe.deinit();
+    var base = try solver_rules.generateBase(
+        allocator,
+        &universe,
+        .{ .jobs = &.{.{
+            .action = .install,
+            .selection = .{ .name = "missing-package" },
+        }} },
+        .{ .native_arch = "x86_64" },
+    );
+    defer base.deinit();
+    var prepared = try solver_policy.prepareInstalledRetention(
+        allocator,
+        &base,
+    );
+    defer prepared.deinit();
+    try std.testing.expect(prepared.formula.clauses.len >= package_count);
+
+
+    var problems = try deriveUnsatProblems(allocator, &prepared.formula);
+    defer problems.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), problems.problems.len);
+    try std.testing.expectEqual(
+        solver_model.ProblemKind.no_candidate,
+        problems.problems[0].kind,
+    );
+    try std.testing.expectEqualStrings(
+        "missing-package",
+        problems.problems[0].capability.?.name,
     );
 }
 

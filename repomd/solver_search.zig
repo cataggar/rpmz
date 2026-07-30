@@ -71,6 +71,7 @@ pub const IncrementalSolver = struct {
                 assumptions,
                 candidate_policy,
                 true,
+                false,
             ),
         };
     }
@@ -219,6 +220,61 @@ pub fn solve(
     return solveWithoutCandidates(allocator, formula, &.{}, .{});
 }
 
+/// An unsatisfiable core: the formula clauses that alone refute the request.
+///
+/// The indices are ascending, unique, and index into the `clauses` of the
+/// `OwnedFormula` that was refuted.
+pub const Refutation = struct {
+    allocator: std.mem.Allocator,
+    clauses: []const usize,
+
+    pub fn deinit(self: *Refutation) void {
+        self.allocator.free(self.clauses);
+        self.* = undefined;
+    }
+};
+
+/// Solve, and on failure report *why* rather than just that it failed.
+///
+/// Returns `null` when the formula is satisfiable. Otherwise returns the
+/// subset of formula clauses the search actually used to derive the
+/// contradiction, extracted the way libsolv does it -- from the conflict
+/// provenance the search already records -- so the cost is proportional to
+/// the decision trail rather than to the size of the formula.
+///
+/// The core is not guaranteed minimal, exactly as libsolv's is not.
+pub fn refute(
+    allocator: std.mem.Allocator,
+    formula: *const OwnedFormula,
+    assumptions: []const Literal,
+) SolveError!?Refutation {
+    var engine = initializeEngine(
+        allocator,
+        formula,
+        assumptions,
+        .{ .fallback = .{} },
+        false,
+        true,
+    ) catch |err| switch (err) {
+        error.InvalidCandidatePolicy => unreachable,
+        else => |solve_error| return solve_error,
+    };
+    defer engine.deinit();
+
+    if (try engine.run(.complete)) return null;
+
+    var core = IndexList.init(allocator);
+    defer core.deinit();
+    if (engine.refutation_clause) |conflict_clause| {
+        try engine.analyzeUnsolvable(conflict_clause, &core);
+    }
+
+    return .{
+        .allocator = allocator,
+        .clauses = try core.toOwnedSlice(),
+    };
+}
+
 /// Solve every formula clause plus the supplied level-zero assumptions.
 pub fn solveAssuming(
     allocator: std.mem.Allocator,
@@ -287,7 +343,17 @@ const Statistics = struct {
 const Analysis = struct {
     literals: []const Literal,
     backtrack_level: u32,
+    proof: ProofRange = .{ .start = 0, .len = 0 },
 };
+
+/// Where a learned clause's antecedents live inside `Engine.proof_pool`.
+const ProofRange = struct {
+    start: usize,
+    len: usize,
+};
+
+/// `Engine.clause_sources` entry for a clause that is not an input clause.
+const no_proof_source = std.math.maxInt(usize);
 
 const Decision = struct {
     variable: usize,
@@ -319,6 +385,7 @@ const CandidateGroupData = struct {
 const ClauseList = std.array_list.Managed(ClauseData);
 const LiteralList = std.array_list.Managed(Literal);
 const IndexList = std.array_list.Managed(usize);
+const ProofRangeList = std.array_list.Managed(ProofRange);
 const OccurrenceList = std.array_list.Managed(CandidateOccurrence);
 
 const Engine = struct {
@@ -353,6 +420,19 @@ const Engine = struct {
     has_empty_clause: bool = false,
     root_initialized: bool = false,
     statistics: Statistics = .{},
+    /// Proof bookkeeping, off unless `refute` asked for it. libsolv records
+    /// the same thing unconditionally; keeping it opt-in leaves the ordinary
+    /// solve path allocating exactly what it did before.
+    record_proof: bool = false,
+    /// Formula clause index per engine clause, `no_proof_source` for the
+    /// assumption units and for learned clauses.
+    clause_sources: IndexList,
+    /// libsolv's `learnt_pool`: the flattened antecedents of learned clauses.
+    proof_pool: IndexList,
+    /// libsolv's `learnt_why`: where each learned clause's antecedents live.
+    clause_proofs: ProofRangeList,
+    /// The clause the search was looking at when it refuted the formula.
+    refutation_clause: ?usize = null,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -463,6 +543,9 @@ const Engine = struct {
             .trail_limits = IndexList.init(allocator),
             .normalize_scratch = LiteralList.init(allocator),
             .analysis_scratch = LiteralList.init(allocator),
+            .clause_sources = IndexList.init(allocator),
+            .proof_pool = IndexList.init(allocator),
+            .clause_proofs = ProofRangeList.init(allocator),
         };
     }
 
@@ -481,6 +564,9 @@ const Engine = struct {
         if (self.candidate_groups) |groups| {
             self.allocator.free(groups);
         }
+        self.clause_proofs.deinit();
+        self.proof_pool.deinit();
+        self.clause_sources.deinit();
         self.analysis_scratch.deinit();
         self.normalize_scratch.deinit();
         self.trail_limits.deinit();
@@ -561,6 +647,13 @@ const Engine = struct {
             .scan_cursor = if (input_literals.len > 2) 2 else 0,
         });
         errdefer _ = self.clauses.pop();
+
+        if (self.record_proof) {
+            try self.clause_sources.append(no_proof_source);
+            errdefer _ = self.clause_sources.pop();
+            try self.clause_proofs.append(.{ .start = 0, .len = 0 });
+            errdefer _ = self.clause_proofs.pop();
+        }
 
         if (self.track_preferred_completion) {
             var true_count: usize = 0;
@@ -893,6 +986,7 @@ const Engine = struct {
     fn initializeRoot(self: *Engine) SolveError!bool {
         if (self.has_empty_clause) {
             self.statistics.conflicts += 1;
+            self.refutation_clause = self.emptyClause();
             return false;
         }
         for (self.clauses.items, 0..) |clause, clause_id| {
@@ -900,14 +994,23 @@ const Engine = struct {
             const literal = self.literals.items[clause.start];
             if (!try self.enqueue(literal, clause_id)) {
                 self.statistics.conflicts += 1;
+                self.refutation_clause = clause_id;
                 return false;
             }
         }
-        if (try self.propagate() != null) {
+        if (try self.propagate()) |conflict_clause| {
             self.statistics.conflicts += 1;
+            self.refutation_clause = conflict_clause;
             return false;
         }
         return true;
+    }
+
+    fn emptyClause(self: *const Engine) ?usize {
+        for (self.clauses.items, 0..) |clause, clause_id| {
+            if (clause.len == 0) return clause_id;
+        }
+        return null;
     }
 
     fn run(self: *Engine, mode: RunMode) SolveError!bool {
@@ -924,7 +1027,10 @@ const Engine = struct {
         while (true) {
             if (try self.propagate()) |conflict_clause| {
                 self.statistics.conflicts += 1;
-                if (self.decisionLevel() == 0) return false;
+                if (self.decisionLevel() == 0) {
+                    self.refutation_clause = conflict_clause;
+                    return false;
+                }
 
                 const analysis = try self.analyze(conflict_clause);
                 const current_level = self.decisionLevel();
@@ -936,6 +1042,9 @@ const Engine = struct {
                 const asserting_literal = analysis.literals[0];
                 const learned_clause = try self.addClause(analysis.literals);
                 self.statistics.learned_clauses += 1;
+                if (self.record_proof) {
+                    self.clause_proofs.items[learned_clause] = analysis.proof;
+                }
                 if (!try self.enqueue(asserting_literal, learned_clause)) {
                     return error.InternalSolverFailure;
                 }
@@ -1063,6 +1172,89 @@ const Engine = struct {
         return null;
     }
 
+    /// libsolv's `analyze_unsolvable` (`src/solver.c:955`). Starting from the
+    /// clause that refuted the formula, mark its variables involved and walk
+    /// the trail backwards, collecting the reason of every involved variable.
+    /// The cost is proportional to the trail, not to the formula, which is why
+    /// this replaces the delta-debugging core search.
+    ///
+    /// Learned clauses are expanded into the input clauses they were resolved
+    /// from, so `out` only ever names formula clause indices.
+    fn analyzeUnsolvable(
+        self: *Engine,
+        conflict_clause: usize,
+        out: *IndexList,
+    ) SolveError!void {
+        if (!self.record_proof) return error.InternalSolverFailure;
+        if (conflict_clause >= self.clauses.items.len) {
+            return error.InternalSolverFailure;
+        }
+
+        @memset(self.seen, false);
+        defer @memset(self.seen, false);
+
+        const visited = try self.allocator.alloc(bool, self.clauses.items.len);
+        defer self.allocator.free(visited);
+        @memset(visited, false);
+
+        var pending = IndexList.init(self.allocator);
+        defer pending.deinit();
+
+        try self.expandProof(conflict_clause, visited, out, &pending);
+        for (self.clauseLiterals(self.clauses.items[conflict_clause])) |literal| {
+            self.seen[literalVariable(literal)] = true;
+        }
+
+        var trail_index = self.trail.items.len;
+        while (trail_index != 0) {
+            trail_index -= 1;
+            const variable = literalVariable(self.trail.items[trail_index]);
+            if (!self.seen[variable]) continue;
+            self.seen[variable] = false;
+            const reason = self.reasons[variable] orelse continue;
+            if (reason >= self.clauses.items.len) {
+                return error.InternalSolverFailure;
+            }
+            try self.expandProof(reason, visited, out, &pending);
+            for (self.clauseLiterals(self.clauses.items[reason])) |literal| {
+                const other = literalVariable(literal);
+                if (other != variable) self.seen[other] = true;
+            }
+        }
+
+        std.sort.heap(usize, out.items, {}, std.sort.asc(usize));
+    }
+
+    /// libsolv's `analyze_unsolvable_rule` (`src/solver.c:880`): resolve one
+    /// engine clause down to the formula clauses that justify it.
+    fn expandProof(
+        self: *Engine,
+        clause_id: usize,
+        visited: []bool,
+        out: *IndexList,
+        pending: *IndexList,
+    ) SolveError!void {
+        pending.clearRetainingCapacity();
+        try pending.append(clause_id);
+        while (pending.pop()) |current| {
+            if (current >= self.clauses.items.len) {
+                return error.InternalSolverFailure;
+            }
+            if (visited[current]) continue;
+            visited[current] = true;
+
+            const proof = self.clause_proofs.items[current];
+            if (proof.len == 0) {
+                const source = self.clause_sources.items[current];
+                if (source != no_proof_source) try out.append(source);
+                continue;
+            }
+            try pending.appendSlice(
+                self.proof_pool.items[proof.start..][0..proof.len],
+            );
+        }
+    }
+
     fn analyze(
         self: *Engine,
         conflict_clause: usize,
@@ -1084,11 +1276,13 @@ const Engine = struct {
         var clause_id = conflict_clause;
         var trail_index = self.trail.items.len;
         var resolved_variable: ?usize = null;
+        const proof_start = self.proof_pool.items.len;
 
         while (true) {
             if (clause_id >= self.clauses.items.len) {
                 return error.InternalSolverFailure;
             }
+            if (self.record_proof) try self.proof_pool.append(clause_id);
             for (self.clauseLiterals(self.clauses.items[clause_id])) |literal| {
                 const variable = literalVariable(literal);
                 if (resolved_variable != null and
@@ -1158,6 +1352,10 @@ const Engine = struct {
         }
 
         return .{
+            .proof = .{
+                .start = proof_start,
+                .len = self.proof_pool.items.len - proof_start,
+            },
             .literals = self.analysis_scratch.items,
             .backtrack_level = backtrack_level,
         };
@@ -1443,6 +1641,7 @@ fn solveInternal(
         assumptions,
         candidate_policy,
         false,
+        false,
     );
     defer engine.deinit();
 
@@ -1459,6 +1658,7 @@ fn initializeEngine(
     assumptions: []const Literal,
     candidate_policy: CandidateDecisionPolicy,
     track_preferred_completion: bool,
+    record_proof: bool,
 ) CandidateSolveError!Engine {
     const variable_count = formula.universe.packages.len;
     if (formula.package_states.len != variable_count) {
@@ -1472,6 +1672,7 @@ fn initializeEngine(
         track_preferred_completion,
     );
     errdefer engine.deinit();
+    engine.record_proof = record_proof;
 
     const clause_mapping = if (candidate_policy.groups.len != 0)
         try allocator.alloc(?usize, formula.clauses.len)
@@ -1497,6 +1698,11 @@ fn initializeEngine(
         );
         if (clause_mapping) |mapping| {
             mapping[clause_index] = internal_clause;
+        }
+        if (record_proof) {
+            if (internal_clause) |engine_clause| {
+                engine.clause_sources.items[engine_clause] = clause_index;
+            }
         }
     }
     if (clause_mapping) |mapping| {
@@ -1640,6 +1846,98 @@ fn testSolveCandidatePolicy(
         candidate_policy,
         statistics,
     );
+}
+
+fn testRefute(
+    allocator: std.mem.Allocator,
+    variable_count: usize,
+    ranges: []const solver_rules.LiteralRange,
+    literals: []const Literal,
+    assumptions: []const Literal,
+) SolveError!?Refutation {
+    const packages = try allocator.alloc(
+        solver_model.UniversePackage,
+        variable_count,
+    );
+    defer allocator.free(packages);
+    const states = try allocator.alloc(
+        solver_rules.PackageState,
+        variable_count,
+    );
+    defer allocator.free(states);
+    @memset(states, .{});
+    const clauses = try allocator.alloc(solver_rules.Clause, ranges.len);
+    defer allocator.free(clauses);
+    for (ranges, clauses, 0..) |range, *clause, clause_index| {
+        clause.* = .{
+            .literals = range,
+            .origin = .{
+                .job = @enumFromInt(@as(u32, @intCast(clause_index))),
+            },
+        };
+    }
+
+    var universe = solver_model.Universe{
+        .allocator = allocator,
+        .repositories = &.{},
+        .packages = packages,
+        .input_to_repository = &.{},
+    };
+    const formula = OwnedFormula{
+        .allocator = allocator,
+        .universe = &universe,
+        .clauses = clauses,
+        .literals = literals,
+        .weak_requests = &.{},
+        .weak_candidates = &.{},
+        .package_states = states,
+    };
+    return refute(allocator, &formula, assumptions);
+}
+
+/// Re-solve only the clauses a refutation names, and require that they alone
+/// refute the request. This is the property that makes a core usable for
+/// problem reporting: everything it omits is irrelevant to the failure.
+fn expectCoreRefutes(
+    variable_count: usize,
+    ranges: []const solver_rules.LiteralRange,
+    literals: []const Literal,
+    assumptions: []const Literal,
+    core: []const usize,
+) !void {
+    const allocator = std.testing.allocator;
+    var core_literals = LiteralList.init(allocator);
+    defer core_literals.deinit();
+    const core_ranges = try allocator.alloc(
+        solver_rules.LiteralRange,
+        core.len,
+    );
+    defer allocator.free(core_ranges);
+
+    var previous: ?usize = null;
+    for (core, core_ranges) |clause_index, *range| {
+        try std.testing.expect(clause_index < ranges.len);
+        if (previous) |last| try std.testing.expect(last < clause_index);
+        previous = clause_index;
+
+        const source = ranges[clause_index];
+        range.* = .{
+            .start = @intCast(core_literals.items.len),
+            .len = source.len,
+        };
+        try core_literals.appendSlice(source.slice(literals));
+    }
+
+    var result = try testSolve(
+        allocator,
+        variable_count,
+        core_ranges,
+        core_literals.items,
+        assumptions,
+        null,
+    );
+    defer result.deinit();
+    try std.testing.expect(result == .unsatisfiable);
 }
 
 fn testIncrementalSolve(
@@ -3416,4 +3714,257 @@ test "search cleans up every allocation failure" {
         allocationFailureCase,
         .{},
     );
+}
+
+test "refutation is absent for a satisfiable formula" {
+    const literals = [_]Literal{
+        testLiteral(0, true),
+        testLiteral(1, false),
+    };
+    const ranges = [_]solver_rules.LiteralRange{
+        .{ .start = 0, .len = 1 },
+        .{ .start = 1, .len = 1 },
+    };
+    const refutation = try testRefute(
+        std.testing.allocator,
+        2,
+        &ranges,
+        &literals,
+        &.{},
+    );
+    try std.testing.expect(refutation == null);
+}
+
+test "refutation names the empty clause" {
+    const literals = [_]Literal{testLiteral(0, true)};
+    const ranges = [_]solver_rules.LiteralRange{
+        .{ .start = 0, .len = 1 },
+        .{ .start = 0, .len = 0 },
+    };
+    var refutation = (try testRefute(
+        std.testing.allocator,
+        1,
+        &ranges,
+        &literals,
+        &.{},
+    )).?;
+    defer refutation.deinit();
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{1},
+        refutation.clauses,
+    );
+}
+
+test "refutation ignores clauses the contradiction does not use" {
+    // Variables 0 and 1 carry the contradiction; 2..5 are unrelated chains
+    // that a delta-debugging core search would still have to re-solve for.
+    const literals = [_]Literal{
+        testLiteral(0, true),
+        testLiteral(0, false),
+        testLiteral(1, true),
+        testLiteral(2, true),
+        testLiteral(3, true),
+        testLiteral(4, true),
+        testLiteral(2, false),
+        testLiteral(5, true),
+    };
+    const ranges = [_]solver_rules.LiteralRange{
+        .{ .start = 3, .len = 1 },
+        .{ .start = 4, .len = 2 },
+        .{ .start = 0, .len = 1 },
+        .{ .start = 6, .len = 2 },
+        .{ .start = 1, .len = 1 },
+    };
+    var refutation = (try testRefute(
+        std.testing.allocator,
+        6,
+        &ranges,
+        &literals,
+        &.{},
+    )).?;
+    defer refutation.deinit();
+
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 2, 4 },
+        refutation.clauses,
+    );
+    try expectCoreRefutes(6, &ranges, &literals, &.{}, refutation.clauses);
+}
+
+test "refutation reports the assumption's antecedents but not the assumption" {
+    // `x0` is only false because of the assumption, which is not a formula
+    // clause and therefore cannot appear in a core over formula clauses.
+    const literals = [_]Literal{
+        testLiteral(0, true),
+        testLiteral(1, true),
+        testLiteral(1, false),
+    };
+    const ranges = [_]solver_rules.LiteralRange{
+        .{ .start = 0, .len = 2 },
+        .{ .start = 2, .len = 1 },
+    };
+    var refutation = (try testRefute(
+        std.testing.allocator,
+        2,
+        &ranges,
+        &literals,
+        &.{testLiteral(0, false)},
+    )).?;
+    defer refutation.deinit();
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ 0, 1 },
+        refutation.clauses,
+    );
+    try expectCoreRefutes(
+        2,
+        &ranges,
+        &literals,
+        &.{testLiteral(0, false)},
+        refutation.clauses,
+    );
+}
+
+test "refutation cores are extracted through learned clauses" {
+    // Pigeonhole-style formula: four pigeons into three holes. It is
+    // unsatisfiable only after conflict-driven learning, so the core has to
+    // be resolved back through learned clauses to reach input clauses.
+    const allocator = std.testing.allocator;
+    const pigeons = 4;
+    const holes = 3;
+    const variable = struct {
+        fn index(pigeon: usize, hole: usize) u32 {
+            return @intCast(pigeon * holes + hole);
+        }
+    };
+
+    var literals = LiteralList.init(allocator);
+    defer literals.deinit();
+    var ranges = std.array_list.Managed(solver_rules.LiteralRange).init(
+        allocator,
+    );
+    defer ranges.deinit();
+
+    for (0..pigeons) |pigeon| {
+        const start = literals.items.len;
+        for (0..holes) |hole| {
+            try literals.append(testLiteral(variable.index(pigeon, hole), true));
+        }
+        try ranges.append(.{
+            .start = @intCast(start),
+            .len = @intCast(literals.items.len - start),
+        });
+    }
+    for (0..holes) |hole| {
+        for (0..pigeons) |left| {
+            for (left + 1..pigeons) |right| {
+                const start = literals.items.len;
+                try literals.append(
+                    testLiteral(variable.index(left, hole), false),
+                );
+                try literals.append(
+                    testLiteral(variable.index(right, hole), false),
+                );
+                try ranges.append(.{
+                    .start = @intCast(start),
+                    .len = 2,
+                });
+            }
+        }
+    }
+
+    var refutation = (try testRefute(
+        allocator,
+        pigeons * holes,
+        ranges.items,
+        literals.items,
+        &.{},
+    )).?;
+    defer refutation.deinit();
+
+    try std.testing.expect(refutation.clauses.len != 0);
+    try expectCoreRefutes(
+        pigeons * holes,
+        ranges.items,
+        literals.items,
+        &.{},
+        refutation.clauses,
+    );
+}
+
+test "generated unsatisfiable formulas yield refuting cores" {
+    var random_state: u64 = 0x9e3779b97f4a7c15;
+    var literal_storage: [64]Literal = undefined;
+    var ranges: [12]solver_rules.LiteralRange = undefined;
+    var assumptions: [3]Literal = undefined;
+    var refuted: usize = 0;
+
+    for (0..512) |_| {
+        const clause_count: usize =
+            1 + @as(usize, @intCast(nextTestRandom(&random_state) % 12));
+        var literal_count: usize = 0;
+        for (ranges[0..clause_count]) |*range| {
+            const start = literal_count;
+            const clause_len: usize =
+                1 + @as(usize, @intCast(nextTestRandom(&random_state) % 3));
+            for (0..clause_len) |_| {
+                const random = nextTestRandom(&random_state);
+                literal_storage[literal_count] = testLiteral(
+                    @intCast((random >> 1) % 5),
+                    random & 1 != 0,
+                );
+                literal_count += 1;
+            }
+            range.* = .{
+                .start = @intCast(start),
+                .len = @intCast(clause_len),
+            };
+        }
+        const assumption_count: usize =
+            @intCast(nextTestRandom(&random_state) % 4);
+        for (assumptions[0..assumption_count]) |*assumption| {
+            const random = nextTestRandom(&random_state);
+            assumption.* = testLiteral(
+                @intCast((random >> 1) % 5),
+                random & 1 != 0,
+            );
+        }
+
+        var result = try testSolve(
+            std.testing.allocator,
+            5,
+            ranges[0..clause_count],
+            literal_storage[0..literal_count],
+            assumptions[0..assumption_count],
+            null,
+        );
+        defer result.deinit();
+
+        const maybe_refutation = try testRefute(
+            std.testing.allocator,
+            5,
+            ranges[0..clause_count],
+            literal_storage[0..literal_count],
+            assumptions[0..assumption_count],
+        );
+        if (result == .satisfiable) {
+            try std.testing.expect(maybe_refutation == null);
+            continue;
+        }
+
+        var refutation = maybe_refutation.?;
+        defer refutation.deinit();
+        refuted += 1;
+        try expectCoreRefutes(
+            5,
+            ranges[0..clause_count],
+            literal_storage[0..literal_count],
+            assumptions[0..assumption_count],
+            refutation.clauses,
+        );
+    }
+
+    try std.testing.expect(refuted != 0);
 }
