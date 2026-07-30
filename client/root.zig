@@ -1,5 +1,6 @@
 comptime {
     _ = @import("repomd_client_exports").query_native;
+    _ = @import("repomd_client_exports").repo_cache;
     _ = @import("transaction_plan_capture");
     _ = @import("transaction_plan_integration");
 }

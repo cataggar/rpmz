@@ -407,7 +407,9 @@ TDNFGetRepoMD(
     {
         if (!access(pszRepoMDFile, F_OK))
         {
-            dwError = SolvCalculateCookieForFile(pszRepoMDFile, pszMDCookie);
+            dwError = TDNFRepoMdCalculateCookieForFile(
+                          pszRepoMDFile,
+                          pszMDCookie);
             BAIL_ON_TDNF_ERROR(dwError);
         }
         nNeedDownload = 1;
@@ -448,7 +450,9 @@ TDNFGetRepoMD(
         nReplaceRepoMD = 1;
         if (pszMDCookie[0])
         {
-            dwError = SolvCalculateCookieForFile(pszTmpRepoMDFile, pszTmpCookie);
+            dwError = TDNFRepoMdCalculateCookieForFile(
+                          pszTmpRepoMDFile,
+                          pszTmpCookie);
             BAIL_ON_TDNF_ERROR(dwError);
             if (!memcmp (pszMDCookie, pszTmpCookie, sizeof(pszTmpCookie)))
             {
@@ -527,7 +531,10 @@ TDNFGetRepoMD(
                 if (nIsRemote) {
                     /* we need a unique name based on URL locally, so we automatically refresh on config changes
                        "snapshot" % URL => "snapshot-12345678" */
-                    dwError = SolvCreateRepoCacheName(TDNF_REPO_METADATA_SNAPSHOT, pRepoData->pszSnapshotUrl, &pszSnapshotFile);
+                    dwError = TDNFRepoMdCreateRepoCacheName(
+                                  TDNF_REPO_METADATA_SNAPSHOT,
+                                  pRepoData->pszSnapshotUrl,
+                                  &pszSnapshotFile);
                     BAIL_ON_TDNF_ERROR(dwError);
 
                     dwError = TDNFGetCachePath(pTdnf, pRepoData,

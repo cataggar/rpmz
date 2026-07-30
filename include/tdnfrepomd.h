@@ -379,6 +379,26 @@ TDNFRepoMdLastError(
     );
 
 /*
+ * Compute the 32-byte repository cache cookie for a metadata file.
+ */
+uint32_t
+TDNFRepoMdCalculateCookieForFile(
+    const char *pszFilePath,
+    unsigned char *pszCookie
+    );
+
+/*
+ * Create the repository cache directory name from a repo id and source URL.
+ * Caller frees *ppszCacheName with TDNFFreeMemory.
+ */
+uint32_t
+TDNFRepoMdCreateRepoCacheName(
+    const char *pszName,
+    const char *pszUrl,
+    char **ppszCacheName
+    );
+
+/*
  * Free a parsed document. Accepts NULL.
  */
 void

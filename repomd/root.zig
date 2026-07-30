@@ -19,6 +19,7 @@ pub const metadata_cache = @import("cache.zig");
 pub const metadata_model = model;
 pub const package_query = @import("pkgquery.zig");
 pub const query_index = @import("index.zig");
+pub const repo_cache = @import("repo_cache.zig");
 pub const rpm_package = @import("rpmpkg.zig");
 pub const solv_bridge = @import("solvbridge.zig");
 pub const query_native = @import("query_native.zig");
