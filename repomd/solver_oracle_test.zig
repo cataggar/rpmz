@@ -6575,10 +6575,11 @@ test "native problem derivation matches the oracle across random universes" {
     try testing.expect(attribution_divergences <= max_attribution_divergences);
 }
 
-/// Measured on the fixed seed above: 13 of 243 comparable universes name a
-/// core with a different rule than libsolv does. All 243 agree on the number
-/// of cores. This is a ceiling, not a target.
-const max_attribution_divergences: usize = 13;
+/// Measured on the fixed seed above: 8 of 243 comparable universes name a
+/// core with a different rule than libsolv does (down from 13 before the
+/// derivation formula adopted libsolv's `solver_unifyrules` rule order). All
+/// 243 agree on the number of cores. This is a ceiling, not a target.
+const max_attribution_divergences: usize = 10;
 
 fn totalProblemCount(problems: []const solver_model.Problem) usize {
     var total: usize = 0;
@@ -6622,4 +6623,97 @@ fn optionalEqual(comptime T: type, expected: ?T, actual: ?T) bool {
         return want == got;
     }
     return actual == null;
+}
+
+test "native problem derivation attributes a capability with two providers" {
+    // Regression for the dual-provider attribution defect: `rq-base` is
+    // provided by two packages (itself and `rq-provides`), one package
+    // conflicts with the capability and another obsoletes it. libsolv reports
+    // *two* distinct problems and names `rq-provides` on the conflict; before
+    // the rule-order transcription the native enumerator derived only the
+    // conflict core, named the self-providing `rq-base`, and lost the
+    // obsoletes problem entirely.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(available, .{ .name = "rq-base" });
+    try builder.addPackage(available, .{
+        .name = "rq-conflicts",
+        .conflicts = &.{relation("rq-base")},
+    });
+    try builder.addPackage(available, .{
+        .name = "rq-obsoletes",
+        .obsoletes = &.{relation("rq-base")},
+    });
+    try builder.addPackage(available, .{
+        .name = "rq-provides",
+        .provides = &.{relation("rq-base")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(0) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(1) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(2) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(3) },
+        },
+    } };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    // Both cores survive as distinct problems, and the conflict names the
+    // other provider rather than the self-providing package.
+    try testing.expectEqual(@as(usize, 2), native.problems.len);
+    try testing.expectEqual(
+        solver_model.ProblemKind.conflict,
+        native.problems[0].kind,
+    );
+    try testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(1)),
+        native.problems[0].package,
+    );
+    try testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(3)),
+        native.problems[0].related_package,
+    );
+    try testing.expectEqual(
+        solver_model.ProblemKind.obsoletes,
+        native.problems[1].kind,
+    );
+    try testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(2)),
+        native.problems[1].package,
+    );
+    try testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(0)),
+        native.problems[1].related_package,
+    );
 }
