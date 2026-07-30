@@ -221,14 +221,6 @@ SolvCountPkgByName(
     );
 
 uint32_t
-SolvGetTransResultsWithType(
-    Transaction *pTrans,
-    Id dwType,
-    PSolvPackageList* ppPkgList
-    );
-
-
-uint32_t
 SolvFindHighestAvailable(
     PSolvSack pSack,
     const char* pszPkgName,
