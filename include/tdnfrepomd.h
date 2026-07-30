@@ -622,6 +622,11 @@ TDNFRepoMdNativeSolverResultFree(
  * which is what a caller describing a request that failed before or instead
  * of a solve needs. It requires ppHandle, ignores ppSolved, and the handle it
  * hands back is released the same way.
+ *
+ * nRefuteUnsat builds the same retained universe for a request that reached
+ * the solver and was unsatisfiable, and stores native problem diagnostics in
+ * the handle. It requires ppHandle, ignores ppSolved, and is mutually
+ * exclusive with nPrepareOnly.
  */
 uint32_t
 TDNFRepoMdNativeSolverLiveSolve(
@@ -653,6 +658,7 @@ TDNFRepoMdNativeSolverLiveSolve(
     const tdnf_rpm_config *pRpmConfig,
     const char *pszNativeArch,
     int nPrepareOnly,
+    int nRefuteUnsat,
     PTDNF_SOLVED_PKG_INFO *ppSolved,
     void **ppHandle
     );

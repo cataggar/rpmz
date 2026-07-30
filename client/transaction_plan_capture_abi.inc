@@ -1160,7 +1160,7 @@ TDNFInitRepoWithResult(
     } while (0)
 
 #define TDNF_TRANSACTION_PLAN_CAPTURE_FAILED_SOLVE(                      \
-    _tdnf, _jobs, _solver, _problems, _unresolved, _excludes,          \
+    _tdnf, _jobs, _solver, _native, _problems, _unresolved, _excludes,  \
     _allow_erasing, _clean_deps, _error)                                \
     do {                                                                 \
         uint32_t _solve_error = (_error);                                \
@@ -1169,7 +1169,7 @@ TDNFInitRepoWithResult(
             (_jobs)->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);         \
         (_error) = 0;                                                    \
         TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(                            \
-            (_tdnf), (_jobs), (_solver), NULL, NULL, (_problems), 0,     \
+            (_tdnf), (_jobs), (_solver), NULL, (_native), (_problems), 0,\
             (_unresolved), UINT32_MAX, (_excludes), (_allow_erasing),   \
             (_clean_deps), (_error));                                   \
         if ((_error)) { TDNFTransactionPlanStateClear((_tdnf)->pTransactionPlanState); (_error) = _solve_error; goto error; } \

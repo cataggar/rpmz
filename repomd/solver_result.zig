@@ -298,7 +298,24 @@ pub fn deriveUnsatProblems(
     formula: *const solver_rules.OwnedFormula,
 ) DeriveProblemsError!OwnedProblems {
     const problem = try deriveCoreProblem(allocator, formula);
+    return ownedSingleProblem(allocator, problem);
+}
 
+/// Derive one canonical problem and attribute package-origin failures to the
+/// single job in their UNSAT core when one exists.
+pub fn deriveUnsatProblemsWithCoreJobs(
+    allocator: std.mem.Allocator,
+    formula: *const solver_rules.OwnedFormula,
+) DeriveProblemsError!OwnedProblems {
+    var core = try deriveCoreProblemWithJob(allocator, formula);
+    if (core.problem.job == null) core.problem.job = core.core_job;
+    return ownedSingleProblem(allocator, core.problem);
+}
+
+fn ownedSingleProblem(
+    allocator: std.mem.Allocator,
+    problem: solver_model.Problem,
+) error{OutOfMemory}!OwnedProblems {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -368,9 +385,21 @@ fn deriveCoreProblem(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
 ) DeriveProblemsError!solver_model.Problem {
+    return (try deriveCoreProblemWithJob(allocator, formula)).problem;
+}
+
+const CoreProblem = struct {
+    problem: solver_model.Problem,
+    core_job: ?solver_model.JobId,
+};
+
+fn deriveCoreProblemWithJob(
+    allocator: std.mem.Allocator,
+    formula: *const solver_rules.OwnedFormula,
+) DeriveProblemsError!CoreProblem {
     var refutation =
         (try solver_search.refute(allocator, formula, &.{})) orelse
-            return error.Satisfiable;
+        return error.Satisfiable;
     defer refutation.deinit();
 
     // The refutation is a proof core, not a minimal one, so it is still
@@ -459,12 +488,17 @@ fn deriveCoreProblem(
     residual_result.deinit();
     if (has_additional_core) return error.UnsupportedProblem;
 
-    return if (causal_origin) |origin|
-        try problemForOrigin(formula, origin)
-    else if (core_job_count == 1)
-        try noCandidateProblem(formula, only_core_job.?)
-    else
-        error.UnsupportedProblem;
+    if (causal_origin) |origin| {
+        return .{
+            .problem = try problemForOrigin(formula, origin),
+            .core_job = if (core_job_count == 1) only_core_job else null,
+        };
+    }
+    if (core_job_count != 1) return error.UnsupportedProblem;
+    return .{
+        .problem = try noCandidateProblem(formula, only_core_job.?),
+        .core_job = only_core_job,
+    };
 }
 
 fn solveIncludedClauses(
@@ -1122,6 +1156,80 @@ fn problemDerivationAllocationFailureCase(
     );
 }
 
+test "problem derivation attributes package failures to their core job" {
+    const allocator = std.testing.allocator;
+    var relations = [_]metadata.Relation{
+        .{ .name = "missing-capability" },
+    };
+    var packages = [_]metadata.Package{
+        .{
+            .pkg_id = "broken",
+            .nevra = .{
+                .name = "broken",
+                .version = "1",
+                .release = "1",
+                .arch = "x86_64",
+            },
+            .checksum = .{
+                .kind = "sha256",
+                .value = "broken",
+                .is_pkgid = true,
+            },
+            .location = .{ .href = "broken.rpm" },
+            .requires = .{ .start = 0, .len = 1 },
+        },
+    };
+    const repository_model = metadata.RepositoryModel{
+        .packages = &packages,
+        .relations = &relations,
+    };
+    var universe = try solver_model.Universe.init(
+        allocator,
+        &.{.{ .id = "available", .model = &repository_model }},
+    );
+    defer universe.deinit();
+    var base = try solver_rules.generateBase(
+        allocator,
+        &universe,
+        .{ .jobs = &.{.{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(0) },
+        }} },
+        .{ .native_arch = "x86_64" },
+    );
+    defer base.deinit();
+    var prepared = try solver_policy.prepareInstalledRetention(
+        allocator,
+        &base,
+    );
+    defer prepared.deinit();
+
+    var problems = try deriveUnsatProblemsWithCoreJobs(
+        allocator,
+        &prepared.formula,
+    );
+    defer problems.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), problems.problems.len);
+    const problem = problems.problems[0];
+    try std.testing.expectEqual(
+        solver_model.ProblemKind.unsatisfied_requirement,
+        problem.kind,
+    );
+    try std.testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(0)),
+        problem.package,
+    );
+    try std.testing.expectEqual(
+        @as(?solver_model.JobId, @enumFromInt(0)),
+        problem.job,
+    );
+    try std.testing.expectEqualStrings(
+        "missing-capability",
+        problem.capability.?.name,
+    );
+}
+
 test "problem derivation scales with the proof, not the repository" {
     // A repository large enough that one solve per formula clause -- what the
     // shrink loop used to do -- is not a viable error path. Only the two
@@ -1200,7 +1308,6 @@ test "problem derivation scales with the proof, not the repository" {
     );
     defer prepared.deinit();
     try std.testing.expect(prepared.formula.clauses.len >= package_count);
-
 
     var problems = try deriveUnsatProblems(allocator, &prepared.formula);
     defer problems.deinit();

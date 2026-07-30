@@ -80,6 +80,26 @@ pub const Input = struct {
         };
     }
 
+    /// Projects an unsatisfiable native live request onto the capture inputs.
+    /// It has no transaction, but the refutation supplies solver-native
+    /// problems for the jobs that could not be satisfied.
+    pub fn fromRefuted(
+        prepared: *const solver_live.Prepared,
+        outcome: *const solver_model.Outcome,
+        job_origins: []const ?u32,
+        trace: *const abi.RequestTraceView,
+    ) Input {
+        return .{
+            .universe = prepared.universe,
+            .jobs = prepared.jobs,
+            .outcome = outcome,
+            .selected = &.{},
+            .hidden = prepared.hidden,
+            .job_origins = job_origins,
+            .trace = trace,
+        };
+    }
+
     /// Projects a completed native live solve onto the capture inputs.
     pub fn fromSolve(
         solve: *const solver_live.OwnedSolve,
@@ -1864,6 +1884,68 @@ test "a request that never solved publishes its jobs and no transaction" {
         abi.resolution_status.problems,
         facts.environment.resolution_status,
     );
+}
+
+test "a refuted native request publishes derived problems and no transaction" {
+    var available = [_]metadata.Package{
+        testPackage("broken", "1", "x86_64"),
+    };
+    const available_model = metadata.RepositoryModel{ .packages = &available };
+    var harness = try buildUniverse(&.{
+        .{ .id = "base", .model = &available_model, .kind = .available },
+    });
+    defer harness.deinit();
+
+    const broken: solver_model.PackageId = @enumFromInt(0);
+    const jobs = [_]solver_model.Job{
+        .{ .action = .install, .selection = .{ .package = broken } },
+    };
+    const origins = [_]?u32{0};
+    const problems = [_]solver_model.Problem{
+        .{
+            .kind = .unsatisfied_requirement,
+            .package = broken,
+            .capability = .{ .name = "missing-capability" },
+            .job = @enumFromInt(0),
+            .count = 1,
+        },
+    };
+    const outcome = solver_model.Outcome{
+        .actions = &.{},
+        .problems = &problems,
+        .skipped_jobs = &.{},
+    };
+    const trace = oneInstallTrace();
+    var prepared = solver_live.Prepared{
+        .arena_state = undefined,
+        .universe = &harness.universe,
+        .jobs = &jobs,
+        .hidden = &.{},
+        .job_origins = &origins,
+        .visibility = undefined,
+        .native_arch = "x86_64",
+    };
+
+    const owner = try create(
+        testing.allocator,
+        .fromRefuted(&prepared, &outcome, prepared.job_origins, &trace),
+    );
+    defer owner.destroy();
+
+    const facts = owner.view();
+    try testing.expectEqual(
+        abi.resolution_status.problems,
+        facts.environment.resolution_status,
+    );
+    try testing.expectEqual(@as(u32, 0), facts.action_count);
+    try testing.expectEqual(@as(u32, 0), facts.selected_package_ref_count);
+    try testing.expectEqual(@as(u32, 1), facts.problem_count);
+    try testing.expectEqual(
+        abi.problem_kind.unsatisfied_requirement,
+        facts.problems.?[0].kind,
+    );
+    try testing.expectEqual(@as(u32, 1), facts.problems.?[0].has_job_ref);
+    try testing.expectEqual(@as(u32, 1), facts.problems.?[0].has_package_ref);
 }
 
 test "hidden packages are published even though no action names them" {
