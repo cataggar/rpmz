@@ -1886,12 +1886,67 @@ pub fn build(b: *Build) void {
     // `check`, but each test owns an install root instead of sharing the
     // host's, so it neither mutates the machine it runs on nor has to run
     // serially. It reuses the RPM fixtures `pytests/repo/setup-repo.sh`
-    // generates and skips itself when they are absent.
+    // generates. The preflight fails loudly when those fixtures or root
+    // privileges are absent so an all-skipped suite is never reported as
+    // success.
     const ztest_step = b.step(
         "ztest",
         "Run Zig integration tests against the installed tree",
     );
     {
+        const ztest_prefix = b.getInstallPath(.prefix, "");
+        const ztest_preflight_script =
+            \\prefix=$1
+            \\repo_script=$2
+            \\repo_src=$3
+            \\status=0
+            \\
+            \\if [ "$(id -u)" -ne 0 ]; then
+            \\  echo "error: ztest must run as root (package file ownership checks require uid 0)." >&2
+            \\  echo 'help: re-run with: sudo -E env "PATH=$PATH" zig build ztest --prefix ./out --summary all' >&2
+            \\  status=1
+            \\fi
+            \\
+            \\tdnf="$prefix/bin/tdnf"
+            \\if [ ! -x "$tdnf" ]; then
+            \\  echo "error: ztest binary missing: $tdnf" >&2
+            \\  echo "help: build it first with: zig build install --prefix \"$prefix\"" >&2
+            \\  echo 'help: for the documented ztest layout, use: zig build install --prefix ./out' >&2
+            \\  status=1
+            \\fi
+            \\
+            \\seed="$prefix/repo/photon-test/repodata/repomd.xml"
+            \\if [ ! -f "$seed" ]; then
+            \\  echo "error: ztest repo seed missing: $seed" >&2
+            \\  echo "help: generate it with: bash \"$repo_script\" \"$prefix/repo\" \"$repo_src\"" >&2
+            \\  echo 'help: for the documented ztest layout, generate ./out/repo and run ztest with --prefix ./out' >&2
+            \\  status=1
+            \\fi
+            \\
+            \\if [ "$status" -ne 0 ]; then
+            \\  echo "error: ztest preflight failed; refusing to report an all-skipped suite as passing." >&2
+            \\  exit "$status"
+            \\fi
+        ;
+        const run_ztest_preflight = b.addSystemCommand(&.{
+            "bash",
+            "-eu",
+            "-c",
+            ztest_preflight_script,
+            "ztest-preflight",
+            ztest_prefix,
+            b.pathJoin(&.{ b.build_root.path.?, "pytests/repo/setup-repo.sh" }),
+            b.pathJoin(&.{ b.build_root.path.?, "pytests/repo" }),
+        });
+        run_ztest_preflight.setCwd(b.path("."));
+
+        const ztest_install_libtdnf = b.addInstallArtifact(libtdnf, .{});
+        ztest_install_libtdnf.step.dependOn(&run_ztest_preflight.step);
+        const ztest_install_libtdnfcli = b.addInstallArtifact(libtdnfcli, .{});
+        ztest_install_libtdnfcli.step.dependOn(&run_ztest_preflight.step);
+        const ztest_install_tdnf = b.addInstallArtifact(tdnf_exe, .{});
+        ztest_install_tdnf.step.dependOn(&run_ztest_preflight.step);
+
         const ztest_mod = b.createModule(.{
             .root_source_file = b.path("ztests/root.zig"),
             .target = target,
@@ -1901,9 +1956,11 @@ pub fn build(b: *Build) void {
         const run_ztests = b.addRunArtifact(ztests);
         run_ztests.setEnvironmentVariable(
             "TDNF_ZTEST_PREFIX",
-            b.getInstallPath(.prefix, ""),
+            ztest_prefix,
         );
-        run_ztests.step.dependOn(b.getInstallStep());
+        run_ztests.step.dependOn(&ztest_install_libtdnf.step);
+        run_ztests.step.dependOn(&ztest_install_libtdnfcli.step);
+        run_ztests.step.dependOn(&ztest_install_tdnf.step);
         run_ztests.has_side_effects = true;
         ztest_step.dependOn(&run_ztests.step);
     }

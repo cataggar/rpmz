@@ -28,6 +28,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             binutils \
+            createrepo-c \
             gcc \
             gnupg \
             libgpgme-dev \
@@ -75,6 +76,15 @@ jobs:
         run: |
           zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out
+
+      - name: Generate ztest repository seed
+        run: |
+          sudo ln -sf /usr/bin/createrepo_c /usr/local/bin/createrepo
+          sudo ln -sf /usr/bin/modifyrepo_c /usr/local/bin/modifyrepo
+          bash pytests/repo/setup-repo.sh "$(pwd)/out/repo" "$(pwd)/pytests/repo"
+
+      - name: Zig integration tests
+        run: sudo -E env "PATH=$PATH" zig build -Doptimize=ReleaseSafe ztest --prefix ./out --summary all
 
   no-rpm-development:
     name: Build without RPM development files
