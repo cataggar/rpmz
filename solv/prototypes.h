@@ -387,19 +387,6 @@ SolvIsGlob(
     );
 
 uint32_t
-SolvCalculateCookieForFile(
-    const char* pszRepoMD,
-    unsigned char* pszCookie
-    );
-
-uint32_t
-SolvCreateRepoCacheName(
-    const char *pszName,
-    const char *pszUrl,
-    char **ppszCacheName
-    );
-
-uint32_t
 SolvGetMetaDataCachePath(
     PSOLV_REPO_INFO_INTERNAL pSolvRepoInfo,
     char** ppszCachePath

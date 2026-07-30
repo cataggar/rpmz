@@ -508,7 +508,7 @@ typedef struct
         .get_cache_path = TDNFGetCachePath,                             \
         .get_repo_md = TDNFGetRepoMD,                                   \
         .free_repo_metadata = TDNFFreeRepoMetadata,                     \
-        .calculate_cookie = SolvCalculateCookieForFile,                 \
+        .calculate_cookie = TDNFRepoMdCalculateCookieForFile,           \
         .use_metadata_cache = SolvUseMetaDataCache,                     \
         .create_metadata_cache = SolvCreateMetaDataCache,               \
         .init_from_metadata = TDNFInitRepoFromMetadata,                 \

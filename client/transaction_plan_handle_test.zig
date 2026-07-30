@@ -104,7 +104,7 @@ extern fn cnfnode_setval(
     value: ?[*:0]const u8,
 ) void;
 extern fn append_node(parent: ?*anyopaque, node: ?*anyopaque) void;
-extern fn SolvCreateRepoCacheName(
+extern fn TDNFRepoMdCreateRepoCacheName(
     repository: ?[*:0]const u8,
     source: ?[*:0]const u8,
     output: ?*?[*:0]u8,
@@ -482,7 +482,7 @@ const Fixture = struct {
         var cache_name: ?[*:0]u8 = null;
         try std.testing.expectEqual(
             @as(u32, 0),
-            SolvCreateRepoCacheName("base", base_url.ptr, &cache_name),
+            TDNFRepoMdCreateRepoCacheName("base", base_url.ptr, &cache_name),
         );
         const cache_name_pointer = cache_name orelse
             return error.TestUnexpectedResult;
@@ -490,7 +490,7 @@ const Fixture = struct {
         var extras_cache_name: ?[*:0]u8 = null;
         try std.testing.expectEqual(
             @as(u32, 0),
-            SolvCreateRepoCacheName(
+            TDNFRepoMdCreateRepoCacheName(
                 "extras",
                 extras_url.ptr,
                 &extras_cache_name,
@@ -502,7 +502,7 @@ const Fixture = struct {
         var empty_cache_name: ?[*:0]u8 = null;
         try std.testing.expectEqual(
             @as(u32, 0),
-            SolvCreateRepoCacheName(
+            TDNFRepoMdCreateRepoCacheName(
                 "empty",
                 empty_url.ptr,
                 &empty_cache_name,

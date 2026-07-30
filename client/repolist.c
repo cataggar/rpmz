@@ -853,21 +853,21 @@ TDNFRepoListFinalize(
 
         if (pRepo->pszMetaLink)
         {
-            dwError = SolvCreateRepoCacheName(pRepo->pszId,
-                                              pRepo->pszMetaLink,
-                                              &pRepo->pszCacheName);
+            dwError = TDNFRepoMdCreateRepoCacheName(pRepo->pszId,
+                                                    pRepo->pszMetaLink,
+                                                    &pRepo->pszCacheName);
         }
         else if (pRepo->pszMirrorList)
         {
-            dwError = SolvCreateRepoCacheName(pRepo->pszId,
-                                              pRepo->pszMirrorList,
-                                              &pRepo->pszCacheName);
+            dwError = TDNFRepoMdCreateRepoCacheName(pRepo->pszId,
+                                                    pRepo->pszMirrorList,
+                                                    &pRepo->pszCacheName);
         }
         else if (pRepo->ppszBaseUrls && pRepo->ppszBaseUrls[0])
         {
-            dwError = SolvCreateRepoCacheName(pRepo->pszId,
-                                              pRepo->ppszBaseUrls[0],
-                                              &pRepo->pszCacheName);
+            dwError = TDNFRepoMdCreateRepoCacheName(pRepo->pszId,
+                                                    pRepo->ppszBaseUrls[0],
+                                                    &pRepo->pszCacheName);
         }
         BAIL_ON_TDNF_ERROR(dwError);
     }
