@@ -18,11 +18,19 @@ fn install(root: *harness.Root, name: []const u8) !void {
     try result.expectOk();
 }
 
+fn cleanup(root: *harness.Root) void {
+    for ([_][]const u8{ leaf1, leaf2, required }) |name| {
+        var result = root.run(&.{ "erase", "-y", name }) catch continue;
+        result.deinit();
+    }
+}
+
 test "autoremoving a leaf takes its dependency with it" {
     var h = try harness.open(std.testing.allocator);
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try install(&root, leaf1);
     try std.testing.expect(try root.isInstalled(required));
@@ -40,6 +48,7 @@ test "a dependency installed first is kept because it is user installed" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try install(&root, required);
     try install(&root, leaf1);
@@ -57,6 +66,7 @@ test "installing an already-pulled-in dependency marks it user installed" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try install(&root, leaf1);
     try install(&root, required);
@@ -74,6 +84,7 @@ test "a shared dependency survives until its last holder goes" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try install(&root, leaf1);
     try install(&root, leaf2);
@@ -95,6 +106,7 @@ test "clean_requirements_on_remove makes a plain remove clean up" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try root.setMainOption("clean_requirements_on_remove", "1");
     try install(&root, leaf1);
@@ -113,6 +125,7 @@ test "without clean_requirements_on_remove a plain remove keeps the dependency" 
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try root.setMainOption("clean_requirements_on_remove", "0");
     try install(&root, leaf1);
@@ -131,6 +144,7 @@ test "--noautoremove overrides clean_requirements_on_remove" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try root.setMainOption("clean_requirements_on_remove", "1");
     try install(&root, leaf1);
@@ -149,6 +163,7 @@ test "autoremove cleans up even when the config disables it" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try root.setMainOption("clean_requirements_on_remove", "0");
     try install(&root, leaf1);
@@ -167,6 +182,7 @@ test "autoremove with no argument sheds everything unneeded" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try install(&root, leaf1);
     try std.testing.expect(try root.isInstalled(required));
@@ -189,6 +205,7 @@ test "autoremove with no argument keeps what a user-installed package needs" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer cleanup(&root);
 
     try install(&root, leaf1);
     try std.testing.expect(try root.isInstalled(required));

@@ -13,12 +13,15 @@ comptime {
     _ = @import("count_test.zig");
     _ = @import("downgrade_test.zig");
     _ = @import("erase_test.zig");
+    _ = @import("excludes_test.zig");
     _ = @import("glob_test.zig");
     _ = @import("install_test.zig");
     _ = @import("list_test.zig");
     _ = @import("mark_test.zig");
     _ = @import("multiinstall_test.zig");
     _ = @import("provides_test.zig");
+    _ = @import("protected_test.zig");
+    _ = @import("repolist_test.zig");
     _ = @import("search_test.zig");
     _ = @import("update_test.zig");
     _ = @import("urls_test.zig");

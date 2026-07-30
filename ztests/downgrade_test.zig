@@ -17,11 +17,17 @@ fn install(root: *harness.Root, name: []const u8) !void {
     try result.expectOk();
 }
 
+fn eraseBestEffort(root: *harness.Root) void {
+    var result = root.run(&.{ "erase", "-y", multiversion }) catch return;
+    defer result.deinit();
+}
+
 test "downgrade with no argument says so when there is no path down" {
     var h = try harness.open(std.testing.allocator);
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer eraseBestEffort(&root);
 
     // The pytest version asserts `ERROR_TDNF_NO_MATCH` here, but that is an
     // artifact of running against a populated host rpmdb: none of its hundreds
@@ -41,6 +47,7 @@ test "downgrade walks the package down and then runs out of path" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer eraseBestEffort(&root);
 
     try install(&root, multiversion);
 
@@ -71,6 +78,7 @@ test "downgrade succeeds from the lowest installed version" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer eraseBestEffort(&root);
 
     try install(&root, multiversion ++ "-" ++ multiversion_lower);
 
@@ -84,6 +92,7 @@ test "downgrade accepts an explicit lower version" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer eraseBestEffort(&root);
 
     try install(&root, multiversion);
 
