@@ -95,3 +95,31 @@ test "list update-related subcommands handle installed state" {
         try expectListNoMatch(&root, &.{ "list", sub_cmd, single });
     }
 }
+
+test "list accepts partial EVR package specs" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+
+    const Case = struct { spec: []const u8, version: []const u8 };
+    const available_cases = [_]Case{
+        .{ .spec = multiversion ++ "=1.0.1", .version = multiversion_lower },
+        .{ .spec = multiversion ++ "=0:1.0.1", .version = multiversion_lower },
+        .{ .spec = multiversion ++ "<=1.0.1", .version = multiversion_lower },
+        .{ .spec = multiversion ++ ">=1.0.1", .version = multiversion_higher },
+    };
+
+    for (available_cases) |case| {
+        var result = try root.run(&.{ "list", "available", case.spec });
+        defer result.deinit();
+        try result.expectOk();
+        try result.expectStdoutContains(case.version);
+    }
+
+    try install(&root, multiversion ++ "-" ++ multiversion_lower);
+    var installed = try root.run(&.{ "list", "installed", multiversion ++ "=0:1.0.1" });
+    defer installed.deinit();
+    try installed.expectOk();
+    try installed.expectStdoutContains(multiversion_lower);
+}

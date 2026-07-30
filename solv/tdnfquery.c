@@ -285,76 +285,6 @@ error:
 }
 
 uint32_t
-SolvApplyPackageFilter(
-    PSolvQuery pQuery,
-    char** ppszPackageNames
-    )
-{
-    uint32_t dwError = 0;
-    int     dwPkgs = 0;
-    char** ppszTmpNames = NULL;
-    char** ppszCopyOfPkgNames = NULL;
-    int nIndex = 0;
-
-    if(!pQuery || !ppszPackageNames)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    ppszTmpNames = ppszPackageNames;
-    while (ppszTmpNames && *ppszTmpNames)
-    {
-        dwPkgs++;
-        ppszTmpNames++;
-    }
-
-    if(dwPkgs == 0)
-    {
-        dwError = ERROR_TDNF_NO_DATA;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFAllocateMemory(
-                  dwPkgs + 1,
-                  sizeof(char*),
-                  (void**)&ppszCopyOfPkgNames);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    for(nIndex = 0; nIndex < dwPkgs; ++nIndex)
-    {
-        if(!IsNullOrEmptyString(ppszPackageNames))
-        {
-            dwError = TDNFAllocateString(
-                          *ppszPackageNames,
-                          &ppszCopyOfPkgNames[nIndex]);
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-        ppszPackageNames++;
-    }
-
-    if(pQuery->ppszPackageNames)
-    {
-        TDNFFreeStringArray(pQuery->ppszPackageNames);
-    }
-    pQuery->ppszPackageNames = ppszCopyOfPkgNames;
-
-cleanup:
-
-    return dwError;
-error:
-    if(dwError == ERROR_TDNF_NO_DATA)
-    {
-        dwError = 0;
-    }
-    if(ppszCopyOfPkgNames)
-    {
-        TDNFFreeStringArray(ppszCopyOfPkgNames);
-    }
-    goto cleanup;
-}
-
-uint32_t
 SolvAddSystemRepoFilter(
     PSolvQuery  pQuery
     )
@@ -520,57 +450,6 @@ error:
     goto cleanup;
 }
 
-static uint32_t
-SolvApplyUpDownScope(
-    PSolvQuery pQuery,
-    int nUp
-    )
-{
-    uint32_t dwError = 0;
-    PSolvPackageList pInstalledPkgList = NULL;
-
-    if(!pQuery || !pQuery->pSack)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    if(!pQuery->ppszPackageNames)
-    {
-        dwError = SolvFindAllInstalled(pQuery->pSack, &pInstalledPkgList);
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-    else
-    {
-        dwError = SolvFindInstalledPkgByMultipleNames(
-                      pQuery->pSack,
-                      pQuery->ppszPackageNames,
-                      &pInstalledPkgList);
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = SolvFindAllUpDownCandidates(
-                  pQuery->pSack,
-                  pInstalledPkgList,
-                  nUp,
-                  &pQuery->queueResult);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-cleanup:
-    if(pInstalledPkgList)
-    {
-        SolvFreePackageList(pInstalledPkgList);
-    }
-    return dwError;
-
-error:
-    if(dwError == ERROR_TDNF_NO_MATCH)
-    {
-        dwError = 0;
-    }
-    goto cleanup;
-}
-
 static inline int
 is_pseudo_package(Pool *pool, Solvable *s)
 {
@@ -613,17 +492,7 @@ SolvApplyListQuery(
     dwError = SolvGenerateCommonJob(pQuery, nFlags);
     BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
 
-    if(pQuery->nScope == SCOPE_UPGRADES)
-    {
-        dwError = SolvApplyUpDownScope(pQuery, 1);
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-    else if(pQuery->nScope == SCOPE_DOWNGRADES)
-    {
-        dwError = SolvApplyUpDownScope(pQuery, 0);
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-    else if(pQuery->queueJob.count > 0)
+    if(pQuery->queueJob.count > 0)
     {
         for (nIndex = 0; nIndex < pQuery->queueJob.count ; nIndex += 2)
         {
@@ -696,130 +565,6 @@ SolvApplyListQuery(
 
 cleanup:
     queue_free(&queueTmp);
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-static uint32_t
-SolvFindUpDownCandidateForSinglePkg(
-    PSolvSack pSack,
-    Queue* pQueueCandidate,
-    Id dwPkgId,
-    int nUp
-    )
-{
-    uint32_t dwError = 0;
-    char* pszName = NULL;
-    uint32_t dwCount = 0;
-    uint32_t dwPkgIndex = 0;
-    Id dwCandidateId = 0;
-    int dwEvrCompare = 0;
-    PSolvPackageList pUpDownCandidates = NULL;
-
-    if(!pSack || !pQueueCandidate)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = SolvGetPkgNameFromId(pSack, dwPkgId, &pszName);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvFindAvailablePkgByName(
-                  pSack,
-                  pszName,
-                  &pUpDownCandidates);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvGetPackageListSize(pUpDownCandidates, &dwCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    for(dwPkgIndex = 0; dwPkgIndex < dwCount; dwPkgIndex++)
-    {
-        dwError = SolvGetPackageId(
-                      pUpDownCandidates,
-                      dwPkgIndex,
-                      &dwCandidateId);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvCmpEvr(
-                      pSack,
-                      dwCandidateId,
-                      dwPkgId,
-                      &dwEvrCompare);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        if((nUp && dwEvrCompare > 0) || (!nUp && dwEvrCompare < 0))
-        {
-            queue_push(pQueueCandidate, dwCandidateId);
-        }
-    }
-
-cleanup:
-    TDNF_SAFE_FREE_MEMORY(pszName);
-    if(pUpDownCandidates)
-    {
-        SolvFreePackageList(pUpDownCandidates);
-    }
-
-    return dwError;
-
-error:
-    goto cleanup;
-
-}
-
-uint32_t
-SolvFindAllUpDownCandidates(
-    PSolvSack pSack,
-    PSolvPackageList  pInstalledPackages,
-    int up,
-    Queue *pQueueResult
-    )
-{
-    uint32_t dwError = 0;
-    uint32_t dwSize  = 0;
-    uint32_t dwPkgIndex = 0;
-    Queue queueUpDown = {0};
-    Id dwPkgId = 0;
-
-    if(!pSack ||
-       !pSack->pPool ||
-       !pInstalledPackages ||
-       !pQueueResult)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-    queue_init(&queueUpDown);
-
-    dwError = SolvGetPackageListSize(pInstalledPackages, &dwSize);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    for(dwPkgIndex = 0; dwPkgIndex < dwSize; dwPkgIndex++)
-    {
-        dwError = SolvGetPackageId(pInstalledPackages, dwPkgIndex, &dwPkgId);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvFindUpDownCandidateForSinglePkg(
-                      pSack,
-                      &queueUpDown,
-                      dwPkgId,
-                      up);
-        if(dwError == ERROR_TDNF_NO_MATCH)
-        {
-            dwError = 0;
-        }
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    queue_insertn(pQueueResult,
-                  pQueueResult->count,
-                  queueUpDown.count,
-                  queueUpDown.elements);
-cleanup:
     return dwError;
 
 error:

@@ -398,8 +398,7 @@ TDNFNativeQuerySerializePackageListRefs(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvGetPackageListSize(pPkgList, &dwCount);
-    BAIL_ON_TDNF_ERROR(dwError);
+    dwCount = pPkgList->queuePackages.count;
 
     dwError = TDNFAllocateMemory(
                   dwCount + 1,
@@ -409,8 +408,7 @@ TDNFNativeQuerySerializePackageListRefs(
 
     for(i = 0; i < dwCount; i++)
     {
-        dwError = SolvGetPackageId(pPkgList, i, &dwPkgId);
-        BAIL_ON_TDNF_ERROR(dwError);
+        dwPkgId = pPkgList->queuePackages.elements[i];
 
         dwError = TDNFNativeQuerySerializePackageId(
                       pSack,

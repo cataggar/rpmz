@@ -9,6 +9,8 @@
 #define _GNU_SOURCE 1
 #include "includes.h"
 
+#define PACKAGEUTILS_NATIVE_REF_SEP ((char)0x1f)
+
 static uint32_t
 PackageUtilsBuildNativeRepoInputsFromSack(
     PSolvSack pSack,
@@ -26,6 +28,69 @@ static uint32_t
 PackageUtilsCreateRpmConfigFromSack(
     PSolvSack pSack,
     tdnf_rpm_config **ppConfig
+    );
+
+static uint32_t
+PackageUtilsFindNativePackageRefs(
+    PSolvSack pSack,
+    const char *pszPkgName,
+    TDNF_SCOPE nScope,
+    char ***pppszPackageRefs,
+    uint32_t *pdwCount
+    );
+
+static uint32_t
+PackageUtilsFindHighestAvailableRef(
+    PSolvSack pSack,
+    const char *pszPkgName,
+    int nSource,
+    char **ppszPackageRef
+    );
+
+static uint32_t
+PackageUtilsFindHighestOrLowestInstalledRef(
+    PSolvSack pSack,
+    const char *pszPkgName,
+    uint32_t dwFindHighest,
+    char **ppszPackageRef
+    );
+
+static uint32_t
+PackageUtilsComparePackageRefsEvr(
+    PSolvSack pSack,
+    const char *pszLeftRef,
+    const char *pszRightRef,
+    int *pnResult
+    );
+
+static uint32_t
+PackageUtilsGetPackageNameFromRef(
+    PSolvSack pSack,
+    const char *pszPackageRef,
+    char **ppszName
+    );
+
+static uint32_t
+PackageUtilsCopyNevraFromRef(
+    const char *pszPackageRef,
+    char **ppszNevra
+    );
+
+static uint32_t
+PackageUtilsResolveSinglePackageRef(
+    PSolvSack pSack,
+    const char *pszPackageRef,
+    int nInstalledOnly,
+    Id* pdwPkgId
+    );
+
+static uint32_t
+PackageUtilsResolvePackageRefsToQueue(
+    PSolvSack pSack,
+    char **ppszPackageRefs,
+    uint32_t dwCount,
+    int nInstalledOnly,
+    Queue* pQueueGoal
     );
 
 static uint32_t
@@ -70,11 +135,12 @@ TDNFMatchForReinstall(
     )
 {
     uint32_t dwError = 0;
-    Id  dwInstalledId = 0;
     Id  dwAvailableId = 0;
-    char* pszNevr = NULL;
-    PSolvPackageList pInstalledPkgList = NULL;
-    PSolvPackageList pAvailablePkgList = NULL;
+    char *pszInstalledNevra = NULL;
+    char **ppszInstalledRefs = NULL;
+    char **ppszAvailableRefs = NULL;
+    uint32_t dwInstalledCount = 0;
+    uint32_t dwAvailableCount = 0;
 
     if(!pSack || !pQueueGoal || IsNullOrEmptyString(pszName))
     {
@@ -82,41 +148,53 @@ TDNFMatchForReinstall(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvFindInstalledPkgByName(
+    dwError = PackageUtilsFindNativePackageRefs(
                   pSack,
                   pszName,
-                  &pInstalledPkgList);
+                  SCOPE_INSTALLED,
+                  &ppszInstalledRefs,
+                  &dwInstalledCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError =  SolvGetPackageId(pInstalledPkgList, 0, &dwInstalledId);
+    if(dwInstalledCount == 0)
+    {
+        dwError = ERROR_TDNF_NO_MATCH;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = PackageUtilsCopyNevraFromRef(
+                  ppszInstalledRefs[0],
+                  &pszInstalledNevra);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvGetPkgNevrFromId(pSack, dwInstalledId, &pszNevr);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvFindAvailablePkgByName(
+    dwError = PackageUtilsFindNativePackageRefs(
                   pSack,
-                  pszNevr,
-                  &pAvailablePkgList);
+                  pszInstalledNevra,
+                  SCOPE_AVAILABLE,
+                  &ppszAvailableRefs,
+                  &dwAvailableCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvGetPackageId(pAvailablePkgList,
-                               0,
-                               &dwAvailableId);
+    if(dwAvailableCount == 0)
+    {
+        dwError = ERROR_TDNF_NO_MATCH;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = PackageUtilsResolveSinglePackageRef(
+                  pSack,
+                  ppszAvailableRefs[0],
+                  0,
+                  &dwAvailableId);
     BAIL_ON_TDNF_ERROR(dwError);
+
 
     queue_push(pQueueGoal, dwAvailableId);
 
 cleanup:
-    TDNF_SAFE_FREE_MEMORY(pszNevr);
-    if(pAvailablePkgList)
-    {
-        SolvFreePackageList(pAvailablePkgList);
-    }
-    if(pInstalledPkgList)
-    {
-        SolvFreePackageList(pInstalledPkgList);
-    }
+    TDNF_SAFE_FREE_MEMORY(pszInstalledNevra);
+    TDNFFreeStringArray(ppszAvailableRefs);
+    TDNFFreeStringArray(ppszInstalledRefs);
     return dwError;
 
 error:
@@ -285,7 +363,7 @@ TDNFPackageGetDowngrade(
     char **ppszMatches = NULL;
     uint32_t dwMatchCount = 0;
 
-    if(!pTdnf || !pSack || !pdwDowngradePkgId || !pAvailabePkgList)
+    if(!pTdnf || !pSack || !pdwDowngradePkgId)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -349,7 +427,8 @@ TDNFGetGlobPackages(
     )
 {
     uint32_t dwError = 0;
-    PSolvPackageList pSolvPkgList = NULL;
+    char **ppszPackageRefs = NULL;
+    uint32_t dwCount = 0;
 
     if(!pSack || IsNullOrEmptyString(pszPkgGlob) || !pQueueGoal)
     {
@@ -357,35 +436,24 @@ TDNFGetGlobPackages(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    if (nIsInstalled) {
-        dwError = SolvFindInstalledPkgByName(
-                      pSack,
-                      pszPkgGlob,
-                      &pSolvPkgList);
-    } else {
-        dwError = SolvFindAvailablePkgByName(
-                      pSack,
-                      pszPkgGlob,
-                      &pSolvPkgList);
-    }
+    dwError = PackageUtilsFindNativePackageRefs(
+                  pSack,
+                  pszPkgGlob,
+                  nIsInstalled ? SCOPE_INSTALLED : SCOPE_AVAILABLE,
+                  &ppszPackageRefs,
+                  &dwCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    if(pSolvPkgList->queuePackages.count > 0)
-    {
-        for(int dwPkgIndex = 0;
-            dwPkgIndex < pSolvPkgList->queuePackages.count;
-            dwPkgIndex++)
-        {
-            queue_push(pQueueGoal,
-                       pSolvPkgList->queuePackages.elements[dwPkgIndex]);
-        }
-    }
+    dwError = PackageUtilsResolvePackageRefsToQueue(
+                  pSack,
+                  ppszPackageRefs,
+                  dwCount,
+                  nIsInstalled,
+                  pQueueGoal);
+    BAIL_ON_TDNF_ERROR(dwError);
 
 cleanup:
-    if(pSolvPkgList)
-    {
-        SolvFreePackageList(pSolvPkgList);
-    }
+    TDNFFreeStringArray(ppszPackageRefs);
     return dwError;
 
 error:
@@ -400,10 +468,8 @@ TDNFAddPackagesForErase(
     )
 {
     uint32_t dwError = 0;
-    Id dwInstalledId = 0;
-    int dwPkgIndex = 0;
     uint32_t dwCount = 0;
-    PSolvPackageList pInstalledPkgList = NULL;
+    char **ppszInstalledRefs = NULL;
 
     if(!pSack || !pQueueGoal || IsNullOrEmptyString(pszPkgName))
     {
@@ -411,30 +477,24 @@ TDNFAddPackagesForErase(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvFindInstalledPkgByName(
+    dwError = PackageUtilsFindNativePackageRefs(
                   pSack,
                   pszPkgName,
-                  &pInstalledPkgList);
+                  SCOPE_INSTALLED,
+                  &ppszInstalledRefs,
+                  &dwCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvGetPackageListSize(pInstalledPkgList, &dwCount);
+    dwError = PackageUtilsResolvePackageRefsToQueue(
+                  pSack,
+                  ppszInstalledRefs,
+                  dwCount,
+                  1,
+                  pQueueGoal);
     BAIL_ON_TDNF_ERROR(dwError);
-
-    for(dwPkgIndex = 0; (uint32_t)dwPkgIndex < dwCount; dwPkgIndex++)
-    {
-        dwError = SolvGetPackageId(
-                      pInstalledPkgList,
-                      dwPkgIndex,
-                      &dwInstalledId);
-        BAIL_ON_TDNF_ERROR(dwError);
-        queue_push(pQueueGoal, dwInstalledId);
-    }
 
 cleanup:
-    if(pInstalledPkgList)
-    {
-        SolvFreePackageList(pInstalledPkgList);
-    }
+    TDNFFreeStringArray(ppszInstalledRefs);
     return dwError;
 
 error:
@@ -451,8 +511,9 @@ TDNFVerifyInstallPackage(
 {
 
     uint32_t dwError = 0;
-    char* pszName = NULL;
-    Id  dwInstalledId = 0;
+    char *pszName = NULL;
+    char *pszPackageRef = NULL;
+    char *pszInstalledRef = NULL;
     int dwEvrCompare = 0;
     uint32_t dwInstallPackage = 0;
 
@@ -462,16 +523,30 @@ TDNFVerifyInstallPackage(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvGetPkgNameFromId(pSack, dwPkg, &pszName);
+    dwError = TDNFNativeQuerySerializePackageId(
+                  pSack,
+                  dwPkg,
+                  &pszPackageRef);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvFindHighestInstalled(
+    dwError = PackageUtilsGetPackageNameFromRef(
+                  pSack,
+                  pszPackageRef,
+                  &pszName);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsFindHighestOrLowestInstalledRef(
                   pSack,
                   pszName,
-                  &dwInstalledId);
+                  1,
+                  &pszInstalledRef);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvCmpEvr(pSack, dwPkg, dwInstalledId, &dwEvrCompare);
+    dwError = PackageUtilsComparePackageRefsEvr(
+                  pSack,
+                  pszPackageRef,
+                  pszInstalledRef,
+                  &dwEvrCompare);
     BAIL_ON_TDNF_ERROR(dwError);
 
     //allow updates and downgrades with install
@@ -483,6 +558,8 @@ TDNFVerifyInstallPackage(
 
     *pdwInstallPackage = dwInstallPackage;
 cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszInstalledRef);
+    TDNF_SAFE_FREE_MEMORY(pszPackageRef);
     TDNF_SAFE_FREE_MEMORY(pszName);
     return dwError;
 
@@ -509,6 +586,8 @@ TDNFAddPackagesForInstall(
     uint32_t dwError = 0;
     Id dwHighestAvailable = 0;
     uint32_t  dwInstallPackage = 0;
+    char *pszHighestAvailableRef = NULL;
+    char *pszInstalledRef = NULL;
 
     if(!pSack || !pQueueGoal || IsNullOrEmptyString(pszPkgName))
     {
@@ -516,10 +595,30 @@ TDNFAddPackagesForInstall(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvFindHighestAvailable(
+    dwError = PackageUtilsFindHighestAvailableRef(
                   pSack,
                   pszPkgName,
                   nSource,
+                  &pszHighestAvailableRef);
+    if(!nSource &&
+       (dwError == ERROR_TDNF_NO_MATCH || dwError == ERROR_TDNF_NO_DATA))
+    {
+        dwError = PackageUtilsFindHighestOrLowestInstalledRef(
+                      pSack,
+                      pszPkgName,
+                      1,
+                      &pszInstalledRef);
+        if(dwError == 0)
+        {
+            dwError = ERROR_TDNF_ALREADY_INSTALLED;
+        }
+    }
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsResolveSinglePackageRef(
+                  pSack,
+                  pszHighestAvailableRef,
+                  0,
                   &dwHighestAvailable);
     BAIL_ON_TDNF_ERROR(dwError);
 
@@ -540,6 +639,8 @@ TDNFAddPackagesForInstall(
     }
 
 cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszInstalledRef);
+    TDNF_SAFE_FREE_MEMORY(pszHighestAvailableRef);
     return dwError;
 
 error:
@@ -556,8 +657,9 @@ TDNFVerifyUpgradePackage(
 {
 
     uint32_t dwError = 0;
-    char* pszName = NULL;
-    Id  dwInstalledId = 0;
+    char *pszName = NULL;
+    char *pszPackageRef = NULL;
+    char *pszInstalledRef = NULL;
     int dwEvrCompare = 0;
     uint32_t dwUpgradePackage = 0;
 
@@ -567,16 +669,30 @@ TDNFVerifyUpgradePackage(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvGetPkgNameFromId(pSack, dwPkg, &pszName);
+    dwError = TDNFNativeQuerySerializePackageId(
+                  pSack,
+                  dwPkg,
+                  &pszPackageRef);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvFindHighestInstalled(
+    dwError = PackageUtilsGetPackageNameFromRef(
+                  pSack,
+                  pszPackageRef,
+                  &pszName);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsFindHighestOrLowestInstalledRef(
                   pSack,
                   pszName,
-                  &dwInstalledId);
+                  1,
+                  &pszInstalledRef);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvCmpEvr(pSack, dwPkg, dwInstalledId, &dwEvrCompare);
+    dwError = PackageUtilsComparePackageRefsEvr(
+                  pSack,
+                  pszPackageRef,
+                  pszInstalledRef,
+                  &dwEvrCompare);
     if(dwError == 0 && dwEvrCompare > 0)
     {
         dwUpgradePackage = 1;
@@ -588,6 +704,8 @@ TDNFVerifyUpgradePackage(
     *pdwUpgradePackage = dwUpgradePackage;
 
 cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszInstalledRef);
+    TDNF_SAFE_FREE_MEMORY(pszPackageRef);
     TDNF_SAFE_FREE_MEMORY(pszName);
     return dwError;
 
@@ -608,6 +726,7 @@ TDNFAddPackagesForUpgrade(
     uint32_t dwError = 0;
     Id dwHighestAvailable = 0;
     uint32_t  dwUpgradePackage = 0;
+    char *pszHighestAvailableRef = NULL;
 
     if(!pSack || !pQueueGoal || IsNullOrEmptyString(pszPkgName))
     {
@@ -615,9 +734,16 @@ TDNFAddPackagesForUpgrade(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvFindHighestAvailable(
+    dwError = PackageUtilsFindHighestAvailableRef(
                   pSack,
                   pszPkgName,
+                  0,
+                  &pszHighestAvailableRef);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsResolveSinglePackageRef(
+                  pSack,
+                  pszHighestAvailableRef,
                   0,
                   &dwHighestAvailable);
     BAIL_ON_TDNF_ERROR(dwError);
@@ -634,6 +760,7 @@ TDNFAddPackagesForUpgrade(
     }
 
 cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszHighestAvailableRef);
     return dwError;
 
 error:
@@ -650,11 +777,12 @@ TDNFAddPackagesForDowngrade(
     )
 {
     uint32_t dwError = 0;
-    PSolvPackageList pAvailabePkgList = NULL;
     Id dwInstalledId = 0;
-    Id dwAvailableId = 0;
     Id dwDownGradeId = 0;
-    char* pszName = NULL;
+    char *pszName = NULL;
+    char *pszInstalledRef = NULL;
+    char **ppszAvailableRefs = NULL;
+    uint32_t dwAvailableCount = 0;
 
     if(!pTdnf || !pSack || !pQueueGoal || IsNullOrEmptyString(pszPkgName))
     {
@@ -662,21 +790,37 @@ TDNFAddPackagesForDowngrade(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvFindAvailablePkgByName(
+    dwError = PackageUtilsFindNativePackageRefs(
                   pSack,
                   pszPkgName,
-                  &pAvailabePkgList);
+                  SCOPE_AVAILABLE,
+                  &ppszAvailableRefs,
+                  &dwAvailableCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvGetPackageId(pAvailabePkgList, 0, &dwAvailableId);
+    if(dwAvailableCount == 0)
+    {
+        dwError = ERROR_TDNF_NO_MATCH;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = PackageUtilsGetPackageNameFromRef(
+                  pSack,
+                  ppszAvailableRefs[0],
+                  &pszName);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvGetPkgNameFromId(pSack, dwAvailableId, &pszName);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvFindLowestInstalled(
+    dwError = PackageUtilsFindHighestOrLowestInstalledRef(
                   pSack,
                   pszName,
+                  0,
+                  &pszInstalledRef);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsResolveSinglePackageRef(
+                  pSack,
+                  pszInstalledRef,
+                  1,
                   &dwInstalledId);
     BAIL_ON_TDNF_ERROR(dwError);
 
@@ -684,17 +828,15 @@ TDNFAddPackagesForDowngrade(
                   pTdnf,
                   dwInstalledId,
                   pSack,
-                  pAvailabePkgList,
+                  NULL,
                   &dwDownGradeId);
     BAIL_ON_TDNF_ERROR(dwError);
 
     queue_push(pQueueGoal, dwDownGradeId);
 cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszInstalledRef);
     TDNF_SAFE_FREE_MEMORY(pszName);
-    if(pAvailabePkgList)
-    {
-        SolvFreePackageList(pAvailabePkgList);
-    }
+    TDNFFreeStringArray(ppszAvailableRefs);
     return dwError;
 
 error:
@@ -1116,6 +1258,414 @@ error:
         *ppConfig = NULL;
     }
     tdnf_rpm_config_destroy(pConfig);
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsFindNativePackageRefs(
+    PSolvSack pSack,
+    const char *pszPkgName,
+    TDNF_SCOPE nScope,
+    char ***pppszPackageRefs,
+    uint32_t *pdwCount
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwRepoCount = 0;
+    uint32_t dwCount = 0;
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
+    tdnf_rpm_config *pConfig = NULL;
+    char **ppszPackageRefs = NULL;
+
+    if(!pSack || IsNullOrEmptyString(pszPkgName) || !pppszPackageRefs || !pdwCount)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = PackageUtilsBuildNativeRepoInputsFromSack(
+                  pSack,
+                  &pRepos,
+                  &dwRepoCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsCreateRpmConfigFromSack(pSack, &pConfig);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = TDNFRepoMdNativePackageRefLinesConfig(
+                  pRepos,
+                  dwRepoCount,
+                  pConfig,
+                  nScope,
+                  pszPkgName,
+                  &ppszPackageRefs,
+                  &dwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *pppszPackageRefs = ppszPackageRefs;
+    *pdwCount = dwCount;
+
+cleanup:
+    tdnf_rpm_config_destroy(pConfig);
+    PackageUtilsFreeNativeRepoInputs(pRepos, dwRepoCount);
+    return dwError;
+
+error:
+    if(pppszPackageRefs)
+    {
+        *pppszPackageRefs = NULL;
+    }
+    if(pdwCount)
+    {
+        *pdwCount = 0;
+    }
+    TDNFFreeStringArray(ppszPackageRefs);
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsFindHighestAvailableRef(
+    PSolvSack pSack,
+    const char *pszPkgName,
+    int nSource,
+    char **ppszPackageRef
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwRepoCount = 0;
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
+    tdnf_rpm_config *pConfig = NULL;
+    char *pszPackageRef = NULL;
+
+    if(!pSack || IsNullOrEmptyString(pszPkgName) || !ppszPackageRef)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = PackageUtilsBuildNativeRepoInputsFromSack(
+                  pSack,
+                  &pRepos,
+                  &dwRepoCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsCreateRpmConfigFromSack(pSack, &pConfig);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = TDNFRepoMdNativeBestPackageRefConfig(
+                  pRepos,
+                  dwRepoCount,
+                  pConfig,
+                  SCOPE_AVAILABLE,
+                  pszPkgName,
+                  nSource,
+                  1,
+                  &pszPackageRef);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszPackageRef = pszPackageRef;
+    pszPackageRef = NULL;
+
+cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszPackageRef);
+    tdnf_rpm_config_destroy(pConfig);
+    PackageUtilsFreeNativeRepoInputs(pRepos, dwRepoCount);
+    return dwError;
+
+error:
+    if(ppszPackageRef)
+    {
+        *ppszPackageRef = NULL;
+    }
+    TDNF_SAFE_FREE_MEMORY(pszPackageRef);
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsFindHighestOrLowestInstalledRef(
+    PSolvSack pSack,
+    const char *pszPkgName,
+    uint32_t dwFindHighest,
+    char **ppszPackageRef
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwRepoCount = 0;
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
+    tdnf_rpm_config *pConfig = NULL;
+    char *pszPackageRef = NULL;
+
+    if(!pSack || IsNullOrEmptyString(pszPkgName) || !ppszPackageRef)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = PackageUtilsBuildNativeRepoInputsFromSack(
+                  pSack,
+                  &pRepos,
+                  &dwRepoCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsCreateRpmConfigFromSack(pSack, &pConfig);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = TDNFRepoMdNativeBestPackageRefConfig(
+                  pRepos,
+                  dwRepoCount,
+                  pConfig,
+                  SCOPE_INSTALLED,
+                  pszPkgName,
+                  0,
+                  dwFindHighest,
+                  &pszPackageRef);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszPackageRef = pszPackageRef;
+    pszPackageRef = NULL;
+
+cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszPackageRef);
+    tdnf_rpm_config_destroy(pConfig);
+    PackageUtilsFreeNativeRepoInputs(pRepos, dwRepoCount);
+    return dwError;
+
+error:
+    if(ppszPackageRef)
+    {
+        *ppszPackageRef = NULL;
+    }
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsComparePackageRefsEvr(
+    PSolvSack pSack,
+    const char *pszLeftRef,
+    const char *pszRightRef,
+    int *pnResult
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwCount = 0;
+    PTDNF_PKG_INFO pPkgInfo = NULL;
+    char *ppszRefs[3] = {(char *)pszLeftRef, (char *)pszRightRef, NULL};
+
+    if(!pSack || IsNullOrEmptyString(pszLeftRef) ||
+       IsNullOrEmptyString(pszRightRef) || !pnResult)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = PackageUtilsPopulatePkgInfoFromRefs(
+                  pSack,
+                  ppszRefs,
+                  2,
+                  DETAIL_LIST,
+                  0,
+                  0,
+                  0,
+                  0,
+                  &pPkgInfo,
+                  &dwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    if(dwCount != 2)
+    {
+        dwError = ERROR_TDNF_NO_DATA;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFRepoMdNativeCompareEvr(
+                  pPkgInfo[0].pszEVR,
+                  pPkgInfo[1].pszEVR,
+                  pnResult);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+cleanup:
+    if(pPkgInfo)
+    {
+        TDNFFreePackageInfoArray(pPkgInfo, dwCount);
+    }
+    return dwError;
+
+error:
+    if(pnResult)
+    {
+        *pnResult = 0;
+    }
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsGetPackageNameFromRef(
+    PSolvSack pSack,
+    const char *pszPackageRef,
+    char **ppszName
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwCount = 0;
+    PTDNF_PKG_INFO pPkgInfo = NULL;
+    char *pszName = NULL;
+    char *ppszRefs[2] = {(char *)pszPackageRef, NULL};
+
+    if(!pSack || IsNullOrEmptyString(pszPackageRef) || !ppszName)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = PackageUtilsPopulatePkgInfoFromRefs(
+                  pSack,
+                  ppszRefs,
+                  1,
+                  DETAIL_LIST,
+                  0,
+                  0,
+                  0,
+                  0,
+                  &pPkgInfo,
+                  &dwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    if(dwCount != 1 || IsNullOrEmptyString(pPkgInfo[0].pszName))
+    {
+        dwError = ERROR_TDNF_NO_DATA;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFAllocateString(pPkgInfo[0].pszName, &pszName);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszName = pszName;
+
+cleanup:
+    if(pPkgInfo)
+    {
+        TDNFFreePackageInfoArray(pPkgInfo, dwCount);
+    }
+    return dwError;
+
+error:
+    if(ppszName)
+    {
+        *ppszName = NULL;
+    }
+    TDNF_SAFE_FREE_MEMORY(pszName);
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsCopyNevraFromRef(
+    const char *pszPackageRef,
+    char **ppszNevra
+    )
+{
+    uint32_t dwError = 0;
+    const char *pszNevra = NULL;
+    char *pszNevraCopy = NULL;
+
+    if(IsNullOrEmptyString(pszPackageRef) || !ppszNevra)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pszNevra = strchr(pszPackageRef, PACKAGEUTILS_NATIVE_REF_SEP);
+    if(!pszNevra || IsNullOrEmptyString(pszNevra + 1))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+    pszNevra++;
+
+    dwError = TDNFAllocateString(pszNevra, &pszNevraCopy);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszNevra = pszNevraCopy;
+
+cleanup:
+    return dwError;
+
+error:
+    if(ppszNevra)
+    {
+        *ppszNevra = NULL;
+    }
+    TDNF_SAFE_FREE_MEMORY(pszNevraCopy);
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsResolveSinglePackageRef(
+    PSolvSack pSack,
+    const char *pszPackageRef,
+    int nInstalledOnly,
+    Id* pdwPkgId
+    )
+{
+    uint32_t dwError = 0;
+
+    if(!pSack || IsNullOrEmptyString(pszPackageRef) || !pdwPkgId)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFNativeQueryResolveSinglePackageRef(
+                  pSack,
+                  pszPackageRef,
+                  nInstalledOnly,
+                  pdwPkgId);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+cleanup:
+    return dwError;
+
+error:
+    if(pdwPkgId)
+    {
+        *pdwPkgId = 0;
+    }
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsResolvePackageRefsToQueue(
+    PSolvSack pSack,
+    char **ppszPackageRefs,
+    uint32_t dwCount,
+    int nInstalledOnly,
+    Queue* pQueueGoal
+    )
+{
+    uint32_t dwError = 0;
+
+    if(!pSack || !ppszPackageRefs || !pQueueGoal)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+    if(dwCount == 0)
+    {
+        dwError = ERROR_TDNF_NO_MATCH;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFNativeQueryResolvePackageRefArrayToQueue(
+                  pSack,
+                  ppszPackageRefs,
+                  dwCount,
+                  nInstalledOnly,
+                  pQueueGoal);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+cleanup:
+    return dwError;
+
+error:
     goto cleanup;
 }
 

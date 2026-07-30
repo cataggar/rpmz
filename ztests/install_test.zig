@@ -70,6 +70,7 @@ test "a partial version spec selects the matching release" {
         .{ .spec = multiversion ++ "=1.0.1", .version = "1.0.1-1" },
         .{ .spec = multiversion ++ "=1.0.2", .version = "1.0.2-1" },
         .{ .spec = multiversion ++ "<=1.0.1", .version = "1.0.1-1" },
+        .{ .spec = multiversion ++ ">=1.0.1", .version = "1.0.2-1" },
         .{ .spec = multiversion ++ "=0:1.0.1", .version = "1.0.1-1" },
         .{ .spec = multiversion ++ "=1.0.1-1", .version = "1.0.1-1" },
     };

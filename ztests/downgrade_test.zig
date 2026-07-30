@@ -105,6 +105,21 @@ test "downgrade accepts an explicit lower version" {
     try result.expectOk();
 }
 
+test "downgrade accepts a partial EVR target" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root);
+
+    try install(&root, multiversion);
+
+    var result = try root.run(&.{ "downgrade", "-y", multiversion ++ "<=1.0.1" });
+    defer result.deinit();
+    try result.expectOk();
+    try std.testing.expect(try root.isInstalledVersion(multiversion, multiversion_lower));
+}
+
 test "downgrade to a version that does not exist reports no match" {
     var h = try harness.open(std.testing.allocator);
     defer h.deinit();

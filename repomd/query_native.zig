@@ -379,6 +379,143 @@ pub export fn TDNFRepoMdNativeFindNevraMatchesConfig(
     return nativeFindNevraMatches(raw_repos, repo_count, null, config, true, raw_nevra, installed_only, out_matches, out_count);
 }
 
+pub export fn TDNFRepoMdNativePackageRefLinesConfig(
+    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    repo_count: u32,
+    config: ?*const c.tdnf_rpm_config,
+    scope_int: c_int,
+    raw_spec: ?[*:0]const u8,
+    out_lines: ?*[*c][*c]u8,
+    out_count: ?*u32,
+) u32 {
+    clearError();
+    if (out_lines) |out| out.* = null;
+    if (out_count) |out| out.* = 0;
+    const rpm_config = config orelse return invalidParameter("null rpm config", .{});
+    const spec = spanRequired(raw_spec, "package spec") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const lines_out = out_lines orelse return invalidParameter("null package-ref output", .{});
+    const count_out = out_count orelse return invalidParameter("null package-ref count", .{});
+
+    var ctx = NativeContext.init(std.heap.c_allocator);
+    defer ctx.deinit();
+
+    ctx.load(raw_repos, repo_count, null, rpm_config, scopeNeedsInstalled(scope_int), .{}, .{}) catch |err| {
+        return mapQueryError(err);
+    };
+
+    var specs = [_][*c]u8{ @ptrCast(@constCast(raw_spec.?)), null };
+    const refs = selectListPackages(&ctx, scope_int, &specs) catch |err| {
+        return mapQueryError(err);
+    };
+    defer std.heap.c_allocator.free(refs);
+    if (refs.len == 0) return c.ERROR_TDNF_NO_MATCH;
+
+    const lines = serializePackageRefs(&ctx, refs) catch |err| {
+        return mapQueryError(err);
+    };
+    defer freeOwnedSlices(lines);
+
+    _ = spec;
+    lines_out.* = (tryBuildCStringArray(lines) catch |err| {
+        return mapQueryError(err);
+    }) orelse null;
+    count_out.* = @intCast(lines.len);
+    return 0;
+}
+
+pub export fn TDNFRepoMdNativeBestPackageRefConfig(
+    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    repo_count: u32,
+    config: ?*const c.tdnf_rpm_config,
+    scope_int: c_int,
+    raw_spec: ?[*:0]const u8,
+    source_only: c_int,
+    highest: c_int,
+    out_line: ?*[*c]u8,
+) u32 {
+    clearError();
+    if (out_line) |out| out.* = null;
+    const rpm_config = config orelse return invalidParameter("null rpm config", .{});
+    const spec = spanRequired(raw_spec, "package spec") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const line_out = out_line orelse return invalidParameter("null best package-ref output", .{});
+
+    var ctx = NativeContext.init(std.heap.c_allocator);
+    defer ctx.deinit();
+
+    ctx.load(raw_repos, repo_count, null, rpm_config, scopeNeedsInstalled(scope_int), .{}, .{}) catch |err| {
+        return mapQueryError(err);
+    };
+
+    var specs = [_][*c]u8{ @ptrCast(@constCast(raw_spec.?)), null };
+    const refs = selectListPackages(&ctx, scope_int, &specs) catch |err| {
+        return mapQueryError(err);
+    };
+    defer std.heap.c_allocator.free(refs);
+    if (refs.len == 0) return c.ERROR_TDNF_NO_MATCH;
+
+    var exact_best: ?PackageRef = null;
+    for (refs) |ref| {
+        const pkg = ctx.package(ref);
+        if (source_only != 0 and !isSourceArch(pkg.nevra.arch)) continue;
+        if (!std.mem.eql(u8, pkg.nevra.name, spec)) continue;
+        if (exact_best) |best_ref| {
+            const cmp = query_index.comparePackageVersions(pkg, ctx.package(best_ref));
+            if ((highest != 0 and cmp > 0) or (highest == 0 and cmp < 0)) {
+                exact_best = ref;
+            }
+        } else {
+            exact_best = ref;
+        }
+    }
+
+    var best: ?PackageRef = null;
+    for (refs) |ref| {
+        const pkg = ctx.package(ref);
+        if (source_only != 0 and !isSourceArch(pkg.nevra.arch)) continue;
+        if (exact_best) |best_exact| {
+            if (!std.mem.eql(u8, pkg.nevra.name, spec) and
+                !packageObsoletesPackage(&ctx, ref, best_exact)) continue;
+        }
+        if (best) |best_ref| {
+            const cmp = query_index.comparePackageVersions(pkg, ctx.package(best_ref));
+            if ((highest != 0 and cmp > 0) or (highest == 0 and cmp < 0)) {
+                best = ref;
+            }
+        } else {
+            best = ref;
+        }
+    }
+
+    const selected = best orelse return c.ERROR_TDNF_NO_MATCH;
+    const line = packageMatchLine(&ctx, selected) catch |err| {
+        return mapQueryError(err);
+    };
+    defer std.heap.c_allocator.free(line);
+
+    line_out.* = dupCString(line) catch |err| {
+        return mapQueryError(err);
+    };
+    return 0;
+}
+
+fn packageObsoletesPackage(ctx: *NativeContext, candidate_ref: PackageRef, target_ref: PackageRef) bool {
+    const candidate = ctx.package(candidate_ref);
+    const target = ctx.package(target_ref);
+    for (candidate.relationsFor(.obsoletes, ctx.relations(candidate_ref))) |relation| {
+        if (!std.mem.eql(u8, relation.name, target.nevra.name)) {
+            continue;
+        }
+        const query = dependencyQueryFromRelation(relation);
+        if (query.comparison == .none) {
+            return true;
+        }
+        if (compareMatches(query_index.comparePackageWithQuery(target, query), query.comparison)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 pub export fn TDNFRepoMdNativeUpdateInfoSummaryLines(
     raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
@@ -2046,6 +2183,10 @@ fn packageMatchesCanonLike(allocator: std.mem.Allocator, pkg: model.Package, spe
     const nevra = pkgquery.nevraString(allocator, pkg) catch return false;
     defer allocator.free(nevra);
     return stringEql(nevra, spec, ignore_case);
+}
+
+fn isSourceArch(arch: []const u8) bool {
+    return std.mem.eql(u8, arch, "src") or std.mem.eql(u8, arch, "nosrc");
 }
 
 fn stringEql(left: []const u8, right: []const u8, ignore_case: bool) bool {
