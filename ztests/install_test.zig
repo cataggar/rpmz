@@ -54,6 +54,38 @@ test "a package installs with and without a version suffix" {
     }
 }
 
+test "a partial version spec selects the matching release" {
+    // `name=version` (a ver with no rel) is documented, supported syntax. The
+    // native resolve port (#244) routed selection through a matcher that
+    // compared the release strictly, so a partial EVR matched nothing and the
+    // install failed with ERROR_TDNF_NO_MATCH. rpm/libsolv treat a missing
+    // release as "any release", so `=1.0.1` must select 1.0.1-1 exactly (not
+    // the higher 1.0.2-1), and the equivalent `<=`, epoch-qualified, and
+    // full-EVR forms must all resolve too.
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+
+    const Case = struct { spec: []const u8, version: []const u8 };
+    const cases = [_]Case{
+        .{ .spec = multiversion ++ "=1.0.1", .version = "1.0.1-1" },
+        .{ .spec = multiversion ++ "=1.0.2", .version = "1.0.2-1" },
+        .{ .spec = multiversion ++ "<=1.0.1", .version = "1.0.1-1" },
+        .{ .spec = multiversion ++ "=0:1.0.1", .version = "1.0.1-1" },
+        .{ .spec = multiversion ++ "=1.0.1-1", .version = "1.0.1-1" },
+    };
+
+    for (cases) |case| {
+        var root = try h.root();
+        defer root.deinit();
+
+        var result = try root.run(&.{ "install", "-y", "--nogpgcheck", case.spec });
+        defer result.deinit();
+        try result.expectOk();
+
+        try std.testing.expect(try root.isInstalledVersion(multiversion, case.version));
+    }
+}
+
 test "an unsatisfiable requirement names what is missing" {
     var h = try harness.open(std.testing.allocator);
     defer h.deinit();

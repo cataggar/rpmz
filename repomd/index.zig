@@ -442,14 +442,23 @@ pub fn comparePackageVersions(left: model.Package, right: model.Package) i32 {
     );
 }
 
+// Tests a package's own EVR against a `name OP EVR` spec constraint. Uses
+// rpm's "match release" rule so that a spec that omits the release (or epoch)
+// selects every release of the requested version, matching how libsolv
+// resolves `name=version` selections. This is a matching predicate, not an
+// ordering: see `comparePackageVersions` for absolute ordering.
 pub fn comparePackageWithQuery(pkg: model.Package, query: DependencyQuery) i32 {
-    return compareEvr(
-        pkg.nevra.epoch,
-        pkg.nevra.version,
-        if (pkg.nevra.release.len == 0) null else pkg.nevra.release,
-        query.epoch,
-        query.version,
-        query.release,
+    return compareEvrPartsMatchRelease(
+        .{
+            .epoch = pkg.nevra.epoch,
+            .version = pkg.nevra.version,
+            .release = if (pkg.nevra.release.len == 0) null else pkg.nevra.release,
+        },
+        .{
+            .epoch = query.epoch,
+            .version = query.version orelse "",
+            .release = query.release,
+        },
     );
 }
 
@@ -816,7 +825,7 @@ fn rangesIntersect(left: VersionRange, right: VersionRange) bool {
         return true;
     }
 
-    const cmp = compareEvrParts(lower.?.evr, upper.?.evr);
+    const cmp = compareEvrPartsMatchRelease(lower.?.evr, upper.?.evr);
     if (cmp < 0) {
         return true;
     }
@@ -831,7 +840,7 @@ fn maxLowerBound(left: ?Bound, right: ?Bound) ?Bound {
     if (left == null) return right;
     if (right == null) return left;
 
-    const cmp = compareEvrParts(left.?.evr, right.?.evr);
+    const cmp = compareEvrPartsMatchRelease(left.?.evr, right.?.evr);
     if (cmp > 0) return left;
     if (cmp < 0) return right;
 
@@ -845,7 +854,7 @@ fn minUpperBound(left: ?Bound, right: ?Bound) ?Bound {
     if (left == null) return right;
     if (right == null) return left;
 
-    const cmp = compareEvrParts(left.?.evr, right.?.evr);
+    const cmp = compareEvrPartsMatchRelease(left.?.evr, right.?.evr);
     if (cmp < 0) return left;
     if (cmp > 0) return right;
 
@@ -855,6 +864,9 @@ fn minUpperBound(left: ?Bound, right: ?Bound) ?Bound {
     };
 }
 
+// Orders two EVR component sets absolutely, treating a missing release as the
+// lowest release (rpm's `EVRCMP_COMPARE`). Use this for version ordering, not
+// for spec/dependency matching (see `compareEvrPartsMatchRelease`).
 fn compareEvrParts(left: EvrParts, right: EvrParts) i32 {
     const left_epoch = left.epoch orelse 0;
     const right_epoch = right.epoch orelse 0;
@@ -865,6 +877,35 @@ fn compareEvrParts(left: EvrParts, right: EvrParts) i32 {
     if (version_cmp != 0) return version_cmp;
 
     return compareRpmVersion(left.release orelse "", right.release orelse "");
+}
+
+// Compares two EVR component sets with rpm's "match release" rule (libsolv
+// `EVRCMP_MATCH_RELEASE`): when either side omits the release, releases are
+// treated as equal so that a partial spec such as `name=1.2` selects every
+// release of that version. Epoch and version are always compared. This is the
+// comparison rpm/libsolv use for dependency and selection matching; it must
+// never be used for absolute version ordering, where a missing release is the
+// lowest release.
+fn compareEvrPartsMatchRelease(left: EvrParts, right: EvrParts) i32 {
+    const left_epoch = left.epoch orelse 0;
+    const right_epoch = right.epoch orelse 0;
+    if (left_epoch < right_epoch) return -1;
+    if (left_epoch > right_epoch) return 1;
+
+    const version_cmp = compareRpmVersion(left.version, right.version);
+    if (version_cmp != 0) return version_cmp;
+
+    const left_release = normalizeRelease(left.release);
+    const right_release = normalizeRelease(right.release);
+    if (left_release == null or right_release == null) {
+        return 0;
+    }
+    return compareRpmVersion(left_release.?, right_release.?);
+}
+
+fn normalizeRelease(release: ?[]const u8) ?[]const u8 {
+    const value = release orelse return null;
+    return if (value.len == 0) null else value;
 }
 
 fn compareRpmVersion(left_raw: []const u8, right_raw: []const u8) i32 {
@@ -1216,6 +1257,52 @@ test "provides index handles versioned and ranged lookups" {
     const unversioned_miss = try index.packagesProviding(testing.allocator, "unversioned-feature >= 1");
     defer unversioned_miss.deinit();
     try testing.expectEqual(@as(usize, 0), unversioned_miss.items.len);
+}
+
+test "partial EVR specs match every release like libsolv selection" {
+    const testing = std.testing;
+    var repository = fixtureRepository();
+    var index = try RepositoryIndex.init(testing.allocator, &repository);
+    defer index.deinit();
+
+    // `alpha = 1.0` omits the release, so it must select alpha-1.0-1 the way
+    // `install alpha=1.0` did before resolve selection was ported to native
+    // queries (#244). This is the regression guard: the previous libsolv path
+    // used SELECTION_REL / EVRCMP_MATCH_RELEASE, where a missing release
+    // matches any release.
+    const eq_partial = try index.packagesProviding(testing.allocator, "alpha = 1.0");
+    defer eq_partial.deinit();
+    try expectPackageIndices(&.{0}, eq_partial.items);
+
+    // `<=` and epoch-qualified partial EVRs regressed the same way.
+    const le_partial = try index.packagesProviding(testing.allocator, "alpha <= 1.0");
+    defer le_partial.deinit();
+    try expectPackageIndices(&.{0}, le_partial.items);
+
+    const eq_epoch_partial = try index.packagesProviding(testing.allocator, "alpha = 0:1.0");
+    defer eq_epoch_partial.deinit();
+    try expectPackageIndices(&.{0}, eq_epoch_partial.items);
+
+    // A partial EVR must still reject a different version...
+    const eq_wrong_version = try index.packagesProviding(testing.allocator, "alpha = 3.0");
+    defer eq_wrong_version.deinit();
+    try testing.expectEqual(@as(usize, 0), eq_wrong_version.items.len);
+
+    // ...a mismatched epoch...
+    const eq_wrong_epoch = try index.packagesProviding(testing.allocator, "alpha = 1:1.0");
+    defer eq_wrong_epoch.deinit();
+    try testing.expectEqual(@as(usize, 0), eq_wrong_epoch.items.len);
+
+    // ...and a full EVR whose release does not exist.
+    const eq_full_miss = try index.packagesProviding(testing.allocator, "alpha = 1.0-9");
+    defer eq_full_miss.deinit();
+    try testing.expectEqual(@as(usize, 0), eq_full_miss.items.len);
+
+    // The direct package-vs-spec predicate agrees: partial EVR matches, and a
+    // different version does not.
+    const eq_query = try DependencyQuery.parse("alpha=1.0");
+    try testing.expectEqual(@as(i32, 0), comparePackageWithQuery(fixture_packages[0], eq_query));
+    try testing.expect(comparePackageWithQuery(fixture_packages[1], eq_query) != 0);
 }
 
 test "file and advisory indexes map shared paths and updateinfo membership" {
