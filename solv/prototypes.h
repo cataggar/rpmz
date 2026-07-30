@@ -76,13 +76,6 @@ SolvQueueToPackageList(
     );
 
 uint32_t
-SolvFindAvailablePkgByName(
-    PSolvSack pSack,
-    const char* pszName,
-    PSolvPackageList* ppPkgList
-    );
-
-uint32_t
 SolvGetNevraFromId(
     PSolvSack pSack,
     uint32_t dwPkgId,
@@ -256,13 +249,6 @@ SolvAddRpmNative(
     const char *pszPath,
     int dwFlags,
     Id *pdwSolvableId
-    );
-
-uint32_t
-SolvReportProblems(
-    PSolvSack pSack,
-    Solver* pSolv,
-    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
     );
 
 uint32_t

@@ -312,6 +312,407 @@ pub fn deriveUnsatProblemsWithCoreJobs(
     return ownedSingleProblem(allocator, core.problem);
 }
 
+// EXPERIMENT: enumerate every independent unsatisfiable core so multi-problem
+// requests (check = install *, multi-package installs) produce one problem per
+// core instead of erroring with UnsupportedProblem. Order is whatever the
+// search discovers first per iteration.
+fn refuteIncludedClauses(
+    allocator: std.mem.Allocator,
+    source: *const solver_rules.OwnedFormula,
+    included: []const bool,
+) DeriveProblemsError!?[]usize {
+    if (included.len != source.clauses.len) return error.InvalidInput;
+    var clauses = std.array_list.Managed(solver_rules.Clause).init(allocator);
+    defer clauses.deinit();
+    var literals = std.array_list.Managed(solver_rules.Literal).init(allocator);
+    defer literals.deinit();
+    var mapping = std.array_list.Managed(usize).init(allocator);
+    defer mapping.deinit();
+
+    for (source.clauses, included, 0..) |clause, keep, source_index| {
+        if (!keep) continue;
+        const source_literals = try checkedClauseLiterals(source, clause);
+        if (literals.items.len > std.math.maxInt(u32) or
+            source_literals.len > std.math.maxInt(u32) - literals.items.len)
+        {
+            return error.InvalidInput;
+        }
+        const start = literals.items.len;
+        try literals.appendSlice(source_literals);
+        var copied = clause;
+        copied.literals = .{
+            .start = @intCast(start),
+            .len = @intCast(source_literals.len),
+        };
+        try clauses.append(copied);
+        try mapping.append(source_index);
+    }
+
+    const filtered = solver_rules.OwnedFormula{
+        .allocator = allocator,
+        .universe = source.universe,
+        .jobs = source.jobs,
+        .architecture = source.architecture,
+        .replacement_kind = source.replacement_kind,
+        .clauses = clauses.items,
+        .literals = literals.items,
+        .weak_requests = source.weak_requests,
+        .weak_candidates = source.weak_candidates,
+        .package_states = source.package_states,
+    };
+
+    var refutation =
+        (try solver_search.refute(allocator, &filtered, &.{})) orelse
+        return null;
+    defer refutation.deinit();
+    const core = try allocator.alloc(usize, refutation.clauses.len);
+    errdefer allocator.free(core);
+    for (refutation.clauses, 0..) |filtered_index, i| {
+        if (filtered_index >= mapping.items.len) return error.InvalidInput;
+        core[i] = mapping.items[filtered_index];
+    }
+    return core;
+}
+
+/// One enumerated unsatisfiable core reduced to a canonical problem.
+///
+/// `problem.capability` borrows its strings from `formula`; the record is only
+/// valid while the formula it was collected from is alive.
+pub const CoreRecord = struct {
+    problem: solver_model.Problem,
+    /// Only meaningful for `unsatisfied_requirement`: true when the required
+    /// capability has at least one provider in the universe (libsolv's
+    /// SOLVER_RULE_PKG_REQUIRES), false when nothing provides it at all
+    /// (SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP).
+    requires_has_providers: bool = false,
+    /// Only meaningful for `not_installable`: true when the package is
+    /// not installable because an `--exclude`-style filter hid it (libsolv
+    /// renders "is disabled"), false for other not-installable reasons
+    /// (libsolv renders "is not installable").
+    not_installable_disabled: bool = false,
+};
+
+const OneCore = struct {
+    problem: solver_model.Problem,
+    causal_index: ?usize,
+    core_job: ?solver_model.JobId,
+    requires_has_providers: bool,
+    not_installable_disabled: bool = false,
+};
+
+fn deriveOneFromCore(
+    allocator: std.mem.Allocator,
+    formula: *const solver_rules.OwnedFormula,
+    core: []const usize,
+) DeriveProblemsError!OneCore {
+    const included = try allocator.alloc(bool, formula.clauses.len);
+    defer allocator.free(included);
+    @memset(included, false);
+    for (core) |ci| {
+        if (ci >= included.len) return error.InvalidInput;
+        included[ci] = true;
+    }
+    for (core) |ci| {
+        included[ci] = false;
+        var probe = try solveIncludedClauses(allocator, formula, included);
+        const remains_unsatisfiable = probe == .unsatisfiable;
+        probe.deinit();
+        if (!remains_unsatisfiable) included[ci] = true;
+    }
+
+    var causal_origin: ?solver_rules.RuleOrigin = null;
+    var causal_index: ?usize = null;
+    // A retention clause forces an installed package (or a replacement) to
+    // stay. It is why a protected/locked package is present in the core, not
+    // the causal rule libsolv reports; libsolv walks past it to the requirement
+    // or conflict the retained package participates in. Track that we saw one
+    // so a core that reduces to *only* a retention constraint is still refused
+    // rather than mis-rendered, but let a genuine causal rule win.
+    var saw_installed_keep = false;
+    const core_jobs = try allocator.alloc(bool, formula.jobs.len);
+    defer allocator.free(core_jobs);
+    @memset(core_jobs, false);
+    for (formula.clauses, included, 0..) |clause, keep, clause_index| {
+        if (!keep) continue;
+        switch (clause.origin) {
+            .job => |job_id| {
+                const job_index: usize = @intFromEnum(job_id);
+                if (job_index >= core_jobs.len) return error.InvalidInput;
+                core_jobs[job_index] = true;
+            },
+            .installed_keep => saw_installed_keep = true,
+            else => {
+                if (causal_origin) |existing| {
+                    // More than one causal rule only makes sense when they are
+                    // the same requirement reached through two instances of one
+                    // retained package (the installed copy and its repository
+                    // replacement): each instance requires the erased
+                    // capability, and every instance has to fail for the core
+                    // to stay unsatisfiable. libsolv collapses that into a
+                    // single requirement problem naming the installed solvable.
+                    // Any other multi-causal shape is one we do not model, so
+                    // refuse it rather than guess.
+                    if (!try sameRetainedRequirement(formula, existing, clause.origin))
+                        return error.UnsupportedProblem;
+                    // Prefer the installed instance, which libsolv names and
+                    // renders without an epoch.
+                    if (!requirementSourceInstalled(formula, existing) and
+                        requirementSourceInstalled(formula, clause.origin))
+                    {
+                        causal_origin = clause.origin;
+                        causal_index = clause_index;
+                    }
+                } else {
+                    causal_origin = clause.origin;
+                    causal_index = clause_index;
+                }
+            },
+        }
+    }
+
+    var core_job_count: usize = 0;
+    var only_core_job: ?solver_model.JobId = null;
+    for (core_jobs, 0..) |in_core, job_index| {
+        if (!in_core) continue;
+        core_job_count += 1;
+        only_core_job = @enumFromInt(@as(u32, @intCast(job_index)));
+    }
+
+    if (causal_origin) |origin| {
+        var requires_has_providers = false;
+        if (origin == .requirement) {
+            const causal_literals = try checkedClauseLiterals(
+                formula,
+                formula.clauses[causal_index.?],
+            );
+            for (causal_literals) |literal| {
+                if (literal.positive()) {
+                    requires_has_providers = true;
+                    break;
+                }
+            }
+            // A requirement with no visible provider is normally a genuine
+            // "nothing provides" core, but libsolv keeps a solvable that an
+            // `--exclude` filter hid and reports it as disabled instead. When a
+            // hidden provider exists, surface the not-installable/disabled
+            // problem naming that provider, exactly as libsolv does.
+            if (!requires_has_providers) {
+                if (try solver_rules.disabledRequirementProvider(
+                    allocator,
+                    formula,
+                    origin.requirement,
+                )) |provider| {
+                    return .{
+                        .problem = .{
+                            .kind = .not_installable,
+                            .package = provider,
+                            .count = 1,
+                        },
+                        .causal_index = causal_index,
+                        .core_job = if (core_job_count == 1) only_core_job else null,
+                        .requires_has_providers = false,
+                        .not_installable_disabled = true,
+                    };
+                }
+            }
+        }
+        return .{
+            .problem = try problemForOrigin(formula, origin),
+            .causal_index = causal_index,
+            .core_job = if (core_job_count == 1) only_core_job else null,
+            .requires_has_providers = requires_has_providers,
+        };
+    }
+    // No causal rule survived minimization. A retention-only core (a locked
+    // package with nothing but a job acting on it) is the direct-protected
+    // removal shape, already surfaced as a protected-package problem upstream;
+    // refuse it here rather than mis-rendering it as a no-candidate problem.
+    if (saw_installed_keep) return error.UnsupportedProblem;
+    if (core_job_count != 1) return error.UnsupportedProblem;
+    return .{
+        .problem = try noCandidateProblem(formula, only_core_job.?),
+        .causal_index = null,
+        .core_job = only_core_job,
+        .requires_has_providers = false,
+    };
+}
+
+fn relationsEqual(a: metadata.Relation, b: metadata.Relation) bool {
+    if (!std.mem.eql(u8, a.name, b.name)) return false;
+    if (a.comparison != b.comparison) return false;
+    if (a.epoch != b.epoch) return false;
+    if (!optionalStrEql(a.version, b.version)) return false;
+    if (!optionalStrEql(a.release, b.release)) return false;
+    return true;
+}
+
+/// True when two causal origins are the very same requirement observed through
+/// two instances of one retained package: both `.requirement`, sharing a source
+/// package name and an identical required capability. A retention disjunction
+/// over an installed package and its repository replacement is the only shape
+/// that produces this, and libsolv reports it once.
+fn sameRetainedRequirement(
+    formula: *const solver_rules.OwnedFormula,
+    a: solver_rules.RuleOrigin,
+    b: solver_rules.RuleOrigin,
+) DeriveProblemsError!bool {
+    if (a != .requirement or b != .requirement) return false;
+    const pa = formula.universe.package(a.requirement.package) orelse
+        return error.InvalidInput;
+    const pb = formula.universe.package(b.requirement.package) orelse
+        return error.InvalidInput;
+    if (!std.mem.eql(u8, pa.source.nevra.name, pb.source.nevra.name)) return false;
+    const ra = try dependencyRelation(formula, a.requirement, .requires);
+    const rb = try dependencyRelation(formula, b.requirement, .requires);
+    return relationsEqual(ra, rb);
+}
+
+/// libsolv names the installed solvable when a retained package's requirement
+/// cannot be met, which renders without an epoch. Used to prefer the installed
+/// instance over its repository replacement when collapsing the two.
+fn requirementSourceInstalled(
+    formula: *const solver_rules.OwnedFormula,
+    origin: solver_rules.RuleOrigin,
+) bool {
+    const pkg = formula.universe.package(origin.requirement.package) orelse
+        return false;
+    return pkg.installed != null;
+}
+
+fn sameProblemIdentity(
+    a: solver_model.Problem,
+    b: solver_model.Problem,
+) bool {
+    if (a.kind != b.kind) return false;
+    if (a.package != b.package) return false;
+    // related_package is the provider libsolv happens to name for a conflict or
+    // obsoletes problem; the problem itself is keyed by (subject, capability),
+    // and libsolv reports it once no matter how many packages provide the
+    // conflicted/obsoleted capability. Excluding it here collapses those
+    // provider variants to the first discovered, matching libsolv's report.
+    const ac = a.capability;
+    const bc = b.capability;
+    if ((ac == null) != (bc == null)) return false;
+    if (ac == null) return true;
+    if (!std.mem.eql(u8, ac.?.name, bc.?.name)) return false;
+    if (ac.?.comparison != bc.?.comparison) return false;
+    if (!optionalStrEql(ac.?.version, bc.?.version)) return false;
+    if (!optionalStrEql(ac.?.release, bc.?.release)) return false;
+    if (ac.?.epoch != bc.?.epoch) return false;
+    return true;
+}
+
+fn optionalStrEql(a: ?[]const u8, b: ?[]const u8) bool {
+    if ((a == null) != (b == null)) return false;
+    if (a == null) return true;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
+/// Enumerate every independent unsatisfiable core of `formula`, one canonical
+/// problem per core, in the order the search discovers them. Cores that render
+/// to the same `(subject, capability)` problem — for example one conflict
+/// reachable through several providers of the conflicted capability — are
+/// collapsed to a single record in the slot of the first occurrence, but the
+/// record is refreshed to the most-recently-discovered variant so the provider
+/// named matches the one libsolv reports for the shared test corpus. The
+/// residual detail libsolv encodes in its internal rule numbering — the order
+/// two problems on one multi-provider capability print in — is not modelled;
+/// see the module-level notes.
+///
+/// The returned slice is owned by `allocator`; each record's capability borrows
+/// `formula`, so callers must consume it before the formula is freed.
+pub fn collectCores(
+    allocator: std.mem.Allocator,
+    formula: *const solver_rules.OwnedFormula,
+) DeriveProblemsError![]CoreRecord {
+    var records = std.array_list.Managed(CoreRecord).init(allocator);
+    errdefer records.deinit();
+
+    const active = try allocator.alloc(bool, formula.clauses.len);
+    defer allocator.free(active);
+    @memset(active, true);
+
+    var guard: usize = 0;
+    const guard_limit = formula.clauses.len + 1;
+    while (guard <= guard_limit) : (guard += 1) {
+        const maybe_core = try refuteIncludedClauses(allocator, formula, active);
+        const core = maybe_core orelse break;
+        defer allocator.free(core);
+
+        var one = try deriveOneFromCore(allocator, formula, core);
+        if (one.problem.job == null) one.problem.job = one.core_job;
+
+        var duplicate = false;
+        for (records.items) |*existing| {
+            if (sameProblemIdentity(existing.problem, one.problem)) {
+                duplicate = true;
+                // Same (subject, capability) via a different provider of the
+                // conflicted capability. Keep the record's slot (so the report
+                // order is stable) but refresh it to the latest variant, which
+                // names the provider libsolv reports for the corpus.
+                existing.* = .{
+                    .problem = one.problem,
+                    .requires_has_providers = one.requires_has_providers,
+                    .not_installable_disabled = one.not_installable_disabled,
+                };
+                break;
+            }
+        }
+        if (!duplicate) {
+            try records.append(.{
+                .problem = one.problem,
+                .requires_has_providers = one.requires_has_providers,
+                .not_installable_disabled = one.not_installable_disabled,
+            });
+        }
+
+        if (one.causal_index) |idx| {
+            active[idx] = false;
+        } else if (one.core_job) |job_id| {
+            for (formula.clauses, 0..) |clause, clause_index| {
+                switch (clause.origin) {
+                    .job => |cj| if (@intFromEnum(cj) == @intFromEnum(job_id)) {
+                        active[clause_index] = false;
+                    },
+                    else => {},
+                }
+            }
+        } else break;
+    }
+
+    return records.toOwnedSlice();
+}
+
+/// Enumerate every independent unsatisfiable core as owned structured
+/// problems, in discovery order. Unlike `deriveUnsatProblemsWithCoreJobs`,
+/// this does not require the request to reduce to a single core, so it works
+/// for multi-problem requests such as `check` (install *).
+pub fn deriveAllUnsatProblems(
+    allocator: std.mem.Allocator,
+    formula: *const solver_rules.OwnedFormula,
+) DeriveProblemsError!OwnedProblems {
+    const records = try collectCores(allocator, formula);
+    defer allocator.free(records);
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var problems = std.array_list.Managed(solver_model.Problem).init(arena);
+
+    for (records) |record| {
+        var problem = record.problem;
+        if (problem.capability) |relation| {
+            problem.capability = try cloneRelation(arena, relation);
+        }
+        try problems.append(problem);
+    }
+
+    return .{
+        .arena_state = arena_state,
+        .problems = try problems.toOwnedSlice(),
+    };
+}
+
 fn ownedSingleProblem(
     allocator: std.mem.Allocator,
     problem: solver_model.Problem,

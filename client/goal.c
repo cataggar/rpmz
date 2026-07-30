@@ -84,6 +84,23 @@ TDNFGoalBuildNativeSolverHiddenAvailable(
     uint32_t *pdwHiddenAvailableCount
 );
 
+static
+uint32_t
+TDNFReportProblemsNative(
+    PTDNF pTdnf,
+    const Queue *pQueueJobs,
+    int nAllowErasing,
+    int nAutoErase, int nStampFlags, int nStampedJobCount,
+    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
+);
+
+static
+int
+TDNFNativeProblemSkipped(
+    uint32_t dwSkipClass,
+    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
+);
+
 #define TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(_tdnf, _jobs, _allow_erasing, _auto_erase, _flags, _stamped_count, _prepare_only, _refute_unsat, _drop_protected, _native, _error) \
     do {                                                                 \
         uint32_t _saved_error = (_error);                                \
@@ -274,7 +291,10 @@ TDNFSolv(
         {
             dwError = TDNFGetSkipProblemOption(pTdnf, &dwSkipProblem);
             BAIL_ON_TDNF_ERROR(dwError);
-            dwError = SolvReportProblems(pTdnf->pSack, pSolv, dwSkipProblem);
+            dwError = TDNFReportProblemsNative(pTdnf, pQueueJobs,
+                                               nAllowErasing, nAutoErase,
+                                               nFlags, nStampedJobCount,
+                                               dwSkipProblem);
             if(dwError)
             {
                 TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 1, 0, &pNativeSolve, dwError);
@@ -697,6 +717,139 @@ cleanup:
     return dwError;
 error:
     goto cleanup;
+}
+
+/*
+ * Report the diagnostics for an unsatisfiable solve using the native solver's
+ * structured problems.
+ *
+ * The libsolv reporter this replaces walked the libsolv problem list in
+ * reverse, printed the surviving problems renumbered contiguously from 1, and
+ * emitted a trailing "Found N problem(s)" summary only when at least one
+ * problem was actually printed -- so a request whose every problem is skipped
+ * returns success and prints nothing. This reproduces that contract exactly,
+ * driven by the native solver's already-ordered, already-rendered problem set.
+ *
+ * There is no libsolv fallback: if the native solver cannot reproduce the
+ * diagnostics for a request libsolv found unsatisfiable, that is a real error
+ * and is surfaced as one.
+ */
+static
+uint32_t
+TDNFReportProblemsNative(
+    PTDNF pTdnf,
+    const Queue *pQueueJobs,
+    int nAllowErasing,
+    int nAutoErase, int nStampFlags, int nStampedJobCount,
+    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwCount = 0;
+    uint32_t dwIndex = 0;
+    uint32_t total_prblms = 0;
+    void *pHandle = NULL;
+
+    if(!pTdnf || !pQueueJobs)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
+                                  nStampFlags, nStampedJobCount, 0, NULL,
+                                  0, 1, 0, &pHandle);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = TDNFRepoMdNativeSolverRefutedProblemCount(pHandle, &dwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    if(dwCount == 0)
+    {
+        /* libsolv reported this request as unsatisfiable but the native solver
+           produced no diagnostics for it. Silently reporting nothing would
+           diverge from the resolver that actually runs, so fail loudly rather
+           than fall back to libsolv. */
+        pr_err("native-solver: unable to render solver diagnostics\n");
+        dwError = ERROR_TDNF_SOLV_FAILED;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    for(dwIndex = 0; dwIndex < dwCount; dwIndex++)
+    {
+        uint32_t dwSkipClass = 0;
+        const char *pszProblem = NULL;
+
+        dwError = TDNFRepoMdNativeSolverRefutedProblem(
+                      pHandle, dwIndex, &dwSkipClass, &pszProblem);
+        BAIL_ON_TDNF_ERROR(dwError);
+
+        if(TDNFNativeProblemSkipped(dwSkipClass, dwSkipProblem))
+        {
+            continue;
+        }
+
+        dwError = ERROR_TDNF_SOLV_FAILED;
+        pr_err("%u. %s\n", ++total_prblms, pszProblem);
+    }
+
+    if(dwError)
+    {
+        pr_err("Found %u problem(s) while resolving\n", total_prblms);
+    }
+
+cleanup:
+    TDNFRepoMdNativeSolverLiveSolveRelease(pHandle);
+    return dwError;
+error:
+    goto cleanup;
+}
+
+/*
+ * Reproduce SkipBasedOnType over the native solver's problem skip classes.
+ *
+ * --skipconflicts drops conflicts, --skipobsoletes drops obsoletes, and
+ * --skip-broken (SKIPPROBLEM_BROKEN) drops every package-rule problem, which
+ * for the native solver is every rendered class. SKIPPROBLEM_DISABLED only
+ * dropped a not-installable problem whose solvable libsolv had disabled; the
+ * native solver marks that case with its own skip class.
+ */
+static
+int
+TDNFNativeProblemSkipped(
+    uint32_t dwSkipClass,
+    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
+    )
+{
+    if(dwSkipProblem == SKIPPROBLEM_NONE)
+    {
+        return 0;
+    }
+    if((dwSkipProblem & SKIPPROBLEM_CONFLICTS) &&
+       dwSkipClass == TDNF_NATIVE_PROBLEM_SKIP_CONFLICT)
+    {
+        return 1;
+    }
+    if((dwSkipProblem & SKIPPROBLEM_OBSOLETES) &&
+       dwSkipClass == TDNF_NATIVE_PROBLEM_SKIP_OBSOLETES)
+    {
+        return 1;
+    }
+    if((dwSkipProblem & SKIPPROBLEM_BROKEN) &&
+       (dwSkipClass == TDNF_NATIVE_PROBLEM_SKIP_CONFLICT ||
+        dwSkipClass == TDNF_NATIVE_PROBLEM_SKIP_OBSOLETES ||
+        dwSkipClass == TDNF_NATIVE_PROBLEM_SKIP_REQUIRES ||
+        dwSkipClass == TDNF_NATIVE_PROBLEM_SKIP_NOT_INSTALLABLE ||
+        dwSkipClass == TDNF_NATIVE_PROBLEM_SKIP_NOT_INSTALLABLE_DISABLED))
+    {
+        return 1;
+    }
+    if((dwSkipProblem & SKIPPROBLEM_DISABLED) &&
+       dwSkipClass == TDNF_NATIVE_PROBLEM_SKIP_NOT_INSTALLABLE_DISABLED)
+    {
+        return 1;
+    }
+    return 0;
 }
 
 static

@@ -692,6 +692,44 @@ TDNFRepoMdNativeSolverLiveSolveRelease(
     );
 
 /*
+ * Native solver-diagnostic accessors.
+ *
+ * A handle produced by TDNFRepoMdNativeSolverLiveSolve with nRefuteUnsat set
+ * retains one rendered problem string per independent unsatisfiable core,
+ * already ordered exactly as the resolver must report them (libsolv report
+ * order). Each problem also carries a skip class that reproduces the rule
+ * categories SkipBasedOnType used to honour --skipconflicts/--skipobsoletes/
+ * --skipbroken/--skipdigest.
+ */
+#define TDNF_NATIVE_PROBLEM_SKIP_OTHER                     0
+#define TDNF_NATIVE_PROBLEM_SKIP_CONFLICT                  1
+#define TDNF_NATIVE_PROBLEM_SKIP_OBSOLETES                 2
+#define TDNF_NATIVE_PROBLEM_SKIP_REQUIRES                  3
+#define TDNF_NATIVE_PROBLEM_SKIP_NOT_INSTALLABLE           4
+#define TDNF_NATIVE_PROBLEM_SKIP_NOT_INSTALLABLE_DISABLED  5
+
+/*
+ * Report how many rendered native solver-diagnostic problems the handle holds.
+ */
+uint32_t
+TDNFRepoMdNativeSolverRefutedProblemCount(
+    void *pHandle,
+    uint32_t *pdwCount
+    );
+
+/*
+ * Fetch one rendered native solver-diagnostic problem by index. *ppszMessage
+ * points into the handle and stays valid until it is released.
+ */
+uint32_t
+TDNFRepoMdNativeSolverRefutedProblem(
+    void *pHandle,
+    uint32_t dwIndex,
+    uint32_t *pdwSkipClass,
+    const char **ppszMessage
+    );
+
+/*
  * Run the native metadata-backed implementation of repoquery-style
  * selectors and field population. `pRepoqueryArgs` uses the public
  * TDNF_REPOQUERY_ARGS layout from tdnftypes.h.

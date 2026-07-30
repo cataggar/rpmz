@@ -271,10 +271,69 @@ TDNFCheckLocalPackages(
 
     if (solver_solve(pSolv, &queueJobs))
     {
+        int nProblem = 0;
+        uint32_t total_prblms = 0;
+
         dwError = TDNFGetSkipProblemOption(pTdnf, &dwSkipProblem);
         BAIL_ON_TDNF_ERROR(dwError);
 
-        dwError = SolvReportProblems(pTdnf->pSack, pSolv, dwSkipProblem);
+        /* check-local is a pre-existing raw-libsolv command that builds its own
+           command-line pool from a directory of rpms; it is outside the native
+           solver migration, so it reports directly from the libsolv solver it
+           just ran. This reproduces the numbering, skip-by-type filtering and
+           summary contract of the former solv/ SolvReportProblems helper. */
+        for (nProblem = solver_problem_count(pSolv); nProblem > 0; nProblem--)
+        {
+            Id dwDep = 0;
+            Id dwSource = 0;
+            Id dwTarget = 0;
+            SolverRuleinfo type;
+            const char *pszProblem = NULL;
+            Id dwProblemId = solver_findproblemrule(pSolv, nProblem);
+            int nSkip = 0;
+
+            type = solver_ruleinfo(pSolv, dwProblemId,
+                                   &dwSource, &dwTarget, &dwDep);
+
+            if (dwSkipProblem & SKIPPROBLEM_CONFLICTS)
+            {
+                nSkip = nSkip || type == SOLVER_RULE_PKG_CONFLICTS ||
+                        type == SOLVER_RULE_PKG_SELF_CONFLICT;
+            }
+            if (dwSkipProblem & SKIPPROBLEM_OBSOLETES)
+            {
+                nSkip = nSkip || type == SOLVER_RULE_PKG_OBSOLETES ||
+                        type == SOLVER_RULE_PKG_IMPLICIT_OBSOLETES ||
+                        type == SOLVER_RULE_PKG_INSTALLED_OBSOLETES;
+            }
+            if (dwSkipProblem & SKIPPROBLEM_BROKEN)
+            {
+                nSkip = nSkip || (type & SOLVER_RULE_PKG);
+            }
+            if ((dwSkipProblem & SKIPPROBLEM_DISABLED) &&
+                type == SOLVER_RULE_PKG_NOT_INSTALLABLE)
+            {
+                Solvable *sp = pSolv->pool->solvables + dwSource;
+                if (pool_disabled_solvable(pSolv->pool, sp))
+                {
+                    nSkip = 1;
+                }
+            }
+            if (nSkip)
+            {
+                continue;
+            }
+
+            pszProblem = solver_problemruleinfo2str(pSolv, type, dwSource,
+                                                    dwTarget, dwDep);
+            dwError = ERROR_TDNF_SOLV_FAILED;
+            pr_err("%u. %s\n", ++total_prblms, pszProblem);
+        }
+
+        if (dwError)
+        {
+            pr_err("Found %u problem(s) while resolving\n", total_prblms);
+        }
         BAIL_ON_TDNF_ERROR(dwError);
     }
 

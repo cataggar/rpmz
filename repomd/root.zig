@@ -244,6 +244,76 @@ pub export fn TDNFRepoMdNativeSolverLiveSolveRelease(
     std.heap.c_allocator.destroy(retained);
 }
 
+fn handleToRefuted(handle: ?*anyopaque) ?*RefutedSolve {
+    const raw = handle orelse return null;
+    const retained: *RetainedSolve = @ptrCast(@alignCast(raw));
+    return switch (retained.*) {
+        .refuted => |*value| value,
+        else => null,
+    };
+}
+
+/// Number of native solver-diagnostic problems retained by a refute solve.
+///
+/// The handle must have been produced by TDNFRepoMdNativeSolverLiveSolve with
+/// nRefuteUnsat set. Problems are ordered exactly as they must be reported.
+pub export fn TDNFRepoMdNativeSolverRefutedProblemCount(
+    handle: ?*anyopaque,
+    out_count: ?*u32,
+) u32 {
+    clearError();
+    const count_out = out_count orelse {
+        setError("null refuted problem count output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    count_out.* = 0;
+    const refuted = handleToRefuted(handle) orelse {
+        setError("handle does not retain refuted diagnostics", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    count_out.* = std.math.cast(u32, refuted.refutation.rendered.items.len) orelse {
+        setError("refuted problem count overflow", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    return 0;
+}
+
+/// Fetch one rendered native solver-diagnostic problem by index.
+///
+/// The returned message points into the handle and is valid until the handle
+/// is released. The skip class encodes the libsolv rule category so callers
+/// can reproduce SkipBasedOnType filtering.
+pub export fn TDNFRepoMdNativeSolverRefutedProblem(
+    handle: ?*anyopaque,
+    index: u32,
+    out_skip_class: ?*u32,
+    out_message: ?*?[*:0]const u8,
+) u32 {
+    clearError();
+    const message_out = out_message orelse {
+        setError("null refuted problem message output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    message_out.* = null;
+    const class_out = out_skip_class orelse {
+        setError("null refuted problem skip class output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    class_out.* = 0;
+    const refuted = handleToRefuted(handle) orelse {
+        setError("handle does not retain refuted diagnostics", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    const items = refuted.refutation.rendered.items;
+    if (index >= items.len) {
+        setError("refuted problem index out of range", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    class_out.* = @intFromEnum(items[index].skip_class);
+    message_out.* = items[index].message.ptr;
+    return 0;
+}
+
 fn nativeSolverLiveSolve(
     repository_count: u32,
     raw_jobs: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,

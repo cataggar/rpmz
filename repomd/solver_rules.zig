@@ -570,6 +570,62 @@ pub fn generateProjectedBase(
     );
 }
 
+/// For a requirement whose visible providers were all filtered out of the
+/// solve, return an available package that still provides the capability but
+/// was removed from provider lists by an `--exclude`-style visibility filter.
+///
+/// libsolv keeps such a solvable in the pool (disabled) and reports the
+/// requirement via SOLVER_RULE_PKG_NOT_INSTALLABLE as `package ... is disabled`
+/// rather than `nothing provides ...`. The native formula instead drops the
+/// hidden provider from the requirement clause, collapsing the core to a
+/// no-provider requirement, so the diagnostics layer reconstructs the disabled
+/// provider here. Returns null when the capability has no hidden provider at
+/// all (a genuine nothing-provides core). Only architecture-eligible providers
+/// are considered — a wrong-architecture package, which libsolv reports
+/// differently and which the native formula also omits from provider lists,
+/// never takes this path.
+pub fn disabledRequirementProvider(
+    allocator: std.mem.Allocator,
+    formula: *const OwnedFormula,
+    dependency: DependencyRef,
+) error{OutOfMemory}!?solver_model.PackageId {
+    if (dependency.kind != .requires) return null;
+    const architecture = formula.architecture orelse return null;
+    const package = formula.universe.package(dependency.package) orelse return null;
+    const relations = package.relationEntries(formula.universe, .requires);
+    const relation_index: usize = @intCast(dependency.index);
+    if (relation_index >= relations.len) return null;
+    const relation = relations[relation_index];
+
+    var index = try UniverseIndex.init(
+        allocator,
+        formula.universe,
+        architecture,
+        null,
+    );
+    defer index.deinit();
+    var lookup = try index.providers(allocator, relation);
+    defer lookup.deinit();
+
+    for (lookup.packages) |candidate| {
+        if (formulaHasNotInstallableClause(formula, candidate)) return candidate;
+    }
+    return null;
+}
+
+fn formulaHasNotInstallableClause(
+    formula: *const OwnedFormula,
+    package_id: solver_model.PackageId,
+) bool {
+    for (formula.clauses) |clause| {
+        switch (clause.origin) {
+            .not_installable => |pid| if (pid == package_id) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
 fn generateBaseInternal(
     allocator: std.mem.Allocator,
     universe: *const solver_model.Universe,

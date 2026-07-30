@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const solver_coordinator = @import("solver_coordinator.zig");
+const solver_diag = @import("solver_diag.zig");
 const solver_identity = @import("solver_identity.zig");
 const solver_model = @import("solver_model.zig");
 const solver_policy = @import("solver_policy.zig");
@@ -75,17 +76,20 @@ pub const OwnedSolveResult = struct {
 
 pub const OwnedProjectedRefutation = struct {
     problems: solver_result.OwnedProblems,
+    rendered: solver_diag.OwnedRenderedProblems,
     jobs: []const solver_model.Job,
     coordinated: ?solver_coordinator.OwnedSolve = null,
 
     pub fn deinit(self: *OwnedProjectedRefutation) void {
         self.problems.deinit();
+        self.rendered.deinit();
         if (self.coordinated) |*coordinated| coordinated.deinit();
         self.* = undefined;
     }
 
     pub fn takeProblems(self: *OwnedProjectedRefutation) solver_result.OwnedProblems {
         const problems = self.problems;
+        self.rendered.deinit();
         if (self.coordinated) |*coordinated| coordinated.deinit();
         self.* = undefined;
         return problems;
@@ -180,17 +184,27 @@ pub fn refuteProjectedWithEffectiveJobs(
             policy,
         );
         errdefer coordinated.deinit();
+        var rendered = solver_diag.emptyRendered(allocator);
+        errdefer rendered.deinit();
         const problems = if (coordinated.problem) |problem|
             try ownedPolicyProblem(allocator, problem)
         else switch (coordinated.weak_result.result) {
-            .unsatisfiable => try solver_result.deriveUnsatProblemsWithCoreJobs(
-                allocator,
-                &coordinated.prepared.formula,
-            ),
+            .unsatisfiable => blk: {
+                rendered.deinit();
+                rendered = try solver_diag.renderUnsatProblems(
+                    allocator,
+                    &coordinated.prepared.formula,
+                );
+                break :blk try solver_result.deriveUnsatProblemsWithCoreJobs(
+                    allocator,
+                    &coordinated.prepared.formula,
+                );
+            },
             .satisfiable => return error.Satisfiable,
         };
         return .{
             .problems = problems,
+            .rendered = rendered,
             .jobs = coordinated.jobs,
             .coordinated = coordinated,
         };
@@ -223,12 +237,21 @@ pub fn refuteProjectedWithEffectiveJobs(
         },
     );
     defer prepared.deinit();
-    const problems = try solver_result.deriveUnsatProblemsWithCoreJobs(
+    const problems = try solver_result.deriveAllUnsatProblems(
+        allocator,
+        &prepared.formula,
+    );
+    errdefer {
+        var owned = problems;
+        owned.deinit();
+    }
+    const rendered = try solver_diag.renderUnsatProblems(
         allocator,
         &prepared.formula,
     );
     return .{
         .problems = problems,
+        .rendered = rendered,
         .jobs = goal.jobs,
     };
 }
