@@ -83,12 +83,16 @@
 #define LOG_INFO    0
 #define LOG_ERR     1
 #define LOG_CRIT    2
+#define LOG_NOTICE  3
 
 #define pr_info(fmt, ...) \
     log_console(LOG_INFO, fmt, ##__VA_ARGS__)
 
 #define pr_err(fmt, ...) \
     log_console(LOG_ERR, fmt, ##__VA_ARGS__)
+
+#define pr_notice(fmt, ...) \
+    log_console(LOG_NOTICE, fmt, ##__VA_ARGS__)
 
 #define pr_json(str) \
     fputs(str, stdout)

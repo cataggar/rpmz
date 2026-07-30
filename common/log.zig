@@ -13,6 +13,7 @@ extern var stderr: *libc.FILE;
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
+const LOG_NOTICE: c_int = 3;
 
 var gbQuiet = false;
 var gbJson = false;
@@ -36,6 +37,12 @@ fn tdnfLogGetStream(nLogLevel: c_int) ?*libc.FILE {
             return stdout;
         },
         LOG_ERR => {
+            return stderr;
+        },
+        LOG_NOTICE => {
+            if (gbJson or gbQuiet) {
+                return null;
+            }
             return stderr;
         },
         else => {
@@ -85,6 +92,20 @@ test "GlobalSetQuiet only suppresses info logs" {
 
     GlobalSetQuiet(0);
     try std.testing.expect(tdnfLogGetStream(LOG_INFO) == null);
+}
+
+test "notice logs go to stderr but obey quiet and json suppression" {
+    resetGlobalStateForTest();
+    defer resetGlobalStateForTest();
+
+    try std.testing.expect(tdnfLogGetStream(LOG_NOTICE) == stderr);
+
+    GlobalSetQuiet(1);
+    try std.testing.expect(tdnfLogGetStream(LOG_NOTICE) == null);
+
+    resetGlobalStateForTest();
+    GlobalSetJson(1);
+    try std.testing.expect(tdnfLogGetStream(LOG_NOTICE) == null);
 }
 
 test "GlobalSetJson suppresses stdout logs and is one way" {
