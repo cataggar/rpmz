@@ -34,6 +34,7 @@ pub const ProjectedSolveError =
     };
 
 pub const ProjectedRefuteError =
+    solver_coordinator.SolveError ||
     solver_rules.GenerateError ||
     solver_policy.PrepareError ||
     solver_result.DeriveProblemsError ||
@@ -72,6 +73,25 @@ pub const OwnedSolveResult = struct {
     }
 };
 
+pub const OwnedProjectedRefutation = struct {
+    problems: solver_result.OwnedProblems,
+    jobs: []const solver_model.Job,
+    coordinated: ?solver_coordinator.OwnedSolve = null,
+
+    pub fn deinit(self: *OwnedProjectedRefutation) void {
+        self.problems.deinit();
+        if (self.coordinated) |*coordinated| coordinated.deinit();
+        self.* = undefined;
+    }
+
+    pub fn takeProblems(self: *OwnedProjectedRefutation) solver_result.OwnedProblems {
+        const problems = self.problems;
+        if (self.coordinated) |*coordinated| coordinated.deinit();
+        self.* = undefined;
+        return problems;
+    }
+};
+
 pub fn solve(
     allocator: std.mem.Allocator,
     universe: *const solver_model.Universe,
@@ -103,7 +123,13 @@ pub fn solveProjected(
         return solve(allocator, universe, goal, policy);
     }
     if (policy.installonly_names.len != 0) {
-        return error.UnsupportedVisibility;
+        return solveInstallonlyProjected(
+            allocator,
+            universe,
+            visibility,
+            goal,
+            policy,
+        );
     }
     return solveOrdinaryProjected(
         allocator,
@@ -123,20 +149,51 @@ pub fn refuteProjected(
     goal: solver_model.Goal,
     policy: solver_model.SolvePolicy,
 ) ProjectedRefuteError!solver_result.OwnedProblems {
+    var refutation = try refuteProjectedWithEffectiveJobs(
+        allocator,
+        universe,
+        visibility,
+        goal,
+        policy,
+    );
+    return refutation.takeProblems();
+}
+
+pub fn refuteProjectedWithEffectiveJobs(
+    allocator: std.mem.Allocator,
+    universe: *const solver_model.Universe,
+    visibility: *const solver_visibility.Projection,
+    goal: solver_model.Goal,
+    policy: solver_model.SolvePolicy,
+) ProjectedRefuteError!OwnedProjectedRefutation {
     if (visibility.visible.len != universe.packages.len or
         visibility.hidden_reasons.len != universe.packages.len)
     {
         return error.InvalidVisibility;
     }
     if (policy.installonly_names.len != 0) {
-        // Install-only solves are coordinated, not a single prepared formula:
-        // the coordinator clones the jobs, appends synthetic multiversion
-        // jobs, may add eviction jobs for installonly_limit, and can
-        // synthesize terminal policy problems after a satisfiable round.
-        // Refuting this ordinary prepared formula would lose that effective
-        // job list and could publish problem job ids that the retained live
-        // Prepared/job_origins cannot name.
-        return error.UnsupportedPolicy;
+        var coordinated = try solver_coordinator.solveInstallonlyProjected(
+            allocator,
+            universe,
+            if (hasHiddenPackages(visibility)) visibility else null,
+            goal,
+            policy,
+        );
+        errdefer coordinated.deinit();
+        const problems = if (coordinated.problem) |problem|
+            try ownedPolicyProblem(allocator, problem)
+        else switch (coordinated.weak_result.result) {
+            .unsatisfiable => try solver_result.deriveUnsatProblemsWithCoreJobs(
+                allocator,
+                &coordinated.prepared.formula,
+            ),
+            .satisfiable => return error.Satisfiable,
+        };
+        return .{
+            .problems = problems,
+            .jobs = coordinated.jobs,
+            .coordinated = coordinated,
+        };
     }
 
     var base = if (hasHiddenPackages(visibility))
@@ -166,10 +223,14 @@ pub fn refuteProjected(
         },
     );
     defer prepared.deinit();
-    return solver_result.deriveUnsatProblemsWithCoreJobs(
+    const problems = try solver_result.deriveUnsatProblemsWithCoreJobs(
         allocator,
         &prepared.formula,
     );
+    return .{
+        .problems = problems,
+        .jobs = goal.jobs,
+    };
 }
 
 fn solveOrdinary(
@@ -288,15 +349,51 @@ fn hasHiddenPackages(
     return false;
 }
 
+fn ownedPolicyProblem(
+    allocator: std.mem.Allocator,
+    problem: solver_coordinator.PolicyProblem,
+) error{OutOfMemory}!solver_result.OwnedProblems {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const problems = try arena.alloc(solver_model.Problem, 1);
+    problems[0] = switch (problem) {
+        .protected_package => |package_id| .{
+            .kind = .protected_package,
+            .package = package_id,
+            .count = 1,
+        },
+        .installonly_limit => |overflow| .{
+            .kind = .installonly_limit,
+            .count = @max(overflow.excess, 1),
+        },
+    };
+    return .{
+        .arena_state = arena_state,
+        .problems = problems,
+    };
+}
+
 fn solveInstallonly(
     allocator: std.mem.Allocator,
     universe: *const solver_model.Universe,
     goal: solver_model.Goal,
     policy: solver_model.SolvePolicy,
 ) SolveError!OwnedSolveResult {
-    var coordinated = try solver_coordinator.solveInstallonly(
+    return solveInstallonlyProjected(allocator, universe, null, goal, policy);
+}
+
+fn solveInstallonlyProjected(
+    allocator: std.mem.Allocator,
+    universe: *const solver_model.Universe,
+    visibility: ?*const solver_visibility.Projection,
+    goal: solver_model.Goal,
+    policy: solver_model.SolvePolicy,
+) SolveError!OwnedSolveResult {
+    var coordinated = try solver_coordinator.solveInstallonlyProjected(
         allocator,
         universe,
+        visibility,
         goal,
         policy,
     );
@@ -446,6 +543,67 @@ test "projected refute derives native problems for an unsatisfiable request" {
         "missing",
         problems.problems[0].capability.?.name,
     );
+}
+
+test "projected refute with installonly uses coordinated effective jobs" {
+    var installed_packages = [_]@import("model.zig").Package{
+        testPackageVersion("kernel", "1"),
+    };
+    const installed_states = [_]solver_model.InstalledState{
+        .{ .rpmdb_hnum = 1 },
+    };
+    var available_packages = [_]@import("model.zig").Package{
+        testPackage("unrelated"),
+    };
+    const inputs = [_]solver_model.RepositoryInput{
+        .{
+            .id = "@System",
+            .model = &.{ .packages = &installed_packages },
+            .kind = .installed,
+            .installed_states = &installed_states,
+        },
+        .{
+            .id = "repo",
+            .model = &.{ .packages = &available_packages },
+        },
+    };
+    var universe = try solver_model.Universe.init(
+        std.testing.allocator,
+        &inputs,
+    );
+    defer universe.deinit();
+    var visibility = try solver_visibility.Projection.init(
+        std.testing.allocator,
+        &universe,
+        .{},
+    );
+    defer visibility.deinit();
+    var policy = testPolicy();
+    policy.installonly_names = &.{"kernel"};
+    policy.installonly_limit = 2;
+
+    var refutation = try refuteProjectedWithEffectiveJobs(
+        std.testing.allocator,
+        &universe,
+        &visibility,
+        .{ .jobs = &.{.{
+            .action = .install,
+            .selection = .{ .name = "missing" },
+        }} },
+        policy,
+    );
+    defer refutation.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), refutation.jobs.len);
+    try std.testing.expectEqual(
+        solver_model.JobAction.multiversion,
+        refutation.jobs[1].action,
+    );
+    try std.testing.expectEqual(@as(usize, 1), refutation.problems.problems.len);
+    const problem = refutation.problems.problems[0];
+    try std.testing.expectEqual(solver_model.ProblemKind.no_candidate, problem.kind);
+    try std.testing.expect(problem.job != null);
+    try std.testing.expect(@intFromEnum(problem.job.?) < refutation.jobs.len);
 }
 
 test "projected solve rejects an exact hidden available install" {

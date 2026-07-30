@@ -7,6 +7,7 @@ const solver_model = @import("solver_model.zig");
 const solver_policy = @import("solver_policy.zig");
 const solver_rules = @import("solver_rules.zig");
 const solver_search = @import("solver_search.zig");
+const solver_visibility = @import("solver_visibility.zig");
 
 const JobList = std.array_list.Managed(solver_model.Job);
 const PackageIdList = std.array_list.Managed(solver_model.PackageId);
@@ -61,6 +62,16 @@ pub fn solveInstallonly(
     goal: solver_model.Goal,
     policy: solver_model.SolvePolicy,
 ) SolveError!OwnedSolve {
+    return solveInstallonlyProjected(allocator, universe, null, goal, policy);
+}
+
+pub fn solveInstallonlyProjected(
+    allocator: std.mem.Allocator,
+    universe: *const solver_model.Universe,
+    visibility: ?*const solver_visibility.Projection,
+    goal: solver_model.Goal,
+    policy: solver_model.SolvePolicy,
+) SolveError!OwnedSolve {
     if (policy.installonly_names.len == 0 or
         policy.skip_broken or
         !policy.keep_orphans)
@@ -95,6 +106,7 @@ pub fn solveInstallonly(
     var round = try runRound(
         allocator,
         universe,
+        visibility,
         jobs.items,
         policy,
     );
@@ -167,6 +179,7 @@ pub fn solveInstallonly(
     round = try runRound(
         allocator,
         universe,
+        visibility,
         jobs.items,
         policy,
     );
@@ -246,15 +259,25 @@ const Round = struct {
 fn runRound(
     allocator: std.mem.Allocator,
     universe: *const solver_model.Universe,
+    visibility: ?*const solver_visibility.Projection,
     jobs: []const solver_model.Job,
     policy: solver_model.SolvePolicy,
 ) SolveError!Round {
-    var base = try solver_rules.generateBase(
-        allocator,
-        universe,
-        .{ .jobs = jobs },
-        policy.architecture,
-    );
+    var base = if (visibility) |projection|
+        try solver_rules.generateProjectedBase(
+            allocator,
+            universe,
+            projection,
+            .{ .jobs = jobs },
+            policy.architecture,
+        )
+    else
+        try solver_rules.generateBase(
+            allocator,
+            universe,
+            .{ .jobs = jobs },
+            policy.architecture,
+        );
     defer base.deinit();
 
     var prepared = try solver_policy.prepareWithOptions(

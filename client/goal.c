@@ -23,7 +23,7 @@ TDNFGoalSolveNative(
 );
 
 static
-void
+uint32_t
 TDNFGoalCaptureNativeSolve(
     PTDNF pTdnf,
     const Queue *pQueueJobs,
@@ -83,6 +83,15 @@ TDNFGoalBuildNativeSolverHiddenAvailable(
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppHiddenAvailable,
     uint32_t *pdwHiddenAvailableCount
 );
+
+#define TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(_tdnf, _jobs, _allow_erasing, _auto_erase, _flags, _stamped_count, _prepare_only, _refute_unsat, _drop_protected, _native, _error) \
+    do {                                                                 \
+        uint32_t _saved_error = (_error);                                \
+        (_error) = TDNFGoalCaptureNativeSolve((_tdnf), (_jobs), (_allow_erasing), (_auto_erase), (_flags), (_stamped_count), (_prepare_only), (_refute_unsat), (_drop_protected), (_native)); \
+        if ((_error)) { TDNFTransactionPlanStateClear((_tdnf)->pTransactionPlanState); (_error) = _saved_error; BAIL_ON_TDNF_ERROR(_error); } \
+        (_error) = _saved_error;                                         \
+        TDNFTransactionPlanRequestTraceFinalize((_tdnf)->pRequestTrace, (_jobs)->elements, (_jobs)->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST); \
+    } while (0)
 
 static uint32_t
 SolvAddDebugInfo(
@@ -235,13 +244,9 @@ TDNFSolv(
             {
                 /* Nothing has been solved yet, so the plan describes the
                    request and the packages it names. */
-                TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
-                                           nAutoErase, nFlags,
-                                           nStampedJobCount, 1, 0, 0,
-                                           &pNativeSolve);
+                TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 1, 0, 0, &pNativeSolve, dwError);
                 TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
-                    pTdnf, pQueueJobs, pSolv, NULL, pNativeSolve, 0,
-                    nUnresolved,
+                    pTdnf, pNativeSolve, nUnresolved,
                     TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE,
                     ppszExcludes, nAllowErasing, nAutoErase, dwError);
             }
@@ -272,14 +277,10 @@ TDNFSolv(
             dwError = SolvReportProblems(pTdnf->pSack, pSolv, dwSkipProblem);
             if(dwError)
             {
-                TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
-                                           nAutoErase, nFlags,
-                                           nStampedJobCount, 0, 1, 0,
-                                           &pNativeSolve);
+                TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 1, 0, &pNativeSolve, dwError);
                 TDNF_TRANSACTION_PLAN_CAPTURE_FAILED_SOLVE(
-                    pTdnf, pQueueJobs, pSolv, pNativeSolve, nProblems,
-                    nUnresolved, ppszExcludes, nAllowErasing, nAutoErase,
-                    dwError);
+                    pTdnf, pNativeSolve, nUnresolved, ppszExcludes,
+                    nAllowErasing, nAutoErase, dwError);
             }
         }
 
@@ -305,13 +306,9 @@ TDNFSolv(
                    protected removal/obsolete is being reported, while the
                    captured environment still records the protection policy so
                    the offending action is recognised as protected. */
-                TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
-                                           nAutoErase, nFlags,
-                                           nStampedJobCount, 0, 0, 1,
-                                           &pNativeSolve);
+                TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 0, 1, &pNativeSolve, dwError);
                 TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
-                    pTdnf, pQueueJobs, pSolv, pTrans, pNativeSolve, nProblems,
-                    nUnresolved,
+                    pTdnf, pNativeSolve, nUnresolved,
                     TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE,
                     ppszExcludes, nAllowErasing, nAutoErase, dwError);
             }
@@ -328,12 +325,9 @@ TDNFSolv(
     } while (dwError == ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED && retries < 2);
     if (dwError == ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED)
     {
-        TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
-                                   nAutoErase, nFlags, nStampedJobCount, 0,
-                                   0, 0, &pNativeSolve);
+        TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 0, 0, &pNativeSolve, dwError);
         TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
-            pTdnf, pQueueJobs, pSolv, pTrans, pNativeSolve, nProblems,
-            nUnresolved,
+            pTdnf, pNativeSolve, nUnresolved,
             TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_INSTALLONLY_LIMIT,
             ppszExcludes, nAllowErasing, nAutoErase, dwError);
     }
@@ -361,10 +355,9 @@ TDNFSolv(
        one the native solver just produced, so the capture needs the solve to
        still be alive. */
     TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(
-        pTdnf, pQueueJobs, pSolv, pTrans, pNativeSolve, nProblems,
-        nProblems && dwSkipProblem != SKIPPROBLEM_NONE,
-        nUnresolved, UINT32_MAX, ppszExcludes,
-        nAllowErasing, nAutoErase, dwError);
+        pTdnf, pNativeSolve, nProblems && dwSkipProblem != SKIPPROBLEM_NONE,
+        nUnresolved, UINT32_MAX, ppszExcludes, nAllowErasing, nAutoErase,
+        dwError);
     BAIL_ON_TDNF_ERROR(dwError);
 
     *ppInfo = pInfo;
@@ -536,11 +529,8 @@ error:
     goto cleanup;
 }
 
-/* Best-effort native snapshot for a request that is about to fail. The plan
-   is not worth the operation's error code, so a failure here just leaves the
-   capture to fall back to libsolv. */
 static
-void
+uint32_t
 TDNFGoalCaptureNativeSolve(
     PTDNF pTdnf,
     const Queue *pQueueJobs,
@@ -552,25 +542,32 @@ TDNFGoalCaptureNativeSolve(
     void **ppHandle
     )
 {
+    uint32_t dwError = 0;
     PTDNF_SOLVED_PKG_INFO pInfo = NULL;
 
     if(!ppHandle || *ppHandle ||
        !TDNFTransactionPlanStateIsEnabled(
            pTdnf ? pTdnf->pTransactionPlanState : NULL))
     {
-        return;
+        goto cleanup;
     }
-    if(TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
-                           nStampFlags, nStampedJobCount, 0,
-                           (nPrepareOnly || nRefuteUnsat) ? NULL : &pInfo,
-                           nPrepareOnly, nRefuteUnsat, nDropProtected, ppHandle))
-    {
-        *ppHandle = NULL;
-    }
+    dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
+                                  nStampFlags, nStampedJobCount, 0,
+                                  (nPrepareOnly || nRefuteUnsat) ? NULL : &pInfo,
+                                  nPrepareOnly, nRefuteUnsat, nDropProtected,
+                                  ppHandle);
+    BAIL_ON_TDNF_ERROR(dwError);
+cleanup:
     if(pInfo)
     {
         TDNFFreeSolvedPackageInfo(pInfo);
     }
+    return dwError;
+error:
+    *ppHandle = NULL;
+    TDNFTransactionPlanStateClear(
+        pTdnf ? pTdnf->pTransactionPlanState : NULL);
+    goto cleanup;
 }
 
 static
