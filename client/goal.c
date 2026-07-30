@@ -18,6 +18,7 @@ TDNFGoalSolveNative(
     PTDNF_SOLVED_PKG_INFO *ppInfo,
     int nPrepareOnly,
     int nRefuteUnsat,
+    int nDropProtected,
     void **ppHandle
 );
 
@@ -30,6 +31,7 @@ TDNFGoalCaptureNativeSolve(
     int nAutoErase, int nStampFlags, int nStampedJobCount,
     int nPrepareOnly,
     int nRefuteUnsat,
+    int nDropProtected,
     void **ppHandle
 );
 
@@ -235,7 +237,7 @@ TDNFSolv(
                    request and the packages it names. */
                 TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
                                            nAutoErase, nFlags,
-                                           nStampedJobCount, 1, 0,
+                                           nStampedJobCount, 1, 0, 0,
                                            &pNativeSolve);
                 TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
                     pTdnf, pQueueJobs, pSolv, NULL, pNativeSolve, 0,
@@ -272,7 +274,7 @@ TDNFSolv(
             {
                 TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
                                            nAutoErase, nFlags,
-                                           nStampedJobCount, 0, 1,
+                                           nStampedJobCount, 0, 1, 0,
                                            &pNativeSolve);
                 TDNF_TRANSACTION_PLAN_CAPTURE_FAILED_SOLVE(
                     pTdnf, pQueueJobs, pSolv, pNativeSolve, nProblems,
@@ -293,13 +295,22 @@ TDNFSolv(
             dwError = TDNFSolvCheckProtectPkgsInTrans(pTdnf, pTrans, pTdnf->pSack->pPool);
             if (dwError == ERROR_TDNF_PROTECTED)
             {
-                /* The offending package is only named by a transaction that
-                   resolves it away, which the native solver refuses to
-                   produce because protection is a solve policy for it. That
-                   plan stays libsolv's until native problem diagnostics can
-                   describe the refusal directly. */
+                /* The offending package is only named by the transaction that
+                   resolves it away -- there is no erase job for it, so the
+                   terminal reference can only find it among the solve's
+                   actions. A native solve that honoured protection would
+                   refuse to produce that transaction (protection is a hard
+                   solve policy for it), so the capture solve drops the
+                   protected names: it reproduces the very transaction whose
+                   protected removal/obsolete is being reported, while the
+                   captured environment still records the protection policy so
+                   the offending action is recognised as protected. */
+                TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
+                                           nAutoErase, nFlags,
+                                           nStampedJobCount, 0, 0, 1,
+                                           &pNativeSolve);
                 TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
-                    pTdnf, pQueueJobs, pSolv, pTrans, NULL, nProblems,
+                    pTdnf, pQueueJobs, pSolv, pTrans, pNativeSolve, nProblems,
                     nUnresolved,
                     TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE,
                     ppszExcludes, nAllowErasing, nAutoErase, dwError);
@@ -319,7 +330,7 @@ TDNFSolv(
     {
         TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
                                    nAutoErase, nFlags, nStampedJobCount, 0,
-                                   0, &pNativeSolve);
+                                   0, 0, &pNativeSolve);
         TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
             pTdnf, pQueueJobs, pSolv, pTrans, pNativeSolve, nProblems,
             nUnresolved,
@@ -340,7 +351,7 @@ TDNFSolv(
        when something is going to read it. */
     dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
                                   nFlags, nStampedJobCount, nReInstall, &pInfo,
-                                  0, 0,
+                                  0, 0, 0,
                                   TDNFTransactionPlanStateIsEnabled(
                                       pTdnf->pTransactionPlanState)
                                       ? &pNativeSolve : NULL);
@@ -537,6 +548,7 @@ TDNFGoalCaptureNativeSolve(
     int nAutoErase, int nStampFlags, int nStampedJobCount,
     int nPrepareOnly,
     int nRefuteUnsat,
+    int nDropProtected,
     void **ppHandle
     )
 {
@@ -551,7 +563,7 @@ TDNFGoalCaptureNativeSolve(
     if(TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
                            nStampFlags, nStampedJobCount, 0,
                            (nPrepareOnly || nRefuteUnsat) ? NULL : &pInfo,
-                           nPrepareOnly, nRefuteUnsat, ppHandle))
+                           nPrepareOnly, nRefuteUnsat, nDropProtected, ppHandle))
     {
         *ppHandle = NULL;
     }
@@ -571,6 +583,7 @@ TDNFGoalSolveNative(
     PTDNF_SOLVED_PKG_INFO *ppInfo,
     int nPrepareOnly,
     int nRefuteUnsat,
+    int nDropProtected,
     void **ppHandle
     )
 {
@@ -653,7 +666,8 @@ TDNFGoalSolveNative(
                   nHasGlobalQueuePair,
                   (const char *const *)ppszInstallOnlyPkgs,
                   (uint32_t)pTdnf->pConf->nInstallOnlyLimit,
-                  (const char *const *)pTdnf->pConf->ppszProtectedPkgs,
+                  nDropProtected ? NULL :
+                      (const char *const *)pTdnf->pConf->ppszProtectedPkgs,
                   (const char *const *)ppszUserInstalledPkgs,
                   (const char *const *)ppszCmdLinePaths, nReInstall,
                   pTdnf->pRpmConfig, pszNativeArch, nPrepareOnly,
