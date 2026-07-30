@@ -4609,7 +4609,7 @@ test "native and oracle normalize obsoletes conflicts" {
     );
 }
 
-test "native problem derivation rejects multiple independent cores" {
+test "native problem derivation enumerates multiple independent cores" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     var builder = GraphBuilder.init(arena_state.allocator());
     const available = try builder.addRepo("available", .available, 50);
@@ -4624,27 +4624,51 @@ test "native problem derivation rejects multiple independent cores" {
     var graph = try builder.finish(&arena_state);
     defer graph.deinit();
 
-    try testing.expectError(
-        error.UnsupportedProblem,
-        deriveNativeProblems(
-            testing.allocator,
-            &graph.universe,
-            .{ .jobs = &.{
-                .{
-                    .action = .install,
-                    .selection = .{ .package = @enumFromInt(0) },
-                },
-                .{
-                    .action = .install,
-                    .selection = .{ .package = @enumFromInt(1) },
-                },
-            } },
-            policy(),
-        ),
+    const goal = solver_model.Goal{ .jobs = &.{
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(0) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(1) },
+        },
+    } };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 2), native.problems.len);
+    try testing.expectEqualStrings(
+        "first-missing",
+        native.problems[0].capability.?.name,
+    );
+    try testing.expectEqualStrings(
+        "second-missing",
+        native.problems[1].capability.?.name,
     );
 }
 
-test "native problem derivation rejects multiple cores for one job" {
+test "native problem derivation names one core per broken job" {
+    // libsolv disables the job rules of a core and re-solves, so a package
+    // with two unsatisfiable requires yields one problem, not two: the second
+    // requires rule never conflicts once the job that pulled the package in
+    // is gone.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     var builder = GraphBuilder.init(arena_state.allocator());
     const available = try builder.addRepo("available", .available, 50);
@@ -4658,21 +4682,37 @@ test "native problem derivation rejects multiple cores for one job" {
     var graph = try builder.finish(&arena_state);
     defer graph.deinit();
 
-    try testing.expectError(
-        error.UnsupportedProblem,
-        deriveNativeProblems(
-            testing.allocator,
-            &graph.universe,
-            .{ .jobs = &.{.{
-                .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
-            }} },
-            policy(),
-        ),
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .install,
+        .selection = .{ .package = @enumFromInt(0) },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 1), native.problems.len);
+    try testing.expectEqualStrings(
+        "first-missing",
+        native.problems[0].capability.?.name,
     );
 }
 
-test "native problem derivation rejects installed-retention cores" {
+test "native problem derivation names installed-retention cores" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     var builder = GraphBuilder.init(arena_state.allocator());
     const installed = try builder.addRepo("@System", .installed, 50);
@@ -4685,15 +4725,684 @@ test "native problem derivation rejects installed-retention cores" {
     var graph = try builder.finish(&arena_state);
     defer graph.deinit();
 
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .install,
+        .selection = .{ .package = @enumFromInt(1) },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 1), native.problems.len);
+    try testing.expectEqual(
+        solver_model.ProblemKind.conflict,
+        native.problems[0].kind,
+    );
+    try testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(1)),
+        native.problems[0].package,
+    );
+    try testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(0)),
+        native.problems[0].related_package,
+    );
+}
+
+test "native problem derivation enumerates three independent cores" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(available, .{
+        .name = "alpha",
+        .requires = &.{relation("alpha-missing")},
+    });
+    try builder.addPackage(available, .{
+        .name = "beta",
+        .requires = &.{relation("beta-missing")},
+    });
+    try builder.addPackage(available, .{
+        .name = "gamma",
+        .requires = &.{relation("gamma-missing")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(0) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(1) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(2) },
+        },
+    } };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 3), native.problems.len);
+}
+
+test "native problem derivation mixes an installed-retention core with a missing dependency core" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(installed, .{ .name = "resident" });
+    try builder.addPackage(available, .{
+        .name = "conflicting",
+        .conflicts = &.{relation("resident")},
+    });
+    try builder.addPackage(available, .{
+        .name = "incomplete",
+        .requires = &.{relation("absent-capability")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(1) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(2) },
+        },
+    } };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 2), native.problems.len);
+}
+
+test "native problem derivation enumerates cores across installed conflicts" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(installed, .{ .name = "resident-one" });
+    try builder.addPackage(installed, .{ .name = "resident-two" });
+    try builder.addPackage(available, .{
+        .name = "blocked-one",
+        .conflicts = &.{relation("resident-one")},
+    });
+    try builder.addPackage(available, .{
+        .name = "blocked-two",
+        .conflicts = &.{relation("resident-two")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(2) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(3) },
+        },
+    } };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 2), native.problems.len);
+}
+
+test "native problem derivation enumerates a missing name job beside a package core" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(available, .{
+        .name = "present",
+        .requires = &.{relation("gone")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{
+        .{
+            .action = .install,
+            .selection = .{ .name = "not-in-any-repo" },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(0) },
+        },
+    } };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 2), native.problems.len);
+}
+
+test "native problem derivation enumerates conflicting requests and a broken request" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(available, .{ .name = "left" });
+    try builder.addPackage(available, .{
+        .name = "right",
+        .conflicts = &.{relation("left")},
+    });
+    try builder.addPackage(available, .{
+        .name = "lonely",
+        .requires = &.{relation("nowhere")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(0) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(1) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(2) },
+        },
+    } };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 2), native.problems.len);
+}
+
+test "native problem derivation enumerates a transitively missing dependency core" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(available, .{
+        .name = "leaf",
+        .requires = &.{relation("nothing-provides-this")},
+    });
+    try builder.addPackage(available, .{
+        .name = "trunk",
+        .requires = &.{relation("leaf")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .install,
+        .selection = .{ .package = @enumFromInt(1) },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+}
+
+test "native problem derivation enumerates duplicate cores into one counted problem" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(available, .{
+        .name = "shared",
+        .requires = &.{relation("shared-missing")},
+    });
+    try builder.addPackage(available, .{
+        .name = "front",
+        .requires = &.{relation("shared")},
+    });
+    try builder.addPackage(available, .{
+        .name = "back",
+        .requires = &.{relation("shared")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(1) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(2) },
+        },
+    } };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 1), native.problems.len);
+    try testing.expectEqual(@as(u32, 2), native.problems[0].count);
+    try testing.expectEqualStrings(
+        "shared-missing",
+        native.problems[0].capability.?.name,
+    );
+}
+
+test "native problem derivation prefers the assertion rule of a chained core" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(available, .{
+        .name = "leaf",
+        .requires = &.{relation("no-provider-anywhere")},
+    });
+    try builder.addPackage(available, .{
+        .name = "middle",
+        .requires = &.{relation("leaf")},
+    });
+    try builder.addPackage(available, .{
+        .name = "top",
+        .requires = &.{relation("middle")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .install,
+        .selection = .{ .package = @enumFromInt(2) },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 1), native.problems.len);
+    try testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(0)),
+        native.problems[0].package,
+    );
+    try testing.expectEqualStrings(
+        "no-provider-anywhere",
+        native.problems[0].capability.?.name,
+    );
+}
+
+test "native problem derivation names a core with two uninstallable providers" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(available, .{
+        .name = "provider-a",
+        .provides = &.{relation("pick")},
+        .requires = &.{relation("missing-a")},
+    });
+    try builder.addPackage(available, .{
+        .name = "provider-b",
+        .provides = &.{relation("pick")},
+        .requires = &.{relation("missing-b")},
+    });
+    try builder.addPackage(available, .{
+        .name = "hub",
+        .requires = &.{relation("pick")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .install,
+        .selection = .{ .package = @enumFromInt(2) },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+}
+
+test "native problem derivation enumerates three installed-retention cores" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(installed, .{ .name = "resident-one" });
+    try builder.addPackage(installed, .{ .name = "resident-two" });
+    try builder.addPackage(installed, .{ .name = "resident-three" });
+    try builder.addPackage(available, .{
+        .name = "blocked-one",
+        .conflicts = &.{relation("resident-one")},
+    });
+    try builder.addPackage(available, .{
+        .name = "blocked-two",
+        .conflicts = &.{relation("resident-two")},
+    });
+    try builder.addPackage(available, .{
+        .name = "blocked-three",
+        .conflicts = &.{relation("resident-three")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(3) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(4) },
+        },
+        .{
+            .action = .install,
+            .selection = .{ .package = @enumFromInt(5) },
+        },
+    } };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 3), native.problems.len);
+    for (native.problems) |problem| {
+        try testing.expectEqual(
+            solver_model.ProblemKind.conflict,
+            problem.kind,
+        );
+    }
+}
+
+test "native problem derivation reports a conflict with the required installed package" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const installed = try builder.addRepo("@System", .installed, 50);
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(installed, .{
+        .name = "resident",
+        .provides = &.{relation("feature")},
+    });
+    try builder.addPackage(available, .{
+        .name = "request",
+        .requires = &.{relation("feature")},
+        .conflicts = &.{relation("resident")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    const goal = solver_model.Goal{ .jobs = &.{.{
+        .action = .install,
+        .selection = .{ .package = @enumFromInt(1) },
+    }} };
+    var observation = try oracle.solve(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer observation.deinit();
+    var native = try deriveNativeProblems(
+        testing.allocator,
+        &graph.universe,
+        goal,
+        policy(),
+    );
+    defer native.deinit();
+
+    try expectProblemsEqual(
+        observation.outcome.problems,
+        native.problems,
+    );
+    try testing.expectEqual(@as(usize, 1), native.problems.len);
+    try testing.expectEqual(
+        solver_model.ProblemKind.conflict,
+        native.problems[0].kind,
+    );
+}
+
+test "native problem derivation attributes each enumerated core to its own job" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    try builder.addPackage(available, .{
+        .name = "first",
+        .requires = &.{relation("first-missing")},
+    });
+    try builder.addPackage(available, .{
+        .name = "second",
+        .requires = &.{relation("second-missing")},
+    });
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
+    var visibility = try solver_visibility.Projection.init(
+        testing.allocator,
+        &graph.universe,
+        .{},
+    );
+    defer visibility.deinit();
+
+    var problems = try solver_native.refuteProjected(
+        testing.allocator,
+        &graph.universe,
+        &visibility,
+        .{ .jobs = &.{
+            .{
+                .action = .install,
+                .selection = .{ .package = @enumFromInt(0) },
+            },
+            .{
+                .action = .install,
+                .selection = .{ .package = @enumFromInt(1) },
+            },
+        } },
+        policy(),
+    );
+    defer problems.deinit();
+
+    try testing.expectEqual(@as(usize, 2), problems.problems.len);
+    try testing.expectEqual(
+        @as(?solver_model.JobId, @enumFromInt(0)),
+        problems.problems[0].job,
+    );
+    try testing.expectEqual(
+        @as(?solver_model.JobId, @enumFromInt(1)),
+        problems.problems[1].job,
+    );
+}
+
+test "native problem derivation caps runaway core enumeration" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var builder = GraphBuilder.init(arena_state.allocator());
+    const available = try builder.addRepo("available", .available, 50);
+    const broken_count = solver_result.max_unsat_cores + 1;
+    var names: [solver_result.max_unsat_cores + 1][32]u8 = undefined;
+    var jobs: [solver_result.max_unsat_cores + 1]solver_model.Job = undefined;
+    for (0..broken_count) |index| {
+        const name = try std.fmt.bufPrint(
+            &names[index],
+            "broken-{d}",
+            .{index},
+        );
+        try builder.addPackage(available, .{
+            .name = name,
+            .requires = &.{relation("no-such-capability")},
+        });
+        jobs[index] = .{
+            .action = .install,
+            .selection = .{
+                .package = @enumFromInt(@as(u32, @intCast(index))),
+            },
+        };
+    }
+    var graph = try builder.finish(&arena_state);
+    defer graph.deinit();
+
     try testing.expectError(
-        error.UnsupportedProblem,
+        error.TooManyUnsatCores,
         deriveNativeProblems(
             testing.allocator,
             &graph.universe,
-            .{ .jobs = &.{.{
-                .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
-            }} },
+            .{ .jobs = jobs[0..broken_count] },
             policy(),
         ),
     );
@@ -5720,4 +6429,197 @@ test "an installed provider satisfies a new capability without a second provider
     try expectNativeMatchesOracle(&native, &observation);
     try testing.expect(containsSelectedName(&graph, &observation, "prov-b"));
     try testing.expect(!containsSelectedName(&graph, &observation, "prov-a"));
+}
+
+// Differential search for problem-derivation gaps.
+//
+// Small random universes are refuted with both libsolv and the native
+// enumerator. Every unsatisfiable case must either match the oracle exactly
+// or fail with one of the derivation errors this port has explicitly frozen;
+// any other outcome is a gap, and a run that never reaches the interesting
+// shapes is a gap too.
+test "native problem derivation matches the oracle across random universes" {
+    const capabilities = [_][]const u8{
+        "cap-one",
+        "cap-two",
+        "cap-three",
+        "cap-missing",
+    };
+    var prng = std.Random.DefaultPrng.init(0x7ded9f6a);
+    const random = prng.random();
+
+    var compared: usize = 0;
+    var unsupported: usize = 0;
+    var multi_problem: usize = 0;
+    var attribution_divergences: usize = 0;
+    var iteration: usize = 0;
+    while (iteration < 400) : (iteration += 1) {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var builder = GraphBuilder.init(arena);
+        const installed_count = random.uintLessThan(usize, 3);
+        const available_count = 1 + random.uintLessThan(usize, 4);
+        const installed = try builder.addRepo("@System", .installed, 50);
+        const available = try builder.addRepo("available", .available, 50);
+
+        var package_count: usize = 0;
+        for (0..installed_count + available_count) |package_index| {
+            const to_installed = package_index < installed_count;
+            const name = try std.fmt.allocPrint(
+                arena,
+                "pkg-{d}",
+                .{package_index},
+            );
+            var provides = std.array_list.Managed(metadata.Relation).init(arena);
+            var requires = std.array_list.Managed(metadata.Relation).init(arena);
+            var conflicts = std.array_list.Managed(metadata.Relation).init(arena);
+            var obsoletes = std.array_list.Managed(metadata.Relation).init(arena);
+            for (capabilities) |capability| {
+                if (random.uintLessThan(u8, 4) == 0) {
+                    try provides.append(relation(capability));
+                }
+                if (random.uintLessThan(u8, 3) == 0) {
+                    try requires.append(relation(capability));
+                }
+                if (random.uintLessThan(u8, 8) == 0) {
+                    try conflicts.append(relation(capability));
+                }
+            }
+            if (package_index != 0 and random.uintLessThan(u8, 6) == 0) {
+                const target = random.uintLessThan(usize, package_index);
+                try obsoletes.append(relation(
+                    try std.fmt.allocPrint(arena, "pkg-{d}", .{target}),
+                ));
+            }
+            try builder.addPackage(
+                if (to_installed) installed else available,
+                .{
+                    .name = name,
+                    .provides = provides.items,
+                    .requires = requires.items,
+                    .conflicts = conflicts.items,
+                    .obsoletes = obsoletes.items,
+                },
+            );
+            package_count += 1;
+        }
+        var graph = try builder.finish(&arena_state);
+        // The graph borrows the arena freed by the enclosing defer.
+        defer graph.universe.deinit();
+
+        var jobs = std.array_list.Managed(solver_model.Job).init(arena);
+        const job_count = 1 + random.uintLessThan(usize, 3);
+        for (0..job_count) |_| {
+            const target = random.uintLessThan(usize, package_count);
+            try jobs.append(.{
+                .action = .install,
+                .selection = .{
+                    .package = @enumFromInt(@as(u32, @intCast(target))),
+                },
+            });
+        }
+        const goal = solver_model.Goal{ .jobs = jobs.items };
+
+        var observation = oracle.solve(
+            testing.allocator,
+            &graph.universe,
+            goal,
+            policy(),
+        ) catch continue;
+        defer observation.deinit();
+        if (observation.outcome.problems.len == 0) continue;
+
+        var native = deriveNativeProblems(
+            testing.allocator,
+            &graph.universe,
+            goal,
+            policy(),
+        ) catch |err| switch (err) {
+            error.UnsupportedProblem,
+            error.AmbiguousProblemRule,
+            => {
+                unsupported += 1;
+                continue;
+            },
+            else => return err,
+        };
+        defer native.deinit();
+
+        // Enumeration parity is the property this test guards: the native
+        // side must find exactly as many independent UNSAT cores as libsolv,
+        // which is the sum of the deduped `count` fields on both sides.
+        try testing.expectEqual(
+            totalProblemCount(observation.outcome.problems),
+            totalProblemCount(native.problems),
+        );
+
+        // Representative-rule *attribution* (which rule of a core names it)
+        // depends on libsolv's proof order, which the native core deliberately
+        // discards (`solver_search.zig` sorts cores by clause index). Those
+        // divergences are counted, not forbidden - see issue #259 item 4.
+        if (!problemsEqual(observation.outcome.problems, native.problems)) {
+            attribution_divergences += 1;
+        }
+
+        compared += 1;
+        if (native.problems.len > 1) multi_problem += 1;
+    }
+
+    // Guard against the search silently degenerating into trivial cases.
+    try testing.expect(compared >= 50);
+    try testing.expect(multi_problem >= 5);
+    try testing.expectEqual(@as(usize, 0), unsupported);
+    // Measured on the fixed seed above; a ceiling, not a target. Lowering it
+    // is progress on issue #259 item 4, raising it is a regression.
+    try testing.expect(attribution_divergences <= max_attribution_divergences);
+}
+
+/// Measured on the fixed seed above: 13 of 243 comparable universes name a
+/// core with a different rule than libsolv does. All 243 agree on the number
+/// of cores. This is a ceiling, not a target.
+const max_attribution_divergences: usize = 13;
+
+fn totalProblemCount(problems: []const solver_model.Problem) usize {
+    var total: usize = 0;
+    for (problems) |problem| total += problem.count;
+    return total;
+}
+
+fn problemsEqual(
+    expected: []const solver_model.Problem,
+    actual: []const solver_model.Problem,
+) bool {
+    if (expected.len != actual.len) return false;
+    for (expected, actual) |want, got| {
+        if (want.kind != got.kind) return false;
+        if (want.count != got.count) return false;
+        if (!optionalEqual(solver_model.PackageId, want.package, got.package)) {
+            return false;
+        }
+        if (!optionalEqual(
+            solver_model.PackageId,
+            want.related_package,
+            got.related_package,
+        )) return false;
+        if (!optionalEqual(solver_model.JobId, want.job, got.job)) return false;
+        if ((want.capability == null) != (got.capability == null)) return false;
+        if (want.capability) |want_capability| {
+            const got_capability = got.capability.?;
+            if (!std.mem.eql(
+                u8,
+                want_capability.name,
+                got_capability.name,
+            )) return false;
+        }
+    }
+    return true;
+}
+
+fn optionalEqual(comptime T: type, expected: ?T, actual: ?T) bool {
+    if (expected) |want| {
+        const got = actual orelse return false;
+        return want == got;
+    }
+    return actual == null;
 }
