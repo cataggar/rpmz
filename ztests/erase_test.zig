@@ -17,6 +17,11 @@ const no_args_code: u8 = 1001 % 256;
 /// `ERROR_TDNF_NO_MATCH`.
 const no_match_code: u8 = 1011 % 256;
 
+fn eraseBestEffort(root: *harness.Root) void {
+    var result = root.run(&.{ "erase", "-y", multiversion }) catch return;
+    defer result.deinit();
+}
+
 test "erase with no argument is refused" {
     var h = try harness.open(std.testing.allocator);
     defer h.deinit();
@@ -44,6 +49,7 @@ test "a package erases by name with a version suffix" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer eraseBestEffort(&root);
 
     const versioned = multiversion ++ "-" ++ multiversion_lower;
 
@@ -63,6 +69,7 @@ test "a package erases by name without a version suffix" {
     defer h.deinit();
     var root = try h.root();
     defer root.deinit();
+    defer eraseBestEffort(&root);
 
     var install = try root.run(&.{ "install", "-y", "--nogpgcheck", multiversion });
     defer install.deinit();
