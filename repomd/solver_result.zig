@@ -50,7 +50,20 @@ pub const DeriveProblemsError = solver_search.SolveError || error{
     Satisfiable,
     InvalidInput,
     UnsupportedProblem,
+    TooManyUnsatCores,
+    UnblockableCore,
+    AmbiguousProblemRule,
 };
+
+/// Independent UNSAT cores enumerated before a request is declared hopeless.
+///
+/// libsolv enumerates cores by disabling the job rules of each core and
+/// re-solving, so the count is bounded by the number of job rules in practice
+/// but not in theory. This mirrors `solver_model.max_skip_broken_jobs`: any
+/// request needing more than this many distinct explanations is reported as a
+/// hard error rather than truncated, because a truncated problem list is
+/// indistinguishable from a complete one at the call site.
+pub const max_unsat_cores: usize = 64;
 
 /// Convert a complete satisfiable model into canonical package actions.
 ///
@@ -288,46 +301,78 @@ pub fn materialize(
     };
 }
 
-/// Derive one canonical structured problem from one independent UNSAT core.
+/// Derive every canonical structured problem of an unsatisfiable formula.
 ///
-/// Multi-core failures and cores requiring multiple causal package rules are
-/// rejected until their libsolv representative semantics are frozen. This
-/// parity slice rebuilds filtered formulas and is not yet a runtime path.
+/// One problem is derived per independent UNSAT core, the way libsolv's
+/// `analyze_unsolvable` does it: refute, name the core, disable the core's
+/// non-package rules, and refute again until the remainder is satisfiable.
+/// The result is sorted and deduplicated into the same canonical multiset
+/// libsolv's problem list collapses to. This is not yet a runtime path.
 pub fn deriveUnsatProblems(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
 ) DeriveProblemsError!OwnedProblems {
-    const problem = try deriveCoreProblem(allocator, formula);
-    return ownedSingleProblem(allocator, problem);
+    return deriveEnumeratedProblems(allocator, formula, false);
 }
 
-/// Derive one canonical problem and attribute package-origin failures to the
-/// single job in their UNSAT core when one exists.
+/// Derive every canonical problem and attribute package-origin failures to
+/// the single job in their own UNSAT core when one exists.
 pub fn deriveUnsatProblemsWithCoreJobs(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
 ) DeriveProblemsError!OwnedProblems {
-    var core = try deriveCoreProblemWithJob(allocator, formula);
-    if (core.problem.job == null) core.problem.job = core.core_job;
-    return ownedSingleProblem(allocator, core.problem);
+    return deriveEnumeratedProblems(allocator, formula, true);
 }
 
-fn ownedSingleProblem(
+fn deriveEnumeratedProblems(
     allocator: std.mem.Allocator,
-    problem: solver_model.Problem,
-) error{OutOfMemory}!OwnedProblems {
+    formula: *const solver_rules.OwnedFormula,
+    attribute_core_jobs: bool,
+) DeriveProblemsError!OwnedProblems {
+    var cores = CoreProblemList.init(allocator);
+    defer cores.deinit();
+    try enumerateCoreProblems(allocator, formula, &cores);
+    if (cores.items.len == 0) return error.Satisfiable;
+
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
-    const problems = try arena.alloc(solver_model.Problem, 1);
-    problems[0] = problem;
-    if (problem.capability) |relation| {
-        problems[0].capability = try cloneRelation(arena, relation);
+
+    const problems = try arena.alloc(solver_model.Problem, cores.items.len);
+    for (cores.items, problems) |core, *problem| {
+        problem.* = core.problem;
+        if (attribute_core_jobs and problem.job == null) {
+            problem.job = core.core_job;
+        }
+        if (problem.capability) |relation| {
+            problem.capability = try cloneRelation(arena, relation);
+        }
     }
+
     return .{
         .arena_state = arena_state,
-        .problems = problems,
+        .problems = canonicalizeProblems(problems),
     };
+}
+
+/// Collapse a derived problem list the way the libsolv oracle collapses its
+/// own: sort canonically, then merge identical problems into one `count`.
+fn canonicalizeProblems(
+    problems: []solver_model.Problem,
+) []const solver_model.Problem {
+    std.sort.pdq(solver_model.Problem, problems, {}, problemLessThan);
+    var write_index: usize = 0;
+    for (problems) |problem| {
+        if (write_index != 0 and
+            sameProblem(problems[write_index - 1], problem))
+        {
+            problems[write_index - 1].count += problem.count;
+            continue;
+        }
+        problems[write_index] = problem;
+        write_index += 1;
+    }
+    return problems[0..write_index];
 }
 
 /// Explain every job a skip-broken solve dropped.
@@ -380,12 +425,21 @@ pub fn deriveSkippedJobProblems(
 
 /// Reduce one independent unsatisfiable core to one canonical problem.
 ///
+/// Errors when the formula holds more than one core, because the callers of
+/// this helper diagnose one isolated request at a time and have no place to
+/// put a second explanation.
+///
 /// The returned problem borrows its capability strings from `formula`.
 fn deriveCoreProblem(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
 ) DeriveProblemsError!solver_model.Problem {
-    return (try deriveCoreProblemWithJob(allocator, formula)).problem;
+    var cores = CoreProblemList.init(allocator);
+    defer cores.deinit();
+    try enumerateCoreProblems(allocator, formula, &cores);
+    if (cores.items.len == 0) return error.Satisfiable;
+    if (cores.items.len != 1) return error.UnsupportedProblem;
+    return cores.items[0].problem;
 }
 
 const CoreProblem = struct {
@@ -393,61 +447,207 @@ const CoreProblem = struct {
     core_job: ?solver_model.JobId,
 };
 
-fn deriveCoreProblemWithJob(
+const CoreProblemList = std.array_list.Managed(CoreProblem);
+
+/// Enumerate every independent UNSAT core of `formula` as one problem each.
+///
+/// This is libsolv's `analyze_unsolvable` loop (`src/solver.c:955`) expressed
+/// over the native formula. libsolv records only the *non-package* rules of a
+/// proof as the problem's rule set, disables exactly those with
+/// `solver_disableproblemset`, and re-solves; package rules are never
+/// disabled. `.job` and `.installed_keep` are the native origins that
+/// correspond to libsolv's non-package rules (job rules and update rules), so
+/// they are the ones this loop blocks.
+///
+/// Leaves `out` empty when the formula is satisfiable.
+fn enumerateCoreProblems(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
-) DeriveProblemsError!CoreProblem {
-    var refutation =
-        (try solver_search.refute(allocator, formula, &.{})) orelse
-        return error.Satisfiable;
-    defer refutation.deinit();
+    out: *CoreProblemList,
+) DeriveProblemsError!void {
+    const clause_count = formula.clauses.len;
+    const active = try allocator.alloc(bool, clause_count);
+    defer allocator.free(active);
+    @memset(active, true);
+    try disableReplacedRetentionRules(formula, active);
 
-    // The refutation is a proof core, not a minimal one, so it is still
-    // shrunk one clause at a time below. The point of extracting it first is
-    // that the shrink then costs one solve per *proof* clause instead of one
-    // per formula clause, and a proof core does not grow with the repository.
-    const included = try allocator.alloc(bool, formula.clauses.len);
+    const included = try allocator.alloc(bool, clause_count);
     defer allocator.free(included);
-    @memset(included, false);
-    for (refutation.clauses) |clause_index| {
-        if (clause_index >= included.len) return error.InvalidInput;
-        included[clause_index] = true;
-    }
-    for (refutation.clauses) |clause_index| {
-        included[clause_index] = false;
-        var probe = try solveIncludedClauses(
+
+    while (true) {
+        const core = try refuteIncludedClauses(
             allocator,
             formula,
-            included,
-        );
-        const remains_unsatisfiable = probe == .unsatisfiable;
-        probe.deinit();
-        if (!remains_unsatisfiable) included[clause_index] = true;
-    }
+            active,
+        ) orelse return;
+        defer allocator.free(core);
 
-    var causal_origin: ?solver_rules.RuleOrigin = null;
-    var causal_clause_index: ?usize = null;
+        // The refutation is a proof core, not a minimal one, so it is still
+        // shrunk one clause at a time below. The point of extracting it first
+        // is that the shrink then costs one solve per *proof* clause instead
+        // of one per formula clause, and a proof core does not grow with the
+        // repository.
+        @memset(included, false);
+        for (core) |clause_index| {
+            if (clause_index >= clause_count) return error.InvalidInput;
+            if (!active[clause_index]) return error.InvalidInput;
+            included[clause_index] = true;
+        }
+        for (core) |clause_index| {
+            included[clause_index] = false;
+            var probe = try solveIncludedClauses(
+                allocator,
+                formula,
+                included,
+            );
+            const remains_unsatisfiable = probe == .unsatisfiable;
+            probe.deinit();
+            if (!remains_unsatisfiable) included[clause_index] = true;
+        }
+
+        try out.append(try classifyCore(allocator, formula, included));
+        if (out.items.len > max_unsat_cores) {
+            return error.TooManyUnsatCores;
+        }
+
+        // Block this core the way libsolv does: disable its non-package
+        // rules, keep every package rule, and refute what is left
+        // (`analyze_unsolvable`, `src/solver.c:955`).
+        var blocked: usize = 0;
+        for (formula.clauses, included, 0..) |clause, keep, clause_index| {
+            if (!keep) continue;
+            switch (clause.origin) {
+                .job, .installed_keep => {
+                    active[clause_index] = false;
+                    blocked += 1;
+                },
+                else => {},
+            }
+        }
+        if (blocked == 0) return error.UnblockableCore;
+    }
+}
+
+/// libsolv disables the update rule of an installed package that an install
+/// job replaces: `jobtodisablelist` (`src/rules.c:2593`) pushes a
+/// `DISABLE_UPDATE` for every installed package obsoleted by a job solvable,
+/// and `solver_disablepolicyrules` applies it before the first solve.
+///
+/// Native rules instead keep a retention clause `p or <replacements>` for
+/// every installed package. Both models agree while the job clause is
+/// present, but a refutation sub-formula that drops the job clause still has
+/// the retention clause forcing a replacement, which invents cores libsolv
+/// never reports. Deactivating those clauses up front restores parity. This
+/// only affects problem derivation - the solve path keeps the clause.
+fn disableReplacedRetentionRules(
+    formula: *const solver_rules.OwnedFormula,
+    active: []bool,
+) DeriveProblemsError!void {
+    for (formula.clauses, 0..) |clause, clause_index| {
+        const retained = switch (clause.origin) {
+            .installed_keep => |package_id| package_id,
+            else => continue,
+        };
+        const literals = try checkedClauseLiterals(formula, clause);
+        for (literals) |literal| {
+            if (!literal.positive()) continue;
+            const replacement = literal.package();
+            if (replacement == retained) continue;
+            if (!installJobAsserts(formula, replacement)) continue;
+            active[clause_index] = false;
+            break;
+        }
+    }
+}
+
+/// True when some install job unconditionally requests `package_id`. Native
+/// install jobs are unit positive clauses, which is the shape libsolv's
+/// `SOLVER_INSTALL` job rule takes for a resolved single solvable.
+fn installJobAsserts(
+    formula: *const solver_rules.OwnedFormula,
+    package_id: solver_model.PackageId,
+) bool {
+    for (formula.clauses) |clause| {
+        if (clause.origin != .job) continue;
+        const literals = formula.clauseLiterals(clause);
+        if (literals.len != 1) continue;
+        if (!literals[0].positive()) continue;
+        if (literals[0].package() == package_id) return true;
+    }
+    return false;
+}
+
+/// Name one minimal core with libsolv's representative-rule priority.
+///
+/// `solver_findproblemrule` (`src/problems.c:1284`) prefers, in order: a
+/// requires-class package rule, then a conflicts-class package rule, then an
+/// update rule, then a job rule. The native origins map onto those classes
+/// exactly, so the same order is applied here.
+///
+/// Within the requires class libsolv applies `findproblemrule_internal`'s
+/// `reqset` ranking (`src/problems.c:1146`): an assertion rule outranks a rule
+/// on the package a job asserted, which outranks a rule on an installed
+/// package, which outranks anything else. Within the conflicts class it
+/// prefers a conflict that touches an installed package. libsolv breaks
+/// remaining ties on its own proof order, which the native core does not
+/// preserve; ascending clause index is used instead, which is package-id
+/// order because rules are generated per package.
+fn classifyCore(
+    allocator: std.mem.Allocator,
+    formula: *const solver_rules.OwnedFormula,
+    included: []const bool,
+) DeriveProblemsError!CoreProblem {
     const core_jobs = try allocator.alloc(bool, formula.jobs.len);
     defer allocator.free(core_jobs);
     @memset(core_jobs, false);
+
+    var job_assert: ?solver_model.PackageId = null;
+    for (formula.clauses, included) |clause, keep| {
+        if (!keep) continue;
+        const job_id = switch (clause.origin) {
+            .job => |value| value,
+            else => continue,
+        };
+        const job_index: usize = @intFromEnum(job_id);
+        if (job_index >= core_jobs.len) return error.InvalidInput;
+        core_jobs[job_index] = true;
+        if (job_assert != null) continue;
+        const literals = try checkedClauseLiterals(formula, clause);
+        if (literals.len == 1 and literals[0].positive()) {
+            job_assert = literals[0].package();
+        }
+    }
+
+    var requires_best: ?Representative = null;
+    var conflicts_best: ?Representative = null;
+    var keep_count: usize = 0;
     for (formula.clauses, included, 0..) |clause, keep, clause_index| {
         if (!keep) continue;
+        const literals = try checkedClauseLiterals(formula, clause);
         switch (clause.origin) {
-            .job => |job_id| {
-                const job_index: usize = @intFromEnum(job_id);
-                if (job_index >= core_jobs.len) {
-                    return error.InvalidInput;
-                }
-                core_jobs[job_index] = true;
-            },
-            .installed_keep => return error.UnsupportedProblem,
-            else => {
-                if (causal_origin != null) {
-                    return error.UnsupportedProblem;
-                }
-                causal_origin = clause.origin;
-                causal_clause_index = clause_index;
-            },
+            .job => {},
+            .installed_keep => keep_count += 1,
+            .not_installable, .requirement => takeBetter(
+                &requires_best,
+                .{
+                    .origin = clause.origin,
+                    .clause_index = clause_index,
+                    .tier = requiresTier(
+                        formula,
+                        clause.origin,
+                        literals,
+                        job_assert,
+                    ),
+                },
+            ),
+            .conflict, .same_name, .obsoletes => takeBetter(
+                &conflicts_best,
+                .{
+                    .origin = clause.origin,
+                    .clause_index = clause_index,
+                    .tier = conflictsTier(formula, clause.origin),
+                },
+            ),
         }
     }
 
@@ -456,67 +656,233 @@ fn deriveCoreProblemWithJob(
     for (core_jobs, 0..) |in_core, job_index| {
         if (!in_core) continue;
         core_job_count += 1;
-        only_core_job = @enumFromInt(
-            @as(u32, @intCast(job_index)),
+        only_core_job = @enumFromInt(@as(u32, @intCast(job_index)));
+    }
+    const single_core_job = if (core_job_count == 1)
+        only_core_job
+    else
+        null;
+
+    if (requires_best) |requires_rule| {
+        const origin = try preferInstalledConflict(
+            formula,
+            included,
+            requires_rule,
         );
-    }
-    if (core_job_count == 0) return error.UnsupportedProblem;
-
-    const residual = try allocator.alloc(bool, formula.clauses.len);
-    defer allocator.free(residual);
-    @memset(residual, true);
-    if (causal_clause_index) |clause_index| {
-        residual[clause_index] = false;
-    } else {
-        if (core_job_count != 1) return error.UnsupportedProblem;
-        for (formula.clauses, 0..) |clause, clause_index| {
-            const job_id = switch (clause.origin) {
-                .job => |value| value,
-                else => continue,
-            };
-            const job_index: usize = @intFromEnum(job_id);
-            if (job_index >= core_jobs.len) return error.InvalidInput;
-            if (core_jobs[job_index]) residual[clause_index] = false;
-        }
-    }
-    var residual_result = try solveIncludedClauses(
-        allocator,
-        formula,
-        residual,
-    );
-    const has_additional_core = residual_result == .unsatisfiable;
-    residual_result.deinit();
-    if (has_additional_core) return error.UnsupportedProblem;
-
-    if (causal_origin) |origin| {
         return .{
             .problem = try problemForOrigin(formula, origin),
-            .core_job = if (core_job_count == 1) only_core_job else null,
+            .core_job = single_core_job,
         };
     }
-    if (core_job_count != 1) return error.UnsupportedProblem;
+    if (conflicts_best) |conflicts_rule| {
+        return .{
+            .problem = try problemForOrigin(formula, conflicts_rule.origin),
+            .core_job = single_core_job,
+        };
+    }
+    // A core held together only by retention rules would be named by
+    // libsolv's update rule, which has no native problem representation yet.
+    if (keep_count != 0) return error.UnsupportedProblem;
+    const job_id = single_core_job orelse return error.AmbiguousProblemRule;
     return .{
-        .problem = try noCandidateProblem(formula, only_core_job.?),
-        .core_job = only_core_job,
+        .problem = try noCandidateProblem(formula, job_id),
+        .core_job = job_id,
     };
 }
 
-fn solveIncludedClauses(
+const Representative = struct {
+    origin: solver_rules.RuleOrigin,
+    clause_index: usize,
+    tier: u8,
+};
+
+fn takeBetter(best: *?Representative, candidate: Representative) void {
+    const current = best.* orelse {
+        best.* = candidate;
+        return;
+    };
+    if (candidate.tier > current.tier) best.* = candidate;
+}
+
+fn requiresTier(
+    formula: *const solver_rules.OwnedFormula,
+    origin: solver_rules.RuleOrigin,
+    literals: []const solver_rules.Literal,
+    job_assert: ?solver_model.PackageId,
+) u8 {
+    if (literals.len == 1) return 3;
+    const subject = switch (origin) {
+        .requirement => |dependency| dependency.package,
+        .not_installable => |package_id| package_id,
+        else => return 0,
+    };
+    if (job_assert) |asserted| {
+        if (asserted == subject) return 2;
+    }
+    if (isInstalled(formula, subject)) return 1;
+    return 0;
+}
+
+fn conflictsTier(
+    formula: *const solver_rules.OwnedFormula,
+    origin: solver_rules.RuleOrigin,
+) u8 {
+    const sides: [2]?solver_model.PackageId = switch (origin) {
+        .conflict => |conflict| .{ conflict.dependency.package, conflict.target },
+        .obsoletes => |obsoletes| .{ obsoletes.dependency.package, obsoletes.target },
+        .same_name => |same_name| .{ same_name.left, same_name.right },
+        else => return 0,
+    };
+    for (sides) |side| {
+        const package_id = side orelse continue;
+        if (isInstalled(formula, package_id)) return 1;
+    }
+    return 0;
+}
+
+/// libsolv's `solver_findproblemrule` tail (`src/problems.c:1293`): a request
+/// for an uninstalled package that requires an installed package conflicting
+/// with it is reported as the conflict, not as the requirement.
+/// Transcribes the tail special case of libsolv's `solver_findproblemrule`
+/// (`problems.c:1284`): when an uninstalled package requires something that
+/// only an installed package provides, and the same package is blocked
+/// against that installed package by a conflicts-class rule, libsolv names
+/// the conflicts-class rule instead of the requires rule.
+///
+/// libsolv applies the test to the single conflicts-class representative it
+/// picked from its proof order. The native core is sorted by clause index and
+/// cannot reproduce that order, so every conflicts-class clause in the core is
+/// tested and the best match wins. Measured against libsolv this is a strictly
+/// closer match than testing only the tier-best conflict.
+fn preferInstalledConflict(
+    formula: *const solver_rules.OwnedFormula,
+    included: []const bool,
+    requires_rule: Representative,
+) DeriveProblemsError!solver_rules.RuleOrigin {
+    const requires_subject = switch (requires_rule.origin) {
+        .requirement => |dependency| dependency.package,
+        else => return requires_rule.origin,
+    };
+    if (isInstalled(formula, requires_subject)) return requires_rule.origin;
+
+    const requires_clause = formula.clauses[requires_rule.clause_index];
+    const requires_literals = try checkedClauseLiterals(
+        formula,
+        requires_clause,
+    );
+
+    var best: ?Representative = null;
+    for (formula.clauses, included, 0..) |clause, keep, clause_index| {
+        if (!keep) continue;
+        const sides = conflictSides(clause.origin) orelse continue;
+        const installed_side = if (requires_subject == sides.left and
+            isInstalled(formula, sides.right))
+            sides.right
+        else if (requires_subject == sides.right and
+            isInstalled(formula, sides.left))
+            sides.left
+        else
+            continue;
+        if (samePackageName(formula, sides.left, sides.right)) continue;
+        if (!requiresPackage(requires_literals, installed_side)) continue;
+        takeBetter(&best, .{
+            .origin = clause.origin,
+            .clause_index = clause_index,
+            .tier = conflictsTier(formula, clause.origin),
+        });
+    }
+    if (best) |conflicts_rule| return conflicts_rule.origin;
+    return requires_rule.origin;
+}
+
+const ConflictSides = struct {
+    left: solver_model.PackageId,
+    right: solver_model.PackageId,
+};
+
+/// libsolv models conflicts, obsoletes and same-name rules alike as a binary
+/// all-negative rule over two packages, which is what its special case reads
+/// through `rule->p` and `rule->w2`.
+fn conflictSides(origin: solver_rules.RuleOrigin) ?ConflictSides {
+    return switch (origin) {
+        .conflict => |value| .{
+            .left = value.dependency.package,
+            .right = value.target orelse return null,
+        },
+        .obsoletes => |value| .{
+            .left = value.dependency.package,
+            .right = value.target,
+        },
+        .same_name => |value| .{ .left = value.left, .right = value.right },
+        else => null,
+    };
+}
+
+fn requiresPackage(
+    literals: []const solver_rules.Literal,
+    package_id: solver_model.PackageId,
+) bool {
+    for (literals) |literal| {
+        if (literal.positive() and literal.package() == package_id) return true;
+    }
+    return false;
+}
+
+fn isInstalled(
+    formula: *const solver_rules.OwnedFormula,
+    package_id: solver_model.PackageId,
+) bool {
+    const package = formula.universe.package(package_id) orelse return false;
+    return package.installed != null;
+}
+
+fn samePackageName(
+    formula: *const solver_rules.OwnedFormula,
+    left_id: solver_model.PackageId,
+    right_id: solver_model.PackageId,
+) bool {
+    const left = formula.universe.package(left_id) orelse return false;
+    const right = formula.universe.package(right_id) orelse return false;
+    return std.mem.eql(
+        u8,
+        left.source.nevra.name,
+        right.source.nevra.name,
+    );
+}
+
+const FilteredFormula = struct {
+    allocator: std.mem.Allocator,
+    formula: solver_rules.OwnedFormula,
+    clauses: []solver_rules.Clause,
+    literals: []solver_rules.Literal,
+    source_index: []usize,
+
+    fn deinit(self: *FilteredFormula) void {
+        self.allocator.free(self.clauses);
+        self.allocator.free(self.literals);
+        self.allocator.free(self.source_index);
+        self.* = undefined;
+    }
+};
+
+fn buildFilteredFormula(
     allocator: std.mem.Allocator,
     source: *const solver_rules.OwnedFormula,
     included: []const bool,
-) DeriveProblemsError!solver_search.Result {
+) DeriveProblemsError!FilteredFormula {
     if (included.len != source.clauses.len) {
         return error.InvalidInput;
     }
     var clauses =
         std.array_list.Managed(solver_rules.Clause).init(allocator);
-    defer clauses.deinit();
+    errdefer clauses.deinit();
     var literals =
         std.array_list.Managed(solver_rules.Literal).init(allocator);
-    defer literals.deinit();
+    errdefer literals.deinit();
+    var source_index = std.array_list.Managed(usize).init(allocator);
+    errdefer source_index.deinit();
 
-    for (source.clauses, included) |clause, keep| {
+    for (source.clauses, included, 0..) |clause, keep, clause_index| {
         if (!keep) continue;
         const source_literals = try checkedClauseLiterals(
             source,
@@ -536,21 +902,72 @@ fn solveIncludedClauses(
             .len = @intCast(source_literals.len),
         };
         try clauses.append(copied);
+        try source_index.append(clause_index);
     }
 
-    const filtered = solver_rules.OwnedFormula{
+    const owned_clauses = try clauses.toOwnedSlice();
+    errdefer allocator.free(owned_clauses);
+    const owned_literals = try literals.toOwnedSlice();
+    errdefer allocator.free(owned_literals);
+    const owned_source_index = try source_index.toOwnedSlice();
+
+    return .{
         .allocator = allocator,
-        .universe = source.universe,
-        .jobs = source.jobs,
-        .architecture = source.architecture,
-        .replacement_kind = source.replacement_kind,
-        .clauses = clauses.items,
-        .literals = literals.items,
-        .weak_requests = source.weak_requests,
-        .weak_candidates = source.weak_candidates,
-        .package_states = source.package_states,
+        .formula = .{
+            .allocator = allocator,
+            .universe = source.universe,
+            .jobs = source.jobs,
+            .architecture = source.architecture,
+            .replacement_kind = source.replacement_kind,
+            .clauses = owned_clauses,
+            .literals = owned_literals,
+            .weak_requests = source.weak_requests,
+            .weak_candidates = source.weak_candidates,
+            .package_states = source.package_states,
+        },
+        .clauses = owned_clauses,
+        .literals = owned_literals,
+        .source_index = owned_source_index,
     };
-    return solver_search.solve(allocator, &filtered);
+}
+
+fn solveIncludedClauses(
+    allocator: std.mem.Allocator,
+    source: *const solver_rules.OwnedFormula,
+    included: []const bool,
+) DeriveProblemsError!solver_search.Result {
+    var filtered = try buildFilteredFormula(allocator, source, included);
+    defer filtered.deinit();
+    return solver_search.solve(allocator, &filtered.formula);
+}
+
+/// Refute only the still-active clauses, reporting the core in source indices.
+///
+/// Returns `null` when the active clauses are satisfiable.
+fn refuteIncludedClauses(
+    allocator: std.mem.Allocator,
+    source: *const solver_rules.OwnedFormula,
+    included: []const bool,
+) DeriveProblemsError!?[]usize {
+    var filtered = try buildFilteredFormula(allocator, source, included);
+    defer filtered.deinit();
+    var refutation = (try solver_search.refute(
+        allocator,
+        &filtered.formula,
+        &.{},
+    )) orelse return null;
+    defer refutation.deinit();
+
+    const mapped = try allocator.alloc(usize, refutation.clauses.len);
+    errdefer allocator.free(mapped);
+    for (refutation.clauses, mapped) |filtered_index, *target| {
+        if (filtered_index >= filtered.source_index.len) {
+            return error.InvalidInput;
+        }
+        target.* = filtered.source_index[filtered_index];
+    }
+    std.sort.pdq(usize, mapped, {}, std.sort.asc(usize));
+    return mapped;
 }
 
 fn checkedClauseLiterals(
@@ -982,6 +1399,116 @@ fn actionLessThan(
     right: solver_model.Action,
 ) bool {
     return @intFromEnum(left.package) < @intFromEnum(right.package);
+}
+
+/// The canonical problem order the libsolv oracle collapses its list with.
+fn problemLessThan(
+    _: void,
+    left: solver_model.Problem,
+    right: solver_model.Problem,
+) bool {
+    if (@intFromEnum(left.kind) != @intFromEnum(right.kind)) {
+        return @intFromEnum(left.kind) < @intFromEnum(right.kind);
+    }
+    const left_package = optionalIdValue(left.package);
+    const right_package = optionalIdValue(right.package);
+    if (left_package != right_package) return left_package < right_package;
+    const left_related = optionalIdValue(left.related_package);
+    const right_related = optionalIdValue(right.related_package);
+    if (left_related != right_related) return left_related < right_related;
+    const capability_order = optionalRelationOrder(
+        left.capability,
+        right.capability,
+    );
+    if (capability_order != .eq) return capability_order == .lt;
+    const left_job = optionalJobValue(left.job);
+    const right_job = optionalJobValue(right.job);
+    return left_job < right_job;
+}
+
+fn sameProblem(
+    left: solver_model.Problem,
+    right: solver_model.Problem,
+) bool {
+    if (left.kind != right.kind or
+        left.package != right.package or
+        left.related_package != right.related_package or
+        left.job != right.job)
+    {
+        return false;
+    }
+    return optionalRelationOrder(left.capability, right.capability) == .eq;
+}
+
+fn optionalIdValue(package_id: ?solver_model.PackageId) u32 {
+    return if (package_id) |value|
+        @intFromEnum(value)
+    else
+        std.math.maxInt(u32);
+}
+
+fn optionalJobValue(job_id: ?solver_model.JobId) u32 {
+    return if (job_id) |value|
+        @intFromEnum(value)
+    else
+        std.math.maxInt(u32);
+}
+
+fn optionalRelationOrder(
+    left: ?metadata.Relation,
+    right: ?metadata.Relation,
+) std.math.Order {
+    if (left == null or right == null) {
+        if (left == null and right == null) return .eq;
+        return if (left == null) .lt else .gt;
+    }
+    return relationOrder(left.?, right.?);
+}
+
+fn relationOrder(
+    left: metadata.Relation,
+    right: metadata.Relation,
+) std.math.Order {
+    var order = std.mem.order(u8, left.name, right.name);
+    if (order != .eq) return order;
+    order = std.math.order(
+        @intFromEnum(left.comparison),
+        @intFromEnum(right.comparison),
+    );
+    if (order != .eq) return order;
+    order = optionalU32Order(left.epoch, right.epoch);
+    if (order != .eq) return order;
+    order = optionalStringOrder(left.version, right.version);
+    if (order != .eq) return order;
+    order = optionalStringOrder(left.release, right.release);
+    if (order != .eq) return order;
+    order = optionalStringOrder(left.flags, right.flags);
+    if (order != .eq) return order;
+    order = std.math.order(
+        @intFromBool(left.pre),
+        @intFromBool(right.pre),
+    );
+    if (order != .eq) return order;
+    return std.math.order(left.sense, right.sense);
+}
+
+fn optionalU32Order(left: ?u32, right: ?u32) std.math.Order {
+    if (left == null or right == null) {
+        if (left == null and right == null) return .eq;
+        return if (left == null) .lt else .gt;
+    }
+    return std.math.order(left.?, right.?);
+}
+
+fn optionalStringOrder(
+    left: ?[]const u8,
+    right: ?[]const u8,
+) std.math.Order {
+    if (left == null or right == null) {
+        if (left == null and right == null) return .eq;
+        return if (left == null) .lt else .gt;
+    }
+    return std.mem.order(u8, left.?, right.?);
 }
 
 test "materializer rejects a model with the wrong package count" {
