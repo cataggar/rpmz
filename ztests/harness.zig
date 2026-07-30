@@ -364,14 +364,11 @@ pub const Harness = struct {
     }
 };
 
-/// Skips rather than fails when the build tree, the repository seed, or root
-/// privilege is absent, so the step stays runnable on a host that has not
-/// produced the RPM fixtures.
+/// `zig build ztest` runs an actionable preflight before the test binary. If
+/// the harness is invoked directly, propagate precondition errors instead of
+/// turning the whole suite into an all-skipped success.
 pub fn open(allocator: std.mem.Allocator) !Harness {
-    return Harness.init(allocator) catch |err| switch (err) {
-        Error.MissingBuildTree, Error.MissingRepoSeed, Error.NotRoot => error.SkipZigTest,
-        else => err,
-    };
+    return Harness.init(allocator);
 }
 
 test "the harness reaches the repository seed it was pointed at" {
