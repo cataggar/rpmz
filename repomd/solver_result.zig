@@ -312,7 +312,7 @@ pub fn deriveUnsatProblems(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
 ) DeriveProblemsError!OwnedProblems {
-    return deriveEnumeratedProblems(allocator, formula, false);
+    return deriveEnumeratedProblems(allocator, formula, false, true);
 }
 
 /// Derive every canonical problem and attribute package-origin failures to
@@ -321,13 +321,28 @@ pub fn deriveUnsatProblemsWithCoreJobs(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
 ) DeriveProblemsError!OwnedProblems {
-    return deriveEnumeratedProblems(allocator, formula, true);
+    return deriveEnumeratedProblems(allocator, formula, true, true);
+}
+
+/// Derive every problem in core *discovery* order instead of collapsing to the
+/// canonical multiset. libsolv reports its problem list in the reverse of the
+/// order it discovers the cores, so the failure-path diagnostics renderer
+/// reverses this list to reproduce libsolv's byte-for-byte report order.
+/// Package-origin failures are attributed to their own core job, matching
+/// `deriveUnsatProblemsWithCoreJobs`; only the ordering and the multiset
+/// collapse differ.
+pub fn deriveUnsatProblemsOrdered(
+    allocator: std.mem.Allocator,
+    formula: *const solver_rules.OwnedFormula,
+) DeriveProblemsError!OwnedProblems {
+    return deriveEnumeratedProblems(allocator, formula, true, false);
 }
 
 fn deriveEnumeratedProblems(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
     attribute_core_jobs: bool,
+    canonicalize: bool,
 ) DeriveProblemsError!OwnedProblems {
     var cores = CoreProblemList.init(allocator);
     defer cores.deinit();
@@ -351,7 +366,7 @@ fn deriveEnumeratedProblems(
 
     return .{
         .arena_state = arena_state,
-        .problems = canonicalizeProblems(problems),
+        .problems = if (canonicalize) canonicalizeProblems(problems) else problems,
     };
 }
 

@@ -692,6 +692,33 @@ TDNFRepoMdNativeSolverLiveSolveRelease(
     );
 
 /*
+ * Number of native solver-failure diagnostics retained by a handle produced
+ * by TDNFRepoMdNativeSolverLiveSolve with nRefuteUnsat set. The problems are
+ * ordered exactly as they must be reported (matching libsolv's report order).
+ */
+uint32_t
+TDNFRepoMdNativeSolverRefutedProblemCount(
+    void *pHandle,
+    uint32_t *pdwCount
+    );
+
+/*
+ * Fetch one retained native solver-failure diagnostic and decide whether it is
+ * reported under dwSkipMask (a TDNF_SKIPPROBLEM_TYPE bitmask). The native path
+ * folds SkipBasedOnType and check_for_providers filtering in here, so *pdwReported
+ * is set to 1 only for problems the caller should print. *ppszMessage points into
+ * the handle and stays valid until TDNFRepoMdNativeSolverLiveSolveRelease.
+ */
+uint32_t
+TDNFRepoMdNativeSolverRefutedProblem(
+    void *pHandle,
+    uint32_t dwIndex,
+    uint32_t dwSkipMask,
+    uint32_t *pdwReported,
+    const char **ppszMessage
+    );
+
+/*
  * Run the native metadata-backed implementation of repoquery-style
  * selectors and field population. `pRepoqueryArgs` uses the public
  * TDNF_REPOQUERY_ARGS layout from tdnftypes.h.

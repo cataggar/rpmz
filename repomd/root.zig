@@ -37,6 +37,7 @@ pub const solver_result_c = @import("solver_result_c.zig");
 pub const solver_legacy_result = @import("solver_legacy_result.zig");
 pub const solver_rules = @import("solver_rules.zig");
 pub const solver_search = @import("solver_search.zig");
+pub const solver_diag = @import("solver_diag.zig");
 
 const c_header = if (builtin.is_test) @cImport({
     @cInclude("tdnfrepomd.h");
@@ -192,6 +193,10 @@ pub const RefutedSolve = struct {
     refutation: solver_native.OwnedProjectedRefutation,
     job_origins: []const ?u32,
     outcome: solver_model.Outcome,
+    /// The failure diagnostics rendered from `refutation.ordered`, cached on
+    /// first access. Rendering is deferred so it only runs (and only allocates)
+    /// when the report path actually asks for the strings.
+    rendered: ?solver_diag.OwnedRenderedProblems = null,
 
     pub fn init(
         prepared: solver_live.Prepared,
@@ -211,6 +216,7 @@ pub const RefutedSolve = struct {
     }
 
     pub fn deinit(self: *RefutedSolve) void {
+        if (self.rendered) |*rendered| rendered.deinit();
         self.refutation.deinit();
         self.prepared.deinit();
         self.* = undefined;
@@ -242,6 +248,221 @@ pub export fn TDNFRepoMdNativeSolverLiveSolveRelease(
     const retained: *RetainedSolve = @ptrCast(@alignCast(raw));
     retained.deinit();
     std.heap.c_allocator.destroy(retained);
+}
+
+fn handleToRefuted(handle: ?*anyopaque) ?*RefutedSolve {
+    const raw = handle orelse return null;
+    const retained: *RetainedSolve = @ptrCast(@alignCast(raw));
+    return switch (retained.*) {
+        .refuted => |*value| value,
+        else => null,
+    };
+}
+
+/// Render the refute's problems on first access and cache them on the handle.
+/// libsolv reports its problem list in the reverse of discovery order, which
+/// `solver_diag.renderProblems` reproduces from `refutation.ordered`.
+fn refutedEnsureRendered(refuted: *RefutedSolve) solver_diag.RenderError!*const solver_diag.OwnedRenderedProblems {
+    if (refuted.rendered == null) {
+        refuted.rendered = try solver_diag.renderProblems(
+            std.heap.c_allocator,
+            refuted.refutation.ordered.problems,
+            refuted.prepared.universe,
+            refuted.prepared.hidden,
+        );
+    }
+    return &refuted.rendered.?;
+}
+
+fn refutedRenderError(err: solver_diag.RenderError) u32 {
+    switch (err) {
+        error.OutOfMemory => {
+            setError("out of memory rendering solver diagnostics", .{});
+            return c.ERROR_TDNF_OUT_OF_MEMORY;
+        },
+        error.InvalidInput, error.UnsupportedProblem => {
+            // No silent fallback: a problem the native renderer cannot turn
+            // into libsolv's text is a hard failure, not a reason to defer to
+            // libsolv.
+            setError("unable to render native solver diagnostics", .{});
+            return c.ERROR_TDNF_SOLV_FAILED;
+        },
+    }
+}
+
+/// Number of native solver-diagnostic problems retained by a refute solve.
+///
+/// The handle must have been produced by `TDNFRepoMdNativeSolverLiveSolve` with
+/// `nRefuteUnsat` set. Problems are ordered exactly as they must be reported.
+pub export fn TDNFRepoMdNativeSolverRefutedProblemCount(
+    handle: ?*anyopaque,
+    out_count: ?*u32,
+) u32 {
+    clearError();
+    const count_out = out_count orelse {
+        setError("null refuted problem count output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    count_out.* = 0;
+    const refuted = handleToRefuted(handle) orelse {
+        setError("handle does not retain refuted diagnostics", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    const rendered = refutedEnsureRendered(refuted) catch |err| return refutedRenderError(err);
+    count_out.* = std.math.cast(u32, rendered.items.len) orelse {
+        setError("refuted problem count overflow", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    return 0;
+}
+
+// TDNF_SKIPPROBLEM_TYPE bits from include/tdnftypes.h. Kept local because that
+// header is not part of the tdnfrepomd.h cImport surface.
+const skipproblem_conflicts: u32 = 0x01;
+const skipproblem_obsoletes: u32 = 0x02;
+const skipproblem_disabled: u32 = 0x04;
+const skipproblem_broken: u32 = 0x08;
+
+/// Reproduce solv/tdnfpackage.c's SkipBasedOnType over a rendered problem's
+/// skip class. --skipconflicts drops conflicts, --skipobsoletes drops
+/// obsoletes, --skip-broken drops every package rule (every rendered class),
+/// and --skipdisabled drops a not-installable problem whose solvable libsolv
+/// had disabled.
+fn refutedProblemSkippedByType(skip_class: solver_diag.SkipClass, skip_mask: u32) bool {
+    if (skip_mask == 0) return false;
+    if ((skip_mask & skipproblem_conflicts) != 0 and skip_class == .conflict) return true;
+    if ((skip_mask & skipproblem_obsoletes) != 0 and skip_class == .obsoletes) return true;
+    if ((skip_mask & skipproblem_broken) != 0) {
+        switch (skip_class) {
+            .conflict, .obsoletes, .requires, .nothing_provides, .not_installable, .not_installable_disabled => return true,
+            .other => {},
+        }
+    }
+    if ((skip_mask & skipproblem_disabled) != 0 and skip_class == .not_installable_disabled) return true;
+    return false;
+}
+
+/// Reproduce libsolv's `SolvFindAvailablePkgByName` availability check: does the
+/// retained refute universe hold an available (that is, not-installed) package
+/// with the given name? The query runs against `prepared.universe`, the full
+/// package set the refute was built from — the same repositories and rpmdb the
+/// libsolv sack held.
+fn refutedAvailableByName(universe: *const solver_model.Universe, name: []const u8) bool {
+    for (universe.packages) |pkg| {
+        if (pkg.installed != null) continue;
+        if (std.mem.eql(u8, pkg.source.nevra.name, name)) return true;
+    }
+    return false;
+}
+
+/// Parse the required package name out of a rendered "requires" message exactly
+/// as check_for_providers did: the text between " requires " and the next ',',
+/// with every space removed (so "foo < 0:9" becomes "foo<0:9", matching no
+/// package name). Returns null only when the markers are absent, which never
+/// happens for a native requires-with-providers message.
+fn refutedRequiredName(message: []const u8, buf: []u8) ?[]const u8 {
+    const marker = " requires ";
+    const start = std.mem.indexOf(u8, message, marker) orelse return null;
+    const rest = message[start + marker.len ..];
+    const comma = std.mem.indexOfScalar(u8, rest, ',') orelse return null;
+    var n: usize = 0;
+    for (rest[0..comma]) |ch| {
+        if (ch == ' ') continue;
+        if (n >= buf.len) break;
+        buf[n] = ch;
+        n += 1;
+    }
+    return buf[0..n];
+}
+
+/// Reproduce SolvReportProblems' stateful per-problem reporting decision for the
+/// problem at `target`. SkipBasedOnType filters first; then, for a
+/// SOLVER_RULE_PKG_REQUIRES survivor under a non-empty mask, check_for_providers
+/// suppresses it when the required name deduplicates against the previous
+/// reported-requires name or still has an available candidate. The dedupe state
+/// is rebuilt by replaying problems 0..=target, so the decision matches
+/// libsolv's single stateful pass without the C caller holding any state.
+fn refutedProblemReported(
+    items: []const solver_diag.RenderedProblem,
+    universe: *const solver_model.Universe,
+    skip_mask: u32,
+    target: u32,
+) bool {
+    // prev name starts empty, matching check_for_providers' {0} buffer.
+    var prev_buf: [256]u8 = undefined;
+    var prev_len: usize = 0;
+    var i: usize = 0;
+    while (i <= target) : (i += 1) {
+        const item = items[i];
+        if (refutedProblemSkippedByType(item.skip_class, skip_mask)) {
+            if (i == target) return false;
+            continue;
+        }
+        if (skip_mask != 0 and item.skip_class == .requires) {
+            var name_buf: [256]u8 = undefined;
+            const name = refutedRequiredName(item.message, &name_buf) orelse {
+                // Unreachable for a native requires message; libsolv's parse
+                // failure branch printed the problem, so report it.
+                if (i == target) return true;
+                continue;
+            };
+            if (std.mem.eql(u8, name, prev_buf[0..prev_len])) {
+                if (i == target) return false;
+                continue;
+            }
+            @memcpy(prev_buf[0..name.len], name);
+            prev_len = name.len;
+            const reported = !refutedAvailableByName(universe, name);
+            if (i == target) return reported;
+            continue;
+        }
+        if (i == target) return true;
+    }
+    return true;
+}
+
+/// Fetch one rendered native solver-diagnostic problem and decide whether it is
+/// reported under the active skip mask.
+///
+/// This folds SolvReportProblems' per-problem filtering into the native path:
+/// SkipBasedOnType (via the problem's skip class) and, for a
+/// SOLVER_RULE_PKG_REQUIRES survivor under a non-empty mask, check_for_providers
+/// (dedupe plus availability lookup). The C caller loops indices and prints the
+/// survivors, keeping the raw libsolv rule taxonomy out of client code.
+///
+/// The returned message points into the handle and is valid until the handle is
+/// released. out_reported is set to 1 when the problem must be printed.
+pub export fn TDNFRepoMdNativeSolverRefutedProblem(
+    handle: ?*anyopaque,
+    index_arg: u32,
+    skip_mask: u32,
+    out_reported: ?*u32,
+    out_message: ?*?[*:0]const u8,
+) u32 {
+    clearError();
+    const message_out = out_message orelse {
+        setError("null refuted problem message output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    message_out.* = null;
+    const reported_out = out_reported orelse {
+        setError("null refuted problem reported output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    reported_out.* = 0;
+    const refuted = handleToRefuted(handle) orelse {
+        setError("handle does not retain refuted diagnostics", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    const rendered = refutedEnsureRendered(refuted) catch |err| return refutedRenderError(err);
+    const items = rendered.items;
+    if (index_arg >= items.len) {
+        setError("refuted problem index out of range", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    message_out.* = items[index_arg].message.ptr;
+    reported_out.* = if (refutedProblemReported(items, refuted.prepared.universe, skip_mask, index_arg)) 1 else 0;
+    return 0;
 }
 
 fn nativeSolverLiveSolve(
