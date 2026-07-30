@@ -6,9 +6,15 @@
 
 comptime {
     _ = @import("harness.zig");
+    _ = @import("assumeno_test.zig");
     _ = @import("autoremove_test.zig");
+    _ = @import("clean_test.zig");
+    _ = @import("conflict_test.zig");
     _ = @import("downgrade_test.zig");
     _ = @import("erase_test.zig");
     _ = @import("install_test.zig");
+    _ = @import("mark_test.zig");
     _ = @import("multiinstall_test.zig");
+    _ = @import("update_test.zig");
+    _ = @import("urls_test.zig");
 }
