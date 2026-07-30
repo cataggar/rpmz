@@ -419,6 +419,9 @@ TDNFCountCommand(
 {
     uint32_t dwError = 0;
     uint32_t dwCount = 0;
+    uint32_t dwRepoCount = 0;
+    PTDNF_PKG_INFO pPkgInfo = NULL;
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
 
     if(!pTdnf || !pTdnf->pSack || !pdwCount)
     {
@@ -429,11 +432,27 @@ TDNFCountCommand(
     dwError = TDNFRefresh(pTdnf);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvCountPackages(pTdnf->pSack, &dwCount);
+    dwError = TDNFNativeQueryBuildRepoInputs(pTdnf, &pRepos, &dwRepoCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = TDNFRepoMdNativeListConfig(
+                  pRepos,
+                  dwRepoCount,
+                  pTdnf->pRpmConfig,
+                  SCOPE_ALL,
+                  NULL,
+                  DETAIL_LIST,
+                  &pPkgInfo,
+                  &dwCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
     *pdwCount = dwCount;
 cleanup:
+    TDNFNativeQueryFreeRepoInputs(pRepos, dwRepoCount);
+    if(pPkgInfo)
+    {
+        TDNFFreePackageInfoArray(pPkgInfo, dwCount);
+    }
     return dwError;
 error:
     if(pdwCount)
@@ -739,6 +758,7 @@ TDNFAddCmdLinePackages(
     char *pszCopyOfPkgName = NULL;
     char* pszRPMPath = NULL;
     Id id;
+    uint32_t dwSolvableId = 0;
     int nTraceStart;
 
     if(!pTdnf || !pnUnresolved)
@@ -824,10 +844,15 @@ TDNFAddCmdLinePackages(
                 TDNF_SAFE_FREE_MEMORY(pszCopyOfPkgName);
            }
         }
-        dwError = SolvAddRpmNative(pTdnf->pSolvCmdLineRepo, pszRPMPath,
+        dwSolvableId = 0;
+        dwError = TDNFRepoMdNativeAddRpm(
+                      pTdnf->pSolvCmdLineRepo,
+                      pszRPMPath,
                       REPO_REUSE_REPODATA|REPO_NO_INTERNALIZE|
-                      RPM_ADD_WITH_HDRID|RPM_ADD_WITH_SHA256SUM, &id);
+                      RPM_ADD_WITH_HDRID|RPM_ADD_WITH_SHA256SUM,
+                      &dwSolvableId);
         BAIL_ON_TDNF_ERROR(dwError);
+        id = (Id)dwSolvableId;
         TDNF_TRANSACTION_PLAN_CONSIDER_NEW_SOLVABLE(pSack->pPool, id);
         nTraceStart = pQueueGoal->count;
         queue_push(pQueueGoal, id);
@@ -1037,18 +1062,18 @@ TDNFRepoSync(
     int ret;
     PTDNF_PKG_INFO pPkgInfos = NULL;
     PTDNF_PKG_INFO pPkgInfo = NULL;
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
     PTDNF_REPO_DATA pRepo = NULL;
     char *pszRepoDir = NULL;
-    PSolvQuery pQuery = NULL;
-    PSolvPackageList pPkgList = NULL;
     char *pszRootPath = NULL;
     char *pszUrl = NULL;
     char *pszDir = NULL;
     char *pszFilePath = NULL;
     char *pszKeepFile = NULL;
     tdnf_rpm_file *pRpmFile = NULL;
-    uint32_t dwCount = 0;
     uint32_t dwRepoCount = 0;
+    uint32_t dwNativeRepoCount = 0;
+    uint32_t dwPkgInfoCount = 0;
 
     if(!pTdnf || !pTdnf->pSack || !pReposyncArgs)
     {
@@ -1094,19 +1119,21 @@ TDNFRepoSync(
 
     /* generate list of packages, result will be
        in pPkgInfos */
-    dwError = SolvCreateQuery(pTdnf->pSack, &pQuery);
+    dwError = TDNFNativeQueryBuildRepoInputs(
+                  pTdnf,
+                  &pRepos,
+                  &dwNativeRepoCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = TDNFApplyScopeFilter(pQuery, SCOPE_ALL);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvApplyListQuery(pQuery);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvGetQueryResult(pQuery, &pPkgList);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFPopulatePkgInfoForRepoSync(pTdnf->pSack, pPkgList, &pPkgInfos);
+    dwError = TDNFRepoMdNativeListConfig(
+                  pRepos,
+                  dwNativeRepoCount,
+                  pTdnf->pRpmConfig,
+                  SCOPE_ALL,
+                  NULL,
+                  DETAIL_LOCATION,
+                  &pPkgInfos,
+                  &dwPkgInfoCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
     if (pReposyncArgs->pszDownloadPath == NULL)
@@ -1123,7 +1150,7 @@ TDNFRepoSync(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    if (pReposyncArgs->nNewestOnly)
+    if (pReposyncArgs->nNewestOnly && pPkgInfos)
     {
         TDNFPkgInfoFilterNewest(pTdnf->pSack, pPkgInfos);
     }
@@ -1131,7 +1158,6 @@ TDNFRepoSync(
     /* iterate through all packages */
     for (pPkgInfo = pPkgInfos; pPkgInfo; pPkgInfo = pPkgInfo->pNext)
     {
-        dwCount++;
         if (strcmp(pPkgInfo->pszRepoName, SYSTEM_REPO_NAME) == 0)
         {
             continue;
@@ -1336,21 +1362,14 @@ TDNFRepoSync(
     }
 
 cleanup:
-    if(pQuery)
-    {
-        SolvFreeQuery(pQuery);
-    }
-    if(pPkgList)
-    {
-        SolvFreePackageList(pPkgList);
-    }
+    TDNFNativeQueryFreeRepoInputs(pRepos, dwNativeRepoCount);
     tdnf_rpm_file_close(pRpmFile);
     TDNF_SAFE_FREE_MEMORY(pszDir);
     TDNF_SAFE_FREE_MEMORY(pszRepoDir);
     TDNF_SAFE_FREE_MEMORY(pszRootPath);
     TDNF_SAFE_FREE_MEMORY(pszKeepFile);
     TDNF_SAFE_FREE_MEMORY(pszFilePath);
-    TDNFFreePackageInfoArray(pPkgInfos, dwCount);
+    TDNFFreePackageInfoArray(pPkgInfos, dwPkgInfoCount);
     return dwError;
 error:
     if(dwError == ERROR_TDNF_NO_MATCH)
@@ -2372,11 +2391,11 @@ TDNFMark(
     )
 {
     uint32_t dwError = 0;
-    PSolvQuery pQuery = NULL;
-    PSolvPackageList pPkgList = NULL;
+    uint32_t dwCount = 0;
+    uint32_t dwIndex = 0;
+    PTDNF_PKG_INFO pPkgInfos = NULL;
     struct history_ctx *ctx = NULL;
     char *pszCmdLine = NULL;
-    char *pszName = NULL;
 
     if(!pTdnf || !pTdnf->pSack || !ppszPackageNameSpecs)
     {
@@ -2384,22 +2403,18 @@ TDNFMark(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvCreateQuery(pTdnf->pSack, &pQuery);
+    dwError = TDNFRepoMdNativeListConfig(
+                  NULL,
+                  0,
+                  pTdnf->pRpmConfig,
+                  SCOPE_INSTALLED,
+                  ppszPackageNameSpecs,
+                  DETAIL_LIST,
+                  &pPkgInfos,
+                  &dwCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = TDNFApplyScopeFilter(pQuery, SCOPE_INSTALLED);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvApplyPackageFilter(pQuery, ppszPackageNameSpecs);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvApplyListQuery(pQuery);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = SolvGetQueryResult(pQuery, &pPkgList);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    if (pPkgList->queuePackages.count > 0)
+    if (dwCount > 0)
     {
         dwError = TDNFJoinArrayToString(&(pTdnf->pArgs->ppszArgv[1]),
                                         " ",
@@ -2413,24 +2428,20 @@ TDNFMark(
         history_add_transaction(ctx, pszCmdLine);
         BAIL_ON_TDNF_ERROR(dwError);
 
-        for (int i = 0; i < pPkgList->queuePackages.count; i++)
+        for (dwIndex = 0; dwIndex < dwCount; dwIndex++)
         {
             int rc;
 
-            dwError = SolvGetPkgNameFromId(pTdnf->pSack,
-                                           pPkgList->queuePackages.elements[i],
-                                           &pszName);
-            BAIL_ON_TDNF_ERROR(dwError);
+            pr_info("marking %s as %sinstalled\n",
+                    pPkgInfos[dwIndex].pszName,
+                    dwValue ? "auto" : "user");
 
-            pr_info("marking %s as %sinstalled\n", pszName, dwValue ? "auto" : "user");
-
-            rc = history_set_auto_flag(ctx, pszName, dwValue);
+            rc = history_set_auto_flag(ctx, pPkgInfos[dwIndex].pszName, dwValue);
             if (rc != 0)
             {
                 dwError = ERROR_TDNF_HISTORY_ERROR;
                 BAIL_ON_TDNF_ERROR(dwError);
             }
-            TDNF_SAFE_FREE_MEMORY(pszName);
         }
     }
     else
@@ -2441,15 +2452,10 @@ TDNFMark(
 
 cleanup:
     TDNF_SAFE_FREE_MEMORY(pszCmdLine);
-    TDNF_SAFE_FREE_MEMORY(pszName);
     destroy_history_ctx(ctx);
-    if(pQuery)
+    if(pPkgInfos)
     {
-        SolvFreeQuery(pQuery);
-    }
-    if(pPkgList)
-    {
-        SolvFreePackageList(pPkgList);
+        TDNFFreePackageInfoArray(pPkgInfos, dwCount);
     }
     return dwError;
 error:
