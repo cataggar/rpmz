@@ -17,6 +17,7 @@ pub const Input = struct {
     accepted_weak: []const solver_policy.AcceptedWeak = &.{},
     eviction_packages: []const solver_model.PackageId = &.{},
     skipped_jobs: []const solver_model.JobId = &.{},
+    problems: []const solver_model.Problem = &.{},
 };
 
 pub const OwnedResult = struct {
@@ -267,12 +268,21 @@ pub fn materialize(
         solver_model.JobId,
         input.skipped_jobs,
     );
+    const owned_problems = try arena.dupe(
+        solver_model.Problem,
+        input.problems,
+    );
+    for (owned_problems) |*problem| {
+        if (problem.capability) |relation| {
+            problem.capability = try cloneRelation(arena, relation);
+        }
+    }
     return .{
         .arena_state = arena_state,
         .selected = owned_selected,
         .outcome = .{
             .actions = owned_actions,
-            .problems = &.{},
+            .problems = owned_problems,
             .skipped_jobs = owned_skipped,
         },
     };
@@ -287,6 +297,77 @@ pub fn deriveUnsatProblems(
     allocator: std.mem.Allocator,
     formula: *const solver_rules.OwnedFormula,
 ) DeriveProblemsError!OwnedProblems {
+    const problem = try deriveCoreProblem(allocator, formula);
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const problems = try arena.alloc(solver_model.Problem, 1);
+    problems[0] = problem;
+    if (problem.capability) |relation| {
+        problems[0].capability = try cloneRelation(arena, relation);
+    }
+    return .{
+        .arena_state = arena_state,
+        .problems = problems,
+    };
+}
+
+/// Explain every job a skip-broken solve dropped.
+///
+/// Each job is diagnosed against its own isolated formula, because the full
+/// formula holds one core per broken job and a core can only be named when it
+/// stands alone. Diagnosis is best effort: a job whose core does not reduce to
+/// a single canonical problem is simply left unexplained rather than failing
+/// the solve, which is the same latitude libsolv takes.
+pub fn deriveSkippedJobProblems(
+    allocator: std.mem.Allocator,
+    prepared: *const solver_policy.Prepared,
+    skipped_jobs: []const solver_model.JobId,
+) error{OutOfMemory}!OwnedProblems {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var problems = std.array_list.Managed(solver_model.Problem).init(arena);
+    for (skipped_jobs) |job| {
+        var isolated = solver_policy.isolateJob(
+            prepared,
+            allocator,
+            job,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+        defer isolated.deinit();
+
+        var problem = deriveCoreProblem(
+            allocator,
+            &isolated.formula,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+        problem.job = job;
+        if (problem.capability) |relation| {
+            problem.capability = try cloneRelation(arena, relation);
+        }
+        try problems.append(problem);
+    }
+
+    return .{
+        .arena_state = arena_state,
+        .problems = try problems.toOwnedSlice(),
+    };
+}
+
+/// Reduce one independent unsatisfiable core to one canonical problem.
+///
+/// The returned problem borrows its capability strings from `formula`.
+fn deriveCoreProblem(
+    allocator: std.mem.Allocator,
+    formula: *const solver_rules.OwnedFormula,
+) DeriveProblemsError!solver_model.Problem {
     var refutation =
         (try solver_search.refute(allocator, formula, &.{})) orelse
             return error.Satisfiable;
@@ -378,25 +459,12 @@ pub fn deriveUnsatProblems(
     residual_result.deinit();
     if (has_additional_core) return error.UnsupportedProblem;
 
-    const problem = if (causal_origin) |origin|
+    return if (causal_origin) |origin|
         try problemForOrigin(formula, origin)
     else if (core_job_count == 1)
         try noCandidateProblem(formula, only_core_job.?)
     else
-        return error.UnsupportedProblem;
-
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const problems = try arena.alloc(solver_model.Problem, 1);
-    problems[0] = problem;
-    if (problem.capability) |relation| {
-        problems[0].capability = try cloneRelation(arena, relation);
-    }
-    return .{
-        .arena_state = arena_state,
-        .problems = problems,
-    };
+        error.UnsupportedProblem;
 }
 
 fn solveIncludedClauses(

@@ -165,10 +165,18 @@ fn solveOrdinaryProjected(
             return error.ProtectedPackage;
         }
 
+        var problems = try solver_result.deriveSkippedJobProblems(
+            allocator,
+            &prepared,
+            skipped.skipped_jobs,
+        );
+        defer problems.deinit();
+
         var result = try solver_result.materialize(allocator, .{
             .prepared = &prepared,
             .model = model,
             .skipped_jobs = skipped.skipped_jobs,
+            .problems = problems.problems,
         });
         errdefer result.deinit();
         return .{
@@ -479,6 +487,150 @@ test "native solve reports an unsatisfiable exact job conflict" {
             } },
             testPolicy(),
         ),
+    );
+}
+
+test "skip broken solve explains every job it drops" {
+    const metadata = @import("model.zig");
+    const relations = [_]metadata.Relation{.{ .name = "missing-capability" }};
+    var broken = testPackage("broken");
+    broken.requires = .{ .start = 0, .len = 1 };
+    var packages = [_]metadata.Package{
+        testPackage("installable"),
+        broken,
+    };
+    const inputs = [_]solver_model.RepositoryInput{.{
+        .id = "repo",
+        .model = &.{ .packages = &packages, .relations = @constCast(&relations) },
+    }};
+    var universe = try solver_model.Universe.init(
+        std.testing.allocator,
+        &inputs,
+    );
+    defer universe.deinit();
+
+    var policy = testPolicy();
+    policy.skip_broken = true;
+    var solved = try solve(
+        std.testing.allocator,
+        &universe,
+        .{ .jobs = &.{
+            .{
+                .action = .install,
+                .selection = .{ .package = @enumFromInt(0) },
+            },
+            .{
+                .action = .install,
+                .selection = .{ .package = @enumFromInt(1) },
+            },
+        } },
+        policy,
+    );
+    defer solved.deinit();
+
+    try std.testing.expectEqualSlices(
+        solver_model.JobId,
+        &.{@enumFromInt(1)},
+        solved.result.outcome.skipped_jobs,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        solved.result.outcome.problems.len,
+    );
+    // The same diagnosis libsolv gives: "nothing provides missing-capability
+    // needed by broken", attributed to the job that was dropped.
+    const problem = solved.result.outcome.problems[0];
+    try std.testing.expectEqual(
+        solver_model.ProblemKind.unsatisfied_requirement,
+        problem.kind,
+    );
+    try std.testing.expectEqual(
+        @as(?solver_model.PackageId, @enumFromInt(1)),
+        problem.package,
+    );
+    try std.testing.expectEqual(
+        @as(?solver_model.JobId, @enumFromInt(1)),
+        problem.job,
+    );
+    try std.testing.expectEqualStrings(
+        "missing-capability",
+        problem.capability.?.name,
+    );
+}
+
+test "skip broken solve explains each dropped job independently" {
+    const metadata = @import("model.zig");
+    const relations = [_]metadata.Relation{
+        .{ .name = "first-missing" },
+        .{ .name = "second-missing" },
+    };
+    var first_broken = testPackage("first-broken");
+    first_broken.requires = .{ .start = 0, .len = 1 };
+    var second_broken = testPackage("second-broken");
+    second_broken.requires = .{ .start = 1, .len = 1 };
+    var packages = [_]metadata.Package{
+        testPackage("installable"),
+        first_broken,
+        second_broken,
+    };
+    const inputs = [_]solver_model.RepositoryInput{.{
+        .id = "repo",
+        .model = &.{
+            .packages = &packages,
+            .relations = @constCast(&relations),
+        },
+    }};
+    var universe = try solver_model.Universe.init(
+        std.testing.allocator,
+        &inputs,
+    );
+    defer universe.deinit();
+
+    var policy = testPolicy();
+    policy.skip_broken = true;
+    var solved = try solve(
+        std.testing.allocator,
+        &universe,
+        .{ .jobs = &.{
+            .{
+                .action = .install,
+                .selection = .{ .package = @enumFromInt(0) },
+            },
+            .{
+                .action = .install,
+                .selection = .{ .package = @enumFromInt(1) },
+            },
+            .{
+                .action = .install,
+                .selection = .{ .package = @enumFromInt(2) },
+            },
+        } },
+        policy,
+    );
+    defer solved.deinit();
+
+    try std.testing.expectEqualSlices(
+        solver_model.JobId,
+        &.{ @enumFromInt(1), @enumFromInt(2) },
+        solved.result.outcome.skipped_jobs,
+    );
+    const problems = solved.result.outcome.problems;
+    try std.testing.expectEqual(@as(usize, 2), problems.len);
+    try std.testing.expectEqualStrings(
+        "first-missing",
+        problems[0].capability.?.name,
+    );
+    try std.testing.expectEqual(
+        @as(?solver_model.JobId, @enumFromInt(1)),
+        problems[0].job,
+    );
+    try std.testing.expectEqualStrings(
+        "second-missing",
+        problems[1].capability.?.name,
+    );
+    try std.testing.expectEqual(
+        @as(?solver_model.JobId, @enumFromInt(2)),
+        problems[1].job,
     );
 }
 
