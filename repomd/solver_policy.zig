@@ -2248,6 +2248,63 @@ fn solveFiltered(
     };
 }
 
+/// The formula for one job with every other job's clauses dropped.
+///
+/// Skip-broken diagnosis needs this: the whole formula can hold several
+/// independent unsatisfiable cores at once, and a core can only be named when
+/// it is the only one. Isolating a job leaves exactly one.
+pub const OwnedJobFormula = struct {
+    allocator: std.mem.Allocator,
+    clauses: []solver_rules.Clause,
+    formula: solver_rules.OwnedFormula,
+
+    pub fn deinit(self: *OwnedJobFormula) void {
+        self.allocator.free(self.clauses);
+        self.* = undefined;
+    }
+};
+
+pub fn isolateJob(
+    prepared: *const Prepared,
+    allocator: std.mem.Allocator,
+    job: solver_model.JobId,
+) SkipBrokenError!OwnedJobFormula {
+    const job_index: usize = @intFromEnum(job);
+    if (job_index >= prepared.formula.jobs.len) return error.InvalidFormula;
+
+    var clauses = std.array_list.Managed(solver_rules.Clause).init(allocator);
+    errdefer clauses.deinit();
+    for (prepared.formula.clauses) |clause| {
+        if (clause.origin == .job) {
+            const origin_index: usize = @intFromEnum(clause.origin.job);
+            if (origin_index >= prepared.formula.jobs.len) {
+                return error.InvalidFormula;
+            }
+            if (origin_index != job_index) continue;
+        }
+        try clauses.append(clause);
+    }
+
+    const owned_clauses = try clauses.toOwnedSlice();
+    errdefer allocator.free(owned_clauses);
+    return .{
+        .allocator = allocator,
+        .clauses = owned_clauses,
+        .formula = .{
+            .allocator = allocator,
+            .universe = prepared.formula.universe,
+            .jobs = prepared.formula.jobs,
+            .architecture = prepared.formula.architecture,
+            .replacement_kind = prepared.formula.replacement_kind,
+            .clauses = owned_clauses,
+            .literals = prepared.formula.literals,
+            .weak_requests = prepared.formula.weak_requests,
+            .weak_candidates = prepared.formula.weak_candidates,
+            .package_states = prepared.formula.package_states,
+        },
+    };
+}
+
 fn isIntrinsicPackageRule(origin: solver_rules.RuleOrigin) bool {
     return switch (origin) {
         .not_installable,
