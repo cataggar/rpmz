@@ -75,17 +75,20 @@ pub const OwnedSolveResult = struct {
 
 pub const OwnedProjectedRefutation = struct {
     problems: solver_result.OwnedProblems,
+    ordered: solver_result.OwnedProblems,
     jobs: []const solver_model.Job,
     coordinated: ?solver_coordinator.OwnedSolve = null,
 
     pub fn deinit(self: *OwnedProjectedRefutation) void {
         self.problems.deinit();
+        self.ordered.deinit();
         if (self.coordinated) |*coordinated| coordinated.deinit();
         self.* = undefined;
     }
 
     pub fn takeProblems(self: *OwnedProjectedRefutation) solver_result.OwnedProblems {
         const problems = self.problems;
+        self.ordered.deinit();
         if (self.coordinated) |*coordinated| coordinated.deinit();
         self.* = undefined;
         return problems;
@@ -180,7 +183,7 @@ pub fn refuteProjectedWithEffectiveJobs(
             policy,
         );
         errdefer coordinated.deinit();
-        const problems = if (coordinated.problem) |problem|
+        var problems = if (coordinated.problem) |problem|
             try ownedPolicyProblem(allocator, problem)
         else switch (coordinated.weak_result.result) {
             .unsatisfiable => try solver_result.deriveUnsatProblemsWithCoreJobs(
@@ -189,8 +192,17 @@ pub fn refuteProjectedWithEffectiveJobs(
             ),
             .satisfiable => return error.Satisfiable,
         };
+        errdefer problems.deinit();
+        const ordered = if (coordinated.problem) |problem|
+            try ownedPolicyProblem(allocator, problem)
+        else
+            try solver_result.deriveUnsatProblemsOrdered(
+                allocator,
+                &coordinated.prepared.formula,
+            );
         return .{
             .problems = problems,
+            .ordered = ordered,
             .jobs = coordinated.jobs,
             .coordinated = coordinated,
         };
@@ -223,12 +235,18 @@ pub fn refuteProjectedWithEffectiveJobs(
         },
     );
     defer prepared.deinit();
-    const problems = try solver_result.deriveUnsatProblemsWithCoreJobs(
+    var problems = try solver_result.deriveUnsatProblemsWithCoreJobs(
+        allocator,
+        &prepared.formula,
+    );
+    errdefer problems.deinit();
+    const ordered = try solver_result.deriveUnsatProblemsOrdered(
         allocator,
         &prepared.formula,
     );
     return .{
         .problems = problems,
+        .ordered = ordered,
         .jobs = goal.jobs,
     };
 }

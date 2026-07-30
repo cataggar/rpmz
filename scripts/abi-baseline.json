@@ -12,7 +12,7 @@
     "tdnferror.h": "33fe98ee05b06f1bb9fc8eba28632d8ad64e5a5f912be2c2f6f3b27f96b87de1",
     "tdnfplugin.h": "5b3c65ab17bcd87a9e682f8af4ce75663214591729b68dec0ae22d5592de2752",
     "tdnfplugineventmap.h": "80fdeaaa13d3802e6095a85a27f9dca6b0b2fb7b2287d43a4a97edec1a0ea48b",
-    "tdnfrepomd.h": "4f05697cb4fad36bd99ea8140ca92f755f405d370b950439b2955a6da2cb7c49",
+    "tdnfrepomd.h": "81b8ab17f9585b3127326371abdc098e52016cbe2034413b58b5bd114108732e",
     "tdnfrpmconfig.h": "3902913a6d2b075d5ad65cc8fb559f7bbb1caee926c1d204b19419644ee8b91b",
     "tdnfrpmtrans.h": "3b91f47299d35169081a565d8556a6dbf04ab5056e50eb25c4c4b4df0472b9e3",
     "tdnftypes.h": "744d8d06215e6ca1d23380092f964029fa437d0654b6e1c22a91d812a7cd9e60"
@@ -248,6 +248,8 @@
       "TDNFRepoMdNativeSearchConfig",
       "TDNFRepoMdNativeSolverLiveSolve",
       "TDNFRepoMdNativeSolverLiveSolveRelease",
+      "TDNFRepoMdNativeSolverRefutedProblem",
+      "TDNFRepoMdNativeSolverRefutedProblemCount",
       "TDNFRepoMdNativeSolverResultFree",
       "TDNFRepoMdNativeTransactionLastError",
       "TDNFRepoMdNativeTransactionPlanFree",

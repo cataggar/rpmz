@@ -84,6 +84,18 @@ TDNFGoalBuildNativeSolverHiddenAvailable(
     uint32_t *pdwHiddenAvailableCount
 );
 
+static
+uint32_t
+TDNFReportProblemsNative(
+    PTDNF pTdnf,
+    const Queue *pQueueJobs,
+    int nAllowErasing,
+    int nAutoErase,
+    int nStampFlags,
+    int nStampedJobCount,
+    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
+);
+
 #define TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(_tdnf, _jobs, _allow_erasing, _auto_erase, _flags, _stamped_count, _prepare_only, _refute_unsat, _drop_protected, _native, _error) \
     do {                                                                 \
         uint32_t _saved_error = (_error);                                \
@@ -274,7 +286,9 @@ TDNFSolv(
         {
             dwError = TDNFGetSkipProblemOption(pTdnf, &dwSkipProblem);
             BAIL_ON_TDNF_ERROR(dwError);
-            dwError = SolvReportProblems(pTdnf->pSack, pSolv, dwSkipProblem);
+            dwError = TDNFReportProblemsNative(pTdnf, pQueueJobs, nAllowErasing,
+                                               nAutoErase, nFlags, nStampedJobCount,
+                                               dwSkipProblem);
             if(dwError)
             {
                 TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 1, 0, &pNativeSolve, dwError);
@@ -523,6 +537,91 @@ TDNFGoal(
 cleanup:
     TDNF_SAFE_FREE_STRINGARRAY(ppszExcludes);
     queue_free(&queueJobs);
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+static
+uint32_t
+TDNFReportProblemsNative(
+    PTDNF pTdnf,
+    const Queue *pQueueJobs,
+    int nAllowErasing,
+    int nAutoErase,
+    int nStampFlags,
+    int nStampedJobCount,
+    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwCount = 0;
+    uint32_t total_prblms = 0;
+    uint32_t i = 0;
+    void *pHandle = NULL;
+
+    if(!pTdnf || !pQueueJobs)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    /* Reproduce the request that libsolv found unsatisfiable and retain the
+       native solver's structured problems. There is no libsolv fallback: if
+       this cannot be rendered natively the error propagates. */
+    dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
+                                  nStampFlags, nStampedJobCount, 0 /*nReInstall*/,
+                                  NULL /*ppInfo*/, 0 /*nPrepareOnly*/,
+                                  1 /*nRefuteUnsat*/, 0 /*nDropProtected*/,
+                                  &pHandle);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    if(!pHandle)
+    {
+        pr_err("native-solver: unable to render solver diagnostics\n");
+        dwError = ERROR_TDNF_SOLV_FAILED;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFRepoMdNativeSolverRefutedProblemCount(pHandle, &dwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    if(dwCount == 0)
+    {
+        pr_err("native-solver: unable to render solver diagnostics\n");
+        dwError = ERROR_TDNF_SOLV_FAILED;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    /* Match SolvReportProblems: number only the survivors of skip filtering,
+       renumbering them contiguously from 1, and print the summary only when at
+       least one problem was reported. */
+    for(i = 0; i < dwCount; i++)
+    {
+        uint32_t nReported = 0;
+        const char *pszMessage = NULL;
+
+        dwError = TDNFRepoMdNativeSolverRefutedProblem(pHandle, i, dwSkipProblem,
+                                                       &nReported, &pszMessage);
+        BAIL_ON_TDNF_ERROR(dwError);
+        if(nReported && pszMessage)
+        {
+            pr_err("%u. %s\n", ++total_prblms, pszMessage);
+        }
+    }
+
+    if(total_prblms > 0)
+    {
+        dwError = ERROR_TDNF_SOLV_FAILED;
+        pr_err("Found %u problem(s) while resolving\n", total_prblms);
+    }
+
+cleanup:
+    if(pHandle)
+    {
+        TDNFRepoMdNativeSolverLiveSolveRelease(pHandle);
+    }
     return dwError;
 
 error:
