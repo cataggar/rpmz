@@ -988,6 +988,29 @@ TDNFRepoMdNativeFindNevraMatchesConfig(
     );
 
 uint32_t
+TDNFRepoMdNativePackageRefLinesConfig(
+    const TDNF_REPOMD_NATIVE_REPO_INPUT *pRepos,
+    uint32_t dwRepoCount,
+    const tdnf_rpm_config *pConfig,
+    int nScope,
+    const char *pszSpec,
+    char ***pppszLines,
+    uint32_t *pdwCount
+    );
+
+uint32_t
+TDNFRepoMdNativeBestPackageRefConfig(
+    const TDNF_REPOMD_NATIVE_REPO_INPUT *pRepos,
+    uint32_t dwRepoCount,
+    const tdnf_rpm_config *pConfig,
+    int nScope,
+    const char *pszSpec,
+    int nSourceOnly,
+    int nHighest,
+    char **ppszLine
+    );
+
+uint32_t
 TDNFRepoMdNativeUpdateInfoSummaryLinesConfig(
     const TDNF_REPOMD_NATIVE_REPO_INPUT *pRepos,
     uint32_t dwRepoCount,

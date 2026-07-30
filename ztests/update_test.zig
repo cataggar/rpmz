@@ -61,3 +61,17 @@ test "update walks a multi-version package to the newest version" {
     try again.expectOk();
     try again.expectStderrContains("Nothing to do");
 }
+
+test "update accepts a partial EVR target" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+
+    try install(&root, multiversion ++ "-" ++ multiversion_lower);
+
+    var result = try root.run(&.{ "update", "-y", "--nogpgcheck", multiversion ++ ">=1.0.2" });
+    defer result.deinit();
+    try result.expectOk();
+    try std.testing.expect(try root.isInstalledVersion(multiversion, multiversion_higher));
+}

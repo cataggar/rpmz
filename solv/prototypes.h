@@ -57,31 +57,12 @@ SolvGetPkgNameFromId(
     char** ppszName);
 
 uint32_t
-SolvGetPkgNevrFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppszNevr);
-
-uint32_t
 SolvSplitEvr(
     const PSolvSack pSack,
     const char *pEVRstring,
     char **ppEpoch,
     char **ppVersion,
     char **ppLease);
-
-uint32_t
-SolvCmpEvr(
-    PSolvSack pSack,
-    Id dwPkg1,
-    Id dwPkg2,
-    int* pdwResult
-    );
-
-uint32_t
-SolvCreatePackageList(
-    PSolvPackageList* ppSolvPackageList
-    );
 
 void
 SolvFreePackageList(
@@ -95,80 +76,10 @@ SolvQueueToPackageList(
     );
 
 uint32_t
-SolvGetPackageListSize(
-    PSolvPackageList pPkgList,
-    uint32_t* pdwSize
-    );
-
-uint32_t
-SolvGetPackageId(
-    PSolvPackageList pPkgList,
-    uint32_t dwPkgIndex,
-    Id* dwPkgId
-    );
-
-uint32_t
-SolvFindAllInstalled(
-    PSolvSack pSack,
-    PSolvPackageList* ppPkgList
-    );
-
-uint32_t
 SolvFindAvailablePkgByName(
     PSolvSack pSack,
     const char* pszName,
     PSolvPackageList* ppPkgList
-    );
-
-uint32_t
-SolvFindAvailableSrcPkgByName(
-    PSolvSack pSack,
-    const char* pszName,
-    PSolvPackageList* ppPkgList
-    );
-
-uint32_t
-SolvFindInstalledPkgByName(
-    PSolvSack pSack,
-    const char* pszName,
-    PSolvPackageList* ppPkgList
-    );
-
-uint32_t
-SolvFindInstalledPkgByMultipleNames(
-    PSolvSack pSack,
-    char** ppszName,
-    PSolvPackageList* ppPkgList
-    );
-
-uint32_t
-SolvFindHighestAvailable(
-    PSolvSack pSack,
-    const char* pszPkgName,
-    int nSource,
-    Id* pdwId
-    );
-
-uint32_t
-SolvFindLowestInstalled(
-    PSolvSack pSack,
-    const char* pszPkgName,
-    Id* pdwId
-    );
-
-uint32_t
-SolvFindHighestInstalled(
-    PSolvSack pSack,
-    const char* pszPkgName,
-    Id* pdwId
-    );
-
-uint32_t
-SolvFindHighestOrLowestInstalled(
-    PSolvSack pSack,
-    const char* pszPkgName,
-    Id* pdwId,
-    uint32_t dwFindHighest
     );
 
 uint32_t
@@ -214,12 +125,6 @@ SolvCreateQuery(
 void
 SolvFreeQuery(
     PSolvQuery pQuery
-    );
-
-uint32_t
-SolvApplyPackageFilter(
-    PSolvQuery  pQuery,
-    char** ppszPackageNames
     );
 
 uint32_t
@@ -294,14 +199,6 @@ SolvAddUserInstalledToJobs(
     Queue* pQueueJobs,
     Pool *pPool,
     struct history_ctx *pHistoryCtx
-    );
-
-uint32_t
-SolvFindAllUpDownCandidates(
-    PSolvSack pSack,
-    PSolvPackageList  pInstalledPackages,
-    int up,
-    Queue *pQueueResult
     );
 
 // tdnfrepo.c
