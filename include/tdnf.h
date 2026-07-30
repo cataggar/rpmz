@@ -9,6 +9,8 @@
 #ifndef _TDNF_H_
 #define _TDNF_H_
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -200,6 +202,52 @@ TDNFResolve(
     PTDNF pTdnf,
     TDNF_ALTERTYPE nAlterType,
     PTDNF_SOLVED_PKG_INFO* ppSolvedPkgInfo
+    );
+
+#define TDNF_TRANSACTION_PLAN_SCHEMA_VERSION UINT32_C(1)
+#define TDNF_TRANSACTION_PLAN_SCHEMA "tdnf.transaction-plan/v1"
+#define TDNF_TRANSACTION_PLAN_DIGEST_SIZE UINT32_C(32)
+#define TDNF_TRANSACTION_PLAN_DIGEST_HEX_LENGTH UINT32_C(64)
+
+/*
+ * Enable or disable capture of the transaction plan produced by subsequent
+ * TDNFResolve() or TDNFHistoryResolve() calls on pTdnf. Disabling capture
+ * clears any stored plan. dwEnabled must be 0 or 1.
+ */
+uint32_t
+TDNFTransactionPlanSetEnabled(
+    PTDNF pTdnf,
+    uint32_t dwEnabled
+    );
+
+/*
+ * Return the canonical JSON for the last resolved transaction plan on pTdnf.
+ * The returned string is NUL-terminated and owned by the caller. Free it with
+ * TDNFTransactionPlanFreeCanonicalJson(). The top-level "schema" value is
+ * TDNF_TRANSACTION_PLAN_SCHEMA. Returns ERROR_TDNF_CALL_NOT_SUPPORTED when no
+ * plan has been captured.
+ */
+uint32_t
+TDNFTransactionPlanGetCanonicalJson(
+    PTDNF pTdnf,
+    char **ppszJson
+    );
+
+void
+TDNFTransactionPlanFreeCanonicalJson(
+    char *pszJson
+    );
+
+/*
+ * Return the lowercase SHA-256 digest hex string for the last resolved
+ * transaction plan on pTdnf. pszDigestHex must point to at least
+ * TDNF_TRANSACTION_PLAN_DIGEST_HEX_LENGTH + 1 bytes.
+ * Returns ERROR_TDNF_CALL_NOT_SUPPORTED when no plan has been captured.
+ */
+uint32_t
+TDNFTransactionPlanGetDigestHex(
+    PTDNF pTdnf,
+    char pszDigestHex[TDNF_TRANSACTION_PLAN_DIGEST_HEX_LENGTH + 1]
     );
 
 //This function will alter the current

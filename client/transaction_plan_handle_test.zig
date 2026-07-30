@@ -154,6 +154,21 @@ extern fn TDNFTransactionPlanCaptureGetCanonicalJson(
     data: ?*?[*]const u8,
     length: ?*usize,
 ) u32;
+extern fn TDNFTransactionPlanSetEnabled(
+    handle: ?*anyopaque,
+    enabled: u32,
+) u32;
+extern fn TDNFTransactionPlanGetCanonicalJson(
+    handle: ?*anyopaque,
+    json: ?*?[*:0]u8,
+) u32;
+extern fn TDNFTransactionPlanFreeCanonicalJson(
+    json: ?[*:0]u8,
+) void;
+extern fn TDNFTransactionPlanGetDigestHex(
+    handle: ?*anyopaque,
+    digest: ?[*]u8,
+) u32;
 extern fn TDNFTransactionPlanCaptureFailNextRepositoryRecord(
     handle: ?*anyopaque,
 ) void;
@@ -1560,6 +1575,166 @@ fn capturedJson(handle: ?*anyopaque) ![]u8 {
     const json = try std.testing.allocator.dupe(u8, raw.?[0..length]);
     TDNFTransactionPlanStateFreeCanonicalJson(raw, length);
     return json;
+}
+
+fn publicCapturedJson(handle: ?*anyopaque) ![]u8 {
+    var raw: ?[*:0]u8 = null;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFTransactionPlanGetCanonicalJson(handle, &raw),
+    );
+    defer TDNFTransactionPlanFreeCanonicalJson(raw);
+    return std.testing.allocator.dupe(u8, std.mem.span(raw.?));
+}
+
+fn publicDigestHex(handle: ?*anyopaque) ![64]u8 {
+    var buffer: [65]u8 = undefined;
+    @memset(&buffer, 0xaa);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFTransactionPlanGetDigestHex(handle, buffer[0..].ptr),
+    );
+    try std.testing.expectEqual(@as(u8, 0), buffer[64]);
+    for (buffer[0..64]) |byte| {
+        try std.testing.expect(
+            (byte >= '0' and byte <= '9') or
+                (byte >= 'a' and byte <= 'f'),
+        );
+    }
+    var output: [64]u8 = undefined;
+    @memcpy(output[0..], buffer[0..64]);
+    return output;
+}
+
+test "public transaction plan API returns versioned JSON and stable digest" {
+    const schema = "tdnf.transaction-plan/v1";
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+        return error.OutOfMemory;
+    defer tdnf_rpm_config_destroy(rpm_config);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        TDNFTransactionPlanTestWriteFileProvider(rpm_config),
+    );
+    const setopts = create_cnfnode("(setopts)") orelse
+        return error.OutOfMemory;
+    defer destroy_cnftree(setopts);
+    const repoopts = create_cnfnode("(repoopts)") orelse
+        return error.OutOfMemory;
+    defer destroy_cnftree(repoopts);
+    const upgrade = try std.testing.allocator.dupeZ(u8, "upgrade");
+    defer std.testing.allocator.free(upgrade);
+    var commands = [_]?[*:0]u8{ upgrade.ptr, null };
+    var args = CmdArgs{};
+    args.nAssumeYes = 1;
+    args.nCacheOnly = 1;
+    args.nQuiet = 1;
+    args.pszArch = @ptrCast(@constCast("x86_64"));
+    args.pszInstallRoot = fixture.root.ptr;
+    args.pszConfFile = fixture.config.ptr;
+    args.pszReleaseVer = @ptrCast(@constCast("1"));
+    args.ppszCmds = &commands;
+    args.nCmdCount = 1;
+    args.cn_setopts = setopts;
+    args.cn_repoopts = repoopts;
+
+    var handle: ?*anyopaque = null;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFOpenHandle(&args, &handle),
+    );
+    defer TDNFCloseHandle(handle);
+    var missing_json: ?[*:0]u8 = null;
+    try std.testing.expectEqual(
+        error_call_not_supported,
+        TDNFTransactionPlanGetCanonicalJson(handle, &missing_json),
+    );
+    try std.testing.expect(missing_json == null);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFTransactionPlanSetEnabled(handle, 1),
+    );
+    try std.testing.expectEqual(
+        error_call_not_supported,
+        TDNFTransactionPlanGetCanonicalJson(handle, &missing_json),
+    );
+    try std.testing.expect(missing_json == null);
+    try std.testing.expectEqual(@as(u32, 0), TDNFRefresh(handle));
+    try resolve(handle);
+
+    const first_json = try publicCapturedJson(handle);
+    defer std.testing.allocator.free(first_json);
+    const first_digest = try publicDigestHex(handle);
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        std.testing.allocator,
+        first_json,
+        .{},
+    );
+    defer parsed.deinit();
+    const object = parsed.value.object;
+    try std.testing.expectEqualStrings(schema, object.get("schema").?.string);
+    const digest = object.get("digest").?.object;
+    try std.testing.expectEqualStrings(
+        "sha256",
+        digest.get("algorithm").?.string,
+    );
+    try std.testing.expectEqualStrings(schema, digest.get("domain").?.string);
+    try std.testing.expectEqualStrings(
+        first_digest[0..],
+        digest.get("value").?.string,
+    );
+
+    try resolve(handle);
+    const repeated_json = try publicCapturedJson(handle);
+    defer std.testing.allocator.free(repeated_json);
+    const repeated_digest = try publicDigestHex(handle);
+    try std.testing.expectEqualStrings(first_json, repeated_json);
+    try std.testing.expectEqualSlices(u8, &first_digest, &repeated_digest);
+
+    const install = try std.testing.allocator.dupeZ(u8, "install");
+    defer std.testing.allocator.free(install);
+    const app = try std.testing.allocator.dupeZ(u8, "app");
+    defer std.testing.allocator.free(app);
+    var install_commands = [_]?[*:0]u8{ install.ptr, app.ptr, null };
+    args.ppszCmds = &install_commands;
+    args.nCmdCount = 2;
+    var install_solved: ?*anyopaque = null;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFResolve(handle, alter_install, &install_solved),
+    );
+    defer TDNFFreeSolvedPackageInfo(install_solved);
+    try std.testing.expect(install_solved != null);
+    const changed_json = try publicCapturedJson(handle);
+    defer std.testing.allocator.free(changed_json);
+    var changed = try std.json.parseFromSlice(
+        std.json.Value,
+        std.testing.allocator,
+        changed_json,
+        .{},
+    );
+    defer changed.deinit();
+    try std.testing.expectEqualStrings(
+        schema,
+        changed.value.object.get("schema").?.string,
+    );
+    const changed_digest = try publicDigestHex(handle);
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        &first_digest,
+        &changed_digest,
+    ));
+    try std.testing.expect(!std.mem.eql(u8, first_json, changed_json));
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFTransactionPlanSetEnabled(handle, 0),
+    );
+    try std.testing.expect(
+        TDNFTransactionPlanGetCanonicalJson(handle, &missing_json) != 0,
+    );
+    try std.testing.expect(missing_json == null);
 }
 
 fn appendFilterSetopts(setopts: ?*anyopaque, filters: u8) !void {
