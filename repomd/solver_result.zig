@@ -471,6 +471,9 @@ fn enumerateCoreProblems(
     @memset(active, true);
     try disableReplacedRetentionRules(formula, active);
 
+    var rule_order = try buildRuleOrder(allocator, formula);
+    defer rule_order.deinit();
+
     const included = try allocator.alloc(bool, clause_count);
     defer allocator.free(included);
 
@@ -478,6 +481,7 @@ fn enumerateCoreProblems(
         const core = try refuteIncludedClauses(
             allocator,
             formula,
+            rule_order.order,
             active,
         ) orelse return;
         defer allocator.free(core);
@@ -498,6 +502,7 @@ fn enumerateCoreProblems(
             var probe = try solveIncludedClauses(
                 allocator,
                 formula,
+                rule_order.order,
                 included,
             );
             const remains_unsatisfiable = probe == .unsatisfiable;
@@ -865,12 +870,169 @@ const FilteredFormula = struct {
     }
 };
 
+/// libsolv's rule sections, in the order `solver_solve` creates them:
+/// package rules (`src/solver.c:3986`), then feature/update rules
+/// (`:4012`, `:4037`), then job rules (`:4082`).
+const package_rule_class: u8 = 0;
+const update_rule_class: u8 = 1;
+const job_rule_class: u8 = 2;
+
+fn libsolvRuleClass(origin: solver_rules.RuleOrigin) u8 {
+    return switch (origin) {
+        .installed_keep => update_rule_class,
+        .job => job_rule_class,
+        else => package_rule_class,
+    };
+}
+
+/// One native literal as the signed solvable id libsolv stores in a rule.
+/// libsolv hands out solvids in universe order, so package id order and
+/// solvid order agree; the `+ 1` only keeps 0 free for the `w2 == 0` an
+/// assertion carries.
+fn signedLiteral(literal: solver_rules.Literal) i64 {
+    const value: i64 = @as(i64, @intFromEnum(literal.package())) + 1;
+    return if (literal.positive()) value else -value;
+}
+
+const RuleKeyRange = struct {
+    start: usize = 0,
+    len: usize = 0,
+};
+
+/// The clause order the derivation formula is laid out in, plus the sort keys
+/// it was derived from.
+const RuleOrder = struct {
+    allocator: std.mem.Allocator,
+    order: []usize,
+    keys: []i64,
+    ranges: []RuleKeyRange,
+
+    fn deinit(self: *RuleOrder) void {
+        self.allocator.free(self.order);
+        self.allocator.free(self.keys);
+        self.allocator.free(self.ranges);
+        self.* = undefined;
+    }
+};
+
+const RuleOrderContext = struct {
+    formula: *const solver_rules.OwnedFormula,
+    keys: []const i64,
+    ranges: []const RuleKeyRange,
+
+    fn key(self: RuleOrderContext, clause_index: usize) []const i64 {
+        const range = self.ranges[clause_index];
+        return self.keys[range.start..][0..range.len];
+    }
+
+    fn lessThan(self: RuleOrderContext, left: usize, right: usize) bool {
+        const left_class = libsolvRuleClass(
+            self.formula.clauses[left].origin,
+        );
+        const right_class = libsolvRuleClass(
+            self.formula.clauses[right].origin,
+        );
+        if (left_class != right_class) return left_class < right_class;
+        if (left_class != package_rule_class) return left < right;
+        const left_key = self.key(left);
+        const right_key = self.key(right);
+        const shared = @min(left_key.len, right_key.len);
+        for (left_key[0..shared], right_key[0..shared]) |a, b| {
+            if (a != b) return a < b;
+        }
+        // `unifyrules_sortcmp` compares a binary rule against a longer one
+        // through the longer one's first literal only and then puts the
+        // shorter rule first, so a shared prefix orders by length.
+        if (left_key.len != right_key.len) {
+            return left_key.len < right_key.len;
+        }
+        return left < right;
+    }
+};
+
+/// Lay the derivation formula out in libsolv's rule order.
+///
+/// libsolv sorts and prunes its package rules with `solver_unifyrules`
+/// (`src/rules.c:281`) before solving, and `unifyrules_sortcmp` orders them by
+/// the rule's literals: `p` first, then `w2` for a binary rule or the provider
+/// list for a longer one, with a shorter rule ahead of a longer one that
+/// shares its prefix. `addrule` (`src/rules.c:184`) stores the numerically
+/// smaller literal in `p`, and an assertion carries `w2 == 0`.
+///
+/// Rule order is not cosmetic. `makewatches` (`src/solver.c:351`) walks the
+/// rules backwards and prepends, so every watch list ends up in ascending rule
+/// id, and `propagate` scans it in that order. The first conflict initial
+/// propagation trips is therefore the lowest-id falsified rule of the
+/// earliest-decided literal, and that rule is the core `analyze_unsolvable`
+/// reports. Native clause generation order is per package, which trips a
+/// different rule -- and since every reported core disables its own job rules,
+/// a different first core does not merely rename a problem, it can hide a
+/// second core that libsolv still reports (a capability with two providers is
+/// the smallest case).
+fn buildRuleOrder(
+    allocator: std.mem.Allocator,
+    formula: *const solver_rules.OwnedFormula,
+) DeriveProblemsError!RuleOrder {
+    const count = formula.clauses.len;
+    var total: usize = 0;
+    for (formula.clauses) |clause| {
+        if (libsolvRuleClass(clause.origin) != package_rule_class) continue;
+        total += @max(@as(usize, @intCast(clause.literals.len)), 2);
+    }
+
+    const keys = try allocator.alloc(i64, total);
+    errdefer allocator.free(keys);
+    const ranges = try allocator.alloc(RuleKeyRange, count);
+    errdefer allocator.free(ranges);
+    const order = try allocator.alloc(usize, count);
+    errdefer allocator.free(order);
+
+    var cursor: usize = 0;
+    for (formula.clauses, 0..) |clause, clause_index| {
+        order[clause_index] = clause_index;
+        ranges[clause_index] = .{ .start = cursor, .len = 0 };
+        if (libsolvRuleClass(clause.origin) != package_rule_class) continue;
+        const literals = try checkedClauseLiterals(formula, clause);
+        const start = cursor;
+        for (literals) |literal| {
+            keys[cursor] = signedLiteral(literal);
+            cursor += 1;
+        }
+        std.sort.pdq(i64, keys[start..cursor], {}, std.sort.asc(i64));
+        // An assertion is `(p, w2 = 0)` in libsolv, and 0 sorts between a
+        // negated literal and a provider, so the placeholder has to be
+        // appended after the literals are ordered, not sorted with them.
+        if (literals.len < 2) {
+            keys[cursor] = 0;
+            cursor += 1;
+        }
+        ranges[clause_index] = .{ .start = start, .len = cursor - start };
+    }
+
+    const context = RuleOrderContext{
+        .formula = formula,
+        .keys = keys,
+        .ranges = ranges,
+    };
+    std.sort.pdq(usize, order, context, RuleOrderContext.lessThan);
+
+    return .{
+        .allocator = allocator,
+        .order = order,
+        .keys = keys,
+        .ranges = ranges,
+    };
+}
+
 fn buildFilteredFormula(
     allocator: std.mem.Allocator,
     source: *const solver_rules.OwnedFormula,
+    order: []const usize,
     included: []const bool,
 ) DeriveProblemsError!FilteredFormula {
-    if (included.len != source.clauses.len) {
+    if (included.len != source.clauses.len or
+        order.len != source.clauses.len)
+    {
         return error.InvalidInput;
     }
     var clauses =
@@ -882,8 +1044,10 @@ fn buildFilteredFormula(
     var source_index = std.array_list.Managed(usize).init(allocator);
     errdefer source_index.deinit();
 
-    for (source.clauses, included, 0..) |clause, keep, clause_index| {
-        if (!keep) continue;
+    for (order) |clause_index| {
+        if (clause_index >= source.clauses.len) return error.InvalidInput;
+        if (!included[clause_index]) continue;
+        const clause = source.clauses[clause_index];
         const source_literals = try checkedClauseLiterals(
             source,
             clause,
@@ -934,9 +1098,15 @@ fn buildFilteredFormula(
 fn solveIncludedClauses(
     allocator: std.mem.Allocator,
     source: *const solver_rules.OwnedFormula,
+    order: []const usize,
     included: []const bool,
 ) DeriveProblemsError!solver_search.Result {
-    var filtered = try buildFilteredFormula(allocator, source, included);
+    var filtered = try buildFilteredFormula(
+        allocator,
+        source,
+        order,
+        included,
+    );
     defer filtered.deinit();
     return solver_search.solve(allocator, &filtered.formula);
 }
@@ -947,9 +1117,15 @@ fn solveIncludedClauses(
 fn refuteIncludedClauses(
     allocator: std.mem.Allocator,
     source: *const solver_rules.OwnedFormula,
+    order: []const usize,
     included: []const bool,
 ) DeriveProblemsError!?[]usize {
-    var filtered = try buildFilteredFormula(allocator, source, included);
+    var filtered = try buildFilteredFormula(
+        allocator,
+        source,
+        order,
+        included,
+    );
     defer filtered.deinit();
     var refutation = (try solver_search.refute(
         allocator,
