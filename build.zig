@@ -1477,6 +1477,23 @@ pub fn build(b: *Build) void {
     hardenExe(tdnf_exe);
     b.installArtifact(tdnf_exe);
 
+    {
+        const plan_cli_test_mod = b.createModule(.{
+            .root_source_file = b.path("tools/cli/plan_cli_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const plan_cli_tests = b.addTest(.{ .root_module = plan_cli_test_mod });
+        const run_plan_cli_tests = b.addRunArtifact(plan_cli_tests);
+        run_plan_cli_tests.setEnvironmentVariable(
+            "TDNF_CLI_TEST_PREFIX",
+            b.getInstallPath(.prefix, ""),
+        );
+        run_plan_cli_tests.step.dependOn(b.getInstallStep());
+        run_plan_cli_tests.has_side_effects = true;
+        zig_test_step.dependOn(&run_plan_cli_tests.step);
+    }
+
     // tdnf-config
     const tdnf_config_mod = b.createModule(.{
         .root_source_file = b.path("tools/config/main.zig"),

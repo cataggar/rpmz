@@ -42,7 +42,7 @@ static uint32_t TDNFParseOSInfo(PTDNF_CONF pConf, const char *os_rel_fn)
 
     fp = fopen(os_rel_fn, "r");
     if (!fp) {
-        pr_info("Warning: '%s' file is not present in the system\n", os_rel_fn);
+        pr_notice("Warning: '%s' file is not present in the system\n", os_rel_fn);
         return dwError;
     }
 

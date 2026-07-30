@@ -3,7 +3,7 @@
     "plugins/metalink/xml.h": "60b6a7ce60f28f3e07d135038b85117bcf7a255418c8dc11c607f7bf1f9cd38a"
   },
   "public_headers_sha256": {
-    "tdnf-common-defines.h": "af8830ab565d8f0090381a0c87a9d640a30beb5e614795ff5a4ecd4470cb78bf",
+    "tdnf-common-defines.h": "86e80114c32bd1250f58874251db920a4e9fdd9662e31db523375068359ee87b",
     "tdnf.h": "32d27cbffce2dc2cb8a99ee422a3cb836071b3dcbe6d833f17ac03d3fd5a1e92",
     "tdnfcli.h": "cc17470d62d4ef4d7421b90640ed70ae6c1a7e1f3038309e1fbefff90b48bf9d",
     "tdnfclierror.h": "983458ba3b6807d7c51cabe8c86c2f58e9ff08e904dbcd469dc3f1ecc165ad42",

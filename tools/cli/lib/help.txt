@@ -255,6 +255,8 @@ makecache                  Generate the metadata cache
                            Example: tdnf makecache
 mark <action> <pkg>        Mark package(s) (install|remove)
                            Example: tdnf mark install package
+plan <cmd> [pkg]           Resolve a transaction command and print its canonical plan JSON
+                           Example: tdnf plan install package
 provides <cap>             Same as 'whatprovides'
                            Example: tdnf provides /usr/bin/bash
 whatprovides <cap>         Find what package provides the given value

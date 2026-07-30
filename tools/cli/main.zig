@@ -21,6 +21,7 @@ extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
 
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
+const LOG_CRIT: c_int = 2;
 
 const command_map = [_]c.TDNF_CLI_CMD_MAP{
     .{ .pszCmdName = "autoerase", .pFnCmd = c.TDNFCliAutoEraseCommand, .ReqRoot = true },
@@ -40,6 +41,7 @@ const command_map = [_]c.TDNF_CLI_CMD_MAP{
     .{ .pszCmdName = "list", .pFnCmd = c.TDNFCliListCommand, .ReqRoot = false },
     .{ .pszCmdName = "makecache", .pFnCmd = c.TDNFCliMakeCacheCommand, .ReqRoot = false },
     .{ .pszCmdName = "mark", .pFnCmd = c.TDNFCliMarkCommand, .ReqRoot = false },
+    .{ .pszCmdName = "plan", .pFnCmd = TDNFCliPlanCommand, .ReqRoot = false },
     .{ .pszCmdName = "provides", .pFnCmd = c.TDNFCliProvidesCommand, .ReqRoot = false },
     .{ .pszCmdName = "whatprovides", .pFnCmd = c.TDNFCliProvidesCommand, .ReqRoot = false },
     .{ .pszCmdName = "reinstall", .pFnCmd = c.TDNFCliReinstallCommand, .ReqRoot = true },
@@ -74,6 +76,19 @@ fn freeOwnedString(ppValue: *?[*:0]u8) void {
         TDNFFreeMemory(@ptrCast(value));
         ppValue.* = null;
     }
+}
+
+fn getErrno() c_int {
+    return c.__errno_location().*;
+}
+
+fn systemOutputError() u32 {
+    const nErrNo = getErrno();
+    if (nErrNo <= 0) {
+        return c.ERROR_TDNF_FILESYS_IO;
+    }
+    return @as(u32, @intCast(c.ERROR_TDNF_SYSTEM_BASE)) +
+        @as(u32, @intCast(nErrNo));
 }
 
 fn cliHandle(pContext: ?*c.TDNF_CLI_CONTEXT) c.PTDNF {
@@ -304,6 +319,118 @@ fn TDNFCliInvokeResolve(
     ppSolvedPkgInfo: ?*?*c.TDNF_SOLVED_PKG_INFO,
 ) callconv(.c) u32 {
     return c.TDNFResolve(cliHandle(pContext), nAlterType, ppSolvedPkgInfo);
+}
+
+fn planAlterType(
+    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pnAlterType: *c.TDNF_ALTERTYPE,
+) u32 {
+    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    if (cmd_args.nCmdCount < 2) {
+        log_console(LOG_CRIT, "need transaction command as argument\n");
+        return c.ERROR_TDNF_CLI_NOT_ENOUGH_ARGS;
+    }
+
+    const transaction_count = cmd_args.nCmdCount - 1;
+    const pszTransaction = cmd_args.ppszCmds[1];
+    if (c.strcmp(pszTransaction, "install") == 0) {
+        pnAlterType.* = c.ALTER_INSTALL;
+    } else if (c.strcmp(pszTransaction, "erase") == 0 or
+        c.strcmp(pszTransaction, "remove") == 0)
+    {
+        pnAlterType.* = c.ALTER_ERASE;
+    } else if (c.strcmp(pszTransaction, "upgrade") == 0 or
+        c.strcmp(pszTransaction, "update") == 0 or
+        c.strcmp(pszTransaction, "upgrade-to") == 0 or
+        c.strcmp(pszTransaction, "update-to") == 0)
+    {
+        pnAlterType.* = if (transaction_count == 1)
+            c.ALTER_UPGRADEALL
+        else
+            c.ALTER_UPGRADE;
+    } else if (c.strcmp(pszTransaction, "downgrade") == 0) {
+        pnAlterType.* = if (transaction_count == 1)
+            c.ALTER_DOWNGRADEALL
+        else
+            c.ALTER_DOWNGRADE;
+    } else if (c.strcmp(pszTransaction, "distro-sync") == 0) {
+        pnAlterType.* = c.ALTER_DISTRO_SYNC;
+    } else if (c.strcmp(pszTransaction, "reinstall") == 0) {
+        pnAlterType.* = c.ALTER_REINSTALL;
+    } else if (c.strcmp(pszTransaction, "autoerase") == 0 or
+        c.strcmp(pszTransaction, "autoremove") == 0)
+    {
+        pnAlterType.* = if (transaction_count == 1)
+            c.ALTER_AUTOERASEALL
+        else
+            c.ALTER_AUTOERASE;
+    } else {
+        log_console(
+            LOG_CRIT,
+            "unsupported transaction plan command '%s'\n",
+            pszTransaction,
+        );
+        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    }
+
+    return 0;
+}
+
+fn TDNFCliPlanCommand(
+    pContext: ?*c.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+) callconv(.c) u32 {
+    const context = pContext orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const handle = cliHandle(context);
+    if (handle == null) {
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    }
+
+    var nAlterType: c.TDNF_ALTERTYPE = undefined;
+    var dwError = planAlterType(cmd_args, &nAlterType);
+    if (dwError != 0) {
+        return dwError;
+    }
+
+    dwError = c.TDNFTransactionPlanSetEnabled(handle, 1);
+    if (dwError != 0) {
+        return dwError;
+    }
+
+    const ppszSavedCmds = cmd_args.ppszCmds;
+    const nSavedCmdCount = cmd_args.nCmdCount;
+    cmd_args.ppszCmds += 1;
+    cmd_args.nCmdCount -= 1;
+    defer {
+        cmd_args.ppszCmds = ppszSavedCmds;
+        cmd_args.nCmdCount = nSavedCmdCount;
+    }
+
+    var pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO = null;
+    defer c.TDNFFreeSolvedPackageInfo(pSolvedPkgInfo);
+
+    const dwResolveError = context.pFnResolve.?(context, nAlterType, &pSolvedPkgInfo);
+    var pszJson: [*c]u8 = null;
+    const dwPlanError = c.TDNFTransactionPlanGetCanonicalJson(handle, &pszJson);
+    defer c.TDNFTransactionPlanFreeCanonicalJson(pszJson);
+
+    if (dwPlanError != 0) {
+        return if (dwResolveError != 0) dwResolveError else dwPlanError;
+    }
+    if (pszJson == null) {
+        return c.ERROR_TDNF_NO_DATA;
+    }
+
+    // Unsatisfied and conflicting requests are reported as structured problem
+    // plans. Once those canonical bytes are emitted, the CLI command succeeded.
+    if (c.fputs(pszJson, c.stdout) < 0) {
+        return systemOutputError();
+    }
+    if (c.fflush(c.stdout) != 0) {
+        return systemOutputError();
+    }
+    return 0;
 }
 
 fn TDNFCliInvokeSearch(

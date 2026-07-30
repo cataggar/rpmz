@@ -21,7 +21,7 @@ from cli_testlib import MinimalCliRuntime  # noqa: E402
 
 CMD_RE = re.compile(
     r'^\s*\.{\s*\.pszCmdName\s*=\s*"([^"]+)",'
-    r"\s*\.pFnCmd\s*=\s*c\.TDNFCli[^,]+,"
+    r"\s*\.pFnCmd\s*=\s*(?:c\.)?TDNFCli[^,]+,"
     r"\s*\.ReqRoot\s*=\s*(?:true|false)\s*},\s*$",
     re.MULTILINE,
 )

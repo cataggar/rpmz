@@ -45,16 +45,16 @@ progress_cb_impl(
         dPercent = 100;
     }
 
-    if (!isatty(STDOUT_FILENO))
+    if (!isatty(STDERR_FILENO))
     {
-        pr_info("%s %u%% %ld\n", pData->pszData, dPercent, dlNow);
+        pr_notice("%s %u%% %ld\n", pData->pszData, dPercent, dlNow);
     }
     else
     {
-        pr_info("%-35s %10ld %u%%\r", pData->pszData, dlNow, dPercent);
+        pr_notice("%-35s %10ld %u%%\r", pData->pszData, dlNow, dPercent);
     }
 
-    fflush(stdout);
+    fflush(stderr);
 
     return 0;
 }
