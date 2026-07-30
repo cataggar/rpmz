@@ -196,6 +196,14 @@ pub const State = struct {
         return plan.canonicalJsonAlloc(allocator);
     }
 
+    pub fn digestHex(
+        self: *const State,
+        allocator: Allocator,
+    ) (transaction_plan.CanonicalError || error{NoPlan})![64]u8 {
+        const plan = self.plan orelse return error.NoPlan;
+        return plan.digest(allocator);
+    }
+
     pub fn recordRepository(
         self: *State,
         repository: *anyopaque,
@@ -4693,6 +4701,67 @@ fn captureGetCanonicalJson(
     return stateGetCanonicalJson(handleState(&input), data, length);
 }
 
+fn publicSetEnabled(
+    handle: ?*anyopaque,
+    enabled: u32,
+) callconv(.c) u32 {
+    return captureSetEnabled(handle, enabled);
+}
+
+fn publicGetCanonicalJson(
+    handle: ?*anyopaque,
+    raw_json: ?*?[*:0]u8,
+) callconv(.c) u32 {
+    const json_out = raw_json orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    json_out.* = null;
+    var input = handleRefreshInput(handle) orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const state = handleState(&input) orelse
+        return error_codes.ERROR_TDNF_CALL_NOT_SUPPORTED;
+    const json = state.canonicalJsonAlloc(std.heap.c_allocator) catch |err| {
+        return switch (err) {
+            error.NoPlan => error_codes.ERROR_TDNF_CALL_NOT_SUPPORTED,
+            error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
+        };
+    };
+    defer std.heap.c_allocator.free(json);
+    const sentinel = std.heap.c_allocator.allocSentinel(
+        u8,
+        json.len,
+        0,
+    ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+    @memcpy(sentinel[0..json.len], json);
+    json_out.* = sentinel.ptr;
+    return 0;
+}
+
+fn publicFreeCanonicalJson(raw_json: ?[*:0]u8) callconv(.c) void {
+    if (raw_json) |json| TDNFFreeMemory(@ptrCast(json));
+}
+
+fn publicGetDigestHex(
+    handle: ?*anyopaque,
+    raw_digest: ?[*]u8,
+) callconv(.c) u32 {
+    const digest_out = raw_digest orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    digest_out[0] = 0;
+    var input = handleRefreshInput(handle) orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const state = handleState(&input) orelse
+        return error_codes.ERROR_TDNF_CALL_NOT_SUPPORTED;
+    const digest = state.digestHex(std.heap.c_allocator) catch |err| {
+        return switch (err) {
+            error.NoPlan => error_codes.ERROR_TDNF_CALL_NOT_SUPPORTED,
+            error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
+        };
+    };
+    @memcpy(digest_out[0..64], &digest);
+    digest_out[64] = 0;
+    return 0;
+}
+
 fn captureFailNextRepositoryRecord(handle: ?*anyopaque) callconv(.c) void {
     var input = handleRefreshInput(handle) orelse return;
     stateFailNextRepositoryRecord(handleState(&input));
@@ -5268,6 +5337,22 @@ comptime {
         .visibility = .hidden,
     });
     if (!integration_options.standalone_test) {
+        @export(&publicSetEnabled, .{
+            .name = "TDNFTransactionPlanSetEnabled",
+            .visibility = .default,
+        });
+        @export(&publicGetCanonicalJson, .{
+            .name = "TDNFTransactionPlanGetCanonicalJson",
+            .visibility = .default,
+        });
+        @export(&publicFreeCanonicalJson, .{
+            .name = "TDNFTransactionPlanFreeCanonicalJson",
+            .visibility = .default,
+        });
+        @export(&publicGetDigestHex, .{
+            .name = "TDNFTransactionPlanGetDigestHex",
+            .visibility = .default,
+        });
         @export(&captureSetEnabled, .{
             .name = "TDNFTransactionPlanCaptureSetEnabled",
             .visibility = .hidden,
