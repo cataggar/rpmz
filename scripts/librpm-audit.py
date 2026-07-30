@@ -27,7 +27,7 @@ REPOSITORY_DIRS = PRODUCTION_DIRS | {
     "abi",
     "bin",
     "ci",
-    "docs",
+    "doc",
     "etc",
     "pytests",
     "scripts",
