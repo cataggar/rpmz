@@ -33,6 +33,16 @@ pub const ProjectedSolveError =
         UnsupportedVisibility,
     };
 
+pub const ProjectedRefuteError =
+    solver_rules.GenerateError ||
+    solver_policy.PrepareError ||
+    solver_result.DeriveProblemsError ||
+    error{
+        InvalidVisibility,
+        UnsupportedVisibility,
+        UnsupportedPolicy,
+    };
+
 /// The originating universe must outlive this result and C materialization.
 pub const OwnedSolveResult = struct {
     universe: *const solver_model.Universe,
@@ -101,6 +111,64 @@ pub fn solveProjected(
         visibility,
         goal,
         policy,
+    );
+}
+
+/// Derive canonical native problem diagnostics for an unsatisfiable projected
+/// live request, without producing a transaction.
+pub fn refuteProjected(
+    allocator: std.mem.Allocator,
+    universe: *const solver_model.Universe,
+    visibility: *const solver_visibility.Projection,
+    goal: solver_model.Goal,
+    policy: solver_model.SolvePolicy,
+) ProjectedRefuteError!solver_result.OwnedProblems {
+    if (visibility.visible.len != universe.packages.len or
+        visibility.hidden_reasons.len != universe.packages.len)
+    {
+        return error.InvalidVisibility;
+    }
+    if (policy.installonly_names.len != 0) {
+        // Install-only solves are coordinated, not a single prepared formula:
+        // the coordinator clones the jobs, appends synthetic multiversion
+        // jobs, may add eviction jobs for installonly_limit, and can
+        // synthesize terminal policy problems after a satisfiable round.
+        // Refuting this ordinary prepared formula would lose that effective
+        // job list and could publish problem job ids that the retained live
+        // Prepared/job_origins cannot name.
+        return error.UnsupportedPolicy;
+    }
+
+    var base = if (hasHiddenPackages(visibility))
+        try solver_rules.generateProjectedBase(
+            allocator,
+            universe,
+            visibility,
+            goal,
+            policy.architecture,
+        )
+    else
+        try solver_rules.generateBase(
+            allocator,
+            universe,
+            goal,
+            policy.architecture,
+        );
+    defer base.deinit();
+    var prepared = try solver_policy.prepareWithOptions(
+        allocator,
+        &base,
+        .{
+            .best = policy.best,
+            .allow_erasing = policy.allow_erasing,
+            .clean_deps = policy.clean_deps,
+            .protected_names = policy.protected_names,
+        },
+    );
+    defer prepared.deinit();
+    return solver_result.deriveUnsatProblemsWithCoreJobs(
+        allocator,
+        &prepared.formula,
     );
 }
 
@@ -331,6 +399,53 @@ test "projected solve materializes and deep copies an exact install" {
         c_result.dwSelectedPackageCount,
     );
     try std.testing.expectEqual(@as(u32, 1), c_result.dwActionCount);
+}
+
+test "projected refute derives native problems for an unsatisfiable request" {
+    var packages = [_]@import("model.zig").Package{
+        testPackage("unrelated"),
+    };
+    const inputs = [_]solver_model.RepositoryInput{.{
+        .id = "repo",
+        .model = &.{ .packages = &packages },
+    }};
+    var universe = try solver_model.Universe.init(
+        std.testing.allocator,
+        &inputs,
+    );
+    defer universe.deinit();
+    var visibility = try solver_visibility.Projection.init(
+        std.testing.allocator,
+        &universe,
+        .{},
+    );
+    defer visibility.deinit();
+
+    var problems = try refuteProjected(
+        std.testing.allocator,
+        &universe,
+        &visibility,
+        .{ .jobs = &.{.{
+            .action = .install,
+            .selection = .{ .name = "missing" },
+        }} },
+        testPolicy(),
+    );
+    defer problems.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), problems.problems.len);
+    try std.testing.expectEqual(
+        solver_model.ProblemKind.no_candidate,
+        problems.problems[0].kind,
+    );
+    try std.testing.expectEqual(
+        @as(?solver_model.JobId, @enumFromInt(0)),
+        problems.problems[0].job,
+    );
+    try std.testing.expectEqualStrings(
+        "missing",
+        problems.problems[0].capability.?.name,
+    );
 }
 
 test "projected solve rejects an exact hidden available install" {

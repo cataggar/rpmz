@@ -17,6 +17,7 @@ TDNFGoalSolveNative(
     int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
     PTDNF_SOLVED_PKG_INFO *ppInfo,
     int nPrepareOnly,
+    int nRefuteUnsat,
     void **ppHandle
 );
 
@@ -28,6 +29,7 @@ TDNFGoalCaptureNativeSolve(
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount,
     int nPrepareOnly,
+    int nRefuteUnsat,
     void **ppHandle
 );
 
@@ -233,7 +235,8 @@ TDNFSolv(
                    request and the packages it names. */
                 TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
                                            nAutoErase, nFlags,
-                                           nStampedJobCount, 1, &pNativeSolve);
+                                           nStampedJobCount, 1, 0,
+                                           &pNativeSolve);
                 TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
                     pTdnf, pQueueJobs, pSolv, NULL, pNativeSolve, 0,
                     nUnresolved,
@@ -267,9 +270,14 @@ TDNFSolv(
             dwError = SolvReportProblems(pTdnf->pSack, pSolv, dwSkipProblem);
             if(dwError)
             {
+                TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
+                                           nAutoErase, nFlags,
+                                           nStampedJobCount, 0, 1,
+                                           &pNativeSolve);
                 TDNF_TRANSACTION_PLAN_CAPTURE_FAILED_SOLVE(
-                    pTdnf, pQueueJobs, pSolv, nProblems, nUnresolved,
-                    ppszExcludes, nAllowErasing, nAutoErase, dwError);
+                    pTdnf, pQueueJobs, pSolv, pNativeSolve, nProblems,
+                    nUnresolved, ppszExcludes, nAllowErasing, nAutoErase,
+                    dwError);
             }
         }
 
@@ -311,7 +319,7 @@ TDNFSolv(
     {
         TDNFGoalCaptureNativeSolve(pTdnf, pQueueJobs, nAllowErasing,
                                    nAutoErase, nFlags, nStampedJobCount, 0,
-                                   &pNativeSolve);
+                                   0, &pNativeSolve);
         TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
             pTdnf, pQueueJobs, pSolv, pTrans, pNativeSolve, nProblems,
             nUnresolved,
@@ -332,7 +340,7 @@ TDNFSolv(
        when something is going to read it. */
     dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
                                   nFlags, nStampedJobCount, nReInstall, &pInfo,
-                                  0,
+                                  0, 0,
                                   TDNFTransactionPlanStateIsEnabled(
                                       pTdnf->pTransactionPlanState)
                                       ? &pNativeSolve : NULL);
@@ -528,6 +536,7 @@ TDNFGoalCaptureNativeSolve(
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount,
     int nPrepareOnly,
+    int nRefuteUnsat,
     void **ppHandle
     )
 {
@@ -541,8 +550,8 @@ TDNFGoalCaptureNativeSolve(
     }
     if(TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
                            nStampFlags, nStampedJobCount, 0,
-                           nPrepareOnly ? NULL : &pInfo, nPrepareOnly,
-                           ppHandle))
+                           (nPrepareOnly || nRefuteUnsat) ? NULL : &pInfo,
+                           nPrepareOnly, nRefuteUnsat, ppHandle))
     {
         *ppHandle = NULL;
     }
@@ -561,6 +570,7 @@ TDNFGoalSolveNative(
     int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
     PTDNF_SOLVED_PKG_INFO *ppInfo,
     int nPrepareOnly,
+    int nRefuteUnsat,
     void **ppHandle
     )
 {
@@ -582,7 +592,8 @@ TDNFGoalSolveNative(
     PTDNF_SOLVED_PKG_INFO pInfo = NULL;
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
        !pTdnf->pSack->pPool || !pTdnf->pRpmConfig || !pQueueJobs ||
-       (!nPrepareOnly && !ppInfo) || (nPrepareOnly && !ppHandle))
+       (!nPrepareOnly && !nRefuteUnsat && !ppInfo) ||
+       ((nPrepareOnly || nRefuteUnsat) && !ppHandle))
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -646,13 +657,14 @@ TDNFGoalSolveNative(
                   (const char *const *)ppszUserInstalledPkgs,
                   (const char *const *)ppszCmdLinePaths, nReInstall,
                   pTdnf->pRpmConfig, pszNativeArch, nPrepareOnly,
-                  nPrepareOnly ? NULL : &pInfo, ppHandle);
+                  nRefuteUnsat, (nPrepareOnly || nRefuteUnsat) ? NULL : &pInfo,
+                  ppHandle);
     if(dwError && !IsNullOrEmptyString(TDNFRepoMdLastError()))
     {
         pr_err("native-solver: %s\n", TDNFRepoMdLastError());
     }
     BAIL_ON_TDNF_ERROR(dwError);
-    if(!nPrepareOnly)
+    if(!nPrepareOnly && !nRefuteUnsat)
     {
         *ppInfo = pInfo;
         pInfo = NULL;

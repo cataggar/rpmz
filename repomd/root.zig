@@ -115,16 +115,22 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
     rpm_config: ?*const c.tdnf_rpm_config,
     raw_native_arch: ?[*:0]const u8,
     prepare_only: c_int,
+    refute_unsat: c_int,
     solved: ?*c.PTDNF_SOLVED_PKG_INFO,
     handle: ?*?*anyopaque,
 ) u32 {
     if (handle) |slot| slot.* = null;
-    if (prepare_only != 0 and handle == null) {
+    if (prepare_only != 0 and refute_unsat != 0) {
         clearError();
-        setError("native live prepare discards its only output", .{});
+        setError("native live solve cannot prepare and refute at once", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
     }
-    if (prepare_only == 0 and solved == null) {
+    if ((prepare_only != 0 or refute_unsat != 0) and handle == null) {
+        clearError();
+        setError("native live terminal capture discards its only output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    if (prepare_only == 0 and refute_unsat == 0 and solved == null) {
         clearError();
         setError("null native live solve output", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
@@ -157,22 +163,51 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
         raw_repositories,
         reinstall != 0,
         prepare_only != 0,
+        refute_unsat != 0,
         solved,
         handle,
     );
 }
 
 /// What a retained `TDNFRepoMdNativeSolverLiveSolve` handle points at. A
-/// request that never reached a solve still has a universe and a job list,
-/// which is all the capture layer needs to describe it.
+/// terminal request still has a universe, a job list, and sometimes native
+/// refutation problems, which is all the capture layer needs to describe it.
 pub const RetainedSolve = union(enum) {
     solved: solver_live.OwnedSolve,
     prepared: solver_live.Prepared,
+    refuted: RefutedSolve,
 
     pub fn deinit(self: *RetainedSolve) void {
         switch (self.*) {
             inline else => |*value| value.deinit(),
         }
+        self.* = undefined;
+    }
+};
+
+pub const RefutedSolve = struct {
+    prepared: solver_live.Prepared,
+    problems: solver_result.OwnedProblems,
+    outcome: solver_model.Outcome,
+
+    pub fn init(
+        prepared: solver_live.Prepared,
+        problems: solver_result.OwnedProblems,
+    ) RefutedSolve {
+        return .{
+            .prepared = prepared,
+            .problems = problems,
+            .outcome = .{
+                .actions = &.{},
+                .problems = problems.problems,
+                .skipped_jobs = &.{},
+            },
+        };
+    }
+
+    pub fn deinit(self: *RefutedSolve) void {
+        self.problems.deinit();
+        self.prepared.deinit();
         self.* = undefined;
     }
 };
@@ -215,6 +250,7 @@ fn nativeSolverLiveSolve(
     raw_repositories: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
     reinstall: bool,
     prepare_only: bool,
+    refute_unsat: bool,
     solved: ?*c.PTDNF_SOLVED_PKG_INFO,
     handle: ?*?*anyopaque,
 ) u32 {
@@ -479,6 +515,49 @@ fn nativeSolverLiveSolve(
             return c.ERROR_TDNF_OUT_OF_MEMORY;
         };
         owned.* = .{ .prepared = prepared };
+        handle.?.* = @ptrCast(owned);
+        return 0;
+    }
+
+    if (refute_unsat) {
+        var prepared = solver_live.prepare(allocator, solver_input) catch |err| {
+            setError("native live refute prepare unavailable: {t}", .{err});
+            return if (err == error.OutOfMemory)
+                c.ERROR_TDNF_OUT_OF_MEMORY
+            else
+                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+        };
+        var problems = solver_native.refuteProjected(
+            allocator,
+            prepared.universe,
+            &prepared.visibility,
+            .{ .jobs = prepared.jobs },
+            .{
+                .architecture = .{ .native_arch = prepared.native_arch },
+                .best = solver_input.best,
+                .allow_erasing = solver_input.allow_erasing or
+                    solver_input.erase_jobs.len != 0,
+                .clean_deps = solver_input.clean_deps,
+                .skip_broken = solver_input.skip_broken,
+                .protected_names = solver_input.protected_names,
+                .installonly_limit = solver_input.installonly_limit,
+                .installonly_names = solver_input.installonly_names,
+            },
+        ) catch |err| {
+            prepared.deinit();
+            setError("native live refute unavailable: {t}", .{err});
+            return if (err == error.OutOfMemory)
+                c.ERROR_TDNF_OUT_OF_MEMORY
+            else
+                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+        };
+        const owned = allocator.create(RetainedSolve) catch {
+            problems.deinit();
+            prepared.deinit();
+            setError("out of memory retaining the native live refutation", .{});
+            return c.ERROR_TDNF_OUT_OF_MEMORY;
+        };
+        owned.* = .{ .refuted = RefutedSolve.init(prepared, problems) };
         handle.?.* = @ptrCast(owned);
         return 0;
     }
@@ -865,6 +944,7 @@ test "native live solve wrapper rejects a null output" {
         null,
         null,
         0,
+        0,
         null,
         null,
     );
@@ -905,6 +985,7 @@ test "native live prepare rejects a request with nowhere to put the handle" {
         null,
         null,
         1,
+        0,
         null,
         null,
     );

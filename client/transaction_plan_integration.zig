@@ -2415,10 +2415,9 @@ pub fn capturePending(state: *State, input: Input) IntegrationError!void {
 /// Owns whichever producer filled the solver half of the capture.
 ///
 /// A resolved request is described by the native solve tdnf is about to run,
-/// because that is the transaction the plan is a plan of. A request that
-/// failed before the native solver ran has no such result, so its problems
-/// are still read off libsolv until native diagnostics replace
-/// `SolvReportProblems`.
+/// because that is the transaction the plan is a plan of. Terminal native
+/// handles carry either the prepared universe or the refuted solve facts the
+/// plan needs without reading libsolv's transaction model.
 const SolverCapture = union(enum) {
     libsolv: *libsolv_capture.Owner,
     native: *native_capture.Owner,
@@ -2451,6 +2450,12 @@ fn captureSolverFacts(
             .prepared => |*prepared| .fromPrepared(
                 prepared,
                 prepared.job_origins,
+                input.trace,
+            ),
+            .refuted => |*refuted| .fromRefuted(
+                &refuted.prepared,
+                &refuted.outcome,
+                refuted.prepared.job_origins,
                 input.trace,
             ),
         };
