@@ -9,60 +9,58 @@
 #define _GNU_SOURCE 1
 #include "includes.h"
 
-/*
- * Retrieve the effective package location, incorporating xml:base if present.
- *
- * If the solvable has SOLVABLE_MEDIABASE set (from <location xml:base="..."/>),
- * the mediabase and href are joined with TDNFJoinPath. Since mediabase is always
- * the first argument, URL schemes (e.g. "file:///pool") are preserved correctly.
- * The result is either an absolute URL (e.g. "file:///pool/pkg.rpm") or a
- * relative path (e.g. "snap-merged/pkg.rpm") that downstream callers join with
- * the repo base URL as normal.
- *
- * When no mediabase is present the bare href is returned unchanged, preserving
- * existing behaviour for normal repositories.
- */
 static uint32_t
-GetPkgLocationWithMediaBase(
+PackageUtilsBuildNativeRepoInputsFromSack(
     PSolvSack pSack,
-    uint32_t dwPkgId,
-    char **ppszLocation)
-{
-    uint32_t dwError = 0;
-    char *pszLocation = NULL;
-    char *pszMediaBase = NULL;
-    char *pszComposed = NULL;
+    PTDNF_REPOMD_NATIVE_REPO_INPUT *ppRepos,
+    uint32_t *pdwRepoCount
+    );
 
-    dwError = SolvGetPkgLocationFromId(pSack, dwPkgId, &pszLocation);
-    BAIL_ON_TDNF_ERROR(dwError);
+static void
+PackageUtilsFreeNativeRepoInputs(
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos,
+    uint32_t dwRepoCount
+    );
 
-    if (pszLocation)
-    {
-        dwError = SolvGetPkgMediaBaseFromId(pSack, dwPkgId, &pszMediaBase);
-        BAIL_ON_TDNF_ERROR(dwError);
+static uint32_t
+PackageUtilsCreateRpmConfigFromSack(
+    PSolvSack pSack,
+    tdnf_rpm_config **ppConfig
+    );
 
-        if (pszMediaBase)
-        {
-            dwError = TDNFJoinPath(&pszComposed, pszMediaBase, pszLocation, NULL);
-            BAIL_ON_TDNF_ERROR(dwError);
+static uint32_t
+PackageUtilsPopulatePkgInfoFromRefs(
+    PSolvSack pSack,
+    char **ppszPackageRefs,
+    uint32_t dwRefCount,
+    TDNF_PKG_DETAIL nDetail,
+    int nQueryFormat,
+    uint32_t dwDependencyMask,
+    int nFileList,
+    int nChecksum,
+    PTDNF_PKG_INFO *ppPkgInfo,
+    uint32_t *pdwCount
+    );
 
-            TDNF_SAFE_FREE_MEMORY(pszLocation);
-            pszLocation = pszComposed;
-            pszComposed = NULL;
-        }
-    }
+static uint32_t
+PackageUtilsPopulatePkgInfoFromPackageList(
+    PSolvSack pSack,
+    PSolvPackageList pPkgList,
+    TDNF_PKG_DETAIL nDetail,
+    int nQueryFormat,
+    uint32_t dwDependencyMask,
+    int nFileList,
+    int nChecksum,
+    PTDNF_PKG_INFO *ppPkgInfo,
+    uint32_t *pdwCount
+    );
 
-    *ppszLocation = pszLocation;
-
-cleanup:
-    TDNF_SAFE_FREE_MEMORY(pszMediaBase);
-    TDNF_SAFE_FREE_MEMORY(pszComposed);
-    return dwError;
-
-error:
-    TDNF_SAFE_FREE_MEMORY(pszLocation);
-    goto cleanup;
-}
+static int
+_pkginfo_compare(
+    const void *ptr1,
+    const void *ptr2,
+    void *data
+    );
 
 uint32_t
 TDNFMatchForReinstall(
@@ -133,153 +131,16 @@ TDNFPopulatePkgInfoQueryFormat(
     uint32_t* pdwCount
     )
 {
-    uint32_t dwError = 0;
-    uint32_t dwCount = 0;
-    uint32_t dwPkgIndex = 0;
-    Id dwPkgId = 0;
-    PTDNF_PKG_INFO pPkgInfos = NULL;
-    PTDNF_PKG_INFO pPkgInfo  = NULL;
-    char *pszSrcName = NULL;
-    char *pszSrcArch = NULL;
-    char *pszSrcEVR = NULL;
-
-    if(!ppPkgInfo || !pdwCount || !pSack || !pPkgList)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = SolvGetPackageListSize(pPkgList, &dwCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    if(dwCount == 0)
-    {
-        dwError = ERROR_TDNF_NO_MATCH;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFAllocateMemory(
-                  dwCount,
-                  sizeof(TDNF_PKG_INFO),
-                  (void**)&pPkgInfos);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    for (dwPkgIndex = 0; (uint32_t)dwPkgIndex < dwCount; dwPkgIndex++)
-    {
-        pPkgInfo = &pPkgInfos[dwPkgIndex];
-
-        dwError = SolvGetPackageId(pPkgList, dwPkgIndex, &dwPkgId);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetNevraFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->dwEpoch,
-                      &pPkgInfo->pszName,
-                      &pPkgInfo->pszVersion,
-                      &pPkgInfo->pszRelease,
-                      &pPkgInfo->pszArch,
-                      &pPkgInfo->pszEVR);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgRepoNameFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszRepoName);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgInstallSizeFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->dwInstallSizeBytes);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgDownloadSizeFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->dwDownloadSizeBytes);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = TDNFUtilsFormatSize(
-                      pPkgInfo->dwInstallSizeBytes,
-                      &pPkgInfo->pszFormattedSize);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = TDNFUtilsFormatSize(
-                      pPkgInfo->dwDownloadSizeBytes,
-                      &pPkgInfo->pszFormattedDownloadSize);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgSummaryFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszSummary);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgUrlFromId(pSack, dwPkgId, &pPkgInfo->pszURL);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgLicenseFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszLicense);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgDescriptionFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszDescription);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetSourceFromId(
-                      pSack,
-                      dwPkgId,
-                      &pszSrcName,
-                      &pszSrcArch,
-                      &pszSrcEVR);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = TDNFAllocateStringPrintf(
-                      &pPkgInfo->pszSourcePkg,
-                      "%s-%s.%s",
-                      pszSrcName, pszSrcEVR, pszSrcArch);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = GetPkgLocationWithMediaBase(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszLocation);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        if (dwPkgIndex < dwCount - 1)
-        {
-            pPkgInfo->pNext = &pPkgInfos[dwPkgIndex+1];
-        }
-    }
-
-    *pdwCount = dwCount;
-    *ppPkgInfo = pPkgInfos;
-
-cleanup:
-    TDNF_SAFE_FREE_MEMORY(pszSrcName);
-    TDNF_SAFE_FREE_MEMORY(pszSrcArch);
-    TDNF_SAFE_FREE_MEMORY(pszSrcEVR);
-    return dwError;
-
-error:
-    if(ppPkgInfo)
-    {
-        *ppPkgInfo = NULL;
-    }
-    if(pdwCount)
-    {
-        *pdwCount = 0;
-    }
-    if(pPkgInfos)
-    {
-        TDNFFreePackageInfoArray(pPkgInfos, dwCount);
-    }
-    goto cleanup;
+    return PackageUtilsPopulatePkgInfoFromPackageList(
+               pSack,
+               pPkgList,
+               DETAIL_LIST,
+               1,
+               0,
+               0,
+               0,
+               ppPkgInfo,
+               pdwCount);
 }
 
 uint32_t
@@ -291,167 +152,16 @@ TDNFPopulatePkgInfoArray(
     uint32_t* pdwCount
     )
 {
-    uint32_t dwError = 0;
-    uint32_t dwCount = 0;
-    uint32_t dwPkgIndex = 0;
-    Id dwPkgId = 0;
-    PTDNF_PKG_INFO pPkgInfos = NULL;
-    PTDNF_PKG_INFO pPkgInfo  = NULL;
-    char *pszSrcName = NULL;
-    char *pszSrcArch = NULL;
-    char *pszSrcEVR = NULL;
-
-    if(!ppPkgInfo || !pdwCount || !pSack || !pPkgList)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = SolvGetPackageListSize(pPkgList, &dwCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    if(dwCount == 0)
-    {
-        dwError = ERROR_TDNF_NO_MATCH;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFAllocateMemory(
-                  dwCount,
-                  sizeof(TDNF_PKG_INFO),
-                  (void**)&pPkgInfos);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    for (dwPkgIndex = 0; (uint32_t)dwPkgIndex < dwCount; dwPkgIndex++)
-    {
-        pPkgInfo = &pPkgInfos[dwPkgIndex];
-
-        dwError = SolvGetPackageId(pPkgList, dwPkgIndex, &dwPkgId);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetNevraFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->dwEpoch,
-                      &pPkgInfo->pszName,
-                      &pPkgInfo->pszVersion,
-                      &pPkgInfo->pszRelease,
-                      &pPkgInfo->pszArch,
-                      &pPkgInfo->pszEVR);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgRepoNameFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszRepoName);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        if(nDetail == DETAIL_INFO)
-        {
-            dwError = SolvGetPkgInstallSizeFromId(
-                          pSack,
-                          dwPkgId,
-                          &pPkgInfo->dwInstallSizeBytes);
-            BAIL_ON_TDNF_ERROR(dwError);
-
-            dwError = SolvGetPkgDownloadSizeFromId(
-                        pSack,
-                        dwPkgId,
-                        &pPkgInfo->dwDownloadSizeBytes);
-            BAIL_ON_TDNF_ERROR(dwError);
-
-            dwError = TDNFUtilsFormatSize(
-                          pPkgInfo->dwInstallSizeBytes,
-                          &pPkgInfo->pszFormattedSize);
-            BAIL_ON_TDNF_ERROR(dwError);
-
-            dwError = TDNFUtilsFormatSize(
-                          pPkgInfo->dwDownloadSizeBytes,
-                          &pPkgInfo->pszFormattedDownloadSize);
-            BAIL_ON_TDNF_ERROR(dwError);
-
-            dwError = SolvGetPkgSummaryFromId(
-                          pSack,
-                          dwPkgId,
-                          &pPkgInfo->pszSummary);
-            BAIL_ON_TDNF_ERROR(dwError);
-
-            dwError = SolvGetPkgUrlFromId(pSack, dwPkgId, &pPkgInfo->pszURL);
-            BAIL_ON_TDNF_ERROR(dwError);
-
-            dwError = SolvGetPkgLicenseFromId(
-                          pSack,
-                          dwPkgId,
-                          &pPkgInfo->pszLicense);
-            BAIL_ON_TDNF_ERROR(dwError);
-
-            dwError = SolvGetPkgDescriptionFromId(
-                          pSack,
-                          dwPkgId,
-                          &pPkgInfo->pszDescription);
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-        else if (nDetail == DETAIL_CHANGELOG)
-        {
-            dwError = SolvGetChangeLogFromId(
-                          pSack,
-                          dwPkgId,
-                          &pPkgInfo->pChangeLogEntries);
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-        else if (nDetail == DETAIL_LOCATION)
-        {
-            dwError = GetPkgLocationWithMediaBase(
-                          pSack,
-                          dwPkgId,
-                          &pPkgInfo->pszLocation);
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-        else if (nDetail == DETAIL_SOURCEPKG)
-        {
-            dwError = SolvGetSourceFromId(
-                          pSack,
-                          dwPkgId,
-                          &pszSrcName,
-                          &pszSrcArch,
-                          &pszSrcEVR);
-            BAIL_ON_TDNF_ERROR(dwError);
-
-            dwError = TDNFAllocateStringPrintf(
-                          &pPkgInfo->pszSourcePkg,
-                          "%s-%s.%s",
-                          pszSrcName, pszSrcEVR, pszSrcArch);
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-        if (dwPkgIndex < dwCount - 1)
-        {
-            pPkgInfo->pNext = &pPkgInfos[dwPkgIndex+1];
-        }
-    }
-
-    *pdwCount = dwCount;
-    *ppPkgInfo = pPkgInfos;
-
-cleanup:
-    TDNF_SAFE_FREE_MEMORY(pszSrcName);
-    TDNF_SAFE_FREE_MEMORY(pszSrcArch);
-    TDNF_SAFE_FREE_MEMORY(pszSrcEVR);
-    return dwError;
-
-error:
-    if(ppPkgInfo)
-    {
-        *ppPkgInfo = NULL;
-    }
-    if(pdwCount)
-    {
-        *pdwCount = 0;
-    }
-    if(pPkgInfos)
-    {
-        TDNFFreePackageInfoArray(pPkgInfos, dwCount);
-    }
-    goto cleanup;
+    return PackageUtilsPopulatePkgInfoFromPackageList(
+               pSack,
+               pPkgList,
+               nDetail,
+               0,
+               0,
+               0,
+               0,
+               ppPkgInfo,
+               pdwCount);
 }
 
 uint32_t
@@ -463,10 +173,7 @@ TDNFPopulatePkgInfoForRepoSync(
 {
     uint32_t dwError = 0;
     uint32_t dwCount = 0;
-    int dwPkgIndex = 0;
-    Id dwPkgId = 0;
     PTDNF_PKG_INFO pPkgInfos = NULL;
-    PTDNF_PKG_INFO pPkgInfo  = NULL;
 
     if(!ppPkgInfo || !pSack || !pPkgList)
     {
@@ -474,55 +181,17 @@ TDNFPopulatePkgInfoForRepoSync(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvGetPackageListSize(pPkgList, &dwCount);
+    dwError = PackageUtilsPopulatePkgInfoFromPackageList(
+                  pSack,
+                  pPkgList,
+                  DETAIL_LOCATION,
+                  0,
+                  0,
+                  0,
+                  0,
+                  &pPkgInfos,
+                  &dwCount);
     BAIL_ON_TDNF_ERROR(dwError);
-
-    if(dwCount == 0)
-    {
-        dwError = ERROR_TDNF_NO_MATCH;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFAllocateMemory(
-                  dwCount,
-                  sizeof(TDNF_PKG_INFO),
-                  (void**)&pPkgInfos);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    for (dwPkgIndex = 0; (uint32_t)dwPkgIndex < dwCount; dwPkgIndex++)
-    {
-        pPkgInfo = &pPkgInfos[dwPkgIndex];
-        if ((uint32_t)dwPkgIndex < dwCount-1)
-        {
-            pPkgInfo->pNext = &pPkgInfos[dwPkgIndex+1];
-        }
-
-        dwError = SolvGetPackageId(pPkgList, dwPkgIndex, &dwPkgId);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetNevraFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->dwEpoch,
-                      &pPkgInfo->pszName,
-                      &pPkgInfo->pszVersion,
-                      &pPkgInfo->pszRelease,
-                      &pPkgInfo->pszArch,
-                      &pPkgInfo->pszEVR);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgRepoNameFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszRepoName);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = GetPkgLocationWithMediaBase(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszLocation);
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
 
     *ppPkgInfo = pPkgInfos;
 
@@ -539,37 +208,6 @@ error:
         TDNFFreePackageInfoArray(pPkgInfos, dwCount);
     }
     goto cleanup;
-}
-
-static
-int _pkginfo_compare(
-        const void *ptr1,
-        const void *ptr2,
-        void *data
-    )
-{
-    const PTDNF_PKG_INFO* ppPkgInfo1 = (PTDNF_PKG_INFO*)ptr1;
-    const PTDNF_PKG_INFO* ppPkgInfo2 = (PTDNF_PKG_INFO*)ptr2;
-    Pool *pPool = (Pool *)data;
-    int ret;
-
-    /* sort by repo name first, then name, then version */
-    ret = strcmp((*ppPkgInfo1)->pszRepoName, (*ppPkgInfo2)->pszRepoName);
-    if (ret != 0)
-    {
-        return ret;
-    }
-    ret = strcmp((*ppPkgInfo1)->pszName, (*ppPkgInfo2)->pszName);
-    if (ret != 0)
-    {
-        return ret;
-    }
-
-    /* we want newest version first, so reverse it by using the negated value */
-    ret = - pool_evrcmp_str(pPool,
-                          (*ppPkgInfo1)->pszEVR, (*ppPkgInfo2)->pszEVR,
-                          EVRCMP_COMPARE);
-    return ret;
 }
 
 uint32_t
@@ -601,8 +239,9 @@ TDNFPkgInfoFilterNewest(
         ppPkgInfos[i++] = pPkgInfo;
     }
 
+    (void)pSack;
     qsort_r(ppPkgInfos, dwCount,
-            sizeof(PTDNF_PKG_INFO), _pkginfo_compare, (void *)pSack->pPool);
+            sizeof(PTDNF_PKG_INFO), _pkginfo_compare, NULL);
 
     /* Loop though pointer array, use the linked list to skip over
        older versions of the same packages. The linked list will only
@@ -1155,115 +794,39 @@ TDNFPopulatePkgInfos(
 {
     uint32_t dwError = 0;
     uint32_t dwCount = 0;
-    int dwPkgIndex = 0;
-    Id dwPkgId = 0;
+    uint32_t dwPkgIndex = 0;
+    PTDNF_PKG_INFO pPkgInfoArray = NULL;
     PTDNF_PKG_INFO pPkgInfos = NULL;
     PTDNF_PKG_INFO pPkgInfo = NULL;
-    int nChecksumType = 0;
 
-    if(!ppPkgInfos)
+    if(!ppPkgInfos || !pSack || !pPkgList)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvGetPackageListSize(pPkgList, &dwCount);
-    if(dwCount == 0)
-    {
-        dwError = ERROR_TDNF_NO_MATCH;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
+    dwError = PackageUtilsPopulatePkgInfoFromPackageList(
+                  pSack,
+                  pPkgList,
+                  DETAIL_LIST,
+                  1,
+                  0,
+                  0,
+                  1,
+                  &pPkgInfoArray,
+                  &dwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
 
-    for (dwPkgIndex = 0; (uint32_t)dwPkgIndex < dwCount; dwPkgIndex++)
+    for (dwPkgIndex = 0; dwPkgIndex < dwCount; dwPkgIndex++)
     {
-        dwError = SolvGetPackageId(pPkgList, dwPkgIndex, &dwPkgId);
-        BAIL_ON_TDNF_ERROR(dwError);
-
         dwError = TDNFAllocateMemory(
                       1,
                       sizeof(TDNF_PKG_INFO),
                       (void**)&pPkgInfo);
         BAIL_ON_TDNF_ERROR(dwError);
 
-        dwError = SolvGetNevraFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->dwEpoch,
-                      &pPkgInfo->pszName,
-                      &pPkgInfo->pszVersion,
-                      &pPkgInfo->pszRelease,
-                      &pPkgInfo->pszArch,
-                      &pPkgInfo->pszEVR);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgRepoNameFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszRepoName);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgSummaryFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszSummary);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = GetPkgLocationWithMediaBase(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->pszLocation);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgChecksumFromId(
-                      pSack,
-                      dwPkgId,
-                      &nChecksumType,
-                      &pPkgInfo->pbChecksum);
-        //Ignore no data
-        if(dwError == ERROR_TDNF_NO_DATA)
-        {
-            dwError = 0;
-        } else if (nChecksumType == REPOKEY_TYPE_SHA512)
-        {
-            pPkgInfo->nChecksumType = TDNF_HASH_SHA512;
-        } else if (nChecksumType == REPOKEY_TYPE_SHA256)
-        {
-            pPkgInfo->nChecksumType = TDNF_HASH_SHA256;
-        } else if (nChecksumType == REPOKEY_TYPE_SHA1)
-        {
-            pPkgInfo->nChecksumType = TDNF_HASH_SHA1;
-        } else if (nChecksumType == REPOKEY_TYPE_MD5)
-        {
-            pPkgInfo->nChecksumType = TDNF_HASH_MD5;
-        } else
-        {
-            pPkgInfo->pbChecksum = NULL;
-        }
-
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgInstallSizeFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->dwInstallSizeBytes);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetPkgDownloadSizeFromId(
-                      pSack,
-                      dwPkgId,
-                      &pPkgInfo->dwDownloadSizeBytes);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = TDNFUtilsFormatSize(
-                      pPkgInfo->dwInstallSizeBytes,
-                      &pPkgInfo->pszFormattedSize);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = TDNFUtilsFormatSize(
-                      pPkgInfo->dwDownloadSizeBytes,
-                      &pPkgInfo->pszFormattedDownloadSize);
-        BAIL_ON_TDNF_ERROR(dwError);
-
+        *pPkgInfo = pPkgInfoArray[dwPkgIndex];
+        memset(&pPkgInfoArray[dwPkgIndex], 0, sizeof(TDNF_PKG_INFO));
         pPkgInfo->pNext = pPkgInfos;
         pPkgInfos = pPkgInfo;
         pPkgInfo = NULL;
@@ -1272,6 +835,7 @@ TDNFPopulatePkgInfos(
     *ppPkgInfos = pPkgInfos;
 
 cleanup:
+    TDNF_SAFE_FREE_MEMORY(pPkgInfoArray);
     return dwError;
 
 error:
@@ -1283,6 +847,11 @@ error:
     if (pPkgInfos)
     {
         TDNFFreePackageInfo(pPkgInfos);
+    }
+    if (pPkgInfoArray)
+    {
+        TDNFFreePackageInfoArray(pPkgInfoArray, dwCount);
+        pPkgInfoArray = NULL;
     }
     if (pPkgInfo)
     {
@@ -1302,8 +871,9 @@ TDNFPopulatePkgInfoArrayDependencies(
     uint32_t dwError = 0;
     uint32_t dwCount = 0;
     uint32_t dwPkgIndex = 0;
-    Id dwPkgId = 0;
-    PTDNF_PKG_INFO pPkgInfo  = NULL;
+    uint32_t dwNativeCount = 0;
+    uint32_t dwDependencyMask = 0;
+    PTDNF_PKG_INFO pNativePkgInfos = NULL;
 
     if(!pPkgInfos || !pSack || !pPkgList)
     {
@@ -1311,27 +881,33 @@ TDNFPopulatePkgInfoArrayDependencies(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvGetPackageListSize(pPkgList, &dwCount);
+    dwDependencyMask = 1u << depKey;
+    dwError = PackageUtilsPopulatePkgInfoFromPackageList(
+                  pSack,
+                  pPkgList,
+                  DETAIL_LIST,
+                  0,
+                  dwDependencyMask,
+                  0,
+                  0,
+                  &pNativePkgInfos,
+                  &dwNativeCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    if(dwCount == 0)
-    {
-        dwError = ERROR_TDNF_NO_MATCH;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
+    dwCount = dwNativeCount;
 
     for (dwPkgIndex = 0; dwPkgIndex < dwCount; dwPkgIndex++)
     {
-        pPkgInfo = &pPkgInfos[dwPkgIndex];
-
-        dwError = SolvGetPackageId(pPkgList, dwPkgIndex, &dwPkgId);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvGetDependenciesFromId(pSack, dwPkgId, depKey, &pPkgInfo->pppszDependencies[depKey]);
-        BAIL_ON_TDNF_ERROR(dwError);
+        pPkgInfos[dwPkgIndex].pppszDependencies =
+            pNativePkgInfos[dwPkgIndex].pppszDependencies;
+        pNativePkgInfos[dwPkgIndex].pppszDependencies = NULL;
     }
 
 cleanup:
+    if(pNativePkgInfos)
+    {
+        TDNFFreePackageInfoArray(pNativePkgInfos, dwNativeCount);
+    }
     return dwError;
 
 error:
@@ -1348,8 +924,8 @@ TDNFPopulatePkgInfoArrayFileList(
     uint32_t dwError = 0;
     uint32_t dwCount = 0;
     uint32_t dwPkgIndex = 0;
-    Id dwPkgId = 0;
-    PTDNF_PKG_INFO pPkgInfo  = NULL;
+    uint32_t dwNativeCount = 0;
+    PTDNF_PKG_INFO pNativePkgInfos = NULL;
 
     if(!pPkgInfos || !pSack || !pPkgList)
     {
@@ -1357,29 +933,367 @@ TDNFPopulatePkgInfoArrayFileList(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvGetPackageListSize(pPkgList, &dwCount);
+    dwError = PackageUtilsPopulatePkgInfoFromPackageList(
+                  pSack,
+                  pPkgList,
+                  DETAIL_LIST,
+                  0,
+                  0,
+                  1,
+                  0,
+                  &pNativePkgInfos,
+                  &dwNativeCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    if(dwCount == 0)
-    {
-        dwError = ERROR_TDNF_NO_MATCH;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
+    dwCount = dwNativeCount;
 
     for (dwPkgIndex = 0; dwPkgIndex < dwCount; dwPkgIndex++)
     {
-        pPkgInfo = &pPkgInfos[dwPkgIndex];
+        pPkgInfos[dwPkgIndex].ppszFileList =
+            pNativePkgInfos[dwPkgIndex].ppszFileList;
+        pNativePkgInfos[dwPkgIndex].ppszFileList = NULL;
+    }
 
-        dwError = SolvGetPackageId(pPkgList, dwPkgIndex, &dwPkgId);
-        BAIL_ON_TDNF_ERROR(dwError);
+cleanup:
+    if(pNativePkgInfos)
+    {
+        TDNFFreePackageInfoArray(pNativePkgInfos, dwNativeCount);
+    }
+    return dwError;
 
-        dwError = SolvGetFileListFromId(pSack, dwPkgId, &pPkgInfo->ppszFileList);
+error:
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsBuildNativeRepoInputsFromSack(
+    PSolvSack pSack,
+    PTDNF_REPOMD_NATIVE_REPO_INPUT *ppRepos,
+    uint32_t *pdwRepoCount
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwCount = 0;
+    uint32_t dwIndex = 0;
+    int nRepoIndex = 0;
+    Pool *pool = NULL;
+    Repo *pRepo = NULL;
+    PTDNF_REPO_DATA pRepoData = NULL;
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
+
+    if(!pSack || !pSack->pPool || !ppRepos || !pdwRepoCount)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
+
+    pool = pSack->pPool;
+    FOR_REPOS(nRepoIndex, pRepo)
+    {
+        pRepoData = (PTDNF_REPO_DATA)pRepo->appdata;
+        if(pRepoData && pRepoData->nEnabled && pRepoData->nHasMetaData &&
+           !IsNullOrEmptyString(pRepoData->pszId))
+        {
+            dwCount++;
+        }
+    }
+
+    if(!dwCount)
+    {
+        goto cleanup;
+    }
+
+    if(IsNullOrEmptyString(pSack->pszCacheDir))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFAllocateMemory(
+                  dwCount,
+                  sizeof(TDNF_REPOMD_NATIVE_REPO_INPUT),
+                  (void **)&pRepos);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    FOR_REPOS(nRepoIndex, pRepo)
+    {
+        const char *pszCacheName = NULL;
+
+        pRepoData = (PTDNF_REPO_DATA)pRepo->appdata;
+        if(!pRepoData || !pRepoData->nEnabled || !pRepoData->nHasMetaData ||
+           IsNullOrEmptyString(pRepoData->pszId))
+        {
+            continue;
+        }
+
+        pszCacheName = pRepoData->pszCacheName ?
+                       pRepoData->pszCacheName : pRepoData->pszId;
+        dwError = TDNFJoinPath(
+                      (char **)&pRepos[dwIndex].pszCacheDir,
+                      pSack->pszCacheDir,
+                      pszCacheName,
+                      NULL);
+        BAIL_ON_TDNF_ERROR(dwError);
+
+        pRepos[dwIndex].pszId = pRepoData->pszId;
+        pRepos[dwIndex].pszSnapshotFile = pRepoData->pszSnapshotFile;
+        dwIndex++;
+    }
+
+cleanup:
+    if(ppRepos)
+    {
+        *ppRepos = pRepos;
+    }
+    if(pdwRepoCount)
+    {
+        *pdwRepoCount = dwIndex;
+    }
+    return dwError;
+
+error:
+    PackageUtilsFreeNativeRepoInputs(pRepos, dwCount);
+    pRepos = NULL;
+    dwIndex = 0;
+    goto cleanup;
+}
+
+static void
+PackageUtilsFreeNativeRepoInputs(
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos,
+    uint32_t dwRepoCount
+    )
+{
+    uint32_t dwIndex = 0;
+
+    if(!pRepos)
+    {
+        return;
+    }
+
+    for(dwIndex = 0; dwIndex < dwRepoCount; dwIndex++)
+    {
+        char *pszCacheDir = (char *)pRepos[dwIndex].pszCacheDir;
+        TDNF_SAFE_FREE_MEMORY(pszCacheDir);
+        pRepos[dwIndex].pszCacheDir = NULL;
+    }
+    TDNF_SAFE_FREE_MEMORY(pRepos);
+}
+
+static uint32_t
+PackageUtilsCreateRpmConfigFromSack(
+    PSolvSack pSack,
+    tdnf_rpm_config **ppConfig
+    )
+{
+    uint32_t dwError = 0;
+    const char *pszRootDir = NULL;
+    tdnf_rpm_config *pConfig = NULL;
+
+    if(!pSack || !ppConfig)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pszRootDir = IsNullOrEmptyString(pSack->pszRootDir) ?
+                 "/" : pSack->pszRootDir;
+    pConfig = tdnf_rpm_config_create(pszRootDir);
+    if(!pConfig)
+    {
+        dwError = ERROR_TDNF_OUT_OF_MEMORY;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *ppConfig = pConfig;
 
 cleanup:
     return dwError;
 
 error:
+    if(ppConfig)
+    {
+        *ppConfig = NULL;
+    }
+    tdnf_rpm_config_destroy(pConfig);
     goto cleanup;
+}
+
+static uint32_t
+PackageUtilsPopulatePkgInfoFromRefs(
+    PSolvSack pSack,
+    char **ppszPackageRefs,
+    uint32_t dwRefCount,
+    TDNF_PKG_DETAIL nDetail,
+    int nQueryFormat,
+    uint32_t dwDependencyMask,
+    int nFileList,
+    int nChecksum,
+    PTDNF_PKG_INFO *ppPkgInfo,
+    uint32_t *pdwCount
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwRepoCount = 0;
+    uint32_t dwCount = 0;
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
+    tdnf_rpm_config *pConfig = NULL;
+    PTDNF_PKG_INFO pPkgInfo = NULL;
+
+    if(!pSack || !ppszPackageRefs || !ppPkgInfo || !pdwCount)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+    if(!dwRefCount)
+    {
+        dwError = ERROR_TDNF_NO_MATCH;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = PackageUtilsBuildNativeRepoInputsFromSack(
+                  pSack,
+                  &pRepos,
+                  &dwRepoCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsCreateRpmConfigFromSack(pSack, &pConfig);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = TDNFRepoMdNativePackageInfoForRefsConfig(
+                  pRepos,
+                  dwRepoCount,
+                  pConfig,
+                  ppszPackageRefs,
+                  nDetail,
+                  nQueryFormat,
+                  dwDependencyMask,
+                  nFileList,
+                  nChecksum,
+                  &pPkgInfo,
+                  &dwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppPkgInfo = pPkgInfo;
+    *pdwCount = dwCount;
+
+cleanup:
+    tdnf_rpm_config_destroy(pConfig);
+    PackageUtilsFreeNativeRepoInputs(pRepos, dwRepoCount);
+    return dwError;
+
+error:
+    if(ppPkgInfo)
+    {
+        *ppPkgInfo = NULL;
+    }
+    if(pdwCount)
+    {
+        *pdwCount = 0;
+    }
+    if(pPkgInfo)
+    {
+        TDNFFreePackageInfoArray(pPkgInfo, dwCount);
+    }
+    goto cleanup;
+}
+
+static uint32_t
+PackageUtilsPopulatePkgInfoFromPackageList(
+    PSolvSack pSack,
+    PSolvPackageList pPkgList,
+    TDNF_PKG_DETAIL nDetail,
+    int nQueryFormat,
+    uint32_t dwDependencyMask,
+    int nFileList,
+    int nChecksum,
+    PTDNF_PKG_INFO *ppPkgInfo,
+    uint32_t *pdwCount
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwCount = 0;
+    char **ppszPackageRefs = NULL;
+
+    if(!pSack || !pPkgList || !ppPkgInfo || !pdwCount)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFNativeQuerySerializePackageListRefs(
+                  pSack,
+                  pPkgList,
+                  &ppszPackageRefs,
+                  &dwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = PackageUtilsPopulatePkgInfoFromRefs(
+                  pSack,
+                  ppszPackageRefs,
+                  dwCount,
+                  nDetail,
+                  nQueryFormat,
+                  dwDependencyMask,
+                  nFileList,
+                  nChecksum,
+                  ppPkgInfo,
+                  pdwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+cleanup:
+    TDNFFreeStringArray(ppszPackageRefs);
+    return dwError;
+
+error:
+    if(ppPkgInfo)
+    {
+        *ppPkgInfo = NULL;
+    }
+    if(pdwCount)
+    {
+        *pdwCount = 0;
+    }
+    goto cleanup;
+}
+
+static
+int _pkginfo_compare(
+        const void *ptr1,
+        const void *ptr2,
+        void *data
+    )
+{
+    const PTDNF_PKG_INFO* ppPkgInfo1 = (PTDNF_PKG_INFO*)ptr1;
+    const PTDNF_PKG_INFO* ppPkgInfo2 = (PTDNF_PKG_INFO*)ptr2;
+    int nCompare = 0;
+    int ret;
+
+    (void)data;
+
+    /* sort by repo name first, then name, then version */
+    ret = strcmp((*ppPkgInfo1)->pszRepoName, (*ppPkgInfo2)->pszRepoName);
+    if (ret != 0)
+    {
+        return ret;
+    }
+    ret = strcmp((*ppPkgInfo1)->pszName, (*ppPkgInfo2)->pszName);
+    if (ret != 0)
+    {
+        return ret;
+    }
+
+    /* we want newest version first, so reverse it by using the negated value */
+    if(TDNFRepoMdNativeCompareEvr(
+           (*ppPkgInfo1)->pszEVR,
+           (*ppPkgInfo2)->pszEVR,
+           &nCompare) == 0)
+    {
+        ret = -nCompare;
+    }
+    else
+    {
+        ret = 0;
+    }
+    return ret;
 }

@@ -809,6 +809,41 @@ TDNFRepoMdNativeRequiresForPackageRefs(
     );
 
 /*
+ * Populate legacy TDNF_PKG_INFO records for serialized package references
+ * (`repo<US>nevra`) supplied in `ppszPackageRefs`. nDetail uses the
+ * TDNF_PKG_DETAIL values. If nQueryFormat is non-zero, the full queryformat
+ * field set is populated. dwDependencyMask is a bitset of REPOQUERY_DEP_KEY
+ * values; nFileList and nChecksum request file-list and package checksum
+ * fields respectively.
+ */
+uint32_t
+TDNFRepoMdNativePackageInfoForRefs(
+    const TDNF_REPOMD_NATIVE_REPO_INPUT *pRepos,
+    uint32_t dwRepoCount,
+    const char *pszInstallRoot,
+    char **ppszPackageRefs,
+    int nDetail,
+    int nQueryFormat,
+    uint32_t dwDependencyMask,
+    int nFileList,
+    int nChecksum,
+    PTDNF_PKG_INFO *ppPkgInfo,
+    uint32_t *pdwCount
+    );
+
+/*
+ * Compare two EVR strings using the native RPM version comparison rules.
+ * `*pnResult` is negative, zero, or positive when left is older, equal, or
+ * newer than right.
+ */
+uint32_t
+TDNFRepoMdNativeCompareEvr(
+    const char *pszLeftEvr,
+    const char *pszRightEvr,
+    int *pnResult
+    );
+
+/*
  * Return serialized `repo<US>nevra` lines for the subset of
  * `ppszAutoInstalledRefs` that are still orphaned when evaluated against the
  * installed RPM metadata rooted at `pszInstallRoot`.
@@ -962,6 +997,21 @@ TDNFRepoMdNativeRequiresForPackageRefsConfig(
     const tdnf_rpm_config *pConfig,
     char **ppszPackageRefs,
     char ***pppszDeps,
+    uint32_t *pdwCount
+    );
+
+uint32_t
+TDNFRepoMdNativePackageInfoForRefsConfig(
+    const TDNF_REPOMD_NATIVE_REPO_INPUT *pRepos,
+    uint32_t dwRepoCount,
+    const tdnf_rpm_config *pConfig,
+    char **ppszPackageRefs,
+    int nDetail,
+    int nQueryFormat,
+    uint32_t dwDependencyMask,
+    int nFileList,
+    int nChecksum,
+    PTDNF_PKG_INFO *ppPkgInfo,
     uint32_t *pdwCount
     );
 
