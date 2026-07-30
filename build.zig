@@ -476,6 +476,7 @@ pub fn build(b: *Build) void {
     repomd_mod.addImport("xml", xml_mod);
     repomd_mod.addImport("rpm_header", rpmzig_header_mod);
     repomd_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+    repomd_mod.addImport("tdnf_error", tdnf_error_mod);
     repomd_mod.addIncludePath(b.path("include"));
     repomd_mod.addIncludePath(b.path("rpmzig"));
     addLibsolvCoreIncludes(
@@ -1709,6 +1710,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addIncludePath(b.path("include"));
         test_mod.addIncludePath(b.path("rpmzig"));
         addLibsolvIncludes(

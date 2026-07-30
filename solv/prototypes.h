@@ -49,75 +49,12 @@ typedef struct _SOLV_REPO_INFO_INTERNAL_
     char          *pszRepoCacheDir;
 }SOLV_REPO_INFO_INTERNAL, *PSOLV_REPO_INFO_INTERNAL;
 
-extern Id allDepKeyIds[];
-
 // tdnfpackage.c
-uint32_t
-SolvGetPkgInfoFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    uint32_t dwWhichInfo,
-    char** ppszInfo);
-
 uint32_t
 SolvGetPkgNameFromId(
     PSolvSack pSack,
     uint32_t dwPkgId,
     char** ppszName);
-
-uint32_t
-SolvGetPkgRepoNameFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppRepoName);
-
-uint32_t
-SolvGetPkgInstallSizeFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    uint32_t * pdwSize);
-
-uint32_t
-SolvGetPkgDownloadSizeFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    uint32_t * pdwSize);
-
-uint32_t
-SolvGetPkgSummaryFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppszSummary);
-
-uint32_t
-SolvGetPkgLicenseFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppszLicense);
-
-uint32_t
-SolvGetPkgDescriptionFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppszDescription);
-
-uint32_t
-SolvGetPkgUrlFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppszUrl);
-
-uint32_t
-SolvGetPkgMediaBaseFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppszMediaBase);
-
-uint32_t
-SolvGetPkgLocationFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char** ppszLocation);
 
 uint32_t
 SolvGetPkgNevrFromId(
@@ -171,14 +108,6 @@ SolvGetPackageId(
     );
 
 uint32_t
-SolvGetPkgChecksumFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    int *checksumType,
-    unsigned char** ppbChecksum
-    );
-
-uint32_t
 SolvFindAllInstalled(
     PSolvSack pSack,
     PSolvPackageList* ppPkgList
@@ -210,14 +139,6 @@ SolvFindInstalledPkgByMultipleNames(
     PSolvSack pSack,
     char** ppszName,
     PSolvPackageList* ppPkgList
-    );
-
-uint32_t
-SolvCountPkgByName(
-    PSolvSack pSack,
-    const char* pszName,
-    int nSource,
-    uint32_t * pdwCount
     );
 
 uint32_t
@@ -260,35 +181,6 @@ SolvGetNevraFromId(
     char **ppszRelease,
     char **ppszArch,
     char **ppszEVR
-    );
-
-uint32_t
-SolvGetDependenciesFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    REPOQUERY_DEP_KEY depKey,
-    char ***pppszDependencies);
-
-uint32_t
-SolvGetFileListFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char ***pppszFiles);
-
-uint32_t
-SolvGetSourceFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    char **ppszName,
-    char **ppszArch,
-    char **ppszEVR
-    );
-
-uint32_t
-SolvGetChangeLogFromId(
-    PSolvSack pSack,
-    uint32_t dwPkgId,
-    PTDNF_PKG_CHANGELOG_ENTRY *ppEntries
     );
 
 // tdnfpool.c
@@ -531,13 +423,6 @@ SolvUseMetaDataCache(
     PSOLV_REPO_INFO_INTERNAL pSolvRepoInfo,
     int       *nUseMetaDataCache
     );
-
-uint32_t
-SolvRequiresFromQueue(
-    Pool *pool,
-    Queue *pq_pkgs,  /* solvable ids */
-    Queue *pq_deps   /* string ids */
-);
 
 #ifdef __cplusplus
 }

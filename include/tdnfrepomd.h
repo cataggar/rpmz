@@ -832,6 +832,18 @@ TDNFRepoMdNativePackageInfoForRefs(
     );
 
 /*
+ * Return unique `requires` dependency strings for packages parsed directly
+ * from the supplied command-line RPM paths.
+ */
+uint32_t
+TDNFRepoMdNativeRequiresForCmdLineRpmPaths(
+    const char *const *ppszCmdLineRpmPaths,
+    uint32_t dwPathCount,
+    char ***pppszDeps,
+    uint32_t *pdwCount
+    );
+
+/*
  * Compare two EVR strings using the native RPM version comparison rules.
  * `*pnResult` is negative, zero, or positive when left is older, equal, or
  * newer than right.

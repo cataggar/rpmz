@@ -9,6 +9,9 @@ pub const ERROR_TDNF_INVALID_PARAMETER: u32 = fromErrno(.INVAL);
 pub const ERROR_TDNF_OUT_OF_MEMORY: u32 = fromErrno(.NOMEM);
 pub const ERROR_TDNF_CALL_NOT_SUPPORTED: u32 = fromErrno(.NOSYS);
 pub const ERROR_TDNF_SOLV_FAILED: u32 = 1301;
+pub const ERROR_TDNF_SOLV_IO: u32 = 1304;
+pub const ERROR_TDNF_RPM_HEADER_CONVERT_FAILED: u32 = 1509;
+pub const ERROR_TDNF_FILE_NOT_FOUND: u32 = fromErrno(.NOENT);
 pub const ERROR_TDNF_TIMED_OUT: u32 = fromErrno(.TIMEDOUT);
 
 pub fn fromErrno(value: std.posix.E) u32 {
@@ -20,5 +23,8 @@ test "system error values match the public Linux ABI" {
     try std.testing.expectEqual(@as(u32, 1622), ERROR_TDNF_INVALID_PARAMETER);
     try std.testing.expectEqual(@as(u32, 1638), ERROR_TDNF_CALL_NOT_SUPPORTED);
     try std.testing.expectEqual(@as(u32, 1301), ERROR_TDNF_SOLV_FAILED);
+    try std.testing.expectEqual(@as(u32, 1304), ERROR_TDNF_SOLV_IO);
+    try std.testing.expectEqual(@as(u32, 1509), ERROR_TDNF_RPM_HEADER_CONVERT_FAILED);
+    try std.testing.expectEqual(@as(u32, 1602), ERROR_TDNF_FILE_NOT_FOUND);
     try std.testing.expectEqual(@as(u32, 1710), ERROR_TDNF_TIMED_OUT);
 }

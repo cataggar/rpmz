@@ -13,6 +13,7 @@ pub const filelists_xml = @import("filelists.zig");
 pub const other_xml = @import("other.zig");
 pub const updateinfo_xml = @import("updateinfo.zig");
 pub const available_repository_loader = @import("available_loader.zig");
+pub const cmdline_requires = @import("cmdline_requires.zig");
 pub const installed_repository_loader = @import("installed_repository.zig");
 pub const metadata_cache = @import("cache.zig");
 pub const metadata_model = model;
@@ -871,6 +872,7 @@ fn expectOptionalString(expected: ?[]const u8, actual: ?[*:0]const u8) !void {
 comptime {
     _ = @import("available_loader.zig");
     _ = @import("cache.zig");
+    _ = @import("cmdline_requires.zig");
     _ = @import("filelists.zig");
     _ = @import("index.zig");
     _ = @import("other.zig");
