@@ -917,6 +917,27 @@ pub fn makeMinimalRpmBytesForTest(
     return buildMinimalRpmBytes(allocator, header_blob);
 }
 
+pub fn makeMinimalRpmBytesWithRequiresForTest(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    version: []const u8,
+    release: []const u8,
+    arch: []const u8,
+) ![]u8 {
+    const requires_values = [_][]const u8{ "dep-one", "dep-two" };
+    const header_blob = try buildHeaderBlob(allocator, &.{
+        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.name), .value = name } },
+        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.version), .value = version } },
+        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.release), .value = release } },
+        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.arch), .value = arch } },
+        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.requirename), .values = &requires_values } },
+        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.requireversion), .values = &[_][]const u8{ "1:1.0-2", "0:3.1" } } },
+        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.requireflags), .values = &[_]u32{ dep_greater | dep_equal | dep_pre_in, dep_less } } },
+    });
+    defer allocator.free(header_blob);
+    return buildMinimalRpmBytes(allocator, header_blob);
+}
+
 pub fn makeMinimalTransactionHeaderForTest(
     allocator: std.mem.Allocator,
 ) ![]u8 {
