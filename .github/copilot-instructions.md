@@ -83,7 +83,7 @@ and `include/tdnfplugineventmap.h`.
 
 Public headers live in `include/`. A component must **never** include a
 header from another component's source folder — only headers under
-`include/` are cross-component (`docs/coding-guidelines.md`). Plugins
+`include/` are cross-component (`doc/coding-guidelines.md`). Plugins
 follow this strictly: they go through `libtdnf`'s public API only.
 
 ## Generated files (configure-time, `build.zig`'s `writeTemplate`)
@@ -177,7 +177,7 @@ not rely on a system `-lsqlite3` link.
 
 These are enforced by convention (and reviewed for); deviating from them
 is the most common reason for review churn. The full rules are in
-`docs/coding-guidelines.md`.
+`doc/coding-guidelines.md`.
 
 **Per-component file layout.** Inside each component:
 
@@ -222,6 +222,12 @@ they are defined; defined at the bottom of the file.
 
 ## Things that bite
 
+- **If you are porting a component off `libsolv`, read
+  `doc/migration-verification.md` first.** It documents the gate's
+  blind spots (a green `libsolv-oracle-test` has shipped three real
+  bugs), how to diff two binaries without false positives, why
+  `Solv*` call-site counts are a gameable proxy, and the
+  no-silent-fallback rule.
 - `client/config.h`, `history/config.h`, the plugin `config.h`s, and
   the `.pc` files are **generated**. Edit the `.in` files, not the
   outputs.
