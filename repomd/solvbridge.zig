@@ -661,6 +661,20 @@ const SolvBuilder = struct {
                 const self_provide = c.pool_rel2id(self.pool, solvable.*.name, solvable.*.evr, c.REL_EQ, 1);
                 c.repo_add_deparray(self.repo, solvid, c.SOLVABLE_PROVIDES, self_provide, 0);
             }
+
+            // `primary.xml` carries the subset of each package's file list that
+            // matches libsolv's standard filter, and the repodata below is
+            // marked as that filtered list. `pool_addfileprovides()` treats a
+            // filtered repodata as authoritative for every path the filter
+            // accepts and never consults the `filelists.xml` extension for
+            // them, so leaving this empty erases every file provide the
+            // repository has. The model keeps only the full list, so the
+            // filtered subset is reconstructed here with libsolv's own filter.
+            for (pkg.fileEntries(self.repository.files)) |file_entry| {
+                const path = try z(self.arena, file_entry.path);
+                if (c.repodata_filelistfilter_matches(null, path) == 0) continue;
+                try addFileEntry(self.arena, data, solvid, file_entry.path);
+            }
         }
 
         if (data.*.end > data.*.start) {
@@ -1300,6 +1314,76 @@ test "file dependency bridge seeds ten thousand paths by kind" {
         total += @intCast(queue.count);
     }
     try std.testing.expectEqual(@as(usize, 10_000), total);
+}
+
+test "bridged repository keeps the file provides libsolv reads from the filtered filelist" {
+    // Regression pin for the `tdnf plan` failure in #268. `addPrimary` marks
+    // its repodata `REPODATA_FILELIST_FILTERED`, and `pool_addfileprovides()`
+    // then treats that repodata as the only source for any path the standard
+    // filter accepts. When it held no files at all, every file provide in the
+    // repository disappeared, so a package requiring `/usr/bin/...` became
+    // unresolvable in the rebuilt pool even though the model carried the file.
+    const pool = c.pool_create() orelse return error.OutOfMemory;
+    defer c.pool_free(pool);
+    _ = c.pool_set_flag(pool, c.POOL_FLAG_ADDFILEPROVIDESFILTERED, 1);
+    const repo: *c.Repo = @ptrCast(
+        c.repo_create(pool, "bridged") orelse return error.OutOfMemory,
+    );
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    var files = [_]model.FileEntry{
+        .{ .path = "/usr/bin/helper" },
+        .{ .path = "/usr/share/doc/helper/README" },
+    };
+    var relations = [_]model.Relation{
+        .{ .name = "/usr/bin/helper" },
+    };
+    var packages = [_]model.Package{
+        .{
+            .pkg_id = "pkg-helper",
+            .nevra = .{ .name = "helper", .epoch = 0, .version = "1.0", .release = "1", .arch = "noarch" },
+            .checksum = .{ .kind = "sha256", .value = "11111111111111111111111111111111" },
+            .location = .{ .href = "Packages/helper-1.0-1.noarch.rpm" },
+            .files = .{ .start = 0, .len = 2 },
+        },
+        .{
+            .pkg_id = "pkg-consumer",
+            .nevra = .{ .name = "consumer", .epoch = 0, .version = "1.0", .release = "1", .arch = "noarch" },
+            .checksum = .{ .kind = "sha256", .value = "22222222222222222222222222222222" },
+            .location = .{ .href = "Packages/consumer-1.0-1.noarch.rpm" },
+            .requires = .{ .start = 0, .len = 1 },
+        },
+    };
+    var repository = model.RepositoryModel{
+        .packages = packages[0..],
+        .relations = relations[0..],
+        .files = files[0..],
+        .has_filelists = true,
+    };
+
+    try buildRepositoryIntoRepo(arena_state.allocator(), repo, &repository);
+    c.pool_addfileprovides(pool);
+    c.pool_createwhatprovides(pool);
+
+    const path_id = c.pool_str2id(pool, "/usr/bin/helper", 0);
+    try std.testing.expect(path_id != 0);
+    const pool_ref: *c.Pool = @ptrCast(pool);
+    var provider_count: usize = 0;
+    var offset = c.pool_whatprovides(pool, path_id);
+    while (pool_ref.whatprovidesdata[@intCast(offset)] != 0) : (offset += 1) {
+        const provider = c.pool_id2solvable(
+            pool,
+            pool_ref.whatprovidesdata[@intCast(offset)],
+        ) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(
+            "helper",
+            std.mem.span(c.pool_id2str(pool, provider.*.name).?),
+        );
+        provider_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), provider_count);
 }
 
 fn loadInstalledPackagesIntoBridge(
