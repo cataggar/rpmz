@@ -292,8 +292,6 @@
       "TDNFSolvAddMinVersions",
       "TDNFSolvAddPkgLocks",
       "TDNFSolvAddProtectPkgs",
-      "TDNFSolvCheckInstallOnlyLimitInTrans",
-      "TDNFSolvCheckProtectPkgsInTrans",
       "TDNFSplitStringToArray",
       "TDNFStrIsValidRepoName",
       "TDNFStringArrayCount",

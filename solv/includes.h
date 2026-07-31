@@ -24,7 +24,6 @@
 #include <solv/solver.h>
 #include <solv/selection.h>
 #include <solv/solverdebug.h>
-#include <solv/testcase.h>
 #include <solv/chksum.h>
 #include <solv/policy.h>
 
