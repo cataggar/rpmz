@@ -45,36 +45,6 @@ error:
     goto cleanup;
 }
 
-uint32_t
-SolvCountPackages(
-    PSolvSack pSack,
-    uint32_t* pdwCount
-    )
-{
-    uint32_t dwError = 0;
-    uint32_t dwCount = 0;
-    const Pool* pool = 0;
-    Id p = 0;
-    if(!pSack || !pSack->pPool || !pdwCount)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-    }
-    pool = pSack->pPool;
-    FOR_POOL_SOLVABLES(p)
-    {
-        if (pool->considered && !MAPTST(pool->considered, p))
-            continue;
-        dwCount++;
-    }
-    *pdwCount = dwCount;
-cleanup:
-    return dwError;
-error:
-    goto cleanup;
-
-}
-
 static
 uint32_t
 readRpmsFromDir(

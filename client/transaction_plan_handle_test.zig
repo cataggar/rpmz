@@ -75,11 +75,9 @@ const SolvSackView = extern struct {
 const SackSnapshot = extern struct {
     pool_identity: usize = 0,
     repository_identity: usize = 0,
-    considered_identity: usize = 0,
     indexes_identity: usize = 0,
     solvable_count: u32 = 0,
     repository_count: u32 = 0,
-    considered_count: u32 = 0,
     digest: [32]u8 = [_]u8{0} ** 32,
 };
 
@@ -135,7 +133,7 @@ extern fn SolvInitSack(
     arch: ?[*:0]const u8,
 ) u32;
 extern fn SolvFreeSack(sack: ?*anyopaque) void;
-extern fn SolvCountPackages(
+extern fn TDNFTransactionPlanTestSackSolvableCount(
     sack: ?*anyopaque,
     count: ?*u32,
 ) u32;
@@ -189,16 +187,10 @@ extern fn TDNFTransactionPlanTestPoolSolvableCount(
 extern fn TDNFTransactionPlanTestPoolRepoCount(
     handle: ?*anyopaque,
 ) u32;
-extern fn TDNFTransactionPlanTestConsideredCount(
+extern fn TDNFTransactionPlanTestVisibleSolvableCount(
     handle: ?*anyopaque,
 ) u32;
-extern fn TDNFTransactionPlanTestConsideredIdentity(
-    handle: ?*anyopaque,
-) usize;
 extern fn TDNFTransactionPlanTestRepoDataCount(handle: ?*anyopaque) u32;
-extern fn TDNFTransactionPlanTestGrowCmdlineConsidered(
-    handle: ?*anyopaque,
-) u32;
 extern fn TDNFTransactionPlanTestRetireNullSack(
     handle: ?*anyopaque,
 ) u32;
@@ -1111,8 +1103,8 @@ test "targeted repository reload is atomic and does not duplicate packages" {
         TDNFTransactionPlanTestPoolRepoCount(handle);
     const baseline_solvables =
         TDNFTransactionPlanTestPoolSolvableCount(handle);
-    const baseline_considered =
-        TDNFTransactionPlanTestConsideredCount(handle);
+    const baseline_visible =
+        TDNFTransactionPlanTestVisibleSolvableCount(handle);
     const baseline_repo_id =
         TDNFTransactionPlanTestRepoId(handle, "base");
     var baseline_extras_digest: [32]u8 = undefined;
@@ -1129,10 +1121,8 @@ test "targeted repository reload is atomic and does not duplicate packages" {
             TDNFTransactionPlanTestPoolSolvableCount(handle);
         const prior_repodata =
             TDNFTransactionPlanTestRepoDataCount(handle);
-        const prior_considered =
-            TDNFTransactionPlanTestConsideredCount(handle);
-        const prior_considered_identity =
-            TDNFTransactionPlanTestConsideredIdentity(handle);
+        const prior_visible =
+            TDNFTransactionPlanTestVisibleSolvableCount(handle);
         const prior_identity =
             TDNFTransactionPlanTestRepoIdentity(handle, "base");
         const prior_repo_id =
@@ -1151,12 +1141,8 @@ test "targeted repository reload is atomic and does not duplicate packages" {
             TDNFTransactionPlanTestRepoDataCount(handle),
         );
         try std.testing.expectEqual(
-            prior_considered,
-            TDNFTransactionPlanTestConsideredCount(handle),
-        );
-        try std.testing.expectEqual(
-            prior_considered_identity,
-            TDNFTransactionPlanTestConsideredIdentity(handle),
+            prior_visible,
+            TDNFTransactionPlanTestVisibleSolvableCount(handle),
         );
         try std.testing.expectEqual(
             prior_identity,
@@ -1192,10 +1178,8 @@ test "targeted repository reload is atomic and does not duplicate packages" {
         TDNFTransactionPlanTestPoolSolvableCount(handle);
     const record_failure_repodata =
         TDNFTransactionPlanTestRepoDataCount(handle);
-    const record_failure_considered =
-        TDNFTransactionPlanTestConsideredCount(handle);
-    const record_failure_considered_identity =
-        TDNFTransactionPlanTestConsideredIdentity(handle);
+    const record_failure_visible =
+        TDNFTransactionPlanTestVisibleSolvableCount(handle);
     const record_failure_identity =
         TDNFTransactionPlanTestRepoIdentity(handle, "base");
     const record_failure_repo_id =
@@ -1214,12 +1198,8 @@ test "targeted repository reload is atomic and does not duplicate packages" {
         TDNFTransactionPlanTestRepoDataCount(handle),
     );
     try std.testing.expectEqual(
-        record_failure_considered,
-        TDNFTransactionPlanTestConsideredCount(handle),
-    );
-    try std.testing.expectEqual(
-        record_failure_considered_identity,
-        TDNFTransactionPlanTestConsideredIdentity(handle),
+        record_failure_visible,
+        TDNFTransactionPlanTestVisibleSolvableCount(handle),
     );
     try std.testing.expectEqual(
         record_failure_identity,
@@ -1290,8 +1270,8 @@ test "targeted repository reload is atomic and does not duplicate packages" {
             TDNFTransactionPlanTestRepoRecordCount(handle, "base"),
         );
         try std.testing.expectEqual(
-            baseline_considered,
-            TDNFTransactionPlanTestConsideredCount(handle),
+            baseline_visible,
+            TDNFTransactionPlanTestVisibleSolvableCount(handle),
         );
         try std.testing.expectEqual(
             @as(u32, 2),
@@ -1406,8 +1386,8 @@ test "repository load failure preserves live sack until successful swap" {
         TDNFTransactionPlanTestPoolSolvableCount(handle);
     const prior_repodata =
         TDNFTransactionPlanTestRepoDataCount(handle);
-    const prior_considered =
-        TDNFTransactionPlanTestConsideredCount(handle);
+    const prior_visible =
+        TDNFTransactionPlanTestVisibleSolvableCount(handle);
     try fixture.tmp.dir.deleteFile(std.testing.io, fixture.base_repomd);
     try std.testing.expectEqual(
         error_cache_disabled,
@@ -1426,8 +1406,8 @@ test "repository load failure preserves live sack until successful swap" {
         TDNFTransactionPlanTestRepoDataCount(handle),
     );
     try std.testing.expectEqual(
-        prior_considered,
-        TDNFTransactionPlanTestConsideredCount(handle),
+        prior_visible,
+        TDNFTransactionPlanTestVisibleSolvableCount(handle),
     );
     try std.testing.expectEqual(
         @as(u32, 1),
@@ -1452,8 +1432,8 @@ test "repository load failure preserves live sack until successful swap" {
         TDNFTransactionPlanTestPoolSolvableCount(handle),
     );
     try std.testing.expectEqual(
-        prior_considered,
-        TDNFTransactionPlanTestConsideredCount(handle),
+        prior_visible,
+        TDNFTransactionPlanTestVisibleSolvableCount(handle),
     );
     try std.testing.expectEqual(
         @as(u32, 1),
@@ -1864,10 +1844,8 @@ fn runFilteredUpdateAllCase(filters: u8) !void {
         TDNFTransactionPlanTestPoolSolvableCount(handle);
     const repodata_count =
         TDNFTransactionPlanTestRepoDataCount(handle);
-    const considered_identity =
-        TDNFTransactionPlanTestConsideredIdentity(handle);
-    const considered_count =
-        TDNFTransactionPlanTestConsideredCount(handle);
+    const visible_count =
+        TDNFTransactionPlanTestVisibleSolvableCount(handle);
     const base_identity =
         TDNFTransactionPlanTestRepoIdentity(handle, "base");
     const extras_identity =
@@ -1893,12 +1871,8 @@ fn runFilteredUpdateAllCase(filters: u8) !void {
         TDNFTransactionPlanTestRepoDataCount(handle),
     );
     try std.testing.expectEqual(
-        considered_identity,
-        TDNFTransactionPlanTestConsideredIdentity(handle),
-    );
-    try std.testing.expectEqual(
-        considered_count,
-        TDNFTransactionPlanTestConsideredCount(handle),
+        visible_count,
+        TDNFTransactionPlanTestVisibleSolvableCount(handle),
     );
     try std.testing.expectEqual(
         base_identity,
@@ -2014,8 +1988,8 @@ test "private handle capture follows production resolve lifecycle" {
             TDNFTransactionPlanTestPoolSolvableCount(handle);
         const prior_repodata =
             TDNFTransactionPlanTestRepoDataCount(handle);
-        const prior_considered =
-            TDNFTransactionPlanTestConsideredCount(handle);
+        const prior_visible =
+            TDNFTransactionPlanTestVisibleSolvableCount(handle);
         TDNFTransactionPlanTestFailNextReload(handle, @intCast(stage));
         try std.testing.expectEqual(
             error_out_of_memory,
@@ -2034,8 +2008,8 @@ test "private handle capture follows production resolve lifecycle" {
             TDNFTransactionPlanTestRepoDataCount(handle),
         );
         try std.testing.expectEqual(
-            prior_considered,
-            TDNFTransactionPlanTestConsideredCount(handle),
+            prior_visible,
+            TDNFTransactionPlanTestVisibleSolvableCount(handle),
         );
         try std.testing.expectEqual(
             @as(u32, 1),
@@ -2101,10 +2075,6 @@ test "private handle capture follows production resolve lifecycle" {
     try resolve(handle);
     const cache_solvable_count =
         TDNFTransactionPlanTestPoolSolvableCount(handle);
-    try std.testing.expectEqual(
-        @as(u32, 1),
-        TDNFTransactionPlanTestGrowCmdlineConsidered(handle),
-    );
     try fixture.corruptBaseSolvCookie();
     try std.testing.expectEqual(@as(u32, 0), TDNFRefresh(handle));
     try std.testing.expectEqual(
@@ -2150,8 +2120,8 @@ test "private handle capture follows production resolve lifecycle" {
         TDNFTransactionPlanTestPoolIdentity(handle);
     const record_failure_solvables =
         TDNFTransactionPlanTestPoolSolvableCount(handle);
-    const record_failure_considered =
-        TDNFTransactionPlanTestConsideredCount(handle);
+    const record_failure_visible =
+        TDNFTransactionPlanTestVisibleSolvableCount(handle);
     TDNFTransactionPlanCaptureFailNextRepositoryRecord(handle);
     try std.testing.expectEqual(
         error_out_of_memory,
@@ -2166,8 +2136,8 @@ test "private handle capture follows production resolve lifecycle" {
         TDNFTransactionPlanTestPoolSolvableCount(handle),
     );
     try std.testing.expectEqual(
-        record_failure_considered,
-        TDNFTransactionPlanTestConsideredCount(handle),
+        record_failure_visible,
+        TDNFTransactionPlanTestVisibleSolvableCount(handle),
     );
     try std.testing.expectEqual(
         @as(u32, 1),
@@ -3638,7 +3608,6 @@ test "alternate sack snapshot uses its own shifted repository ids" {
             &alternate_before_failures,
         ),
     );
-    try std.testing.expect(alternate_before_failures.considered_identity != 0);
     try std.testing.expect(alternate_before_failures.indexes_identity != 0);
     const live_extras_identity =
         TDNFTransactionPlanTestRepoIdentity(handle, "extras");
@@ -3709,10 +3678,6 @@ test "alternate sack snapshot uses its own shifted repository ids" {
             alternate_after_swap.repository_identity,
     );
     try std.testing.expect(
-        alternate_before_failures.considered_identity !=
-            alternate_after_swap.considered_identity,
-    );
-    try std.testing.expect(
         alternate_before_failures.indexes_identity !=
             alternate_after_swap.indexes_identity,
     );
@@ -3723,10 +3688,6 @@ test "alternate sack snapshot uses its own shifted repository ids" {
     try std.testing.expectEqual(
         alternate_before_failures.repository_count,
         alternate_after_swap.repository_count,
-    );
-    try std.testing.expectEqual(
-        alternate_before_failures.considered_count,
-        alternate_after_swap.considered_count,
     );
     try std.testing.expectEqualSlices(
         u8,
@@ -3796,9 +3757,16 @@ test "alternate sack snapshot uses its own shifted repository ids" {
     var alternate_count: u32 = 0;
     try std.testing.expectEqual(
         @as(u32, 0),
-        SolvCountPackages(alternate, &alternate_count),
+        TDNFTransactionPlanTestSackSolvableCount(alternate, &alternate_count),
     );
-    try std.testing.expectEqual(@as(u32, 9), alternate_count);
+    // 2 `base` + 3 `shift` (both synthesized above) + 1 `@System`
+    // + 2 `extras` + 3 `base`. The predecessor `SolvCountPackages`
+    // reported 9 here: it skipped solvables cleared in
+    // `pool->considered`, and libsolv's `map_grow` zero-fills, so the
+    // two `shift` solvables past the first byte of the staged map read
+    // back as hidden. That was an artefact of the staging map, not a
+    // property of the sack.
+    try std.testing.expectEqual(@as(u32, 11), alternate_count);
     try std.testing.expectEqual(
         @as(u32, 0),
         TDNFRefreshSack(handle, null, 0),
@@ -3858,9 +3826,9 @@ test "alternate sack snapshot uses its own shifted repository ids" {
     alternate_count = 0;
     try std.testing.expectEqual(
         @as(u32, 0),
-        SolvCountPackages(alternate, &alternate_count),
+        TDNFTransactionPlanTestSackSolvableCount(alternate, &alternate_count),
     );
-    try std.testing.expectEqual(@as(u32, 9), alternate_count);
+    try std.testing.expectEqual(@as(u32, 11), alternate_count);
     const before_free_identity =
         TDNFTransactionPlanTestRepoIdentity(handle, "base");
     var before_free_digest: [32]u8 = undefined;

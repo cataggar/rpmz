@@ -424,12 +424,6 @@ pub const RepositoryInitCallbacks = extern struct {
         ?*anyopaque,
         ?[*:0]const u8,
     ) callconv(.c) u32 = null,
-    apply_snapshot: ?*const fn (
-        ?*anyopaque,
-        ?*anyopaque,
-        ?*anyopaque,
-        ?*anyopaque,
-    ) callconv(.c) u32 = null,
 };
 
 pub const RepositoryRefreshView = extern struct {
@@ -439,7 +433,6 @@ pub const RepositoryRefreshView = extern struct {
     id: ?[*:0]const u8 = null,
     name: ?[*:0]const u8 = null,
     base_url: ?[*:0]const u8 = null,
-    snapshot_file: ?[*:0]const u8 = null,
     metadata_expire: c_long = 0,
     priority: c_int = 0,
     enabled: c_int = 0,
@@ -486,10 +479,8 @@ pub const RepositoryInitInput = extern struct {
     failure_stage: ?*u32 = null,
     repository_id: ?[*:0]const u8 = null,
     base_url: ?[*:0]const u8 = null,
-    snapshot_file: ?[*:0]const u8 = null,
     priority: i32 = 0,
     has_metadata: u32 = 0,
-    apply_snapshot: u32 = 0,
     reuse_empty_repository: u32 = 0,
 };
 

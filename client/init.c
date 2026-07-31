@@ -81,7 +81,6 @@ TDNFDescribeRepository(
     pView->name = pRepo->pszName;
     pView->base_url = pRepo->ppszBaseUrls
         ? pRepo->ppszBaseUrls[0] : NULL;
-    pView->snapshot_file = pRepo->pszSnapshotFile;
     pView->metadata_expire = pRepo->lMetadataExpire;
     pView->priority = pRepo->nPriority;
     pView->enabled = pRepo->nEnabled;

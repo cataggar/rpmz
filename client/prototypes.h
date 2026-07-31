@@ -600,8 +600,7 @@ TDNFSolvAddInstallOnlyPkgs(
 uint32_t
 TDNFGoalAddHiddenPackages(
     PTDNF pTdnf,
-    char **ppszExcludes,
-    Pool *pPool
+    char **ppszExcludes
     );
 
 uint32_t
@@ -804,14 +803,6 @@ TDNFReadConfFilesFromDir(
     );
 
 //repo.c
-
-uint32_t
-TDNFApplySnapshot(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepoData,
-    PSolvSack pSack,
-    Repo* pRepo
-    );
 
 uint32_t
 TDNFInitRepoFromMetadata(

@@ -39,7 +39,6 @@
       "TDNFAlterRepoState",
       "TDNFAppendPath",
       "TDNFApplyScopeFilter",
-      "TDNFApplySnapshot",
       "TDNFCheckDownloadCacheBytes",
       "TDNFCheckHash",
       "TDNFCheckHexDigest",
