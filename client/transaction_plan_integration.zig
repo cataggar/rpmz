@@ -4024,7 +4024,7 @@ fn captureEnvironment(
     resolution_status: transaction_plan.ResolutionStatus,
 ) IntegrationError!transaction_plan.Environment {
     const include_installed = try flagValue(input.include_installed);
-    const architecture = try effectivePoolArchitecture(pool);
+    const architecture = try effectiveArchitecture(allocator, input);
     const policy = RawPolicy{
         .excludes = try dedupeStrings(
             allocator,
@@ -4104,26 +4104,39 @@ fn dedupeStrings(
     return output.toOwnedSlice(allocator);
 }
 
-fn effectivePoolArchitecture(pool: *c.Pool) IntegrationError![]const u8 {
-    if (pool.id2arch == null or pool.lastarch <= 1) {
-        return error.InvalidEnvironment;
+/// The architecture the plan reports, derived the same way the pool's was.
+///
+/// `SolvInitSack` is the only thing that ever calls `pool_setarch`, and it
+/// passes `pTdnf->pArgs->pszArch` verbatim when that pointer is non-NULL and
+/// `uname().machine` otherwise -- the identical expression this environment
+/// carries as `force_architecture` (`transaction_plan_capture_abi.inc`).
+///
+/// The pool read that this replaces recovered the lowest-scoring architecture
+/// above the noarch class from `pool->id2arch`, which is the first token of the
+/// policy string `pool_setarchpolicy` walked (score starts at 0x10001 and only
+/// ever rises). Every key in `poolarch.c`'s `archpolicies` table is the head of
+/// its own policy, and an unlisted architecture is used as a one-token policy,
+/// so that first token is always exactly the string `pool_setarch` was handed.
+///
+/// An empty `--arch` is preserved as an error rather than quietly falling back
+/// to the kernel: `pool_setarch(pool, "")` leaves `id2arch` holding nothing but
+/// the noarch class, which the pool read rejected. Note that the native solver
+/// treats the same input as absent (`client/goal.c` uses `IsNullOrEmptyString`
+/// where `SolvInitSack` tests only for NULL), so `--arch=` is inconsistent
+/// today; this keeps that inconsistency rather than silently changing it.
+fn effectiveArchitecture(
+    allocator: Allocator,
+    input: *const abi.IntegrationEnvironment,
+) IntegrationError![]const u8 {
+    if (input.force_architecture) |raw| {
+        const forced = std.mem.span(raw);
+        if (forced.len == 0) return error.InvalidEnvironment;
+        return forced;
     }
-    var best_id: c.Id = 0;
-    var best_score: c.Id = std.math.maxInt(c.Id);
-    var id: c.Id = 1;
-    while (id < pool.lastarch) : (id += 1) {
-        const score = pool.id2arch[@intCast(id)];
-        if (score > 1 and score < best_score) {
-            best_score = score;
-            best_id = id;
-        }
-    }
-    if (best_id == 0) return error.InvalidEnvironment;
-    const raw = c.pool_id2str(pool, best_id) orelse
-        return error.InvalidEnvironment;
-    const architecture = std.mem.span(raw);
-    if (architecture.len == 0) return error.InvalidEnvironment;
-    return architecture;
+    const host = std.posix.uname();
+    const machine = std.mem.sliceTo(&host.machine, 0);
+    if (machine.len == 0) return error.InvalidEnvironment;
+    return allocator.dupe(u8, machine);
 }
 
 fn validatePolicyTrace(
@@ -8099,6 +8112,93 @@ test "solver digest context scans package universe once" {
         context.digest_calls,
     );
     try std.testing.expectEqual(@as(u32, 1), context.universe_scans);
+}
+
+/// The architecture read back out of `pool->id2arch`, exactly the way
+/// `captureEnvironment` used to read it. Kept as the oracle for
+/// `effectiveArchitecture` for as long as libsolv is linked.
+fn libsolvPoolArchitecture(pool: *c.Pool) IntegrationError![]const u8 {
+    if (pool.id2arch == null or pool.lastarch <= 1) {
+        return error.InvalidEnvironment;
+    }
+    var best_id: c.Id = 0;
+    var best_score: c.Id = std.math.maxInt(c.Id);
+    var id: c.Id = 1;
+    while (id < pool.lastarch) : (id += 1) {
+        const score = pool.id2arch[@intCast(id)];
+        if (score > 1 and score < best_score) {
+            best_score = score;
+            best_id = id;
+        }
+    }
+    if (best_id == 0) return error.InvalidEnvironment;
+    const raw = c.pool_id2str(pool, best_id) orelse
+        return error.InvalidEnvironment;
+    const architecture = std.mem.span(raw);
+    if (architecture.len == 0) return error.InvalidEnvironment;
+    return architecture;
+}
+
+test "native architecture matches the libsolv arch policy readback" {
+    // Heads of multi-token policies, an architecture absent from the policy
+    // table, and one that is only ever a tail of somebody else's policy.
+    const cases = [_][]const u8{
+        "x86_64",  "x86_64_v2", "x86_64_v3", "x86_64_v4",
+        "i686",    "i586",      "i486",      "i386",
+        "s390x",   "ppc64",     "ppc64p7",   "ia64",
+        "armv7hl", "armv8l",    "sparcv9",   "e2kv4",
+        "aarch64", "riscv64",   "ppc64le",   "loongarch64",
+    };
+    for (cases) |arch| {
+        errdefer std.debug.print("\narchitecture case {s}\n", .{arch});
+        const pool = c.pool_create() orelse return error.OutOfMemory;
+        defer c.pool_free(pool);
+        const arch_z = try std.testing.allocator.dupeZ(u8, arch);
+        defer std.testing.allocator.free(arch_z);
+        c.pool_setarch(pool, arch_z.ptr);
+        const environment = abi.IntegrationEnvironment{
+            .force_architecture = arch_z.ptr,
+        };
+        try std.testing.expectEqualStrings(
+            try libsolvPoolArchitecture(pool),
+            try effectiveArchitecture(std.testing.allocator, &environment),
+        );
+    }
+}
+
+test "an empty forced architecture is rejected on both paths" {
+    const pool = c.pool_create() orelse return error.OutOfMemory;
+    defer c.pool_free(pool);
+    c.pool_setarch(pool, "");
+    try std.testing.expectError(
+        error.InvalidEnvironment,
+        libsolvPoolArchitecture(pool),
+    );
+    try std.testing.expectError(
+        error.InvalidEnvironment,
+        effectiveArchitecture(
+            std.testing.allocator,
+            &.{ .force_architecture = "" },
+        ),
+    );
+}
+
+test "an absent forced architecture reports the kernel machine" {
+    const host = std.posix.uname();
+    const machine = std.mem.sliceTo(&host.machine, 0);
+    const pool = c.pool_create() orelse return error.OutOfMemory;
+    defer c.pool_free(pool);
+    c.pool_setarch(pool, &host.machine);
+    const native = try effectiveArchitecture(
+        std.testing.allocator,
+        &.{ .force_architecture = null },
+    );
+    defer std.testing.allocator.free(native);
+    try std.testing.expectEqualStrings(machine, native);
+    try std.testing.expectEqualStrings(
+        try libsolvPoolArchitecture(pool),
+        native,
+    );
 }
 
 /// Every field the snapshot id hashes, read back out of libsolv exactly the way
