@@ -5222,6 +5222,7 @@ fn decodeTerminalProblemKind(raw: u32) error{InvalidProblemKind}!?transaction_pl
         abi.problem_kind.obsoletes => .obsoletes,
         abi.problem_kind.protected_package => .protected_package,
         abi.problem_kind.unsatisfied_requirement => .unsatisfied_requirement,
+        abi.problem_kind.same_name => .same_name,
         else => error.InvalidProblemKind,
     };
 }

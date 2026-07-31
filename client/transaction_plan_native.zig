@@ -966,6 +966,7 @@ fn problemKind(kind: solver_model.ProblemKind) u32 {
     return switch (kind) {
         .unsatisfied_requirement => abi.problem_kind.unsatisfied_requirement,
         .conflict => abi.problem_kind.conflict,
+        .same_name => abi.problem_kind.same_name,
         .obsoletes => abi.problem_kind.obsoletes,
         .no_candidate => abi.problem_kind.no_candidate,
         .not_installable => abi.problem_kind.not_installable,

@@ -72,6 +72,9 @@ pub const problem_kind = struct {
     pub const obsoletes: u32 = 4;
     pub const protected_package: u32 = 5;
     pub const unsatisfied_requirement: u32 = 6;
+    // Appended rather than slotted in alphabetically so the existing wire
+    // values keep their meaning.
+    pub const same_name: u32 = 7;
 };
 
 pub const compare_op = struct {

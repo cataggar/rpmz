@@ -38,6 +38,7 @@ pub const solver_legacy_result = @import("solver_legacy_result.zig");
 pub const solver_rules = @import("solver_rules.zig");
 pub const solver_search = @import("solver_search.zig");
 pub const solver_diag = @import("solver_diag.zig");
+pub const directory_repository = @import("directory_repository.zig");
 
 const c_header = if (builtin.is_test) @cImport({
     @cInclude("tdnfrepomd.h");
@@ -188,11 +189,29 @@ pub const RetainedSolve = union(enum) {
     }
 };
 
+/// Where the reporting filter looks for an available package, which is what
+/// `check_for_providers` in `solv/tdnfpackage.c` did with the sack.
+pub const AvailableLookup = enum {
+    /// Query the retained universe. The goal path solved the same set the
+    /// sack held, so the two answers agree.
+    universe,
+    /// Answer "nothing is available". `check-local` solved a directory-only
+    /// pool while the sack it queried held only the rpmdb -- `TDNFOpenHandle`
+    /// reads the installed packages but no repository metadata, and
+    /// `check-local` never refreshes -- so the availability query could never
+    /// match anything.
+    none,
+};
+
 pub const RefutedSolve = struct {
     prepared: solver_live.Prepared,
     refutation: solver_native.OwnedProjectedRefutation,
     job_origins: []const ?u32,
     outcome: solver_model.Outcome,
+    /// How the report filter answers `check_for_providers`' "is this name
+    /// still available?" question. libsolv asked the *sack*, not the pool it
+    /// solved, so a caller whose sack held no available packages must say so.
+    available_lookup: AvailableLookup = .universe,
     /// The failure diagnostics rendered from `refutation.ordered`, cached on
     /// first access. Rendering is deferred so it only runs (and only allocates)
     /// when the report path actually asks for the strings.
@@ -334,7 +353,14 @@ fn refutedProblemSkippedByType(skip_class: solver_diag.SkipClass, skip_mask: u32
     if ((skip_mask & skipproblem_obsoletes) != 0 and skip_class == .obsoletes) return true;
     if ((skip_mask & skipproblem_broken) != 0) {
         switch (skip_class) {
-            .conflict, .obsoletes, .requires, .nothing_provides, .not_installable, .not_installable_disabled => return true,
+            .conflict,
+            .same_name,
+            .obsoletes,
+            .requires,
+            .nothing_provides,
+            .not_installable,
+            .not_installable_disabled,
+            => return true,
             .other => {},
         }
     }
@@ -387,6 +413,7 @@ fn refutedProblemReported(
     universe: *const solver_model.Universe,
     skip_mask: u32,
     target: u32,
+    available_lookup: AvailableLookup,
 ) bool {
     // prev name starts empty, matching check_for_providers' {0} buffer.
     var prev_buf: [256]u8 = undefined;
@@ -412,7 +439,11 @@ fn refutedProblemReported(
             }
             @memcpy(prev_buf[0..name.len], name);
             prev_len = name.len;
-            const reported = !refutedAvailableByName(universe, name);
+            const available = switch (available_lookup) {
+                .universe => refutedAvailableByName(universe, name),
+                .none => false,
+            };
+            const reported = !available;
             if (i == target) return reported;
             continue;
         }
@@ -461,7 +492,195 @@ pub export fn TDNFRepoMdNativeSolverRefutedProblem(
         return c.ERROR_TDNF_INVALID_PARAMETER;
     }
     message_out.* = items[index_arg].message.ptr;
-    reported_out.* = if (refutedProblemReported(items, refuted.prepared.universe, skip_mask, index_arg)) 1 else 0;
+    reported_out.* = if (refutedProblemReported(
+        items,
+        refuted.prepared.universe,
+        skip_mask,
+        index_arg,
+        refuted.available_lookup,
+    )) 1 else 0;
+    return 0;
+}
+
+/// Storage behind the entry path `TDNFRepoMdNativeSolverCheckLocal` hands back
+/// when a directory entry could not be classified. It stays valid until the
+/// next call on the same thread, which is long enough for the caller to print
+/// the diagnostic libsolv printed at that point.
+threadlocal var check_local_error_path: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
+
+/// Translate a `prepareDirectoryCheck` failure into the error code the
+/// libsolv-backed walk produced for the same input. A directory that cannot be
+/// opened surfaced as `ERROR_TDNF_SYSTEM_BASE + errno`, which is what
+/// `check-local` on a missing path or on a plain file reported.
+fn checkLocalPrepareError(
+    err: solver_live.ProduceError,
+    path_out: ?*?[*:0]const u8,
+) u32 {
+    switch (err) {
+        error.DirectoryOpenFailed => {
+            const errno_value = directory_repository.last_open_errno;
+            if (directory_repository.lastStatPath()) |path| {
+                if (path.len < check_local_error_path.len) {
+                    @memcpy(check_local_error_path[0..path.len], path);
+                    check_local_error_path[path.len] = 0;
+                    if (path_out) |out| {
+                        out.* = @ptrCast(&check_local_error_path);
+                    }
+                }
+            }
+            setError(
+                "unable to read the check-local directory: {s}",
+                .{@tagName(@as(std.posix.E, @enumFromInt(errno_value)))},
+            );
+            return @intCast(c.ERROR_TDNF_SYSTEM_BASE + errno_value);
+        },
+        error.OutOfMemory => {
+            setError("out of memory reading the check-local directory", .{});
+            return c.ERROR_TDNF_OUT_OF_MEMORY;
+        },
+        error.RpmFileOpenFailed => {
+            setError("unreadable rpm file in the check-local directory", .{});
+            return c.ERROR_TDNF_INVALID_REPO_FILE;
+        },
+        error.InvalidRpmHeader => {
+            setError("invalid rpm header in the check-local directory", .{});
+            return c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED;
+        },
+        else => {
+            setError("native check-local universe unavailable: {t}", .{err});
+            return c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+        },
+    }
+}
+
+/// Run `tdnf check-local <dir>` natively: build a universe holding only the
+/// `.rpm` files under `raw_directory`, request every one of them, and either
+/// report a clean check or retain the solver's diagnostics.
+///
+/// `out_count` receives the number of packages found, which the caller prints
+/// before any diagnostic. `out_error_path` receives, on failure, the directory
+/// entry that could not be classified, so the caller can name it the way
+/// libsolv's walk did; it stays null for every other failure. `out_handle` receives null when the request was
+/// satisfiable; otherwise it retains the problems, is read with
+/// `TDNFRepoMdNativeSolverRefutedProblem*`, and is released with
+/// `TDNFRepoMdNativeSolverLiveSolveRelease`.
+pub export fn TDNFRepoMdNativeSolverCheckLocal(
+    raw_directory: ?[*:0]const u8,
+    raw_native_arch: ?[*:0]const u8,
+    out_count: ?*u32,
+    out_handle: ?*?*anyopaque,
+    out_error_path: ?*?[*:0]const u8,
+) u32 {
+    clearError();
+    if (out_error_path) |out| out.* = null;
+    const count_out = out_count orelse {
+        setError("null check-local package count output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    count_out.* = 0;
+    const handle_out = out_handle orelse {
+        setError("null check-local diagnostics output", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    handle_out.* = null;
+    const directory = spanRequired(raw_directory) orelse {
+        setError("null check-local directory", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    const native_arch = spanRequired(raw_native_arch) orelse {
+        setError("null check-local architecture", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+
+    const allocator = std.heap.c_allocator;
+    var prepared = solver_live.prepareDirectoryCheck(allocator, .{
+        .directory = directory,
+        .native_arch = native_arch,
+    }) catch |err| return checkLocalPrepareError(err, out_error_path);
+
+    count_out.* = std.math.cast(u32, prepared.universe.packages.len) orelse {
+        prepared.deinit();
+        setError("check-local package count overflow", .{});
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    };
+
+    // libsolv set SOLVER_FLAG_ALLOW_UNINSTALL on this solve; every other flag
+    // it set either matches the native default (KEEP_ORPHANS) or only takes
+    // effect for jobs check-local never queues (BEST_OBEY_POLICY without a
+    // forcebest job) or for a concept the native solver does not model
+    // (ALLOW_VENDORCHANGE).
+    const policy: solver_model.SolvePolicy = .{
+        .architecture = .{
+            .native_arch = prepared.native_arch,
+            // SolvCreatePool never called pool_setarch for this pool, so
+            // libsolv considered every architecture installable here.
+            .allow_any_arch = true,
+        },
+        .allow_erasing = true,
+    };
+
+    // solveProjected's identity index rejects two packages with the same
+    // NEVRA and checksum, which a check-local directory may legitimately hold
+    // (the same rpm staged under two file names). Nothing is hidden here, so
+    // the projected entry point would delegate to solve() anyway.
+    if (solver_native.solve(
+        allocator,
+        prepared.universe,
+        .{ .jobs = prepared.jobs },
+        policy,
+    )) |solve| {
+        var solved = solve;
+        solved.deinit();
+        prepared.deinit();
+        return 0;
+    } else |err| if (err != error.Unsatisfiable) {
+        prepared.deinit();
+        setError("native check-local solve unavailable: {t}", .{err});
+        return if (err == error.OutOfMemory)
+            c.ERROR_TDNF_OUT_OF_MEMORY
+        else
+            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+    }
+
+    // The request is unsatisfiable, which is the only case that produces
+    // output: retain the diagnostics for the caller to filter and print.
+    var refutation = solver_native.refuteProjectedWithEffectiveJobs(
+        allocator,
+        prepared.universe,
+        &prepared.visibility,
+        .{ .jobs = prepared.jobs },
+        policy,
+    ) catch |err| {
+        prepared.deinit();
+        setError("native check-local diagnostics unavailable: {t}", .{err});
+        return if (err == error.OutOfMemory)
+            c.ERROR_TDNF_OUT_OF_MEMORY
+        else
+            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+    };
+    const job_origins = refutedJobOrigins(
+        &prepared,
+        refutation.jobs,
+    ) catch |err| {
+        refutation.deinit();
+        prepared.deinit();
+        setError("native check-local job origins unavailable: {t}", .{err});
+        return if (err == error.OutOfMemory)
+            c.ERROR_TDNF_OUT_OF_MEMORY
+        else
+            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+    };
+    const owned = allocator.create(RetainedSolve) catch {
+        refutation.deinit();
+        prepared.deinit();
+        setError("out of memory retaining check-local diagnostics", .{});
+        return c.ERROR_TDNF_OUT_OF_MEMORY;
+    };
+    var refuted = RefutedSolve.init(prepared, refutation, job_origins);
+    // The sack check-local filtered against held no available packages.
+    refuted.available_lookup = .none;
+    owned.* = .{ .refuted = refuted };
+    handle_out.* = @ptrCast(owned);
     return 0;
 }
 

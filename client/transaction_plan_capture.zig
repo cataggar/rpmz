@@ -1019,6 +1019,7 @@ fn decodeProblemKind(raw: u32) DecodeError!transaction_plan.ProblemKind {
         abi.problem_kind.obsoletes => .obsoletes,
         abi.problem_kind.protected_package => .protected_package,
         abi.problem_kind.unsatisfied_requirement => .unsatisfied_requirement,
+        abi.problem_kind.same_name => .same_name,
         else => error.InvalidAbi,
     };
 }

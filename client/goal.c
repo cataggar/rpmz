@@ -557,8 +557,6 @@ TDNFReportProblemsNative(
 {
     uint32_t dwError = 0;
     uint32_t dwCount = 0;
-    uint32_t total_prblms = 0;
-    uint32_t i = 0;
     void *pHandle = NULL;
 
     if(!pTdnf || !pQueueJobs)
@@ -594,9 +592,44 @@ TDNFReportProblemsNative(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    /* Match SolvReportProblems: number only the survivors of skip filtering,
-       renumbering them contiguously from 1, and print the summary only when at
-       least one problem was reported. */
+    dwError = TDNFReportNativeSolverProblems(pHandle, dwSkipProblem);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+cleanup:
+    if(pHandle)
+    {
+        TDNFRepoMdNativeSolverLiveSolveRelease(pHandle);
+    }
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/* Print the native solver's retained diagnostics the way SolvReportProblems
+   printed libsolv's: skip-filter them, number only the survivors, contiguously
+   from 1, and print the summary only when at least one problem was reported.
+   The handle stays owned by the caller. */
+uint32_t
+TDNFReportNativeSolverProblems(
+    void *pHandle,
+    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwCount = 0;
+    uint32_t total_prblms = 0;
+    uint32_t i = 0;
+
+    if(!pHandle)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFRepoMdNativeSolverRefutedProblemCount(pHandle, &dwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
     for(i = 0; i < dwCount; i++)
     {
         uint32_t nReported = 0;
@@ -618,10 +651,6 @@ TDNFReportProblemsNative(
     }
 
 cleanup:
-    if(pHandle)
-    {
-        TDNFRepoMdNativeSolverLiveSolveRelease(pHandle);
-    }
     return dwError;
 
 error:

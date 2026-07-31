@@ -1175,6 +1175,13 @@ TDNFGetSkipProblemOption(
     TDNF_SKIPPROBLEM_TYPE *pdwSkipProblem
     );
 
+/* goal.c */
+uint32_t
+TDNFReportNativeSolverProblems(
+    void *pHandle,
+    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
+    );
+
 /* plugins.c */
 uint32_t
 TDNFLoadPlugins(

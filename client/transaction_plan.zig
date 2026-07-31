@@ -84,6 +84,9 @@ pub const ActionReason = enum {
 
 pub const ProblemKind = enum {
     conflict,
+    /// Two packages with the same name that cannot be installed together
+    /// (libsolv's SOLVER_RULE_PKG_SAME_NAME).
+    same_name,
     installonly_limit,
     no_candidate,
     not_installable,
