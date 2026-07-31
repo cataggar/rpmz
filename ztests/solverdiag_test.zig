@@ -34,6 +34,9 @@ const conflicts_0 = "tdnf-test-dummy-conflicts-0";
 const conflicts_1 = "tdnf-test-dummy-conflicts-1";
 const leaf = "tdnf-test-cleanreq-leaf1";
 const required = "tdnf-test-cleanreq-required";
+/// A package with no unsatisfiable dependency, used as the half of a request
+/// that has to survive when the other half is skipped.
+const satisfiable = "tdnf-test-one";
 
 const summary_prefix = "Found ";
 const summary_suffix = " problem(s) while resolving";
@@ -257,6 +260,54 @@ test "multiple problems are numbered and counted together" {
     try std.testing.expectEqual(@as(usize, 2), diagnostics.reported);
     try diagnostics.expectContains("nothing provides missing needed by " ++ missing_dep);
     try diagnostics.expectContains("conflicts with " ++ conflicts_0);
+}
+
+// `--skip-broken` reaches the solver rather than the reporter: the request is
+// unsatisfiable as written, but the unsatisfiable job is dropped and the rest
+// of it resolves. Nothing is reported and the command succeeds.
+test "--skip-broken drops the unsatisfiable job and resolves the rest" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root, satisfiable);
+
+    var result = try root.run(&.{
+        "install", "-y", "--nogpgcheck", "--skip-broken", satisfiable, missing_dep,
+    });
+    defer result.deinit();
+    try result.expectOk();
+
+    // No diagnostic block at all: a skipped job is not a reported problem.
+    try std.testing.expect(!result.stderrContains(summary_suffix));
+    try std.testing.expect(try root.isInstalled(satisfiable));
+    try std.testing.expect(!try root.isInstalled(missing_dep));
+}
+
+// A skip filter removes problems from the *report*; it does not make the
+// request satisfiable. With the only problem skipped there is nothing to
+// print, and the request must still fail without changing anything.
+test "a request whose only problem is skipped still fails and installs nothing" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+
+    var result = try root.run(&.{
+        "install", "-y", "--nogpgcheck", "--skipconflicts", conflicts_0, conflicts_1,
+    });
+    defer result.deinit();
+
+    if (result.code == 0) {
+        std.debug.print(
+            "a skipped conflict must not make the request succeed\nstdout:\n{s}\nstderr:\n{s}\n",
+            .{ result.stdout, result.stderr },
+        );
+        return error.TestUnexpectedResult;
+    }
+    try std.testing.expect(!result.stderrContains("conflicts with"));
+    try std.testing.expect(!try root.isInstalled(conflicts_0));
+    try std.testing.expect(!try root.isInstalled(conflicts_1));
 }
 
 test "skipped problems are excluded from the count and the rest renumbered" {

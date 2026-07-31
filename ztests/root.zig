@@ -12,6 +12,7 @@ comptime {
     _ = @import("clean_test.zig");
     _ = @import("conflict_test.zig");
     _ = @import("count_test.zig");
+    _ = @import("debugsolver_test.zig");
     _ = @import("downgrade_test.zig");
     _ = @import("erase_test.zig");
     _ = @import("excludes_test.zig");
