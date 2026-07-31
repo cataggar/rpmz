@@ -575,6 +575,7 @@ pub fn build(b: *Build) void {
         });
         mod.addIncludePath(b.path("include"));
         mod.addIncludePath(b.path("common"));
+        mod.addImport("tdnf_error", tdnf_error_mod);
         mod.addCSourceFiles(.{
             .root = b.path("common"),
             .files = &.{ "memory_printf_shim.c", "log_shim.c", "joinpath_shim.c" },
@@ -812,6 +813,7 @@ pub fn build(b: *Build) void {
         });
         test_mod.addIncludePath(b.path("include"));
         test_mod.addIncludePath(b.path("common"));
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addCSourceFiles(.{
             .root = b.path("common"),
             .files = &.{ "memory_printf_shim.c", "memory_test_shim.c", "log_shim.c", "joinpath_shim.c", "utils_test_shim.c" },

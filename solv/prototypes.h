@@ -70,8 +70,9 @@ SolvFreePackageList(
     );
 
 uint32_t
-SolvQueueToPackageList(
-    Queue* pQueue,
+SolvIdsToPackageList(
+    const Id* pIds,
+    uint32_t dwIdCount,
     PSolvPackageList* ppPkgList
     );
 
@@ -148,42 +149,8 @@ SolvGetQueryResult(
     );
 
 uint32_t
-SolvAddUpgradeAllJob(
-    Queue* pQueueJobs
-    );
-
-uint32_t
-SolvAddDistUpgradeJob(
-    Queue* pQueueJobs
-    );
-
-uint32_t
-SolvAddFlagsToJobs(
-    Queue* pQueueJobs,
-    int dwFlags
-    );
-
-uint32_t
-SolvAddPkgInstallJob(
-    Queue* pQueueJobs,
-    Id dwId
-    );
-
-uint32_t
-SolvAddPkgDowngradeJob(
-    Queue* pQueueJobs,
-    Id dwId
-    );
-
-uint32_t
-SolvAddPkgEraseJob(
-    Queue* pQueueJobs,
-    Id dwId
-    );
-
-uint32_t
 SolvAddUserInstalledToJobs(
-    Queue* pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     Pool *pPool,
     struct history_ctx *pHistoryCtx
     );

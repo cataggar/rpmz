@@ -80,7 +80,7 @@ TDNFNativeQuerySerializePackageId(
 uint32_t
 TDNFNativeQuerySerializeQueuePackageRefs(
     PSolvSack pSack,
-    Queue *pQueue,
+    PTDNF_ID_LIST pQueue,
     char ***pppszRefs,
     uint32_t *pdwCount
     );
@@ -115,7 +115,7 @@ TDNFNativeQueryResolvePackageRefArrayToQueue(
     char **ppszPackageRefs,
     uint32_t dwCount,
     int nInstalledOnly,
-    Queue *pQueue
+    PTDNF_ID_LIST pQueue
     );
 
 uint32_t
@@ -353,7 +353,7 @@ uint32_t
 TDNFMatchForReinstall(
     PSolvSack pSack,
     const char* pszName,
-    Queue* pQueueGoal
+    PTDNF_ID_LIST pQueueGoal
     );
 
 uint32_t
@@ -407,7 +407,7 @@ TDNFGetGlobPackages(
     PSolvSack pSack,
     char* pszPkgGlob,
     int nIsInstalled,
-    Queue* pQueueGlob
+    PTDNF_ID_LIST pQueueGlob
     );
 
 uint32_t
@@ -415,18 +415,18 @@ TDNFFilterPackages(
     PTDNF pTdnf,
     TDNF_ALTERTYPE nAlterType,
     char** ppszPkgsNotResolved,
-    Queue* pQueueGoal
+    PTDNF_ID_LIST pQueueGoal
     );
 
 uint32_t
 TDNFGetAutoInstalledOrphans(
     PTDNF pTdnf,
-    Queue* pQueueGoal);
+    PTDNF_ID_LIST pQueueGoal);
 
 uint32_t
 TDNFAddPackagesForInstall(
     PSolvSack pSack,
-    Queue* pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName,
     int nSource,
     int nInstallOnly
@@ -435,14 +435,14 @@ TDNFAddPackagesForInstall(
 uint32_t
 TDNFAddPackagesForErase(
     PSolvSack pSack,
-    Queue* pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     );
 
 uint32_t
 TDNFAddPackagesForUpgrade(
     PSolvSack pSack,
-    Queue* pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     );
 
@@ -464,7 +464,7 @@ uint32_t
 TDNFAddPackagesForDowngrade(
     PTDNF pTdnf,
     PSolvSack pSack,
-    Queue* pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     );
 
@@ -500,7 +500,7 @@ TDNFPopulatePkgInfoArrayFileList(
 uint32_t
 TDNFGoal(
     PTDNF pTdnf,
-    Queue* pkgList,
+    PTDNF_ID_LIST pkgList,
     PTDNF_SOLVED_PKG_INFO* ppInfo,
     TDNF_ALTERTYPE nAlterType, int nUnresolved
     );
@@ -508,22 +508,22 @@ TDNFGoal(
 uint32_t
 TDNFGoalNoDeps(
     PTDNF pTdnf,
-    Queue* pQueuePkgList,
+    PTDNF_ID_LIST pQueuePkgList,
     PTDNF_SOLVED_PKG_INFO* ppInfo
     );
 
 uint32_t
 TDNFHistoryGoal(
     PTDNF pTdnf,
-    Queue *pqInstall,
-    Queue *pqErase,
+    PTDNF_ID_LIST pqInstall,
+    PTDNF_ID_LIST pqErase,
     PTDNF_SOLVED_PKG_INFO* ppInfo
     );
 
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
 TDNFSolv(
     PTDNF pTdnf,
-    Queue *pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     char **ppszExcludes,
     uint32_t dwExcludeCount,
     int nAllowErasing,
@@ -536,7 +536,7 @@ TDNFSolv(
 uint32_t
 TDNFAddUserInstall(
     PTDNF pTdnf,
-    const Queue* pQueueGoal,
+    const TDNF_ID_LIST *pQueueGoal,
     PTDNF_SOLVED_PKG_INFO ppInfo
     );
 
@@ -558,7 +558,7 @@ uint32_t
 TDNFAddGoal(
     PTDNF pTdnf,
     TDNF_ALTERTYPE nAlterType,
-    Queue* pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     Id dwId,
     uint32_t dwCount,
     char** ppszExcludes
@@ -575,14 +575,14 @@ TDNFPkgsToExclude(
 uint32_t
 TDNFSolvAddPkgLocks(
     PTDNF pTdnf,
-    Queue* pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     Pool *pPool
     );
 
 uint32_t
 TDNFSolvAddInstallOnlyPkgs(
     PTDNF pTdnf,
-    Queue* pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     Pool *pPool
     );
 
@@ -595,7 +595,7 @@ TDNFSolvAddMinVersions(
 uint32_t
 TDNFSolvAddProtectPkgs(
     PTDNF pTdnf,
-    Queue* pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     Pool *pPool
     );
 
@@ -943,7 +943,7 @@ TDNFPrepareAllPackages(
     PTDNF pTdnf,
     TDNF_ALTERTYPE* pAlterType,
     char** ppszPkgsNotResolved,
-    Queue* pQueueGoal
+    PTDNF_ID_LIST pQueueGoal
     );
 
 uint32_t
@@ -952,7 +952,7 @@ TDNFPrepareSinglePkg(
     const char* pszPkgName,
     TDNF_ALTERTYPE nAlterType,
     char** ppszPkgsNotResolved,
-    Queue* pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     uint32_t dwRequestRef
     );
 
@@ -967,7 +967,7 @@ TDNFResolveBuildDependencies(
     PTDNF pTdnf,
     char **ppszPackageNameSpecs,
     char **ppszPkgsNotResolved,
-    Queue* queueGoal
+    PTDNF_ID_LIST queueGoal
     );
 
 //rpmtrans.c

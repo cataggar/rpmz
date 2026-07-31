@@ -144,6 +144,41 @@ TDNFStringArraySort(
     char **ppszArray
     );
 
+//idlist.zig
+void
+TDNFIdListInit(
+    PTDNF_ID_LIST pList
+    );
+
+void
+TDNFIdListFree(
+    PTDNF_ID_LIST pList
+    );
+
+void
+TDNFIdListEmpty(
+    PTDNF_ID_LIST pList
+    );
+
+uint32_t
+TDNFIdListPush(
+    PTDNF_ID_LIST pList,
+    int32_t nValue
+    );
+
+uint32_t
+TDNFIdListPush2(
+    PTDNF_ID_LIST pList,
+    int32_t nFirst,
+    int32_t nSecond
+    );
+
+uint32_t
+TDNFIdListPushUnique(
+    PTDNF_ID_LIST pList,
+    int32_t nValue
+    );
+
 //utils.c
 uint32_t
 TDNFCreateAndWriteToFile(

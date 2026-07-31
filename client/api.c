@@ -734,7 +734,7 @@ error:
 static uint32_t
 TDNFAddCmdLinePackages(
     PTDNF pTdnf,
-    Queue *pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     TDNF_ALTERTYPE nAlterType,
     int *pnUnresolved
 )
@@ -750,7 +750,7 @@ TDNFAddCmdLinePackages(
     char* pszRPMPath = NULL;
     Id id;
     uint32_t dwSolvableId = 0;
-    int nTraceStart;
+    uint32_t nTraceStart = 0;
 
     if(!pTdnf || !pnUnresolved)
     {
@@ -845,10 +845,11 @@ TDNFAddCmdLinePackages(
         BAIL_ON_TDNF_ERROR(dwError);
         id = (Id)dwSolvableId;
         TDNF_TRANSACTION_PLAN_CONSIDER_NEW_SOLVABLE(pSack->pPool, id);
-        nTraceStart = pQueueGoal->count;
-        queue_push(pQueueGoal, id);
-        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf->pRequestTrace, pQueueGoal->elements, nTraceStart,
-            pQueueGoal->count, nAlterType, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, nCmdIndex - 1);
+        nTraceStart = pQueueGoal->dwCount;
+        dwError = TDNFIdListPush(pQueueGoal, id);
+        BAIL_ON_TDNF_ERROR(dwError);
+        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf->pRequestTrace, pQueueGoal->pnElements, nTraceStart,
+            pQueueGoal->dwCount, nAlterType, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, nCmdIndex - 1);
     }
 
     repo_internalize(pTdnf->pSolvCmdLineRepo);
@@ -1472,7 +1473,7 @@ TDNFResolve(
     )
 {
     uint32_t dwError = 0;
-    Queue queueGoal = {0};
+    TDNF_ID_LIST queueGoal = {0};
     char** ppszPkgsNotResolved = NULL;
     PTDNF_SOLVED_PKG_INFO pSolvedPkgInfo = NULL;
     uint64_t qwAvailCacheBytes = 0;
@@ -1527,7 +1528,7 @@ TDNFResolve(
         }
     }
 
-    queue_init(&queueGoal);
+    TDNFIdListInit(&queueGoal);
 
     if(!pTdnf->pArgs->nBuildDeps && !pTdnf->pArgs->nSource &&
        !pTdnf->pArgs->nNoDeps)
@@ -1644,7 +1645,7 @@ cleanup:
     TDNF_SAFE_FREE_MEMORY(ppszPkgNames);
     TDNF_SAFE_FREE_MEMORY(ppszPkgFiles);
 
-    queue_free(&queueGoal);
+    TDNFIdListFree(&queueGoal);
     return dwError;
 
 error:
@@ -1825,14 +1826,14 @@ TDNFHistoryResolve(
     struct history_delta *hd = NULL;
     struct history_flags_delta *hfd = NULL;
     struct history_nevra_map *hnm = NULL;
-    Queue qInstall = {0};
-    Queue qErase = {0};
+    TDNF_ID_LIST qInstall = {0};
+    TDNF_ID_LIST qErase = {0};
     PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
     uint32_t dwRepoCount = 0;
     uint32_t dwUnresolvedCount = 0;
     char **ppszMatches = NULL;
     uint32_t dwMatchCount = 0;
-    int nTraceStart = 0;
+    uint32_t nTraceStart = 0;
     int nHistoryOutcome = 0;
 
     if(pTdnf)
@@ -1943,15 +1944,15 @@ TDNFHistoryResolve(
     dwError = TDNFNativeQueryBuildRepoInputs(pTdnf, &pRepos, &dwRepoCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    queue_init(&qInstall);
-    queue_init(&qErase);
+    TDNFIdListInit(&qInstall);
+    TDNFIdListInit(&qErase);
 
     for (int i = 0; i < hd->added_count; i++)
     {
         const char *pszPkgName = history_get_nevra(hnm, hd->added_ids[i]);
         if (pszPkgName)
         {
-            Queue qResult = {0};
+            TDNF_ID_LIST qResult = {0};
 
             nHistoryOutcome = TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED;
             if (strncmp(pszPkgName, "gpg-pubkey-", 11) == 0)
@@ -1959,8 +1960,8 @@ TDNFHistoryResolve(
                 continue;
             }
 
-            nTraceStart = qInstall.count;
-            queue_init(&qResult);
+            nTraceStart = qInstall.dwCount;
+            TDNFIdListInit(&qResult);
 
             dwError = TDNFRepoMdNativeFindNevraMatchesConfig(
                           pRepos,
@@ -1980,7 +1981,7 @@ TDNFHistoryResolve(
                           &qResult);
             BAIL_ON_TDNF_ERROR(dwError);
 
-            if (qResult.count == 0)
+            if (qResult.dwCount == 0)
             {
                 dwError = TDNFAddNotResolved(ppszPkgsNotResolved, pszPkgName);
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -1990,8 +1991,8 @@ TDNFHistoryResolve(
             }
             else
             {
-                Queue qInstalled = {0};
-                queue_init(&qInstalled);
+                TDNF_ID_LIST qInstalled = {0};
+                TDNFIdListInit(&qInstalled);
 
                 /* find if pkg is already installed */
                 TDNFFreeStringArray(ppszMatches);
@@ -2016,22 +2017,23 @@ TDNFHistoryResolve(
                               &qInstalled);
                 BAIL_ON_TDNF_ERROR(dwError);
 
-                if (qInstalled.count == 0)
+                if (qInstalled.dwCount == 0)
                 {
                     /* We may have found multiples if they occur in multiple
                        repos. Take the first one. */
-                    queue_push(&qInstall, qResult.elements[0]);
+                    dwError = TDNFIdListPush(&qInstall, qResult.pnElements[0]);
+                    BAIL_ON_TDNF_ERROR(dwError);
                     nHistoryOutcome = TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_QUEUED;
                 }
-                queue_free(&qInstalled);
+                TDNFIdListFree(&qInstalled);
             }
             TDNFFreeStringArray(ppszMatches);
             ppszMatches = NULL;
             dwMatchCount = 0;
-            queue_free(&qResult);
+            TDNFIdListFree(&qResult);
             TDNFTransactionPlanRequestTraceRecordHistoryGoal(pTdnf->pRequestTrace, pszPkgName,
                 TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_INSTALL, TDNF_TRANSACTION_PLAN_CAPTURE_JOB_INSTALL,
-                qInstall.elements, nTraceStart, qInstall.count, nHistoryOutcome);
+                qInstall.pnElements, nTraceStart, qInstall.dwCount, nHistoryOutcome);
         }
         else
         {
@@ -2048,7 +2050,7 @@ TDNFHistoryResolve(
             if (strncmp(pszPkgName, "gpg-pubkey-", 11) == 0)
                 continue;
 
-            nTraceStart = qErase.count;
+            nTraceStart = qErase.dwCount;
             dwError = TDNFRepoMdNativeFindNevraMatchesConfig(
                           pRepos,
                           dwRepoCount,
@@ -2066,7 +2068,7 @@ TDNFHistoryResolve(
                           1,
                           &qErase);
             BAIL_ON_TDNF_ERROR(dwError);
-            nHistoryOutcome = qErase.count == nTraceStart
+            nHistoryOutcome = qErase.dwCount == nTraceStart
                 ? TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED
                 : TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_QUEUED;
 
@@ -2075,7 +2077,7 @@ TDNFHistoryResolve(
             dwMatchCount = 0;
             TDNFTransactionPlanRequestTraceRecordHistoryGoal(pTdnf->pRequestTrace, pszPkgName,
                 TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_ERASE, TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ERASE,
-                qErase.elements, nTraceStart, qErase.count, nHistoryOutcome);
+                qErase.pnElements, nTraceStart, qErase.dwCount, nHistoryOutcome);
         }
         else
         {
@@ -2124,8 +2126,8 @@ cleanup:
     destroy_history_ctx(ctx);
     TDNFFreeStringArray(ppszMatches);
     TDNFNativeQueryFreeRepoInputs(pRepos, dwRepoCount);
-    queue_free(&qInstall);
-    queue_free(&qErase);
+    TDNFIdListFree(&qInstall);
+    TDNFIdListFree(&qErase);
     return dwError;
 
 error:

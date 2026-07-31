@@ -20,21 +20,26 @@ SolvFreePackageList(
     }
 }
 
+/*
+ * Builds a package list from a plain array of ids. client/ no longer owns a
+ * libsolv Queue, so the id array is the only shape both sides can speak.
+ */
 uint32_t
-SolvQueueToPackageList(
-    Queue* pQueue,
+SolvIdsToPackageList(
+    const Id* pIds,
+    uint32_t dwIdCount,
     PSolvPackageList* ppPkgList
     )
 {
     uint32_t dwError = 0;
     PSolvPackageList pPkgList = NULL;
-    if(!ppPkgList || !pQueue)
+    if(!ppPkgList || !pIds)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    if(pQueue->count == 0)
+    if(dwIdCount == 0)
     {
         dwError = ERROR_TDNF_NO_DATA;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -48,8 +53,8 @@ SolvQueueToPackageList(
     queue_init(&pPkgList->queuePackages);
     queue_insertn(&pPkgList->queuePackages,
                   pPkgList->queuePackages.count,
-                  pQueue->count,
-                  pQueue->elements);
+                  (int)dwIdCount,
+                  pIds);
     *ppPkgList = pPkgList;
 cleanup:
     return dwError;
@@ -86,7 +91,9 @@ SolvGetQueryResult(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvQueueToPackageList(&pQuery->queueResult, &pPkgList);
+    dwError = SolvIdsToPackageList(pQuery->queueResult.elements,
+                                   (uint32_t)pQuery->queueResult.count,
+                                   &pPkgList);
     BAIL_ON_TDNF_ERROR(dwError);
     *ppPkgList = pPkgList;
 

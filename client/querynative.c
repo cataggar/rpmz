@@ -25,7 +25,7 @@ NativeQueryAppendRefMatches(
     PSolvSack pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
-    Queue *pQueue,
+    PTDNF_ID_LIST pQueue,
     uint32_t *pdwMatches
     );
 
@@ -333,7 +333,7 @@ TDNFNativeQuerySerializePackageId(
 uint32_t
 TDNFNativeQuerySerializeQueuePackageRefs(
     PSolvSack pSack,
-    Queue *pQueue,
+    PTDNF_ID_LIST pQueue,
     char ***pppszRefs,
     uint32_t *pdwCount
     )
@@ -349,7 +349,7 @@ TDNFNativeQuerySerializeQueuePackageRefs(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwCount = (uint32_t)pQueue->count;
+    dwCount = (uint32_t)pQueue->dwCount;
     dwError = TDNFAllocateMemory(
                   dwCount + 1,
                   sizeof(char *),
@@ -360,7 +360,7 @@ TDNFNativeQuerySerializeQueuePackageRefs(
     {
         dwError = TDNFNativeQuerySerializePackageId(
                       pSack,
-                      pQueue->elements[i],
+                      pQueue->pnElements[i],
                       &ppszRefs[i]);
         BAIL_ON_TDNF_ERROR(dwError);
     }
@@ -592,7 +592,7 @@ TDNFNativeQueryResolvePackageRefArrayToQueue(
     char **ppszPackageRefs,
     uint32_t dwCount,
     int nInstalledOnly,
-    Queue *pQueue
+    PTDNF_ID_LIST pQueue
     )
 {
     uint32_t dwError = 0;
@@ -643,7 +643,7 @@ TDNFNativeQueryResolveSinglePackageRef(
     )
 {
     uint32_t dwError = 0;
-    Queue queueMatches = {0};
+    TDNF_ID_LIST queueMatches = {0};
 
     if(!pSack || IsNullOrEmptyString(pszPackageRef) || !pdwPkgId)
     {
@@ -651,7 +651,7 @@ TDNFNativeQueryResolveSinglePackageRef(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    queue_init(&queueMatches);
+    TDNFIdListInit(&queueMatches);
 
     dwError = NativeQueryAppendRefMatches(
                   pSack,
@@ -661,16 +661,16 @@ TDNFNativeQueryResolveSinglePackageRef(
                   NULL);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    if(queueMatches.count == 0)
+    if(queueMatches.dwCount == 0)
     {
         dwError = ERROR_TDNF_NO_DATA;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    *pdwPkgId = queueMatches.elements[0];
+    *pdwPkgId = queueMatches.pnElements[0];
 
 cleanup:
-    queue_free(&queueMatches);
+    TDNFIdListFree(&queueMatches);
     return dwError;
 error:
     if(pdwPkgId)
@@ -887,7 +887,7 @@ NativeQueryAppendRefMatches(
     PSolvSack pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
-    Queue *pQueue,
+    PTDNF_ID_LIST pQueue,
     uint32_t *pdwMatches
     )
 {
@@ -973,7 +973,8 @@ NativeQueryAppendRefMatches(
                 continue;
             }
 
-            queue_pushunique(pQueue, p);
+            dwError = TDNFIdListPushUnique(pQueue, p);
+            BAIL_ON_TDNF_ERROR(dwError);
             dwMatches++;
         }
     }
@@ -1013,7 +1014,8 @@ NativeQueryAppendRefMatches(
                 continue;
             }
 
-            queue_pushunique(pQueue, p);
+            dwError = TDNFIdListPushUnique(pQueue, p);
+            BAIL_ON_TDNF_ERROR(dwError);
             dwMatches++;
         }
     }
