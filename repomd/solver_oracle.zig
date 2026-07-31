@@ -1222,9 +1222,11 @@ fn problemKind(rule_type: c.SolverRuleinfo) solver_model.ProblemKind {
     {
         return .unsatisfied_requirement;
     }
+    if (rule_type == c.SOLVER_RULE_PKG_SAME_NAME) {
+        return .same_name;
+    }
     if (rule_type == c.SOLVER_RULE_PKG_CONFLICTS or
-        rule_type == c.SOLVER_RULE_PKG_SELF_CONFLICT or
-        rule_type == c.SOLVER_RULE_PKG_SAME_NAME)
+        rule_type == c.SOLVER_RULE_PKG_SELF_CONFLICT)
     {
         return .conflict;
     }

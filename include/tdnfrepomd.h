@@ -174,7 +174,8 @@ typedef enum _TDNF_REPOMD_NATIVE_SOLVER_PROBLEM_KIND
     TDNF_REPOMD_NATIVE_SOLVER_PROBLEM_NO_CANDIDATE = 4,
     TDNF_REPOMD_NATIVE_SOLVER_PROBLEM_NOT_INSTALLABLE = 5,
     TDNF_REPOMD_NATIVE_SOLVER_PROBLEM_PROTECTED_PACKAGE = 6,
-    TDNF_REPOMD_NATIVE_SOLVER_PROBLEM_INSTALL_ONLY_LIMIT = 7
+    TDNF_REPOMD_NATIVE_SOLVER_PROBLEM_INSTALL_ONLY_LIMIT = 7,
+    TDNF_REPOMD_NATIVE_SOLVER_PROBLEM_SAME_NAME = 8
 } TDNF_REPOMD_NATIVE_SOLVER_PROBLEM_KIND;
 
 typedef enum _TDNF_REPOMD_NATIVE_SOLVER_REPOSITORY_KIND
@@ -689,6 +690,30 @@ TDNFRepoMdNativeSolverLiveSolve(
 void
 TDNFRepoMdNativeSolverLiveSolveRelease(
     void *pHandle
+    );
+
+/*
+ * Check every rpm file under pszDirectory against the other rpm files in that
+ * same directory, which is the universe `tdnf check-local` examines: the
+ * installed packages and the configured repositories take no part in it.
+ *
+ * *pdwPackageCount receives the number of packages found. *ppHandle receives
+ * NULL when every package could be installed together, and otherwise a handle
+ * holding the failure diagnostics, read with the
+ * TDNFRepoMdNativeSolverRefutedProblem* functions below and released with
+ * TDNFRepoMdNativeSolverLiveSolveRelease.
+ *
+ * *ppszErrorPath receives NULL, except when a directory entry could not be
+ * stat'ed: it then names that entry so the caller can report it. The string
+ * is owned by the callee and is valid until the next call on the same thread.
+ */
+uint32_t
+TDNFRepoMdNativeSolverCheckLocal(
+    const char *pszDirectory,
+    const char *pszNativeArch,
+    uint32_t *pdwPackageCount,
+    void **ppHandle,
+    const char **ppszErrorPath
     );
 
 /*

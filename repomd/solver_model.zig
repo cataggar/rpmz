@@ -310,6 +310,11 @@ pub const ArchitecturePolicy = struct {
     native_arch: []const u8,
     force_arch: ?[]const u8 = null,
     allow_multilib: bool = true,
+    /// libsolv only rejects or ranks solvables by architecture once
+    /// `pool_setarch` has populated `pool->id2arch`. A pool built without it --
+    /// `check-local`'s -- treats every architecture as installable and prunes
+    /// no candidate by architecture, which this reproduces.
+    allow_any_arch: bool = false,
 };
 
 pub const SolvePolicy = struct {
@@ -355,6 +360,10 @@ pub const Action = struct {
 pub const ProblemKind = enum {
     unsatisfied_requirement,
     conflict,
+    /// Two packages with the same name that cannot be installed together,
+    /// which libsolv reports as its own rule (`SOLVER_RULE_PKG_SAME_NAME`)
+    /// with its own wording and its own skip behaviour.
+    same_name,
     obsoletes,
     no_candidate,
     not_installable,

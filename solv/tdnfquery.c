@@ -242,49 +242,6 @@ SolvFreeQuery(
 }
 
 uint32_t
-SolvApplySinglePackageFilter(
-    PSolvQuery pQuery,
-    const char* pszPackageName
-    )
-{
-    uint32_t dwError = 0;
-    char** ppCopyOfpkgNames = NULL;
-    if(!pQuery || IsNullOrEmptyString(pszPackageName))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFAllocateMemory(
-                  2,
-                  sizeof(char*),
-                  (void**)&ppCopyOfpkgNames);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFAllocateString(
-                  pszPackageName,
-                  &ppCopyOfpkgNames[0]);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    if(pQuery->ppszPackageNames)
-    {
-        TDNFFreeStringArray(pQuery->ppszPackageNames);
-    }
-
-    pQuery->ppszPackageNames = ppCopyOfpkgNames;
-
-cleanup:
-    return dwError;
-
-error:
-    if(ppCopyOfpkgNames)
-    {
-        TDNFFreeStringArray(ppCopyOfpkgNames);
-    }
-    goto cleanup;
-}
-
-uint32_t
 SolvAddSystemRepoFilter(
     PSolvQuery  pQuery
     )

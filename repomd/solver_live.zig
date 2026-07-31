@@ -436,6 +436,87 @@ pub fn prepare(
     };
 }
 
+pub const DirectoryCheckInput = struct {
+    /// Directory of `.rpm` files to check. Every package found under it is
+    /// requested; nothing else is in the universe.
+    directory: []const u8,
+    native_arch: []const u8,
+};
+
+/// Builds the universe `tdnf check-local <dir>` checks and the request it
+/// makes of it.
+///
+/// The command is deliberately **directory-only**: libsolv built a fresh
+/// command-line pool holding just the `.rpm` files under the directory and
+/// never read the rpmdb or any configured repository into it, so a
+/// requirement satisfied only by an installed package is still a problem.
+/// The request is one install job per package, queued in the order the
+/// directory walk produced them, which is the order libsolv pushed its jobs
+/// in and therefore the order its problems came back in.
+pub fn prepareDirectoryCheck(
+    parent_allocator: std.mem.Allocator,
+    input: DirectoryCheckInput,
+) ProduceError!Prepared {
+    if (input.directory.len == 0 or input.native_arch.len == 0) {
+        return error.InvalidInput;
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(parent_allocator);
+    errdefer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const models = try arena.alloc(model.RepositoryModel, 1);
+    models[0] = try directory_repository.loadModelOrdered(
+        arena,
+        input.directory,
+        .read,
+    );
+    const repository_inputs = try arena.alloc(
+        solver_model.RepositoryInput,
+        1,
+    );
+    repository_inputs[0] = .{
+        .id = cmdline_repository_id,
+        .model = &models[0],
+        .priority = solver_model.default_repository_priority,
+        .cost = solver_model.default_repository_cost,
+    };
+
+    const universe = try arena.create(solver_model.Universe);
+    universe.* = try solver_model.Universe.init(arena, repository_inputs);
+    errdefer universe.deinit();
+
+    // One install job per package, addressed by package id: the directory may
+    // hold the same NEVRA under two file names, and libsolv requested both.
+    const jobs = try arena.alloc(solver_model.Job, universe.packages.len);
+    for (universe.packages, jobs) |package, *job| {
+        job.* = .{
+            .action = .install,
+            .selection = .{ .package = package.id },
+            .reason = .user,
+        };
+    }
+    const job_origins = try arena.alloc(?u32, jobs.len);
+    @memset(job_origins, null);
+
+    var visibility = try solver_visibility.Projection.init(
+        parent_allocator,
+        universe,
+        .{},
+    );
+    errdefer visibility.deinit();
+
+    return .{
+        .arena_state = arena_state,
+        .universe = universe,
+        .jobs = jobs,
+        .job_origins = job_origins,
+        .hidden = &.{},
+        .visibility = visibility,
+        .native_arch = try arena.dupe(u8, input.native_arch),
+    };
+}
+
 pub fn produce(
     parent_allocator: std.mem.Allocator,
     input: Input,

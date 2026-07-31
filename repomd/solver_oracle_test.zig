@@ -4555,8 +4555,11 @@ test "native and oracle normalize same-name conflicts" {
         observation.outcome.problems,
         native.problems,
     );
+    // libsolv reports this as its own rule (SOLVER_RULE_PKG_SAME_NAME) with its
+    // own wording ("cannot install both A and B") and its own skip behaviour,
+    // so the native model keeps it distinct from a declared conflict.
     try testing.expectEqual(
-        solver_model.ProblemKind.conflict,
+        solver_model.ProblemKind.same_name,
         native.problems[0].kind,
     );
 }

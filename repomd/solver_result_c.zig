@@ -367,6 +367,7 @@ fn mapProblemKind(kind: solver_model.ProblemKind) u32 {
         .not_installable => 5,
         .protected_package => 6,
         .installonly_limit => 7,
+        .same_name => 8,
     };
 }
 

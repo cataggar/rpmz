@@ -2697,7 +2697,8 @@ fn appendBestReplacementClause(
         const top = universe.package(first).?;
         const best_priority = globalRepositoryPriority(universe, top.*);
         var best_machine_rank: ?usize = null;
-        if (architecture) |policy| {
+        if (architecture) |policy| arch_rank: {
+            if (policy.allow_any_arch) break :arch_rank;
             const target = policy.force_arch orelse policy.native_arch;
             for (ranked) |candidate_id| {
                 if (candidate_id == group.installed) continue;
@@ -2793,6 +2794,7 @@ fn bestReplacementTier(
         return false;
     }
     if (architecture) |policy| {
+        if (policy.allow_any_arch) return true;
         const rank = solver_rules.architectureRank(
             policy.force_arch orelse policy.native_arch,
             candidate.source.nevra.arch,

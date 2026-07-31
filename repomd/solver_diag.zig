@@ -45,6 +45,10 @@ pub const SkipClass = enum(u32) {
     not_installable = 4,
     not_installable_disabled = 5,
     nothing_provides = 6,
+    /// SOLVER_RULE_PKG_SAME_NAME. SkipBasedOnType did not list it under
+    /// --skipconflicts or --skipobsoletes, but it is inside the
+    /// SOLVER_RULE_PKG range that --skip-broken filters.
+    same_name = 7,
 };
 
 pub const RenderedProblem = struct {
@@ -173,6 +177,11 @@ fn renderProblem(
             const target = try renderPackage(arena, universe, problem.related_package);
             return std.fmt.allocPrintSentinel(arena, "package {s} conflicts with {s} provided by {s}", .{ source, dep, target }, 0);
         },
+        .same_name => {
+            const source = try renderPackage(arena, universe, problem.package);
+            const target = try renderPackage(arena, universe, problem.related_package);
+            return std.fmt.allocPrintSentinel(arena, "cannot install both {s} and {s}", .{ source, target }, 0);
+        },
         .obsoletes => {
             const source = try renderPackage(arena, universe, problem.package);
             const dep = try renderCapability(arena, problem.capability);
@@ -202,6 +211,7 @@ fn skipClassFor(
 ) SkipClass {
     return switch (problem.kind) {
         .conflict => .conflict,
+        .same_name => .same_name,
         .obsoletes => .obsoletes,
         // libsolv splits an unsatisfied requirement into three rules:
         // SOLVER_RULE_PKG_REQUIRES ("requires X, but none of the providers can

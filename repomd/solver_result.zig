@@ -1233,7 +1233,10 @@ fn problemForOrigin(
             .count = 1,
         },
         .same_name => |same_name| .{
-            .kind = .conflict,
+            // libsolv normalizes the pair so the higher solvable id is the
+            // source ("we normalize same name order" in rules.c), which is the
+            // one its message names first.
+            .kind = .same_name,
             .package = try validPackageId(formula, same_name.right),
             .related_package = try validPackageId(
                 formula,

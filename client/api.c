@@ -216,78 +216,69 @@ TDNFCheckLocalPackages(
     )
 {
     uint32_t dwError = 0;
-    Repo *pCmdlineRepo = 0;
-    Queue queueJobs = {0};
-    Solver *pSolv = NULL;
-    uint32_t count = 0;
-    Pool *pCmdLinePool = NULL;
+    uint32_t dwCount = 0;
+    const char *pszNativeArch = NULL;
+    const char *pszErrorPath = NULL;
+    char *pszNativeArchOwned = NULL;
+    void *pHandle = NULL;
     TDNF_SKIPPROBLEM_TYPE dwSkipProblem = SKIPPROBLEM_NONE;
-    Solvable *s = NULL;
-    Id p;
 
-    if(!pTdnf || !pTdnf->pSack || !pTdnf->pSack->pPool || !pszLocalPath)
+    if(!pTdnf || !pTdnf->pArgs || !pTdnf->pSack || !pszLocalPath)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
-
-    queue_init(&queueJobs);
 
     pr_info("Checking all packages from: %s\n", pszLocalPath);
 
-    dwError = SolvCreatePool(&pCmdLinePool);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    pool_set_rootdir(pCmdLinePool, pTdnf->pArgs->pszInstallRoot);
-
-    pCmdlineRepo = repo_create(pCmdLinePool, CMDLINE_REPO_NAME);
-    if(!pCmdlineRepo)
+    if(!IsNullOrEmptyString(pTdnf->pArgs->pszArch))
     {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        pszNativeArch = pTdnf->pArgs->pszArch;
+    }
+    else
+    {
+        dwError = TDNFGetKernelArch(&pszNativeArchOwned);
+        BAIL_ON_TDNF_ERROR(dwError);
+        pszNativeArch = pszNativeArchOwned;
+    }
+    if(IsNullOrEmptyString(pszNativeArch))
+    {
+        dwError = ERROR_TDNF_NO_DATA;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvReadRpmsFromDirectory(pCmdlineRepo, pszLocalPath);
+    /* The universe is the directory and nothing else: the installed packages
+       and the configured repositories take no part in the check. */
+    dwError = TDNFRepoMdNativeSolverCheckLocal(pszLocalPath, pszNativeArch,
+                                               &dwCount, &pHandle,
+                                               &pszErrorPath);
+    if(dwError && pszErrorPath)
+    {
+        /* Name the entry that could not be classified, as the walk did. */
+        pr_err("ReadRpms: Error while operating on '%s', '%s'\n",
+               pszErrorPath,
+               strerror(dwError > ERROR_TDNF_SYSTEM_BASE ?
+                        (int)(dwError - ERROR_TDNF_SYSTEM_BASE) : 0));
+    }
     BAIL_ON_TDNF_ERROR(dwError);
 
-    FOR_REPO_SOLVABLES(pCmdlineRepo, p, s) {
-        queue_push2(&queueJobs, SOLVER_SOLVABLE|SOLVER_INSTALL, p);
-        count++;
-    }
-    pr_info("Found %u packages\n", count);
+    pr_info("Found %u packages\n", dwCount);
 
-    pSolv = solver_create(pCmdLinePool);
-    if(pSolv == NULL)
-    {
-        dwError = ERROR_TDNF_OUT_OF_MEMORY;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-    solver_set_flag(pSolv, SOLVER_FLAG_ALLOW_UNINSTALL, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_BEST_OBEY_POLICY, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_ALLOW_VENDORCHANGE, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_KEEP_ORPHANS, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_BEST_OBEY_POLICY, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_YUM_OBSOLETES, 1);
-
-    if (solver_solve(pSolv, &queueJobs))
+    if(pHandle)
     {
         dwError = TDNFGetSkipProblemOption(pTdnf, &dwSkipProblem);
         BAIL_ON_TDNF_ERROR(dwError);
 
-        dwError = SolvReportProblems(pTdnf->pSack, pSolv, dwSkipProblem);
+        dwError = TDNFReportNativeSolverProblems(pHandle, dwSkipProblem);
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
 cleanup:
-    if(pCmdLinePool)
+    if(pHandle)
     {
-        pool_free(pCmdLinePool);
+        TDNFRepoMdNativeSolverLiveSolveRelease(pHandle);
     }
-    if(pSolv)
-    {
-        solver_free(pSolv);
-    }
-    queue_free(&queueJobs);
+    TDNF_SAFE_FREE_MEMORY(pszNativeArchOwned);
     return dwError;
 
 error:

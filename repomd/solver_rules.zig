@@ -425,6 +425,7 @@ const UniverseIndex = struct {
             if (!visibility.isVisible(package.id).?) return false;
         }
         if (isSource(package.source.nevra.arch)) return false;
+        if (self.architecture.allow_any_arch) return true;
         return architectureAllows(
             self.architecture.force_arch orelse self.architecture.native_arch,
             package.source.nevra.arch,
@@ -786,7 +787,8 @@ fn generateNotInstallable(
             continue;
         }
         if (is_visible and
-            (isSource(package.source.nevra.arch) or
+            (architecture.allow_any_arch or
+                isSource(package.source.nevra.arch) or
                 architectureAllows(wanted_arch, package.source.nevra.arch)))
         {
             continue;
