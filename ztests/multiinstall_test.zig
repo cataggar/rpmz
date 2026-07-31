@@ -12,6 +12,9 @@ const multi = "tdnf-multi";
 /// Sorted ascending.
 const versions = [_][]const u8{ "1.0.1-1", "1.0.1-2", "1.0.1-3", "1.0.1-4" };
 
+/// `ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED`, as the shell sees it.
+const installonly_limit_code: u8 = 1530 % 256;
+
 fn installOnlyRoot(h: *harness.Harness) !harness.Root {
     var root = try h.root();
     errdefer root.deinit();
@@ -111,6 +114,39 @@ test "upgrading an install-only package adds nothing while under the limit" {
     try lowered.expectOk();
     try std.testing.expect(try root.isInstalledVersion(multi, versions[0]));
     try std.testing.expect(!try root.isInstalledVersion(multi, versions[3]));
+}
+
+// Eviction can only free instances that already exist, so a single request
+// that installs more new instances than `installonly_limit` allows cannot be
+// brought back under the limit by evicting: the request is refused with
+// `ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED` and nothing changes.
+//
+// This is the terminal outcome of the limit check and its bounded retry --
+// the other direction from "the fourth install evicts the oldest instance",
+// which exercises the retry succeeding. Nothing pinned it before.
+test "an install that eviction cannot bring under the limit is refused" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try installOnlyRoot(&h);
+    defer root.deinit();
+    try root.setMainOption("installonly_limit", "1");
+
+    try installVersion(&root, versions[0]);
+    try std.testing.expect(try root.isInstalledVersion(multi, versions[0]));
+
+    // One installed instance plus two new ones is three, and evicting the one
+    // installed instance still leaves two against a limit of one.
+    var result = try root.run(&.{
+        "install",                       "-y",
+        "--nogpgcheck",                  multi ++ "=" ++ versions[1],
+        multi ++ "=" ++ versions[2],
+    });
+    defer result.deinit();
+    try result.expectCode(installonly_limit_code);
+
+    try std.testing.expect(try root.isInstalledVersion(multi, versions[0]));
+    try std.testing.expect(!try root.isInstalledVersion(multi, versions[1]));
+    try std.testing.expect(!try root.isInstalledVersion(multi, versions[2]));
 }
 
 test "removing without a version removes every instance" {

@@ -96,6 +96,26 @@ TDNFReportProblemsNative(
     TDNF_SKIPPROBLEM_TYPE dwSkipProblem
 );
 
+static
+uint32_t
+TDNFGoalFindProtectedInTransaction(
+    PTDNF pTdnf,
+    const Queue *pQueueJobs,
+    int nAllowErasing,
+    int nAutoErase,
+    int nStampFlags,
+    int nStampedJobCount,
+    const char **ppszName,
+    const char **ppszAction
+);
+
+static
+const char *
+TDNFFindProtectedPkg(
+    char **ppszProtectedPkgs,
+    PTDNF_PKG_INFO pPkgs
+);
+
 #define TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(_tdnf, _jobs, _allow_erasing, _auto_erase, _flags, _stamped_count, _prepare_only, _refute_unsat, _drop_protected, _native, _error) \
     do {                                                                 \
         uint32_t _saved_error = (_error);                                \
@@ -106,38 +126,6 @@ TDNFReportProblemsNative(
     } while (0)
 
 static uint32_t
-SolvAddDebugInfo(
-    Solver *pSolv,
-    const char *pszDir
-    )
-{
-    uint32_t dwError = 0;
-    uint32_t dwResultFlags = TESTCASE_RESULT_TRANSACTION |
-                             TESTCASE_RESULT_PROBLEMS;
-    if(!pSolv || IsNullOrEmptyString(pszDir))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    //returns 1 for success.
-    dwError = testcase_write(pSolv, pszDir, dwResultFlags, NULL, NULL);
-    if(dwError == 0)
-    {
-        pr_err("Could not write debugdata to folder %s\n", pszDir);
-    }
-    //need not fail if debugdata write fails.
-    dwError = 0;
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-static
-uint32_t
 TDNFAddUserInstalledToJobs(
     PTDNF pTdnf,
     Queue* pQueueJobs
@@ -190,11 +178,7 @@ TDNFSolv(
     uint32_t dwError = 0;
     PTDNF_SOLVED_PKG_INFO pInfo = NULL;
     TDNF_SKIPPROBLEM_TYPE dwSkipProblem = SKIPPROBLEM_NONE;
-    Solver *pSolv = NULL;
-    Transaction *pTrans = NULL;
     int nFlags = 0;
-    int nProblems = 0;
-    int retries = 0;
     int nStampedJobCount = 0;
     void *pNativeSolve = NULL;
 
@@ -241,103 +225,113 @@ TDNFSolv(
     dwError = TDNFSolvAddMinVersions(pTdnf, pTdnf->pSack->pPool);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    pSolv = solver_create(pTdnf->pSack->pPool);
-    if(pSolv == NULL)
+    if(nAllowErasing && pTdnf->pConf->ppszProtectedPkgs)
     {
-        dwError = ERROR_TDNF_OUT_OF_MEMORY;
+        dwError = TDNFSolvAddProtectPkgs(pTdnf, pQueueJobs, pTdnf->pSack->pPool);
+        if (dwError == ERROR_TDNF_PROTECTED)
+        {
+            /* Nothing has been solved yet, so the plan describes the
+               request and the packages it names. */
+            TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 1, 0, 0, &pNativeSolve, dwError);
+            TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
+                pTdnf, pNativeSolve, nUnresolved,
+                TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE,
+                ppszExcludes, nAllowErasing, nAutoErase, dwError);
+        }
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    if(nAllowErasing)
+    /* --debugsolver used to dump libsolv's internal testcase into ./debugdata.
+       There is no libsolv solve left to dump and the native solver has no
+       equivalent, so the flag is still parsed and accepted -- scripts passing
+       it keep working -- but says so rather than silently doing nothing.
+       Deleting this block is all it takes to retire the notice; deleting the
+       option entry in tools/cli/lib/parseargs.zig and its help.txt line as
+       well is all it takes to retire the flag. */
+    if(pTdnf->pArgs->nDebugSolver)
     {
-        if (pTdnf->pConf->ppszProtectedPkgs) {
-            dwError = TDNFSolvAddProtectPkgs(pTdnf, pQueueJobs, pTdnf->pSack->pPool);
-            if (dwError == ERROR_TDNF_PROTECTED)
-            {
-                /* Nothing has been solved yet, so the plan describes the
-                   request and the packages it names. */
-                TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 1, 0, 0, &pNativeSolve, dwError);
-                TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
-                    pTdnf, pNativeSolve, nUnresolved,
-                    TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE,
-                    ppszExcludes, nAllowErasing, nAutoErase, dwError);
-            }
-            BAIL_ON_TDNF_ERROR(dwError);
-        } else {
-            solver_set_flag(pSolv, SOLVER_FLAG_ALLOW_UNINSTALL, 1);
+        pr_err("--debugsolver: solver debug data is no longer produced; "
+               "the native solver has no libsolv testcase to write\n");
+    }
+
+    dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
+                                  nFlags, nStampedJobCount, nReInstall, &pInfo,
+                                  0, 0, 0,
+                                  TDNFTransactionPlanStateIsEnabled(
+                                      pTdnf->pTransactionPlanState)
+                                      ? &pNativeSolve : NULL);
+    if(dwError == ERROR_TDNF_PROTECTED ||
+       (dwError == ERROR_TDNF_CALL_NOT_SUPPORTED &&
+        pTdnf->pConf->ppszProtectedPkgs))
+    {
+        /* The second case is the native solver refusing a policy combination
+           outright -- today, skip-broken together with protected packages.
+           libsolv did not honour protection during the solve either: it
+           produced a transaction regardless and
+           TDNFSolvCheckProtectPkgsInTrans rejected it afterwards. Asking the
+           same question here keeps that answer: if the transaction the
+           request would have had removes a protected package, that is what
+           the user is told. If it does not, the refusal stands untouched. */
+        const char *pszProtected = NULL;
+        const char *pszAction = NULL;
+        uint32_t dwFind = 0;
+
+        dwFind = TDNFGoalFindProtectedInTransaction(pTdnf, pQueueJobs,
+                                                    nAllowErasing, nAutoErase,
+                                                    nFlags, nStampedJobCount,
+                                                    &pszProtected, &pszAction);
+        if(pszProtected)
+        {
+            pr_err("package %s would be %s but it is protected\n",
+                   pszProtected, pszAction);
+            dwError = ERROR_TDNF_PROTECTED;
+        }
+        else if(dwError == ERROR_TDNF_PROTECTED)
+        {
+            pr_err("a protected package blocks this transaction but it could "
+                   "not be named (%u)\n", dwFind);
         }
     }
-    solver_set_flag(pSolv, SOLVER_FLAG_ALLOW_VENDORCHANGE, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_KEEP_ORPHANS, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_BEST_OBEY_POLICY, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_YUM_OBSOLETES, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_ALLOW_DOWNGRADE, 1);
-    solver_set_flag(pSolv, SOLVER_FLAG_INSTALL_ALSO_UPDATES, 1);
 
-    do {
-        if(pTrans)
+    if(dwError == ERROR_TDNF_SOLV_FAILED)
+    {
+        /* The request has no solution. Which problems the user is shown
+           depends on the skip options, and a skip option that hides every
+           problem leaves nothing to print -- but it does not make the request
+           solvable, so the failure stands. */
+        uint32_t dwReported = 0;
+
+        dwError = TDNFGetSkipProblemOption(pTdnf, &dwSkipProblem);
+        BAIL_ON_TDNF_ERROR(dwError);
+        dwReported = TDNFReportProblemsNative(pTdnf, pQueueJobs, nAllowErasing,
+                                              nAutoErase, nFlags, nStampedJobCount,
+                                              dwSkipProblem);
+        if(!dwReported)
         {
-            transaction_free(pTrans);
-            pTrans = NULL;
+            pr_err("The request cannot be resolved. Every problem found was "
+                   "hidden by a skip option.\n");
+            dwReported = ERROR_TDNF_SOLV_FAILED;
         }
-
-        nProblems = solver_solve(pSolv, pQueueJobs);
-        if (nProblems > 0)
-        {
-            dwError = TDNFGetSkipProblemOption(pTdnf, &dwSkipProblem);
-            BAIL_ON_TDNF_ERROR(dwError);
-            dwError = TDNFReportProblemsNative(pTdnf, pQueueJobs, nAllowErasing,
-                                               nAutoErase, nFlags, nStampedJobCount,
-                                               dwSkipProblem);
-            if(dwError)
-            {
-                TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 1, 0, &pNativeSolve, dwError);
-                TDNF_TRANSACTION_PLAN_CAPTURE_FAILED_SOLVE(
-                    pTdnf, pNativeSolve, nUnresolved, ppszExcludes,
-                    nAllowErasing, nAutoErase, dwError);
-            }
-        }
-
-        pTrans = solver_create_transaction(pSolv);
-        if(!pTrans)
-        {
-            dwError = ERROR_TDNF_INVALID_PARAMETER;
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-
-        if (pTdnf->pConf->ppszProtectedPkgs) {
-            /* catch protected obsoleted packages, and double check for removals */
-            dwError = TDNFSolvCheckProtectPkgsInTrans(pTdnf, pTrans, pTdnf->pSack->pPool);
-            if (dwError == ERROR_TDNF_PROTECTED)
-            {
-                /* The offending package is only named by the transaction that
-                   resolves it away -- there is no erase job for it, so the
-                   terminal reference can only find it among the solve's
-                   actions. A native solve that honoured protection would
-                   refuse to produce that transaction (protection is a hard
-                   solve policy for it), so the capture solve drops the
-                   protected names: it reproduces the very transaction whose
-                   protected removal/obsolete is being reported, while the
-                   captured environment still records the protection policy so
-                   the offending action is recognised as protected. */
-                TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 0, 1, &pNativeSolve, dwError);
-                TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
-                    pTdnf, pNativeSolve, nUnresolved,
-                    TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE,
-                    ppszExcludes, nAllowErasing, nAutoErase, dwError);
-            }
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-
-        if (pTdnf->pConf->ppszInstallOnlyPkgs) {
-            dwError = TDNFSolvCheckInstallOnlyLimitInTrans(pTdnf, pTrans, pTdnf->pSack->pPool, pQueueJobs);
-            if (dwError != ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED) {
-                BAIL_ON_TDNF_ERROR(dwError);
-            }
-        }
-        retries++;
-    } while (dwError == ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED && retries < 2);
-    if (dwError == ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED)
+        dwError = dwReported;
+        TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 1, 0, &pNativeSolve, dwError);
+        TDNF_TRANSACTION_PLAN_CAPTURE_FAILED_SOLVE(
+            pTdnf, pNativeSolve, nUnresolved, ppszExcludes,
+            nAllowErasing, nAutoErase, dwError);
+    }
+    else if(dwError == ERROR_TDNF_PROTECTED)
+    {
+        /* The capture solve drops the protected names for the same reason
+           TDNFGoalFindProtectedInTransaction does: it reproduces the very
+           transaction whose protected removal is being reported, while the
+           captured environment still records the protection policy so the
+           offending action is recognised as protected. */
+        TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 0, 1, &pNativeSolve, dwError);
+        TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
+            pTdnf, pNativeSolve, nUnresolved,
+            TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE,
+            ppszExcludes, nAllowErasing, nAutoErase, dwError);
+    }
+    else if(dwError == ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED)
     {
         TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, nFlags, nStampedJobCount, 0, 0, 0, &pNativeSolve, dwError);
         TDNF_TRANSACTION_PLAN_CAPTURE_TERMINAL_PROBLEM(
@@ -349,27 +343,13 @@ TDNFSolv(
         pQueueJobs->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    if(pTdnf->pArgs->nDebugSolver)
-    {
-        dwError = SolvAddDebugInfo(pSolv, "debugdata");
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    /* Retaining the solve keeps the whole universe alive, so only ask for it
-       when something is going to read it. */
-    dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
-                                  nFlags, nStampedJobCount, nReInstall, &pInfo,
-                                  0, 0, 0,
-                                  TDNFTransactionPlanStateIsEnabled(
-                                      pTdnf->pTransactionPlanState)
-                                      ? &pNativeSolve : NULL);
-    BAIL_ON_TDNF_ERROR(dwError);
-
     /* The plan describes the transaction tdnf is about to run, which is the
        one the native solver just produced, so the capture needs the solve to
-       still be alive. */
+       still be alive. A solve that returned at all tolerated every problem it
+       reports, and what it dropped instead it reports as skipped jobs, so
+       nothing here has to tell the plan that problems were accepted. */
     TDNF_TRANSACTION_PLAN_CAPTURE_SOLVED(
-        pTdnf, pNativeSolve, nProblems && dwSkipProblem != SKIPPROBLEM_NONE,
+        pTdnf, pNativeSolve, 0,
         nUnresolved, UINT32_MAX, ppszExcludes, nAllowErasing, nAutoErase,
         dwError);
     BAIL_ON_TDNF_ERROR(dwError);
@@ -378,14 +358,6 @@ TDNFSolv(
 
 cleanup:
     TDNFRepoMdNativeSolverLiveSolveRelease(pNativeSolve);
-    if(pTrans)
-    {
-        transaction_free(pTrans);
-    }
-    if(pSolv)
-    {
-        solver_free(pSolv);
-    }
     return dwError;
 
 error:
@@ -604,6 +576,125 @@ cleanup:
 
 error:
     goto cleanup;
+}
+
+/* Name the protected package a transaction would remove, in the wording
+   TDNFSolvCheckProtectPkgsInTrans used when it inspected libsolv's tentative
+   transaction. *ppszName is NULL when the transaction removes no protected
+   package -- and when it could not be produced at all, in which case the
+   returned error says why.
+
+   A native solve that honours protection has no transaction to inspect:
+   refusing to produce one is how it reports the problem. Protection is a
+   solve policy for it (TDNFSolvAddProtectPkgs turns protected names into jobs
+   and the native solver mirrors that), so solving again with the protected
+   names dropped reproduces the very transaction being reported. That is also
+   what libsolv did -- it only ever heard protection as USERINSTALLED hints
+   and produced the transaction anyway, which the check then rejected.
+
+   pPkgsObsoleted is consulted before pPkgsToRemove because libsolv asked for
+   SOLVER_TRANSACTION_SHOW_OBSOLETES first: an obsoleted package was never
+   reported as a plain removal. */
+static
+uint32_t
+TDNFGoalFindProtectedInTransaction(
+    PTDNF pTdnf,
+    const Queue *pQueueJobs,
+    int nAllowErasing,
+    int nAutoErase,
+    int nStampFlags,
+    int nStampedJobCount,
+    const char **ppszName,
+    const char **ppszAction
+    )
+{
+    uint32_t dwError = 0;
+    PTDNF_SOLVED_PKG_INFO pInfo = NULL;
+    const char *pszName = NULL;
+    const char *pszAction = NULL;
+
+    if(!pTdnf || !pQueueJobs || !pTdnf->pConf || !ppszName || !ppszAction)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase,
+                                  nStampFlags, nStampedJobCount, 0 /*nReInstall*/,
+                                  &pInfo, 0 /*nPrepareOnly*/, 0 /*nRefuteUnsat*/,
+                                  1 /*nDropProtected*/, NULL /*ppHandle*/);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    pszName = TDNFFindProtectedPkg(pTdnf->pConf->ppszProtectedPkgs,
+                                   pInfo ? pInfo->pPkgsObsoleted : NULL);
+    if(pszName)
+    {
+        pszAction = "obsoleted";
+    }
+    else
+    {
+        pszName = TDNFFindProtectedPkg(pTdnf->pConf->ppszProtectedPkgs,
+                                       pInfo ? pInfo->pPkgsToRemove : NULL);
+        if(pszName)
+        {
+            pszAction = "removed";
+        }
+    }
+
+cleanup:
+    if(ppszName)
+    {
+        *ppszName = pszName;
+    }
+    if(ppszAction)
+    {
+        *ppszAction = pszAction;
+    }
+    if(pInfo)
+    {
+        TDNFFreeSolvedPackageInfo(pInfo);
+    }
+    return dwError;
+
+error:
+    pszName = NULL;
+    pszAction = NULL;
+    goto cleanup;
+}
+
+/* The configured protected name matching the first package in pPkgs, or NULL.
+   The configured string is returned rather than the package's own name because
+   that is what the libsolv check printed. */
+static
+const char *
+TDNFFindProtectedPkg(
+    char **ppszProtectedPkgs,
+    PTDNF_PKG_INFO pPkgs
+    )
+{
+    PTDNF_PKG_INFO pPkg = NULL;
+    int i = 0;
+
+    if(!ppszProtectedPkgs)
+    {
+        return NULL;
+    }
+
+    for(pPkg = pPkgs; pPkg; pPkg = pPkg->pNext)
+    {
+        if(IsNullOrEmptyString(pPkg->pszName))
+        {
+            continue;
+        }
+        for(i = 0; ppszProtectedPkgs[i]; i++)
+        {
+            if(!strcmp(ppszProtectedPkgs[i], pPkg->pszName))
+            {
+                return ppszProtectedPkgs[i];
+            }
+        }
+    }
+    return NULL;
 }
 
 /* Print the native solver's retained diagnostics the way SolvReportProblems
@@ -1629,102 +1720,6 @@ error:
     goto cleanup;
 }
 
-uint32_t
-TDNFSolvCheckInstallOnlyLimitInTrans(
-    PTDNF pTdnf,
-    Transaction *pTrans,
-    Pool *pPool,
-    Queue *pQueueJobs
-    )
-{
-    uint32_t dwError = 0;
-    char **ppszPackages = NULL;
-    int i;
-    int nLimit;
-    Map *pMapRemove = NULL;
-
-    if(!pTdnf || !pTrans || !pPool || !pTdnf->pConf)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    ppszPackages = pTdnf->pConf->ppszInstallOnlyPkgs;
-    nLimit = pTdnf->pConf->nInstallOnlyLimit;
-
-    dwError = TDNFAllocateMemory(
-                          1,
-                          sizeof(Map),
-                          (void**)&pMapRemove);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    map_init(pMapRemove, pPool->nsolvables);
-
-    for (i = 0; ppszPackages && ppszPackages[i]; i++)
-    {
-        char *pszPkg = ppszPackages[i];
-        Id idName = pool_str2id(pPool, pszPkg, 1);
-        int n = 0;
-
-        if (idName)
-        {
-            Id p;
-            Solvable *s;
-
-            FOR_REPO_SOLVABLES(pPool->installed, p, s) {
-                if (idName == s->name) {
-                    n++;
-                }
-            }
-        }
-        /* Apply the tentative transaction delta to the installed count. */
-        for (int j = 0; j < pTrans->steps.count; j++) {
-            Id idType;
-            Id idPkg = pTrans->steps.elements[j];
-            const Solvable *s = pool_id2solvable(pPool, idPkg);
-
-            if (idName == s->name) {
-                idType = transaction_type(pTrans, idPkg,
-                                          SOLVER_TRANSACTION_SHOW_MULTIINSTALL);
-                if (idType == SOLVER_TRANSACTION_MULTIINSTALL) {
-                    n++;
-                } else if (idType == SOLVER_TRANSACTION_ERASE) {
-                    map_set(pMapRemove, idPkg);
-                    n--;
-                }
-            }
-        }
-
-        if (n > nLimit) {
-            Id p;
-            Solvable *s;
-
-            dwError = ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED;
-
-            FOR_REPO_SOLVABLES(pPool->installed, p, s) {
-                if (idName == s->name && !MAPTST(pMapRemove, p)) {
-                    map_set(pMapRemove, p);
-                    queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_ERASE, p);
-                    TDNFTransactionPlanRequestTraceRecordPackageJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
-                        TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ERASE, p, SOLVER_SOLVABLE|SOLVER_ERASE, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_INSTALLONLY_LIMIT,
-                        TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
-                    n--;
-                    if (n <= nLimit)
-                        break;
-                }
-            }
-        }
-    }
-
-cleanup:
-    if (pMapRemove) {
-        map_free(pMapRemove);
-        TDNFFreeMemory(pMapRemove);
-    }
-    return dwError;
-error:
-    goto cleanup;
-}
 
 uint32_t
 TDNFSolvAddMinVersions(
@@ -1901,64 +1896,3 @@ error:
     goto cleanup;
 }
 
-uint32_t
-TDNFSolvCheckProtectPkgsInTrans(
-    PTDNF pTdnf,
-    Transaction *pTrans,
-    Pool *pPool
-    )
-{
-    uint32_t dwError = 0;
-    char **ppszProtectedPkgs = NULL;
-    int i;
-    Queue qPkgs = {0};
-
-    if(!pTdnf || !pTrans || !pPool || !pTdnf->pConf)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    ppszProtectedPkgs = pTdnf->pConf->ppszProtectedPkgs;
-    queue_init(&qPkgs);
-    for (i = 0; ppszProtectedPkgs[i]; i++) {
-        Id idPkg = pool_str2id(pPool, ppszProtectedPkgs[i], 1);
-        if (idPkg) {
-            queue_push(&qPkgs, idPkg);
-        }
-    }
-
-    for (i = 0; i < pTrans->steps.count; i++) {
-        Id idType;
-        Id idPkg = pTrans->steps.elements[i];
-
-        idType = transaction_type(pTrans, idPkg,
-                                  SOLVER_TRANSACTION_SHOW_OBSOLETES);
-        if (idType != SOLVER_TRANSACTION_OBSOLETED) {
-            idType = transaction_type(pTrans, idPkg,
-                                      SOLVER_TRANSACTION_SHOW_ACTIVE|
-                                          SOLVER_TRANSACTION_SHOW_ALL);
-        }
-        if (idType == SOLVER_TRANSACTION_OBSOLETED ||
-            idType == SOLVER_TRANSACTION_ERASE) {
-            int j;
-            const Solvable *s = pool_id2solvable(pPool, idPkg);
-            for (j = 0; j < qPkgs.count; j++) {
-                if (qPkgs.elements[j] == s->name) {
-                    pr_err("package %s would be %s but it is protected\n",
-                           ppszProtectedPkgs[j],
-                           idType == SOLVER_TRANSACTION_OBSOLETED ?
-                               "obsoleted" : "removed");
-                    dwError = ERROR_TDNF_PROTECTED;
-                    BAIL_ON_TDNF_ERROR(dwError);
-                }
-            }
-        }
-    }
-
-cleanup:
-    queue_free(&qPkgs);
-    return dwError;
-error:
-    goto cleanup;
-}

@@ -599,21 +599,6 @@ TDNFSolvAddProtectPkgs(
     Pool *pPool
     );
 
-uint32_t
-TDNFSolvCheckProtectPkgsInTrans(
-    PTDNF pTdnf,
-    Transaction *pTrans,
-    Pool *pPool
-    );
-
-uint32_t
-TDNFSolvCheckInstallOnlyLimitInTrans(
-    PTDNF pTdnf,
-    Transaction *pTrans,
-    Pool *pPool,
-    Queue *pQueueJobs
-    );
-
 TDNF_TRANSACTION_PLAN_REQUEST_TRACE *
 TDNFTransactionPlanRequestTraceCreate(
     uint32_t alter_type,

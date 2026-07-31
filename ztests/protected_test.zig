@@ -9,6 +9,9 @@ const single = "tdnf-test-one";
 const leaf = "tdnf-test-cleanreq-leaf1";
 const required = "tdnf-test-cleanreq-required";
 const multiversion = "tdnf-test-multiversion";
+/// The fixture with four releases of one version, used as an install-only
+/// package so that `installonly_limit` has something to evict.
+const multiversion_installonly = "tdnf-multi";
 const obsoleted_versioned = "tdnf-test-dummy-obsoleted=0.1";
 const obsoleted = "tdnf-test-dummy-obsoleted";
 const obsoleting = "tdnf-test-dummy-obsoleting";
@@ -53,6 +56,7 @@ test "a protected package cannot be erased directly" {
     var result = try root.run(&.{ "-y", "--nogpgcheck", "remove", single });
     defer result.deinit();
     try result.expectCode(protected_code);
+    try result.expectStderrContains("package " ++ single ++ " is protected");
     try std.testing.expect(try root.isInstalled(single));
 }
 
@@ -115,8 +119,52 @@ test "an install that would obsolete a protected package is refused" {
     var result = try root.run(&.{ "install", "-y", "--nogpgcheck", obsoleting });
     defer result.deinit();
     try result.expectCode(protected_code);
+    // The message distinguishes an obsoletion from a plain removal, which is
+    // the only thing that tells the user *why* the package would go away.
+    try result.expectStderrContains(
+        "package " ++ obsoleted ++ " would be obsoleted but it is protected",
+    );
     try std.testing.expect(try root.isInstalled(obsoleted));
     try std.testing.expect(!try root.isInstalled(obsoleting));
+}
+
+// The other half of the protected-transaction check: an install-only package
+// whose oldest instance the `installonly_limit` eviction would remove. The
+// eviction is not a user job, so this is the one routine way an ordinary
+// `install` reaches the "would be removed" branch rather than "would be
+// obsoleted" or the direct-erase refusal.
+test "evicting a protected install-only instance is refused" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root, multiversion_installonly);
+    defer clearProtected(&root);
+
+    try root.setMainOption("installonlypkgs", multiversion_installonly);
+    try root.setMainOption("installonly_limit", "1");
+
+    try install(&root, multiversion_installonly ++ "=1.0.1-1");
+    try std.testing.expect(
+        try root.isInstalledVersion(multiversion_installonly, "1.0.1-1"),
+    );
+    try writeProtected(&root, multiversion_installonly);
+
+    var result = try root.run(&.{
+        "install", "-y", "--nogpgcheck", multiversion_installonly ++ "=1.0.1-2",
+    });
+    defer result.deinit();
+    try result.expectCode(protected_code);
+    try result.expectStderrContains(
+        "package " ++ multiversion_installonly ++
+            " would be removed but it is protected",
+    );
+    try std.testing.expect(
+        try root.isInstalledVersion(multiversion_installonly, "1.0.1-1"),
+    );
+    try std.testing.expect(
+        !try root.isInstalledVersion(multiversion_installonly, "1.0.1-2"),
+    );
 }
 
 test "history rollback can revert a protected package upgrade" {

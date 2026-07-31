@@ -1041,12 +1041,22 @@ fn nativeSolverLiveSolve(
         setError("null native live solve output", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
     };
-    var solve = solver_live.produce(allocator, solver_input) catch |err| {
-        setError("native live solve unavailable: {t}", .{err});
-        return if (err == error.OutOfMemory)
-            c.ERROR_TDNF_OUT_OF_MEMORY
-        else
-            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+    var solve = solver_live.produce(allocator, solver_input) catch |err| switch (err) {
+        // Outcomes tdnf models with error codes of its own rather than solver
+        // failures. `clearError` at the top of this function has already left
+        // the diagnostic empty, which is what tells `TDNFGoalSolveNative` not
+        // to print a `native-solver:` line for them: the caller renders each
+        // one itself, in the wording the corresponding libsolv check used.
+        error.Unsatisfiable => return c.ERROR_TDNF_SOLV_FAILED,
+        error.ProtectedPackage => return c.ERROR_TDNF_PROTECTED,
+        error.InstallonlyLimit => return c.ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED,
+        else => {
+            setError("native live solve unavailable: {t}", .{err});
+            return if (err == error.OutOfMemory)
+                c.ERROR_TDNF_OUT_OF_MEMORY
+            else
+                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+        },
     };
     // A caller asking for the handle snapshots the solve after this returns,
     // so it outlives the call and moves to the heap.
