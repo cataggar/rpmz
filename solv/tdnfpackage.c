@@ -72,47 +72,6 @@ error:
 }
 
 uint32_t
-SolvGetQueryResult(
-    PSolvQuery pQuery,
-    PSolvPackageList* ppPkgList
-    )
-{
-    uint32_t dwError = 0;
-    PSolvPackageList pPkgList = NULL;
-    if(!ppPkgList || !pQuery)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    if(pQuery->queueResult.count == 0)
-    {
-        dwError = ERROR_TDNF_NO_MATCH;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = SolvIdsToPackageList(pQuery->queueResult.elements,
-                                   (uint32_t)pQuery->queueResult.count,
-                                   &pPkgList);
-    BAIL_ON_TDNF_ERROR(dwError);
-    *ppPkgList = pPkgList;
-
-cleanup:
-    return dwError;
-
-error:
-    if(pPkgList)
-    {
-        SolvFreePackageList(pPkgList);
-    }
-    if(ppPkgList)
-    {
-        *ppPkgList = NULL;
-    }
-    goto cleanup;
-}
-
-uint32_t
 SolvGetPkgNameFromId(
     PSolvSack pSack,
     uint32_t dwPkgId,

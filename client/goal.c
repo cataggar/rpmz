@@ -235,8 +235,7 @@ TDNFSolv(
 
     dwError = TDNFGoalAddHiddenPackages(
                   pTdnf,
-                  dwExcludeCount != 0 ? ppszExcludes : NULL,
-                  pTdnf->pSack->pPool);
+                  dwExcludeCount != 0 ? ppszExcludes : NULL);
     BAIL_ON_TDNF_ERROR(dwError);
 
     if(nAllowErasing && pTdnf->pConf->ppszProtectedPkgs)
@@ -1795,17 +1794,18 @@ error:
  * Both sets used to be derived by scanning the libsolv pool: excludes matched
  * SOLVABLE_NAME through a Dataiterator, minversions resolved native ref lines
  * back to solvable Ids. Both are now produced natively and kept as refs, so
- * TDNFGoalBuildNativeSolverHiddenAvailable no longer walks the pool at all.
+ * neither this function nor TDNFGoalBuildNativeSolverHiddenAvailable touches
+ * the pool.
  *
- * The pool->considered bitmap is still stamped from the same refs because it
- * is what bindRepositoryVisibility hashes into the plan's repository snapshot
- * id. That is the last reader; it retires with the plan capture harness.
+ * Each ref is still resolved once below. That is a validation, not
+ * bookkeeping: it is the only place that proves a hidden ref names exactly
+ * one package, and TDNFNativeQueryResolveSinglePackageRef fails when it names
+ * none or several.
  */
 uint32_t
 TDNFGoalAddHiddenPackages(
     PTDNF pTdnf,
-    char **ppszExcludes,
-    Pool *pPool
+    char **ppszExcludes
     )
 {
     uint32_t dwError = 0;
@@ -1815,12 +1815,11 @@ TDNFGoalAddHiddenPackages(
     uint32_t dwExcludeLineCount = 0;
     uint32_t dwMinVersionLineCount = 0;
     uint32_t dwHiddenRefCount = 0;
-    Map *pMapHidden = NULL;
     PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
     uint32_t dwRepoCount = 0;
     uint32_t i = 0;
 
-    if(!pTdnf || !pPool || !pTdnf->pConf)
+    if(!pTdnf || !pTdnf->pConf)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -1899,11 +1898,6 @@ TDNFGoalAddHiddenPackages(
         dwHiddenRefCount++;
     }
 
-    dwError = TDNFAllocateMemory(1, sizeof(Map), (void **)&pMapHidden);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    map_init(pMapHidden, pPool->nsolvables);
-
     for(i = 0; i < dwHiddenRefCount; i++)
     {
         Id dwPkgId = 0;
@@ -1914,22 +1908,7 @@ TDNFGoalAddHiddenPackages(
                       0,
                       &dwPkgId);
         BAIL_ON_TDNF_ERROR(dwError);
-
-        MAPSET(pMapHidden, dwPkgId);
     }
-
-    if (!pPool->considered)
-    {
-        dwError = TDNFAllocateMemory(
-                             1,
-                             sizeof(Map),
-                             (void**)&pPool->considered);
-        BAIL_ON_TDNF_ERROR(dwError);
-        map_init(pPool->considered, pPool->nsolvables);
-        map_setall(pPool->considered);
-    }
-
-    map_subtract(pPool->considered, pMapHidden);
 
     pTdnf->ppszHiddenRefs = ppszHiddenRefs;
     pTdnf->dwHiddenRefCount = dwHiddenRefCount;
@@ -1940,11 +1919,6 @@ cleanup:
     TDNFFreeStringArray(ppszExcludeLines);
     TDNFFreeStringArray(ppszMinVersionLines);
     TDNFNativeQueryFreeRepoInputs(pRepos, dwRepoCount);
-    if(pMapHidden)
-    {
-        map_free(pMapHidden);
-        TDNFFreeMemory(pMapHidden);
-    }
     return dwError;
 error:
     goto cleanup;

@@ -32,8 +32,9 @@ typedef struct _TDNF_
     TDNF_TRANSACTION_PLAN_REQUEST_TRACE *pRequestTrace;
     TDNF_TRANSACTION_PLAN_STATE *pTransactionPlanState;
     /* "repo\x1fNEVRA" refs of every package hidden by excludepkgs/--exclude
-       and minversions, produced natively. Replaces the libsolv name scan
-       that used to derive the same set into pPool->considered. */
+       and minversions, produced natively. This is the sole representation of
+       the hidden set: it feeds the native solver's hidden-available list and
+       the plan's repository visibility snapshot. */
     char **ppszHiddenRefs;
     uint32_t dwHiddenRefCount;
     uint32_t nTestReloadFailureStage;

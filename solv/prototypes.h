@@ -111,28 +111,6 @@ SolvInitSack(
 
 // tdnfquery.c
 uint32_t
-SolvCreateQuery(
-    PSolvSack pSack,
-    PSolvQuery* ppQuery
-    );
-
-void
-SolvFreeQuery(
-    PSolvQuery pQuery
-    );
-
-uint32_t
-SolvApplyListQuery(
-    PSolvQuery pQuery
-    );
-
-uint32_t
-SolvGenerateCommonJob(
-    PSolvQuery pQuery,
-    uint32_t dwSelectFlags
-    );
-
-uint32_t
 SolvAddSystemRepoFilter(
     PSolvQuery pQuery
     );
@@ -140,12 +118,6 @@ SolvAddSystemRepoFilter(
 uint32_t
 SolvAddAvailableRepoFilter(
     PSolvQuery pQuery
-    );
-
-uint32_t
-SolvGetQueryResult(
-    PSolvQuery pQuery,
-    PSolvPackageList* ppPkgList
     );
 
 uint32_t
@@ -175,12 +147,6 @@ SolvReadYumRepoNative(
     const char *pszFilelists,
     const char *pszUpdateinfo,
     const char *pszOther
-    );
-
-uint32_t
-SolvCountPackages(
-    PSolvSack pSack,
-    uint32_t* pdwCount
     );
 
 uint32_t

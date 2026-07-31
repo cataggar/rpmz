@@ -433,11 +433,6 @@ typedef struct
         const char *,
         struct _TDNF_REPO_METADATA *);
     uint32_t (*read_rpms_from_directory)(Repo *, const char *);
-    uint32_t (*apply_snapshot)(
-        struct _TDNF_ *,
-        PTDNF_REPO_DATA,
-        struct _SolvSack *,
-        Repo *);
 } TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS;
 
 typedef struct
@@ -448,7 +443,6 @@ typedef struct
     const char *id;
     const char *name;
     const char *base_url;
-    const char *snapshot_file;
     long metadata_expire;
     int priority;
     int enabled;
@@ -494,10 +488,8 @@ typedef struct
     uint32_t *failure_stage;
     const char *repository_id;
     const char *base_url;
-    const char *snapshot_file;
     int32_t priority;
     uint32_t has_metadata;
-    uint32_t apply_snapshot;
     uint32_t reuse_empty_repository;
 } TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT;
 
@@ -513,7 +505,6 @@ typedef struct
         .create_metadata_cache = SolvCreateMetaDataCache,               \
         .init_from_metadata = TDNFInitRepoFromMetadata,                 \
         .read_rpms_from_directory = SolvReadRpmsFromDirectory,          \
-        .apply_snapshot = TDNFApplySnapshot,                            \
     }
 
 #define TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT_DEFAULTS            \
@@ -828,15 +819,6 @@ TDNFTransactionPlanStatePublishProblem(
         }                                                                \
     } while (0)
 
-#define TDNF_TRANSACTION_PLAN_CONSIDER_NEW_SOLVABLE(_pool, _solvid)      \
-    do {                                                                 \
-        if ((_pool)->considered)                                        \
-        {                                                                \
-            map_grow((_pool)->considered, (_pool)->nsolvables);          \
-            map_set((_pool)->considered, (_solvid));                     \
-        }                                                                \
-    } while (0)
-
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
 TDNFTransactionPlanStateDestroy(
     TDNF_TRANSACTION_PLAN_STATE *state
@@ -923,22 +905,18 @@ TDNFTransactionPlanTestPoolRepoCount(
     );
 
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
-TDNFTransactionPlanTestConsideredCount(
+TDNFTransactionPlanTestVisibleSolvableCount(
     void *tdnf_handle
     );
 
-TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uintptr_t
-TDNFTransactionPlanTestConsideredIdentity(
-    void *tdnf_handle
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
+TDNFTransactionPlanTestSackSolvableCount(
+    void *sack,
+    uint32_t *count
     );
 
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
 TDNFTransactionPlanTestRepoDataCount(
-    void *tdnf_handle
-    );
-
-TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
-TDNFTransactionPlanTestGrowCmdlineConsidered(
     void *tdnf_handle
     );
 

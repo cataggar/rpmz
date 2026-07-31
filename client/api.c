@@ -844,7 +844,6 @@ TDNFAddCmdLinePackages(
                       &dwSolvableId);
         BAIL_ON_TDNF_ERROR(dwError);
         id = (Id)dwSolvableId;
-        TDNF_TRANSACTION_PLAN_CONSIDER_NEW_SOLVABLE(pSack->pPool, id);
         nTraceStart = pQueueGoal->dwCount;
         dwError = TDNFIdListPush(pQueueGoal, id);
         BAIL_ON_TDNF_ERROR(dwError);

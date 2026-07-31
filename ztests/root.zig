@@ -26,6 +26,7 @@ comptime {
     _ = @import("protected_test.zig");
     _ = @import("repolist_test.zig");
     _ = @import("search_test.zig");
+    _ = @import("snapshot_test.zig");
     _ = @import("solverdiag_test.zig");
     _ = @import("update_test.zig");
     _ = @import("urls_test.zig");

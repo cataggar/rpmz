@@ -361,47 +361,10 @@ const RepositoryStage = struct {
     original_disabled: c_int,
     original_priority: c_int,
     original_subpriority: c_int,
-    prior_considered: ?*c.Map = null,
-    staged_considered: ?*c.Map = null,
     committed: bool = false,
-
-    fn stageConsidered(
-        self: *RepositoryStage,
-        force_map: bool,
-    ) Allocator.Error!void {
-        const prior = if (self.pool.considered) |raw|
-            @as(*c.Map, @ptrCast(raw))
-        else
-            null;
-        if (prior == null and !force_map) return;
-
-        const staged = try std.heap.c_allocator.create(c.Map);
-        if (prior) |value| {
-            c.map_init_clone(staged, value);
-            c.map_grow(staged, self.pool.nsolvables);
-        } else {
-            c.map_init(staged, self.pool.nsolvables);
-            c.map_setall(staged);
-        }
-        var solvid = self.repository.start;
-        while (solvid < self.repository.end) : (solvid += 1) {
-            const raw = c.pool_id2solvable(self.pool, solvid) orelse
-                continue;
-            const solvable: *c.Solvable = @ptrCast(raw);
-            if (solvable.repo == self.repository)
-                c.map_set(staged, solvid);
-        }
-        self.prior_considered = prior;
-        self.staged_considered = staged;
-        self.pool.considered = staged;
-    }
 
     fn rollback(self: *RepositoryStage) void {
         if (self.committed) return;
-        if (self.staged_considered) |staged| {
-            self.pool.considered = self.prior_considered;
-            freeConsidered(staged);
-        }
         if (self.created) {
             self.repository.appdata = null;
             c.repo_free(self.repository, 1);
@@ -425,23 +388,6 @@ const RepositoryStage = struct {
             prior != self.repository
         else
             false;
-        if (replacing) {
-            const prior = self.prior.?;
-            if (self.pool.considered) |raw_map| {
-                const considered: *c.Map = @ptrCast(raw_map);
-                var solvid = prior.start;
-                while (solvid < prior.end) : (solvid += 1) {
-                    const raw = c.pool_id2solvable(
-                        self.pool,
-                        solvid,
-                    ) orelse continue;
-                    const solvable: *c.Solvable = @ptrCast(raw);
-                    if (solvable.repo == prior)
-                        c.map_clr(considered, solvid);
-                }
-            }
-        }
-
         self.repository.appdata = input.repo_data;
         if (liveRepositorySlot(input)) |slot|
             slot.* = self.repository;
@@ -458,9 +404,6 @@ const RepositoryStage = struct {
             prior.appdata = null;
             c.repo_free(prior, 1);
         }
-        if (self.staged_considered != null) {
-            if (self.prior_considered) |prior| freeConsidered(prior);
-        }
         rebuildPoolIndexes(self.pool);
         self.committed = true;
     }
@@ -475,7 +418,7 @@ fn initRepository(
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     const callbacks = input.callbacks orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (input.has_metadata > 1 or input.apply_snapshot > 1 or
+    if (input.has_metadata > 1 or
         input.reuse_empty_repository > 1 or
         input.priority == std.math.minInt(i32) or
         callbacks.free_memory == null or callbacks.make_dirs == null or
@@ -485,8 +428,7 @@ fn initRepository(
         callbacks.use_metadata_cache == null or
         callbacks.create_metadata_cache == null or
         callbacks.init_from_metadata == null or
-        callbacks.read_rpms_from_directory == null or
-        callbacks.apply_snapshot == null)
+        callbacks.read_rpms_from_directory == null)
     {
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     }
@@ -539,25 +481,12 @@ fn initRepository(
     var repo_info = SolvRepoInfo{ .repository = repository };
     repository.appdata = @ptrCast(&repo_info);
     var loaded = LoadedRepository{};
-    var result = loadRepository(input, repository, &repo_info, &loaded);
+    const result = loadRepository(input, repository, &repo_info, &loaded);
     if (result != 0) return result;
     if (consumeReloadFailure(input, 6))
         return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
 
-    stage.stageConsidered(
-        input.apply_snapshot != 0 and input.snapshot_file != null,
-    ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
     c.pool_createwhatprovides(pool);
-    if (input.apply_snapshot != 0 and input.snapshot_file != null) {
-        result = callbacks.apply_snapshot.?(
-            input.tdnf_handle,
-            input.repo_data,
-            input.sack,
-            @ptrCast(repository),
-        );
-        if (result != 0) return result;
-        c.pool_createwhatprovides(pool);
-    }
     if (!validateStagedRepository(
         input,
         pool,
@@ -754,14 +683,6 @@ fn validateStagedRepository(
         std.mem.span(name),
         std.mem.span(input.repository_id orelse return false),
     )) return false;
-    if (pool.considered) |raw_map| {
-        const considered: *c.Map = @ptrCast(raw_map);
-        if (considered.size < 0 or
-            @as(i64, considered.size) * 8 < pool.nsolvables)
-        {
-            return false;
-        }
-    }
 
     var count: c_int = 0;
     var solvid: c.Id = 1;
@@ -811,11 +732,6 @@ fn consumeReloadFailure(
     return true;
 }
 
-fn freeConsidered(considered: *c.Map) void {
-    c.map_free(considered);
-    std.heap.c_allocator.destroy(considered);
-}
-
 fn rebuildPoolIndexes(pool: *c.Pool) void {
     pool.pos = std.mem.zeroes(@TypeOf(pool.pos));
     c.pool_addfileprovides(pool);
@@ -838,11 +754,6 @@ const NativeRepoInput = extern struct {
 const RefreshEntry = struct {
     data: *anyopaque,
     view: abi.RepositoryRefreshView,
-};
-
-const SolvableVisibility = struct {
-    destination: c.Id,
-    visible: bool,
 };
 
 extern fn SolvInitSack(
@@ -875,12 +786,6 @@ extern fn TDNFRepoRemoveCache(
 ) u32;
 extern fn TDNFRemoveSolvCache(
     handle: ?*anyopaque,
-    repository: ?*anyopaque,
-) u32;
-extern fn TDNFApplySnapshot(
-    handle: ?*anyopaque,
-    repository_data: ?*anyopaque,
-    sack: ?*anyopaque,
     repository: ?*anyopaque,
 ) u32;
 extern fn TDNFFreeMemory(memory: ?*anyopaque) void;
@@ -1063,10 +968,6 @@ fn preparePoolRefresh(
     const pool = sack.pool orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     c.pool_freewhatprovides(pool);
-    if (pool.considered) |raw_considered| {
-        freeConsidered(@ptrCast(raw_considered));
-        pool.considered = null;
-    }
     while (true) {
         var highest: ?*c.Repo = null;
         var index: c.Id = 1;
@@ -1223,18 +1124,7 @@ fn refreshSackInPlace(
     }
     if (raw_sack != null and consumeRefreshFailure(input, 5))
         return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    if (raw_sack) |sack| {
-        for (entries, loaded) |entry, repository| {
-            if (repository != null and entry.view.snapshot_file != null) {
-                const result = TDNFApplySnapshot(
-                    input.tdnf_handle,
-                    entry.data,
-                    sack,
-                    repository,
-                );
-                if (result != 0) return result;
-            }
-        }
+    if (raw_sack) |_| {
         for (entries, loaded) |entry, repository| {
             if (repository == null)
                 input.set_repository_enabled.?(entry.data, 0);
@@ -1394,8 +1284,6 @@ fn cloneSackContents(
         destination_pool.installed orelse
             return error_codes.ERROR_TDNF_INVALID_PARAMETER,
     );
-    var visibility = std.ArrayList(SolvableVisibility).empty;
-    defer visibility.deinit(std.heap.c_allocator);
     var saw_installed = false;
     var index: c.Id = 1;
     while (index < source_pool.nrepos) : (index += 1) {
@@ -1418,24 +1306,14 @@ fn cloneSackContents(
             error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
             error.InvalidRepository => error_codes.ERROR_TDNF_INVALID_PARAMETER,
         };
-        appendClonedVisibility(
-            std.heap.c_allocator,
+        validateClonedRepository(
             source_pool,
             source_repository,
             destination_repository,
-            &visibility,
-        ) catch |err| return switch (err) {
-            error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
-            error.InvalidRepository => error_codes.ERROR_TDNF_INVALID_PARAMETER,
-        };
+        ) catch return error_codes.ERROR_TDNF_INVALID_PARAMETER;
         if (source_repository == source_installed) saw_installed = true;
     }
     if (!saw_installed) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    installVisibilityMap(
-        destination_pool,
-        visibility.items,
-        source_pool.considered != null,
-    ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
     destination.command_package_count = source.command_package_count;
     rebuildPoolIndexes(destination_pool);
     return 0;
@@ -1546,7 +1424,7 @@ fn initRepoFromHandle(
     raw_data: ?*anyopaque,
     raw_sack: ?*anyopaque,
     loaded_repo: ?*?*anyopaque,
-    apply_snapshot: bool,
+    reload: bool,
 ) u32 {
     if (loaded_repo) |output| output.* = null;
     const data = raw_data orelse
@@ -1580,13 +1458,11 @@ fn initRepoFromHandle(
         .failure_stage = refresh.failure_stage,
         .repository_id = repository_id,
         .base_url = view.base_url,
-        .snapshot_file = view.snapshot_file,
         .priority = view.priority,
         .has_metadata = @intFromBool(view.has_metadata != 0),
-        .apply_snapshot = @intFromBool(apply_snapshot),
-        .reuse_empty_repository = @intFromBool(!apply_snapshot),
+        .reuse_empty_repository = @intFromBool(!reload),
     };
-    result = if (apply_snapshot)
+    result = if (reload)
         reloadRepository(&input, loaded_repo)
     else
         initRepository(&input, loaded_repo);
@@ -1627,103 +1503,6 @@ fn initRepoWithResult(
         loaded_repo,
         false,
     );
-}
-
-fn applySnapshot(
-    handle: ?*anyopaque,
-    raw_data: ?*anyopaque,
-    raw_sack: ?*anyopaque,
-    raw_repository: ?*anyopaque,
-) callconv(.c) u32 {
-    const data = raw_data orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const sack: *SolvSack = @ptrCast(@alignCast(raw_sack orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER));
-    const pool = sack.pool orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const repository: *c.Repo = @ptrCast(@alignCast(raw_repository orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER));
-    if (repository.pool != pool)
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    var refresh = abi.RepositoryRefreshInput{};
-    var result = TDNFBuildRefreshInput(handle, sack, &refresh);
-    if (result != 0) return result;
-    const view = describeRepository(&refresh, data);
-    const snapshot_file = view.snapshot_file orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-
-    var packages: ?[*]?[*:0]u8 = null;
-    defer TDNFFreeStringArray(packages);
-    result = TDNFReadFileToStringArray(snapshot_file, &packages);
-    if (result != 0) return result;
-    const repo_input = std.heap.c_allocator.create(NativeRepoInput) catch
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    repo_input.* = .{};
-    defer TDNFNativeQueryFreeRepoInputs(repo_input, 1);
-    result = TDNFNativeQueryBuildSingleRepoInput(
-        handle,
-        data,
-        repo_input,
-    );
-    if (result != 0) return result;
-
-    var queue: IdList = undefined;
-    TDNFIdListInit(&queue);
-    defer TDNFIdListFree(&queue);
-    var matches: ?[*]?[*:0]u8 = null;
-    defer TDNFFreeStringArray(matches);
-    var index: usize = 0;
-    const package_values = packages orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    while (package_values[index]) |package| : (index += 1) {
-        if (package[0] == '#') continue;
-        TDNFFreeStringArray(matches);
-        matches = null;
-        var match_count: u32 = 0;
-        result = TDNFRepoMdNativeFindNameEvrMatches(
-            repo_input,
-            1,
-            package,
-            &matches,
-            &match_count,
-        );
-        if (result != 0) return result;
-        result = TDNFNativeQueryResolvePackageRefArrayToQueue(
-            sack,
-            matches,
-            match_count,
-            0,
-            &queue,
-        );
-        if (result != 0) return result;
-    }
-
-    if (pool.considered == null) {
-        const considered = std.heap.c_allocator.create(c.Map) catch
-            return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-        c.map_init(considered, pool.nsolvables);
-        c.map_setall(considered);
-        pool.considered = considered;
-    } else {
-        c.map_grow(@ptrCast(pool.considered), pool.nsolvables);
-    }
-    const considered: *c.Map = @ptrCast(pool.considered.?);
-    var solvid = repository.start;
-    while (solvid < repository.end) : (solvid += 1) {
-        const raw_solvable = c.pool_id2solvable(pool, solvid) orelse
-            continue;
-        const solvable: *c.Solvable = @ptrCast(raw_solvable);
-        if (solvable.repo == repository) c.map_clr(considered, solvid);
-    }
-    index = 0;
-    while (index < queue.dwCount) : (index += 1) {
-        const selected = queue.pnElements.?[index];
-        const raw_solvable = c.pool_id2solvable(pool, selected) orelse
-            continue;
-        const solvable: *c.Solvable = @ptrCast(raw_solvable);
-        if (solvable.repo == repository) c.map_set(considered, selected);
-    }
-    return 0;
 }
 
 fn historyGoalImpl(
@@ -1861,311 +1640,34 @@ fn cloneRepository(
     destination.subpriority = source.subpriority;
 }
 
-fn appendClonedVisibility(
-    allocator: Allocator,
+/// `cloneRepository` round-trips a repository through `repo_write` /
+/// `repo_add_solv`. The clone must hold exactly the solvables the source held;
+/// this is the only check that the round-trip lost or invented none. It
+/// replaces the solvable-by-solvable walk that used to exist to carry
+/// visibility bits across the clone.
+fn validateClonedRepository(
     source_pool: *c.Pool,
     source: *c.Repo,
     destination: *c.Repo,
-    visibility: *std.ArrayList(SolvableVisibility),
-) (Allocator.Error || error{InvalidRepository})!void {
-    var destination_id = destination.start;
+) error{InvalidRepository}!void {
+    var source_count: u32 = 0;
     var source_id = source.start;
     while (source_id < source.end) : (source_id += 1) {
-        const raw_source = c.pool_id2solvable(
-            source_pool,
-            source_id,
-        ) orelse continue;
-        const source_solvable: *c.Solvable = @ptrCast(raw_source);
-        if (source_solvable.repo != source) continue;
-        while (destination_id < destination.end) : (destination_id += 1) {
-            const raw_destination = c.pool_id2solvable(
-                destination.pool,
-                destination_id,
-            ) orelse continue;
-            const destination_solvable: *c.Solvable =
-                @ptrCast(raw_destination);
-            if (destination_solvable.repo != destination) continue;
-            try visibility.append(allocator, .{
-                .destination = destination_id,
-                .visible = if (source_pool.considered) |raw_map|
-                    c.map_tst(@ptrCast(raw_map), source_id) != 0
-                else
-                    true,
-            });
-            destination_id += 1;
-            break;
-        } else {
-            return error.InvalidRepository;
-        }
+        const raw = c.pool_id2solvable(source_pool, source_id) orelse continue;
+        const solvable: *c.Solvable = @ptrCast(raw);
+        if (solvable.repo == source) source_count += 1;
     }
+    var destination_count: u32 = 0;
+    var destination_id = destination.start;
     while (destination_id < destination.end) : (destination_id += 1) {
-        const raw_destination = c.pool_id2solvable(
+        const raw = c.pool_id2solvable(
             destination.pool,
             destination_id,
         ) orelse continue;
-        const destination_solvable: *c.Solvable = @ptrCast(raw_destination);
-        if (destination_solvable.repo == destination)
-            return error.InvalidRepository;
-    }
-}
-
-const StableSolvableKey = struct {
-    package: SolverPackageFact,
-    source_name: ?[]const u8,
-    source_evr: ?[]const u8,
-    source_arch: ?[]const u8,
-    rpmdb_hnum: ?u64,
-};
-
-const ReloadVisibilityFact = struct {
-    key: StableSolvableKey,
-    solvid: c.Id,
-    visible: bool,
-};
-
-fn optionalStableSourceValue(
-    allocator: Allocator,
-    solvable: *c.Solvable,
-    key: c.Id,
-) Allocator.Error!?[]const u8 {
-    const value = c.solvable_lookup_str(solvable, key) orelse return null;
-    return try allocator.dupe(u8, std.mem.span(value));
-}
-
-fn stableSolvableKey(
-    allocator: Allocator,
-    pool: *c.Pool,
-    repository: *c.Repo,
-    solvid: c.Id,
-) (Allocator.Error || error{InvalidRepository})!StableSolvableKey {
-    const raw = c.pool_id2solvable(pool, solvid) orelse
-        return error.InvalidRepository;
-    const solvable: *c.Solvable = @ptrCast(raw);
-    if (solvable.repo != repository) return error.InvalidRepository;
-    const repository_name = rawRepositoryName(repository) catch
-        return error.InvalidRepository;
-    const package = solverFactKeyForSolvid(
-        allocator,
-        pool,
-        repository_name,
-        solvid,
-    ) catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.InvalidRepository,
-    };
-    const missing = std.math.maxInt(u64);
-    const raw_hnum = c.solvable_lookup_num(
-        solvable,
-        c.RPM_RPMDBID,
-        missing,
-    );
-    const rpmdb_hnum = if (repository == pool.installed) blk: {
-        if (raw_hnum == missing or raw_hnum == 0)
-            return error.InvalidRepository;
-        break :blk raw_hnum;
-    } else null;
-    return .{
-        .package = package,
-        .source_name = try optionalStableSourceValue(
-            allocator,
-            solvable,
-            c.SOLVABLE_SOURCENAME,
-        ),
-        .source_evr = try optionalStableSourceValue(
-            allocator,
-            solvable,
-            c.SOLVABLE_SOURCEEVR,
-        ),
-        .source_arch = try optionalStableSourceValue(
-            allocator,
-            solvable,
-            c.SOLVABLE_SOURCEARCH,
-        ),
-        .rpmdb_hnum = rpmdb_hnum,
-    };
-}
-
-fn compareOptionalStableValue(
-    left: ?[]const u8,
-    right: ?[]const u8,
-) std.math.Order {
-    const presence = std.math.order(
-        @intFromBool(left != null),
-        @intFromBool(right != null),
-    );
-    if (presence != .eq) return presence;
-    return if (left) |value|
-        std.mem.order(u8, value, right.?)
-    else
-        .eq;
-}
-
-fn compareStableSolvableKeys(
-    left: StableSolvableKey,
-    right: StableSolvableKey,
-) std.math.Order {
-    const package_order = compareSolverFactKeys(left.package, right.package);
-    if (package_order != .eq) return package_order;
-    inline for (.{
-        .{ left.source_name, right.source_name },
-        .{ left.source_evr, right.source_evr },
-        .{ left.source_arch, right.source_arch },
-    }) |values| {
-        const order = compareOptionalStableValue(values[0], values[1]);
-        if (order != .eq) return order;
-    }
-    const hnum_presence = std.math.order(
-        @intFromBool(left.rpmdb_hnum != null),
-        @intFromBool(right.rpmdb_hnum != null),
-    );
-    if (hnum_presence != .eq) return hnum_presence;
-    return if (left.rpmdb_hnum) |hnum|
-        std.math.order(hnum, right.rpmdb_hnum.?)
-    else
-        .eq;
-}
-
-fn reloadVisibilityFactLessThan(
-    _: void,
-    left: ReloadVisibilityFact,
-    right: ReloadVisibilityFact,
-) bool {
-    return compareStableSolvableKeys(left.key, right.key) == .lt;
-}
-
-fn collectReloadVisibilityFacts(
-    allocator: Allocator,
-    pool: *c.Pool,
-    repository: *c.Repo,
-) (Allocator.Error || error{InvalidRepository})![]ReloadVisibilityFact {
-    var facts = std.ArrayList(ReloadVisibilityFact).empty;
-    var solvid = repository.start;
-    while (solvid < repository.end) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
         const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != repository or solvable.name == 0) continue;
-        try facts.append(allocator, .{
-            .key = try stableSolvableKey(
-                allocator,
-                pool,
-                repository,
-                solvid,
-            ),
-            .solvid = solvid,
-            .visible = if (pool.considered) |raw_map|
-                c.map_tst(@ptrCast(raw_map), solvid) != 0
-            else
-                true,
-        });
+        if (solvable.repo == destination) destination_count += 1;
     }
-    const output = try facts.toOwnedSlice(allocator);
-    std.mem.sort(
-        ReloadVisibilityFact,
-        output,
-        {},
-        reloadVisibilityFactLessThan,
-    );
-    return output;
-}
-
-fn appendReloadedVisibility(
-    allocator: Allocator,
-    source_pool: *c.Pool,
-    source: *c.Repo,
-    destination: *c.Repo,
-    visibility: *std.ArrayList(SolvableVisibility),
-) (Allocator.Error || error{InvalidRepository})!void {
-    const destination_pool: *c.Pool = @ptrCast(destination.pool);
-    if (source.pool != source_pool or destination.pool != destination_pool)
-        return error.InvalidRepository;
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const source_facts = try collectReloadVisibilityFacts(
-        arena,
-        source_pool,
-        source,
-    );
-    const destination_facts = try collectReloadVisibilityFacts(
-        arena,
-        destination_pool,
-        destination,
-    );
-    var source_index: usize = 0;
-    var destination_index: usize = 0;
-    while (destination_index < destination_facts.len) {
-        while (source_index < source_facts.len and
-            compareStableSolvableKeys(
-                source_facts[source_index].key,
-                destination_facts[destination_index].key,
-            ) == .lt)
-        {
-            source_index += 1;
-        }
-        if (source_index == source_facts.len or
-            compareStableSolvableKeys(
-                source_facts[source_index].key,
-                destination_facts[destination_index].key,
-            ) != .eq)
-        {
-            try visibility.append(allocator, .{
-                .destination = destination_facts[destination_index].solvid,
-                .visible = destination_facts[destination_index].visible,
-            });
-            destination_index += 1;
-            continue;
-        }
-
-        var source_end = source_index + 1;
-        var old_visible = source_facts[source_index].visible;
-        while (source_end < source_facts.len and
-            compareStableSolvableKeys(
-                source_facts[source_index].key,
-                source_facts[source_end].key,
-            ) == .eq) : (source_end += 1)
-        {
-            old_visible = old_visible and source_facts[source_end].visible;
-        }
-        var destination_end = destination_index + 1;
-        while (destination_end < destination_facts.len and
-            compareStableSolvableKeys(
-                destination_facts[destination_index].key,
-                destination_facts[destination_end].key,
-            ) == .eq) : (destination_end += 1)
-        {}
-        for (destination_facts[destination_index..destination_end]) |fact| {
-            try visibility.append(allocator, .{
-                .destination = fact.solvid,
-                .visible = old_visible and fact.visible,
-            });
-        }
-        source_index = source_end;
-        destination_index = destination_end;
-    }
-}
-
-fn installVisibilityMap(
-    pool: *c.Pool,
-    visibility: []const SolvableVisibility,
-    needed: bool,
-) Allocator.Error!void {
-    const prior: ?*c.Map = if (pool.considered) |raw|
-        @ptrCast(raw)
-    else
-        null;
-    if (!needed) {
-        if (prior) |map| freeConsidered(map);
-        pool.considered = null;
-        return;
-    }
-    const considered = try std.heap.c_allocator.create(c.Map);
-    c.map_init(considered, pool.nsolvables);
-    c.map_setall(considered);
-    for (visibility) |entry| {
-        if (!entry.visible) c.map_clr(considered, entry.destination);
-    }
-    pool.considered = considered;
-    if (prior) |map| freeConsidered(map);
+    if (source_count != destination_count) return error.InvalidRepository;
 }
 
 fn cloneReplacementSack(
@@ -2175,7 +1677,6 @@ fn cloneReplacementSack(
     replacement: *SolvSack,
     source_target: *c.Repo,
     capture_state: ?*State,
-    visibility: *std.ArrayList(SolvableVisibility),
     loaded_repo: ?*?*anyopaque,
 ) u32 {
     const source_pool = source_sack.pool.?;
@@ -2229,16 +1730,11 @@ fn cloneReplacementSack(
             error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
             error.InvalidRepository => error_codes.ERROR_TDNF_INVALID_PARAMETER,
         };
-        appendClonedVisibility(
-            std.heap.c_allocator,
+        validateClonedRepository(
             source_pool,
             source,
             destination,
-            visibility,
-        ) catch |err| return switch (err) {
-            error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
-            error.InvalidRepository => error_codes.ERROR_TDNF_INVALID_PARAMETER,
-        };
+        ) catch return error_codes.ERROR_TDNF_INVALID_PARAMETER;
         if (source == source_pool.installed) saw_installed = true;
         if (source_command_line != null and source == source_command_line.?)
             destination_command_line = destination;
@@ -2252,16 +1748,8 @@ fn cloneReplacementSack(
     const target = destination_target orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     if (!saw_installed) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    appendReloadedVisibility(
-        std.heap.c_allocator,
-        source_pool,
-        source_target,
-        target,
-        visibility,
-    ) catch |err| return switch (err) {
-        error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
-        error.InvalidRepository => error_codes.ERROR_TDNF_INVALID_PARAMETER,
-    };
+    if (source_target.pool != source_pool or target.pool != destination_pool)
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     replacement.command_package_count = source_sack.command_package_count;
     if (source_command_line != null and destination_command_line == null)
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
@@ -2323,8 +1811,6 @@ fn reloadRepository(
     if (consumeReloadFailure(input, 2))
         return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
 
-    var visibility = std.ArrayList(SolvableVisibility).empty;
-    defer visibility.deinit(std.heap.c_allocator);
     var staged_loaded: ?*anyopaque = null;
     result = cloneReplacementSack(
         input,
@@ -2333,18 +1819,12 @@ fn reloadRepository(
         replacement_value,
         target,
         if (refresh_started) state else null,
-        &visibility,
         &staged_loaded,
     );
     if (result != 0) return result;
     if (consumeReloadFailure(input, 4))
         return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
     const destination_pool = replacement_value.pool.?;
-    installVisibilityMap(
-        destination_pool,
-        visibility.items,
-        source_pool.considered != null or destination_pool.considered != null,
-    ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
     rebuildPoolIndexes(destination_pool);
     const destination_target: *c.Repo = @ptrCast(@alignCast(staged_loaded.?));
     if (!validateStagedRepository(
@@ -3106,9 +2586,9 @@ fn visibilitySnapshotId(
 /// One package hidden from the solver, in a form that can be compared against
 /// the native repository model without a libsolv bitmap.
 ///
-/// This is the same set that stamps `pool->considered` in
-/// `TDNFGoalAddHiddenPackages`: both derive from `pTdnf->ppszHiddenRefs`, so
-/// resolving it here reads the decision rather than a round-trip of it.
+/// This is the same set `TDNFGoalAddHiddenPackages` resolves for the native
+/// solver: both derive from `pTdnf->ppszHiddenRefs`, so resolving it here reads
+/// the decision rather than a round-trip of it.
 const HiddenIdentity = struct {
     repository_id: []const u8,
     name: []const u8,
@@ -5198,7 +4678,35 @@ fn testRepoDataCount(handle: ?*anyopaque) callconv(.c) u32 {
     return count;
 }
 
-fn testConsideredCount(handle: ?*anyopaque) callconv(.c) u32 {
+/// Counts the solvables an arbitrary sack holds. Replaces `SolvCountPackages`,
+/// whose only distinguishing behaviour was skipping solvables cleared in
+/// `pool->considered`.
+fn testSackSolvableCount(
+    raw_sack: ?*anyopaque,
+    raw_count: ?*u32,
+) callconv(.c) u32 {
+    const sack: *SolvSack = @ptrCast(@alignCast(raw_sack orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER));
+    const count = raw_count orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const pool = sack.pool orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    var total: u32 = 0;
+    // `FOR_POOL_SOLVABLES` starts at 2, skipping the system solvable.
+    var solvid: c.Id = 2;
+    while (solvid < pool.nsolvables) : (solvid += 1) {
+        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
+        const solvable: *c.Solvable = @ptrCast(raw);
+        if (solvable.repo != null) total += 1;
+    }
+    count.* = total;
+    return 0;
+}
+
+/// Counts the solvables the live sack still holds. This used to also honour
+/// `pool->considered`; with that bitmap retired it is the reload-preserves-the-
+/// solvable-set probe the handle tests actually assert on.
+fn testVisibleSolvableCount(handle: ?*anyopaque) callconv(.c) u32 {
     const input = handleRefreshInput(handle) orelse return 0;
     const sack = handleLiveSack(&input) orelse return 0;
     const pool = sack.pool orelse return 0;
@@ -5207,42 +4715,9 @@ fn testConsideredCount(handle: ?*anyopaque) callconv(.c) u32 {
     while (solvid < pool.nsolvables) : (solvid += 1) {
         const raw = c.pool_id2solvable(pool, solvid) orelse continue;
         const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != null and
-            (pool.considered == null or
-                c.map_tst(@ptrCast(pool.considered), solvid) != 0))
-        {
-            count += 1;
-        }
+        if (solvable.repo != null) count += 1;
     }
     return count;
-}
-
-fn testConsideredIdentity(handle: ?*anyopaque) callconv(.c) usize {
-    const input = handleRefreshInput(handle) orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    const pool = sack.pool orelse return 0;
-    return if (pool.considered) |value| @intFromPtr(value) else 0;
-}
-
-fn testGrowCmdlineConsidered(handle: ?*anyopaque) callconv(.c) u32 {
-    const input = handleRefreshInput(handle) orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    const pool = sack.pool orelse return 0;
-    const raw_repository = input.command_line_repository_slot.?.* orelse
-        return 0;
-    const repository: *c.Repo = @ptrCast(@alignCast(raw_repository));
-    if (pool.considered == null) {
-        const considered = std.heap.c_allocator.create(c.Map) catch return 0;
-        c.map_init(considered, pool.nsolvables);
-        c.map_setall(considered);
-        pool.considered = considered;
-    }
-    const solvid = c.repo_add_solvable(repository);
-    if (solvid <= 0) return 0;
-    const considered: *c.Map = @ptrCast(pool.considered.?);
-    c.map_grow(considered, pool.nsolvables);
-    c.map_set(considered, solvid);
-    return @intFromBool(c.map_tst(considered, solvid) != 0);
 }
 
 fn testRetireNullSack(handle: ?*anyopaque) callconv(.c) u32 {
@@ -5455,11 +4930,9 @@ fn testEnableRepo(
 const TestSackSnapshot = extern struct {
     pool_identity: usize = 0,
     repository_identity: usize = 0,
-    considered_identity: usize = 0,
     indexes_identity: usize = 0,
     solvable_count: u32 = 0,
     repository_count: u32 = 0,
-    considered_count: u32 = 0,
     digest: [32]u8 = [_]u8{0} ** 32,
 };
 
@@ -5505,32 +4978,22 @@ fn testSackSnapshot(
     }
     const repository = repository_match orelse return 0;
     var solvable_count: u32 = 0;
-    var considered_count: u32 = 0;
     var solvid: c.Id = 1;
     while (solvid < pool.nsolvables) : (solvid += 1) {
         const raw = c.pool_id2solvable(pool, solvid) orelse return 0;
         const solvable: *c.Solvable = @ptrCast(raw);
         if (solvable.repo == null) continue;
         solvable_count += 1;
-        const considered = pool.considered == null or
-            c.map_tst(@ptrCast(pool.considered), solvid) != 0;
-        if (considered) considered_count += 1;
-        hasher.update(&.{@intFromBool(considered)});
     }
     output.* = .{
         .pool_identity = @intFromPtr(pool),
         .repository_identity = @intFromPtr(repository),
-        .considered_identity = if (pool.considered) |value|
-            @intFromPtr(value)
-        else
-            0,
         .indexes_identity = if (pool.whatprovides) |value|
             @intFromPtr(value)
         else
             0,
         .solvable_count = solvable_count,
         .repository_count = repository_count,
-        .considered_count = considered_count,
     };
     hasher.final(&output.digest);
     return 1;
@@ -5636,10 +5099,6 @@ comptime {
         @export(&initRepoWithResult, .{
             .name = "TDNFInitRepoWithResult",
             .visibility = .hidden,
-        });
-        @export(&applySnapshot, .{
-            .name = "TDNFApplySnapshot",
-            .visibility = .default,
         });
         @export(&historyGoal, .{
             .name = "TDNFHistoryGoal",
@@ -5755,16 +5214,12 @@ comptime {
             .name = "TDNFTransactionPlanTestRepoDataCount",
             .visibility = .hidden,
         });
-        @export(&testConsideredCount, .{
-            .name = "TDNFTransactionPlanTestConsideredCount",
+        @export(&testVisibleSolvableCount, .{
+            .name = "TDNFTransactionPlanTestVisibleSolvableCount",
             .visibility = .hidden,
         });
-        @export(&testConsideredIdentity, .{
-            .name = "TDNFTransactionPlanTestConsideredIdentity",
-            .visibility = .hidden,
-        });
-        @export(&testGrowCmdlineConsidered, .{
-            .name = "TDNFTransactionPlanTestGrowCmdlineConsidered",
+        @export(&testSackSolvableCount, .{
+            .name = "TDNFTransactionPlanTestSackSolvableCount",
             .visibility = .hidden,
         });
         @export(&testRetireNullSack, .{
@@ -8224,12 +7679,11 @@ fn libsolvVisibilityFacts(
             repository_name,
             solvid,
         );
+        // Every solvable a repository holds is visible: `pool->considered`
+        // is retired, so libsolv has no hiding channel left to consult.
         facts.append(allocator, .{
             .package = fact,
-            .considered = if (pool.considered) |raw_map|
-                c.map_tst(@ptrCast(raw_map), solvid) != 0
-            else
-                true,
+            .considered = true,
         }) catch |err| {
             deinitSolverPackageFact(allocator, fact);
             return err;
@@ -8676,291 +8130,6 @@ test "visibility binding cleans every allocation failure" {
     );
 }
 
-fn setTestConsidered(
-    pool: *c.Pool,
-    hidden: []const c.Id,
-) !void {
-    if (pool.considered != null) return error.TestUnexpectedResult;
-    const considered = try std.heap.c_allocator.create(c.Map);
-    c.map_init(considered, pool.nsolvables);
-    c.map_setall(considered);
-    for (hidden) |solvid| c.map_clr(considered, solvid);
-    pool.considered = considered;
-}
-
-fn clearTestConsidered(pool: *c.Pool) void {
-    if (pool.considered) |raw| {
-        pool.considered = null;
-        freeConsidered(@ptrCast(raw));
-    }
-}
-
-fn mappedVisibility(
-    visibility: []const SolvableVisibility,
-    solvid: c.Id,
-) ?bool {
-    for (visibility) |entry| {
-        if (entry.destination == solvid) return entry.visible;
-    }
-    return null;
-}
-
-test "reload visibility uses stable source keys across reorder and removal" {
-    const checksum_a =
-        "1111111111111111111111111111111111111111111111111111111111111111";
-    const checksum_b =
-        "2222222222222222222222222222222222222222222222222222222222222222";
-    const checksum_c =
-        "3333333333333333333333333333333333333333333333333333333333333333";
-    const checksum_d =
-        "4444444444444444444444444444444444444444444444444444444444444444";
-    const checksum_e =
-        "5555555555555555555555555555555555555555555555555555555555555555";
-    var source = try TestUniverse.create();
-    defer source.destroy();
-    const source_repo = try source.addRepository("available", false, 0);
-    const removed = try source.addPackageChecksum(
-        source_repo,
-        "removed",
-        "1-1",
-        null,
-        "removed.rpm",
-        1,
-        checksum_a,
-    );
-    const duplicate_a = try source.addPackageChecksum(
-        source_repo,
-        "duplicate",
-        "1-1",
-        null,
-        "duplicate-a.rpm",
-        1,
-        checksum_b,
-    );
-    _ = try source.addPackageChecksum(
-        source_repo,
-        "duplicate",
-        "1-1",
-        null,
-        "duplicate-b.rpm",
-        1,
-        checksum_c,
-    );
-    const keep = try source.addPackageChecksum(
-        source_repo,
-        "keep",
-        "1-1",
-        null,
-        "keep.rpm",
-        1,
-        checksum_d,
-    );
-    const exact_hidden = try source.addPackageChecksum(
-        source_repo,
-        "exact",
-        "1-1",
-        null,
-        "exact.rpm",
-        1,
-        checksum_e,
-    );
-    _ = try source.addPackageChecksum(
-        source_repo,
-        "exact",
-        "1-1",
-        null,
-        "exact.rpm",
-        1,
-        checksum_e,
-    );
-    source.finish(&.{source_repo});
-    try setTestConsidered(
-        source.pool,
-        &.{ removed, duplicate_a, keep, exact_hidden },
-    );
-    defer clearTestConsidered(source.pool);
-
-    var destination = try TestUniverse.create();
-    defer destination.destroy();
-    const destination_repo = try destination.addRepository(
-        "available",
-        false,
-        0,
-    );
-    const destination_duplicate_b = try destination.addPackageChecksum(
-        destination_repo,
-        "duplicate",
-        "1-1",
-        null,
-        "duplicate-b.rpm",
-        1,
-        checksum_c,
-    );
-    const new_hidden = try destination.addPackageChecksum(
-        destination_repo,
-        "new-hidden",
-        "1-1",
-        null,
-        "new-hidden.rpm",
-        1,
-        checksum_a,
-    );
-    const destination_keep = try destination.addPackageChecksum(
-        destination_repo,
-        "keep",
-        "1-1",
-        null,
-        "keep.rpm",
-        1,
-        checksum_d,
-    );
-    const destination_duplicate_a = try destination.addPackageChecksum(
-        destination_repo,
-        "duplicate",
-        "1-1",
-        null,
-        "duplicate-a.rpm",
-        1,
-        checksum_b,
-    );
-    const exact_first = try destination.addPackageChecksum(
-        destination_repo,
-        "exact",
-        "1-1",
-        null,
-        "exact.rpm",
-        1,
-        checksum_e,
-    );
-    const new_visible = try destination.addPackageChecksum(
-        destination_repo,
-        "new-visible",
-        "1-1",
-        null,
-        "new-visible.rpm",
-        1,
-        checksum_a,
-    );
-    const exact_second = try destination.addPackageChecksum(
-        destination_repo,
-        "exact",
-        "1-1",
-        null,
-        "exact.rpm",
-        1,
-        checksum_e,
-    );
-    destination.finish(&.{destination_repo});
-    try setTestConsidered(destination.pool, &.{new_hidden});
-    defer clearTestConsidered(destination.pool);
-
-    var visibility = std.ArrayList(SolvableVisibility).empty;
-    defer visibility.deinit(std.testing.allocator);
-    try appendReloadedVisibility(
-        std.testing.allocator,
-        source.pool,
-        source_repo,
-        destination_repo,
-        &visibility,
-    );
-    try std.testing.expectEqual(@as(usize, 7), visibility.items.len);
-    try std.testing.expectEqual(
-        true,
-        mappedVisibility(visibility.items, destination_duplicate_b).?,
-    );
-    try std.testing.expectEqual(
-        false,
-        mappedVisibility(visibility.items, destination_duplicate_a).?,
-    );
-    try std.testing.expectEqual(
-        false,
-        mappedVisibility(visibility.items, destination_keep).?,
-    );
-    try std.testing.expectEqual(
-        false,
-        mappedVisibility(visibility.items, new_hidden).?,
-    );
-    try std.testing.expectEqual(
-        true,
-        mappedVisibility(visibility.items, new_visible).?,
-    );
-    try std.testing.expectEqual(
-        false,
-        mappedVisibility(visibility.items, exact_first).?,
-    );
-    try std.testing.expectEqual(
-        false,
-        mappedVisibility(visibility.items, exact_second).?,
-    );
-}
-
-test "reload visibility distinguishes installed hnums" {
-    var source = try TestUniverse.create();
-    defer source.destroy();
-    const source_repo = try source.addRepository("@System", true, 0);
-    const source_ten = try source.addPackage(
-        source_repo,
-        "duplicate",
-        "1-1",
-        10,
-        "unused",
-        0,
-    );
-    _ = try source.addPackage(
-        source_repo,
-        "duplicate",
-        "1-1",
-        20,
-        "unused",
-        0,
-    );
-    source.finish(&.{source_repo});
-    try setTestConsidered(source.pool, &.{source_ten});
-    defer clearTestConsidered(source.pool);
-
-    var destination = try TestUniverse.create();
-    defer destination.destroy();
-    const destination_repo = try destination.addRepository(
-        "@System",
-        true,
-        0,
-    );
-    const destination_twenty = try destination.addPackage(
-        destination_repo,
-        "duplicate",
-        "1-1",
-        20,
-        "unused",
-        0,
-    );
-    const destination_ten = try destination.addPackage(
-        destination_repo,
-        "duplicate",
-        "1-1",
-        10,
-        "unused",
-        0,
-    );
-    destination.finish(&.{destination_repo});
-
-    var visibility = std.ArrayList(SolvableVisibility).empty;
-    defer visibility.deinit(std.testing.allocator);
-    try appendReloadedVisibility(
-        std.testing.allocator,
-        source.pool,
-        source_repo,
-        destination_repo,
-        &visibility,
-    );
-    try std.testing.expectEqual(
-        true,
-        mappedVisibility(visibility.items, destination_twenty).?,
-    );
-    try std.testing.expectEqual(
-        false,
-        mappedVisibility(visibility.items, destination_ten).?,
-    );
-}
 
 test "repository solver facts key same-nevra packages by checksum" {
     const checksum_one =
