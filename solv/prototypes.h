@@ -212,18 +212,7 @@ SolvAddRpmNative(
     Id *pdwSolvableId
     );
 
-uint32_t
-SolvAddExcludes(
-    Pool* pPool,
-    char** ppszExcludes
-    );
 
-uint32_t
-SolvDataIterator(
-     Pool* pPool,
-     char** ppszExcludes,
-     Map* pMap
-     );
 
 int
 SolvIsGlob(

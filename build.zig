@@ -729,6 +729,44 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
+    // `repomd/query_native.zig` is deliberately excluded from `repomd/root.zig`'s
+    // test aggregation (it needs libtdnf's allocators at link time), so its unit
+    // tests need a root of their own or they never run.
+    const query_native_test_step = b.step(
+        "query-native-test",
+        "Run native repoquery/exclude line builder tests",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("repomd/query_native.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("xml", xml_mod);
+        test_mod.addImport("rpm_header", rpmzig_header_mod);
+        test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("sqlite", sqlite_dep.module("sqlite"));
+        test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
+        test_mod.addIncludePath(b.path("include"));
+        test_mod.addIncludePath(b.path("rpmzig"));
+        addLibsolvCoreIncludes(
+            test_mod,
+            libsolv_include,
+            libsolv_flat_include,
+        );
+        test_mod.linkLibrary(common_lib);
+        test_mod.linkLibrary(llconf_lib);
+        test_mod.linkLibrary(rpmzig_lib);
+        test_mod.addObjectFile(libsolv.getEmittedBin());
+        test_mod.addObjectFile(libsolvext.getEmittedBin());
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        query_native_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
     const transaction_plan_integration_test_step = b.step(
         "transaction-plan-integration-test",
         "Run authoritative stored transaction plan integration tests",

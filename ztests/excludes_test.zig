@@ -115,6 +115,108 @@ test "update skips an excluded package" {
     try std.testing.expect(try root.isInstalledVersion(multiversion, multiversion_lower));
 }
 
+// An exclude that names the requested package is short-circuited by the job
+// builder, so it never reaches the package visibility list. Excluding a
+// *dependency* is what forces the solver to see the package as hidden, which is
+// why every test below excludes `required` and asks for `leaf`.
+test "a glob exclude pattern hides a matching dependency" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root, leaf);
+    defer eraseBestEffort(&root, required);
+
+    var result = try root.run(&.{
+        "install",
+        "--exclude=tdnf-test-cleanreq-requir*",
+        "-y",
+        "--nogpgcheck",
+        leaf,
+    });
+    defer result.deinit();
+    try result.expectCode(solv_code);
+    try result.expectStderrContains(required ++ "-0:1.0.1-3");
+    try result.expectStderrContains("is disabled");
+    try std.testing.expect(!try root.isInstalled(leaf));
+    try std.testing.expect(!try root.isInstalled(required));
+}
+
+// Overlapping patterns select the same package more than once. The native
+// visibility list rejects a duplicate entry outright, so a lost dedup shows up
+// here as a hard error rather than as a subtly wrong package set.
+test "overlapping exclude patterns select the same dependency only once" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root, leaf);
+    defer eraseBestEffort(&root, required);
+
+    var result = try root.run(&.{
+        "install",
+        "--exclude=" ++ required,
+        "--exclude=tdnf-test-cleanreq-requir*",
+        "--exclude=*-cleanreq-required",
+        "-y",
+        "--nogpgcheck",
+        leaf,
+    });
+    defer result.deinit();
+    try result.expectCode(solv_code);
+    try result.expectStderrContains(required ++ "-0:1.0.1-3");
+    try result.expectStderrContains("is disabled");
+    try std.testing.expect(!try root.isInstalled(leaf));
+    try std.testing.expect(!try root.isInstalled(required));
+}
+
+// The exclude list and the minversion list are built independently and then
+// merged; here they overlap on `multiversion_lower`, which the same duplicate
+// check would reject.
+test "an exclude overlapping a minversion selects the package only once" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root, multiversion);
+
+    try root.setMainOption("minversions", multiversion ++ "=" ++ multiversion_higher);
+
+    var result = try root.run(&.{
+        "install",
+        "--exclude=" ++ multiversion,
+        "-y",
+        "--nogpgcheck",
+        multiversion,
+    });
+    defer result.deinit();
+    try result.expectOk();
+    try result.expectStderrContains("Nothing to do");
+    try std.testing.expect(!try root.isInstalled(multiversion));
+}
+
+// Without the exclude the same minversion setting must still take effect, so
+// the test above cannot pass merely because minversions were dropped.
+test "a minversion alone hides the lower version" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root, multiversion);
+
+    try root.setMainOption("minversions", multiversion ++ "=" ++ multiversion_higher);
+
+    var result = try root.run(&.{
+        "install",
+        "-y",
+        "--nogpgcheck",
+        multiversion ++ "-" ++ multiversion_lower,
+    });
+    defer result.deinit();
+    try result.expectCode(solv_code);
+    try std.testing.expect(!try root.isInstalled(multiversion));
+}
+
 test "remove skips an excluded package" {
     var h = try harness.open(std.testing.allocator);
     defer h.deinit();

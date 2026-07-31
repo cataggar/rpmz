@@ -127,6 +127,17 @@ TDNFNativeQueryResolveSinglePackageRef(
     );
 
 uint32_t
+TDNFNativeQuerySplitPackageRef(
+    const char *pszRef,
+    char **ppszRepo,
+    uint32_t *pdwEpoch,
+    char **ppszName,
+    char **ppszVersion,
+    char **ppszRelease,
+    char **ppszArch
+    );
+
+uint32_t
 TDNFNativeQueryBuildUpdateInfoSummary(
     char **ppszLines,
     uint32_t dwCount,
@@ -587,8 +598,9 @@ TDNFSolvAddInstallOnlyPkgs(
     );
 
 uint32_t
-TDNFSolvAddMinVersions(
+TDNFGoalAddHiddenPackages(
     PTDNF pTdnf,
+    char **ppszExcludes,
     Pool *pPool
     );
 

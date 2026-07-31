@@ -680,6 +680,115 @@ error:
     goto cleanup;
 }
 
+/*
+ * Split a "repo\x1fN-E:V-R.A" package ref into its parts. This is the
+ * inverse of NativeQuerySerializePackageIdCommon and is pool-free, so
+ * callers holding native ref lines never need a solvable Id to read them.
+ */
+uint32_t
+TDNFNativeQuerySplitPackageRef(
+    const char *pszRef,
+    char **ppszRepo,
+    uint32_t *pdwEpoch,
+    char **ppszName,
+    char **ppszVersion,
+    char **ppszRelease,
+    char **ppszArch
+    )
+{
+    uint32_t dwError = 0;
+    char *pszCopy = NULL;
+    char *pszNevra = NULL;
+    char *pszName = NULL;
+    char *pszEvr = NULL;
+    char *pszArch = NULL;
+    char *pszVersion = NULL;
+    char *pszRelease = NULL;
+    char *pszEpochEnd = NULL;
+    char *pszRepo = NULL;
+    char *pszOutRepo = NULL;
+    char *pszOutName = NULL;
+    char *pszOutVersion = NULL;
+    char *pszOutRelease = NULL;
+    char *pszOutArch = NULL;
+    unsigned long ulEpoch = 0;
+
+    if(IsNullOrEmptyString(pszRef) || !ppszRepo || !pdwEpoch || !ppszName ||
+       !ppszVersion || !ppszRelease || !ppszArch)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFAllocateString(pszRef, &pszCopy);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    pszRepo = pszCopy;
+    pszNevra = strchr(pszCopy, NATIVE_QUERY_FIELD_SEP);
+    if(!pszNevra)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+    *pszNevra++ = '\0';
+    if(IsNullOrEmptyString(pszRepo) || IsNullOrEmptyString(pszNevra))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    if(NativeQuerySplitNevra(pszNevra, &pszName, &pszEvr, &pszArch) != 0)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    /* EVR is [epoch:]version-release; an absent epoch means 0. */
+    pszVersion = pszEvr;
+    pszEpochEnd = strchr(pszEvr, ':');
+    if(pszEpochEnd)
+    {
+        *pszEpochEnd = '\0';
+        ulEpoch = strtoul(pszEvr, NULL, 10);
+        pszVersion = pszEpochEnd + 1;
+    }
+
+    pszRelease = strrchr(pszVersion, '-');
+    if(pszRelease)
+    {
+        *pszRelease++ = '\0';
+    }
+
+    dwError = TDNFAllocateString(pszRepo, &pszOutRepo);
+    BAIL_ON_TDNF_ERROR(dwError);
+    dwError = TDNFAllocateString(pszName, &pszOutName);
+    BAIL_ON_TDNF_ERROR(dwError);
+    dwError = TDNFAllocateString(pszVersion, &pszOutVersion);
+    BAIL_ON_TDNF_ERROR(dwError);
+    dwError = TDNFAllocateString(pszRelease ? pszRelease : "", &pszOutRelease);
+    BAIL_ON_TDNF_ERROR(dwError);
+    dwError = TDNFAllocateString(pszArch, &pszOutArch);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszRepo = pszOutRepo;
+    *pdwEpoch = (uint32_t)ulEpoch;
+    *ppszName = pszOutName;
+    *ppszVersion = pszOutVersion;
+    *ppszRelease = pszOutRelease;
+    *ppszArch = pszOutArch;
+
+cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszCopy);
+    return dwError;
+error:
+    TDNF_SAFE_FREE_MEMORY(pszOutRepo);
+    TDNF_SAFE_FREE_MEMORY(pszOutName);
+    TDNF_SAFE_FREE_MEMORY(pszOutVersion);
+    TDNF_SAFE_FREE_MEMORY(pszOutRelease);
+    TDNF_SAFE_FREE_MEMORY(pszOutArch);
+    goto cleanup;
+}
+
 uint32_t
 TDNFNativeQueryBuildUpdateInfoSummary(
     char **ppszLines,

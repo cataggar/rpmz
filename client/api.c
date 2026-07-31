@@ -2478,6 +2478,8 @@ TDNFCloseHandle(
         tdnf_rpm_config_destroy(pTdnf->pRpmConfig);
         TDNFFreePlugins(pTdnf->pPlugins);
         TDNF_SAFE_FREE_STRINGARRAY(pTdnf->ppszRepoFromDirIds);
+        TDNF_SAFE_FREE_STRINGARRAY(pTdnf->ppszHiddenRefs);
+        pTdnf->dwHiddenRefCount = 0;
         TDNFTransactionPlanRequestTraceDestroy(pTdnf->pRequestTrace);
         TDNFTransactionPlanStateDestroy(pTdnf->pTransactionPlanState);
         TDNFFreeMemory(pTdnf);
