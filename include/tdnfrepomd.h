@@ -1098,6 +1098,16 @@ TDNFRepoMdNativeMinVersionExcludeLinesConfig(
     );
 
 uint32_t
+TDNFRepoMdNativeExcludeLinesConfig(
+    const TDNF_REPOMD_NATIVE_REPO_INPUT *pRepos,
+    uint32_t dwRepoCount,
+    const tdnf_rpm_config *pConfig,
+    char **ppszExcludes,
+    char ***pppszLines,
+    uint32_t *pdwCount
+    );
+
+uint32_t
 TDNFRepoMdNativeRequiresForPackageRefsConfig(
     const TDNF_REPOMD_NATIVE_REPO_INPUT *pRepos,
     uint32_t dwRepoCount,

@@ -1167,6 +1167,66 @@ fn nativeUpdateInfoLines(
     return 0;
 }
 
+pub export fn TDNFRepoMdNativeExcludeLinesConfig(
+    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    repo_count: u32,
+    config: ?*const c.tdnf_rpm_config,
+    raw_excludes: [*c][*c]u8,
+    out_lines: ?*[*c][*c]u8,
+    out_count: ?*u32,
+) u32 {
+    clearError();
+    if (out_lines) |out| out.* = null;
+    if (out_count) |out| out.* = 0;
+    if (config == null) {
+        return invalidParameter("null rpm config", .{});
+    }
+
+    const lines_out = out_lines orelse return invalidParameter("null exclude output", .{});
+    const count_out = out_count orelse return invalidParameter("null exclude count output", .{});
+
+    var ctx = NativeContext.init(std.heap.c_allocator);
+    defer ctx.deinit();
+
+    ctx.load(raw_repos, repo_count, null, config, true, .{}, .{}) catch |err| {
+        return mapQueryError(err);
+    };
+
+    const patterns = parsePatternArray(raw_excludes) catch |err| {
+        return mapQueryError(err);
+    };
+    defer std.heap.c_allocator.free(patterns);
+
+    const lines = computeExcludeLines(&ctx, patterns) catch |err| {
+        return mapQueryError(err);
+    };
+    defer freeOwnedSlices(lines);
+
+    lines_out.* = (tryBuildCStringArray(lines) catch |err| {
+        return mapQueryError(err);
+    }) orelse null;
+    count_out.* = @intCast(lines.len);
+    return 0;
+}
+
+/// Borrowed spans over a NULL-terminated C string array. Unlike
+/// `parseEntryArray` the values are not split on whitespace: an exclude
+/// pattern is taken verbatim, exactly as libsolv's `dataiterator_init` took it.
+fn parsePatternArray(raw_values: [*c][*c]u8) ![][]const u8 {
+    if (raw_values == null) {
+        return try std.heap.c_allocator.alloc([]const u8, 0);
+    }
+
+    var count: usize = 0;
+    while (raw_values[count] != null) : (count += 1) {}
+
+    const out = try std.heap.c_allocator.alloc([]const u8, count);
+    for (out, 0..) |*entry, index| {
+        entry.* = std.mem.span(raw_values[index]);
+    }
+    return out;
+}
+
 fn nativeMinVersionExcludeLines(
     raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
@@ -2816,6 +2876,51 @@ fn computeMinVersionExcludeLines(ctx: *NativeContext, entries: []const MinVersio
     return serializePackageRefs(ctx, refs.items);
 }
 
+/// Package refs whose name matches any of `patterns`, mirroring the libsolv
+/// `SolvDataIterator` scan this replaces: a pattern containing `*`, `?` or `[`
+/// is a glob (`SolvIsGlob` tested for exactly those three), anything else is an
+/// exact name match, and both installed and available repositories are scanned.
+/// Refs are deduplicated because the solver rejects a repeated hidden package
+/// with `error.InvalidInput` (`repomd/solver_live.zig:411`).
+///
+/// One deliberate difference: `matchNamePattern` trims ASCII whitespace from
+/// the pattern, where libsolv matched it verbatim. Only a pattern that is
+/// entirely whitespace changes meaning, and that matched nothing either way.
+fn computeExcludeLines(ctx: *NativeContext, patterns: []const []const u8) ![][]const u8 {
+    var refs = std.array_list.Managed(PackageRef).init(std.heap.c_allocator);
+    defer refs.deinit();
+    if (patterns.len == 0) return serializePackageRefs(ctx, refs.items);
+
+    for (ctx.datasets.items, 0..) |*dataset, dataset_index| {
+        var seen = try std.heap.c_allocator.alloc(bool, dataset.repository.packages.len);
+        defer std.heap.c_allocator.free(seen);
+        @memset(seen, false);
+
+        const index = try dataset.ensureIndex();
+        for (patterns) |pattern| {
+            var matches = try index.matchNamePattern(
+                std.heap.c_allocator,
+                pattern,
+                .{ .ignore_case = false },
+            );
+            defer matches.deinit();
+            for (matches.items) |package_index| {
+                if (package_index >= seen.len or seen[package_index]) continue;
+                seen[package_index] = true;
+            }
+        }
+
+        // Emit in package order so the ref list is deterministic and
+        // independent of the order the patterns were configured in.
+        for (seen, 0..) |hit, package_index| {
+            if (!hit) continue;
+            try refs.append(.{ .dataset_index = dataset_index, .package_index = package_index });
+        }
+    }
+
+    return serializePackageRefs(ctx, refs.items);
+}
+
 fn computeDowngradeCandidateLines(ctx: *NativeContext, entries: []const MinVersionEntry, installed_ref: []const u8) ![][]const u8 {
     _ = entries;
     const installed = (try parsePackageRefSpec(installed_ref)).nevra;
@@ -3832,23 +3937,29 @@ test "package info refs populate dependencies and checksums" {
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
 
+    // Allocate before the struct literal: `arena_state` is copied by value into
+    // the dataset, so anything allocated after the copy would be orphaned in the
+    // local arena and leak.
+    const demo_packages = try arena.dupe(model.Package, &[_]model.Package{
+        .{
+            .pkg_id = "pkg-demo",
+            .nevra = .{ .name = "demo", .version = "1.0", .release = "1", .arch = "x86_64" },
+            .checksum = .{ .kind = "sha256", .value = "0a1b" },
+            .location = .{ .href = "demo.rpm" },
+            .requires = .{ .start = 0, .len = 1 },
+        },
+    });
+    const demo_relations = try arena.dupe(model.Relation, &[_]model.Relation{
+        .{ .name = "dep", .comparison = .ge, .version = "2.0", .release = "1" },
+    });
+
     try ctx.datasets.append(.{
         .kind = .available,
         .repo_id = "repo",
         .arena_state = arena_state,
         .repository = .{
-            .packages = try arena.dupe(model.Package, &[_]model.Package{
-                .{
-                    .pkg_id = "pkg-demo",
-                    .nevra = .{ .name = "demo", .version = "1.0", .release = "1", .arch = "x86_64" },
-                    .checksum = .{ .kind = "sha256", .value = "0a1b" },
-                    .location = .{ .href = "demo.rpm" },
-                    .requires = .{ .start = 0, .len = 1 },
-                },
-            }),
-            .relations = try arena.dupe(model.Relation, &[_]model.Relation{
-                .{ .name = "dep", .comparison = .ge, .version = "2.0", .release = "1" },
-            }),
+            .packages = demo_packages,
+            .relations = demo_relations,
         },
     });
 
@@ -3910,7 +4021,7 @@ test "native updateinfo summary and detail return legacy no-match and no-data er
         error.NoMatch,
         computeUpdateInfoLines(&ctx, @constCast(&missing_specs), false, null, false),
     );
-    try testing.expectEqual(c.ERROR_TDNF_NO_MATCH, mapQueryError(error.NoMatch));
+    try testing.expectEqual(@as(u32, @intCast(c.ERROR_TDNF_NO_MATCH)), mapQueryError(error.NoMatch));
 
     const summary_lines = try computeUpdateInfoSummaryLines(&ctx, null, false, "9.0");
     defer freeOwnedSlices(summary_lines);
@@ -3925,7 +4036,7 @@ test "native updateinfo summary and detail return legacy no-match and no-data er
         error.NoData,
         computeUpdateInfoLines(&ctx, null, false, "9.0", false),
     );
-    try testing.expectEqual(c.ERROR_TDNF_NO_DATA, mapQueryError(error.NoData));
+    try testing.expectEqual(@as(u32, @intCast(c.ERROR_TDNF_NO_DATA)), mapQueryError(error.NoData));
 }
 
 test "provides and changelog builders free partial tracked allocations on oom" {
@@ -4109,4 +4220,125 @@ fn appendUpdateInfoTestDatasets(ctx: *NativeContext, allocator: std.mem.Allocato
             .has_updateinfo = true,
         },
     });
+}
+
+test "exclude patterns match by name and glob across every dataset exactly once" {
+    const testing = std.testing;
+
+    var ctx = NativeContext.init(testing.allocator);
+    defer ctx.deinit();
+
+    var installed_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    errdefer installed_arena.deinit();
+    const installed = installed_arena.allocator();
+    const installed_packages = try installed.dupe(model.Package, &[_]model.Package{
+        .{
+            .pkg_id = "i-demo",
+            .nevra = .{ .name = "demo", .version = "1.0", .release = "1", .arch = "x86_64" },
+            .checksum = .{ .kind = "sha256", .value = "11" },
+            .location = .{},
+        },
+        .{
+            .pkg_id = "i-keep",
+            .nevra = .{ .name = "keep", .version = "1.0", .release = "1", .arch = "noarch" },
+            .checksum = .{ .kind = "sha256", .value = "22" },
+            .location = .{},
+        },
+    });
+    try ctx.datasets.append(.{
+        .kind = .installed,
+        .repo_id = system_repo_name,
+        .arena_state = installed_arena,
+        .repository = .{ .packages = installed_packages },
+    });
+
+    var available_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    errdefer available_arena.deinit();
+    const available = available_arena.allocator();
+    const available_packages = try available.dupe(model.Package, &[_]model.Package{
+        .{
+            .pkg_id = "a-demo",
+            .nevra = .{ .name = "demo", .version = "2.0", .release = "1", .arch = "x86_64" },
+            .checksum = .{ .kind = "sha256", .value = "33" },
+            .location = .{},
+        },
+        .{
+            .pkg_id = "a-demo-tools",
+            .nevra = .{ .name = "demo-tools", .version = "2.0", .release = "1", .arch = "noarch" },
+            .checksum = .{ .kind = "sha256", .value = "44" },
+            .location = .{},
+        },
+        .{
+            .pkg_id = "a-keep",
+            .nevra = .{ .name = "keep", .version = "2.0", .release = "1", .arch = "noarch" },
+            .checksum = .{ .kind = "sha256", .value = "55" },
+            .location = .{},
+        },
+    });
+    try ctx.datasets.append(.{
+        .kind = .available,
+        .repo_id = "repo",
+        .arena_state = available_arena,
+        .repository = .{ .packages = available_packages },
+    });
+
+    // "demo" and "demo*" both select `demo`; the overlap must not be emitted
+    // twice, and the exact pattern must not pick up `demo-tools`.
+    const lines = try computeExcludeLines(&ctx, &[_][]const u8{ "demo", "demo*" });
+    defer freeOwnedSlices(lines);
+
+    try testing.expectEqual(@as(usize, 3), lines.len);
+    try testing.expectEqualStrings("@System\x1fdemo-1.0-1.x86_64", lines[0]);
+    try testing.expectEqualStrings("repo\x1fdemo-2.0-1.x86_64", lines[1]);
+    try testing.expectEqualStrings("repo\x1fdemo-tools-2.0-1.noarch", lines[2]);
+}
+
+test "exclude line order does not depend on the order the patterns are given" {
+    const testing = std.testing;
+
+    const Fixture = struct {
+        fn build(ctx: *NativeContext, alloc: std.mem.Allocator) !void {
+            var arena_state = std.heap.ArenaAllocator.init(alloc);
+            errdefer arena_state.deinit();
+            const arena = arena_state.allocator();
+            const packages = try arena.dupe(model.Package, &[_]model.Package{
+                .{
+                    .pkg_id = "a",
+                    .nevra = .{ .name = "alpha", .version = "1", .release = "1", .arch = "noarch" },
+                    .checksum = .{ .kind = "sha256", .value = "11" },
+                    .location = .{},
+                },
+                .{
+                    .pkg_id = "b",
+                    .nevra = .{ .name = "beta", .version = "1", .release = "1", .arch = "noarch" },
+                    .checksum = .{ .kind = "sha256", .value = "22" },
+                    .location = .{},
+                },
+            });
+            try ctx.datasets.append(.{
+                .kind = .available,
+                .repo_id = "repo",
+                .arena_state = arena_state,
+                .repository = .{ .packages = packages },
+            });
+        }
+    };
+
+    var forward = NativeContext.init(testing.allocator);
+    defer forward.deinit();
+    try Fixture.build(&forward, testing.allocator);
+    const forward_lines = try computeExcludeLines(&forward, &[_][]const u8{ "alpha", "beta" });
+    defer freeOwnedSlices(forward_lines);
+
+    var reverse = NativeContext.init(testing.allocator);
+    defer reverse.deinit();
+    try Fixture.build(&reverse, testing.allocator);
+    const reverse_lines = try computeExcludeLines(&reverse, &[_][]const u8{ "beta", "alpha" });
+    defer freeOwnedSlices(reverse_lines);
+
+    try testing.expectEqual(forward_lines.len, reverse_lines.len);
+    for (forward_lines, reverse_lines) |a, b| {
+        try testing.expectEqualStrings(a, b);
+    }
+    try testing.expectEqualStrings("repo\x1falpha-1-1.noarch", forward_lines[0]);
 }

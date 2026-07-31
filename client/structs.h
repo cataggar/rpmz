@@ -31,6 +31,11 @@ typedef struct _TDNF_
     char **ppszRepoFromDirIds;
     TDNF_TRANSACTION_PLAN_REQUEST_TRACE *pRequestTrace;
     TDNF_TRANSACTION_PLAN_STATE *pTransactionPlanState;
+    /* "repo\x1fNEVRA" refs of every package hidden by excludepkgs/--exclude
+       and minversions, produced natively. Replaces the libsolv name scan
+       that used to derive the same set into pPool->considered. */
+    char **ppszHiddenRefs;
+    uint32_t dwHiddenRefCount;
     uint32_t nTestReloadFailureStage;
 } TDNF;
 

@@ -70,18 +70,26 @@ TDNFGoalFreeNativeSolverJobs(
 );
 
 static
-int
-TDNFGoalIsNativeSolverPackage(
-    Pool *pPool,
-    Solvable *pSolvable
-);
-
-static
 uint32_t
 TDNFGoalBuildNativeSolverHiddenAvailable(
     PTDNF pTdnf,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppHiddenAvailable,
     uint32_t *pdwHiddenAvailableCount
+);
+
+static
+uint32_t
+TDNFGoalSplitHiddenRef(
+    const char *pszRef,
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob,
+    int *pnSkip
+);
+
+static
+void
+TDNFGoalFreeNativeSolverHiddenAvailable(
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJobs,
+    uint32_t dwJobCount
 );
 
 static
@@ -217,8 +225,6 @@ TDNFSolv(
             dwError = ERROR_TDNF_INVALID_PARAMETER;
             BAIL_ON_TDNF_ERROR(dwError);
         }
-        dwError = SolvAddExcludes(pTdnf->pSack->pPool, ppszExcludes);
-        BAIL_ON_TDNF_ERROR(dwError);
     }
 
     dwError = TDNFSolvAddInstallOnlyPkgs(pTdnf, pQueueJobs, pTdnf->pSack->pPool);
@@ -227,7 +233,10 @@ TDNFSolv(
     dwError = TDNFSolvAddPkgLocks(pTdnf, pQueueJobs, pTdnf->pSack->pPool);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = TDNFSolvAddMinVersions(pTdnf, pTdnf->pSack->pPool);
+    dwError = TDNFGoalAddHiddenPackages(
+                  pTdnf,
+                  dwExcludeCount != 0 ? ppszExcludes : NULL,
+                  pTdnf->pSack->pPool);
     BAIL_ON_TDNF_ERROR(dwError);
 
     if(nAllowErasing && pTdnf->pConf->ppszProtectedPkgs)
@@ -917,7 +926,7 @@ cleanup:
     TDNF_SAFE_FREE_MEMORY(ppszCmdLinePaths);
     TDNF_SAFE_FREE_MEMORY(ppszUserInstalledPkgs);
     TDNF_SAFE_FREE_MEMORY(ppszInstallOnlyPkgs);
-    TDNFGoalFreeNativeSolverJobs(pHiddenAvailable, dwHiddenAvailableCount);
+    TDNFGoalFreeNativeSolverHiddenAvailable(pHiddenAvailable, dwHiddenAvailableCount);
     TDNFGoalFreeNativeSolverJobs(pJobs, dwJobCount + dwEraseJobCount);
     TDNFGoalFreeNativeSolverRepoInputs(pRepos, dwRepoCount);
     return dwError;
@@ -1298,21 +1307,31 @@ TDNFGoalFreeNativeSolverJobs(
     TDNF_SAFE_FREE_MEMORY(pJobs);
 }
 
+/*
+ * Hidden-available entries are built from native ref strings, so unlike the
+ * job list -- whose pszRepository borrows a libsolv repo name -- they own
+ * their repository string too.
+ */
 static
-int
-TDNFGoalIsNativeSolverPackage(
-    Pool *pPool,
-    Solvable *pSolvable
+void
+TDNFGoalFreeNativeSolverHiddenAvailable(
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJobs,
+    uint32_t dwJobCount
     )
 {
-    const char *pszName = NULL;
+    uint32_t dwIndex = 0;
 
-    if(!pPool || !pSolvable)
+    if(!pJobs)
     {
-        return 0;
+        return;
     }
-    pszName = pool_id2str(pPool, pSolvable->name);
-    return pszName && strncmp(pszName, "patch:", 6);
+    for(dwIndex = 0; dwIndex < dwJobCount; dwIndex++)
+    {
+        char *pszRepository = (char *)pJobs[dwIndex].pszRepository;
+        TDNF_SAFE_FREE_MEMORY(pszRepository);
+        pJobs[dwIndex].pszRepository = NULL;
+    }
+    TDNFGoalFreeNativeSolverJobs(pJobs, dwJobCount);
 }
 
 static
@@ -1326,95 +1345,129 @@ TDNFGoalBuildNativeSolverHiddenAvailable(
     uint32_t dwError = 0;
     uint32_t dwCount = 0;
     uint32_t dwIndex = 0;
-    Id dwPkgId = 0;
-    Pool *pPool = NULL;
+    uint32_t i = 0;
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pHiddenAvailable = NULL;
 
-    if(!pTdnf || !pTdnf->pSack || !pTdnf->pSack->pPool ||
-       !ppHiddenAvailable || !pdwHiddenAvailableCount)
+    if(!pTdnf || !ppHiddenAvailable || !pdwHiddenAvailableCount)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
-    pPool = pTdnf->pSack->pPool;
-    if(!pPool->considered)
-    {
-        goto cleanup;
-    }
-    for(dwPkgId = 1; dwPkgId < pPool->nsolvables; dwPkgId++)
-    {
-        Solvable *pSolvable = pool_id2solvable((Pool *)pPool, dwPkgId);
-        if(!pSolvable || !pSolvable->repo ||
-           MAPTST(pPool->considered, dwPkgId) ||
-           pSolvable->repo == pPool->installed ||
-           !TDNFGoalIsNativeSolverPackage(pPool, pSolvable))
-        {
-            continue;
-        }
-        if(IsNullOrEmptyString(pSolvable->repo->name))
-        {
-            dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-        if(pSolvable->repo == pTdnf->pSolvCmdLineRepo ||
-           !strcmp(pSolvable->repo->name, CMDLINE_REPO_NAME))
-        {
-            continue;
-        }
-        dwCount++;
-    }
-    if(!dwCount)
+    if(!pTdnf->dwHiddenRefCount)
     {
         goto cleanup;
     }
 
     dwError = TDNFAllocateMemory(
-                  dwCount,
+                  pTdnf->dwHiddenRefCount,
                   sizeof(TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB),
                   (void **)&pHiddenAvailable);
     BAIL_ON_TDNF_ERROR(dwError);
+    dwCount = pTdnf->dwHiddenRefCount;
 
-    for(dwPkgId = 1; dwPkgId < pPool->nsolvables; dwPkgId++)
+    for(i = 0; i < pTdnf->dwHiddenRefCount; i++)
     {
-        Solvable *pSolvable = pool_id2solvable(pPool, dwPkgId);
-        if(!pSolvable || !pSolvable->repo ||
-           MAPTST(pPool->considered, dwPkgId) ||
-           pSolvable->repo == pPool->installed ||
-           !TDNFGoalIsNativeSolverPackage(pPool, pSolvable))
-        {
-            continue;
-        }
-        if(IsNullOrEmptyString(pSolvable->repo->name))
-        {
-            dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-        if(pSolvable->repo == pTdnf->pSolvCmdLineRepo ||
-           !strcmp(pSolvable->repo->name, CMDLINE_REPO_NAME))
-        {
-            continue;
-        }
-        pHiddenAvailable[dwIndex].pszRepository = pSolvable->repo->name;
-        dwError = SolvGetNevraFromId(
-                      pTdnf->pSack,
-                      dwPkgId,
-                      &pHiddenAvailable[dwIndex].dwEpoch,
-                      (char **)&pHiddenAvailable[dwIndex].pszName,
-                      (char **)&pHiddenAvailable[dwIndex].pszVersion,
-                      (char **)&pHiddenAvailable[dwIndex].pszRelease,
-                      (char **)&pHiddenAvailable[dwIndex].pszArch,
-                      NULL);
+        int nSkip = 0;
+
+        dwError = TDNFGoalSplitHiddenRef(
+                      pTdnf->ppszHiddenRefs[i],
+                      &pHiddenAvailable[dwIndex],
+                      &nSkip);
         BAIL_ON_TDNF_ERROR(dwError);
+        if(nSkip)
+        {
+            continue;
+        }
         dwIndex++;
     }
 
+    if(!dwIndex)
+    {
+        goto cleanup;
+    }
+
     *ppHiddenAvailable = pHiddenAvailable;
-    *pdwHiddenAvailableCount = dwCount;
+    *pdwHiddenAvailableCount = dwIndex;
+    pHiddenAvailable = NULL;
 
 cleanup:
+    TDNFGoalFreeNativeSolverHiddenAvailable(pHiddenAvailable, dwCount);
     return dwError;
 error:
-    TDNFGoalFreeNativeSolverJobs(pHiddenAvailable, dwCount);
+    goto cleanup;
+}
+
+/*
+ * Split one "repo\x1fN-E:V-R.A" hidden ref into the native solver's job
+ * shape. The solver only accepts available packages, so installed and
+ * command-line refs are reported as skipped rather than translated -- the
+ * same two exclusions the pool walk used to apply.
+ *
+ * The pool walk needed a third exclusion, for the "patch:" pseudo-solvables
+ * libsolv synthesises from updateinfo. Those exist only in the pool; the
+ * native package model has no such entries, so no ref can name one and the
+ * check has nothing left to reject.
+ */
+static
+uint32_t
+TDNFGoalSplitHiddenRef(
+    const char *pszRef,
+    PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob,
+    int *pnSkip
+    )
+{
+    uint32_t dwError = 0;
+    char *pszRepo = NULL;
+    char *pszName = NULL;
+    char *pszVersion = NULL;
+    char *pszRelease = NULL;
+    char *pszArch = NULL;
+    uint32_t dwEpoch = 0;
+
+    if(IsNullOrEmptyString(pszRef) || !pJob || !pnSkip)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+    *pnSkip = 0;
+
+    dwError = TDNFNativeQuerySplitPackageRef(
+                  pszRef,
+                  &pszRepo,
+                  &dwEpoch,
+                  &pszName,
+                  &pszVersion,
+                  &pszRelease,
+                  &pszArch);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    if(!strcmp(pszRepo, SYSTEM_REPO_NAME) ||
+       !strcmp(pszRepo, CMDLINE_REPO_NAME))
+    {
+        *pnSkip = 1;
+        goto cleanup;
+    }
+
+    pJob->pszRepository = pszRepo;
+    pJob->dwEpoch = dwEpoch;
+    pJob->pszName = pszName;
+    pJob->pszVersion = pszVersion;
+    pJob->pszRelease = pszRelease;
+    pJob->pszArch = pszArch;
+    pszRepo = NULL;
+    pszName = NULL;
+    pszVersion = NULL;
+    pszRelease = NULL;
+    pszArch = NULL;
+
+cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszRepo);
+    TDNF_SAFE_FREE_MEMORY(pszName);
+    TDNF_SAFE_FREE_MEMORY(pszVersion);
+    TDNF_SAFE_FREE_MEMORY(pszRelease);
+    TDNF_SAFE_FREE_MEMORY(pszArch);
+    return dwError;
+error:
     goto cleanup;
 }
 
@@ -1735,65 +1788,134 @@ error:
 }
 
 
+/*
+ * Collect every package hidden from the solver -- by excludepkgs/--exclude
+ * and by minversions -- as native "repo\x1fNEVRA" refs on the handle.
+ *
+ * Both sets used to be derived by scanning the libsolv pool: excludes matched
+ * SOLVABLE_NAME through a Dataiterator, minversions resolved native ref lines
+ * back to solvable Ids. Both are now produced natively and kept as refs, so
+ * TDNFGoalBuildNativeSolverHiddenAvailable no longer walks the pool at all.
+ *
+ * The pool->considered bitmap is still stamped from the same refs because it
+ * is what bindRepositoryVisibility hashes into the plan's repository snapshot
+ * id. That is the last reader; it retires with the plan capture harness.
+ */
 uint32_t
-TDNFSolvAddMinVersions(
+TDNFGoalAddHiddenPackages(
     PTDNF pTdnf,
+    char **ppszExcludes,
     Pool *pPool
     )
 {
     uint32_t dwError = 0;
-    char **ppszPackages = NULL;
     char **ppszExcludeLines = NULL;
-    uint32_t dwExcludeCount = 0;
-    Map *pMapMinVersions = NULL;
+    char **ppszMinVersionLines = NULL;
+    char **ppszHiddenRefs = NULL;
+    uint32_t dwExcludeLineCount = 0;
+    uint32_t dwMinVersionLineCount = 0;
+    uint32_t dwHiddenRefCount = 0;
+    Map *pMapHidden = NULL;
     PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
     uint32_t dwRepoCount = 0;
     uint32_t i = 0;
 
-    if(!pTdnf || !pPool)
+    if(!pTdnf || !pPool || !pTdnf->pConf)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    ppszPackages = pTdnf->pConf->ppszMinVersions;
-    if (!ppszPackages)
+    TDNF_SAFE_FREE_STRINGARRAY(pTdnf->ppszHiddenRefs);
+    pTdnf->dwHiddenRefCount = 0;
+
+    if(!ppszExcludes && !pTdnf->pConf->ppszMinVersions)
     {
         goto cleanup;
     }
 
-    dwError = TDNFAllocateMemory(
-                          1,
-                          sizeof(Map),
-                          (void**)&pMapMinVersions);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    map_init(pMapMinVersions, pPool->nsolvables);
-
     dwError = TDNFNativeQueryBuildRepoInputs(pTdnf, &pRepos, &dwRepoCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = TDNFRepoMdNativeMinVersionExcludeLinesConfig(
-                  pRepos,
-                  dwRepoCount,
-                  pTdnf->pRpmConfig,
-                  ppszPackages,
-                  &ppszExcludeLines,
-                  &dwExcludeCount);
+    if(ppszExcludes)
+    {
+        dwError = TDNFRepoMdNativeExcludeLinesConfig(
+                      pRepos,
+                      dwRepoCount,
+                      pTdnf->pRpmConfig,
+                      ppszExcludes,
+                      &ppszExcludeLines,
+                      &dwExcludeLineCount);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    if(pTdnf->pConf->ppszMinVersions)
+    {
+        dwError = TDNFRepoMdNativeMinVersionExcludeLinesConfig(
+                      pRepos,
+                      dwRepoCount,
+                      pTdnf->pRpmConfig,
+                      pTdnf->pConf->ppszMinVersions,
+                      &ppszMinVersionLines,
+                      &dwMinVersionLineCount);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    if(dwExcludeLineCount == 0 && dwMinVersionLineCount == 0)
+    {
+        goto cleanup;
+    }
+
+    /* One spare element so the array is NULL-terminated for
+       TDNFFreeStringArray. A package caught by both filters must appear
+       once: the native solver rejects a repeated hidden package outright. */
+    dwError = TDNFAllocateMemory(
+                  dwExcludeLineCount + dwMinVersionLineCount + 1,
+                  sizeof(char *),
+                  (void **)&ppszHiddenRefs);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    for(i = 0; i < dwExcludeCount; i++)
+    for(i = 0; i < dwExcludeLineCount + dwMinVersionLineCount; i++)
+    {
+        const char *pszLine = i < dwExcludeLineCount
+            ? ppszExcludeLines[i]
+            : ppszMinVersionLines[i - dwExcludeLineCount];
+        uint32_t dwSeen = 0;
+
+        for(dwSeen = 0; dwSeen < dwHiddenRefCount; dwSeen++)
+        {
+            if(!strcmp(ppszHiddenRefs[dwSeen], pszLine))
+            {
+                break;
+            }
+        }
+        if(dwSeen < dwHiddenRefCount)
+        {
+            continue;
+        }
+
+        dwError = TDNFAllocateString(pszLine, &ppszHiddenRefs[dwHiddenRefCount]);
+        BAIL_ON_TDNF_ERROR(dwError);
+        dwHiddenRefCount++;
+    }
+
+    dwError = TDNFAllocateMemory(1, sizeof(Map), (void **)&pMapHidden);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    map_init(pMapHidden, pPool->nsolvables);
+
+    for(i = 0; i < dwHiddenRefCount; i++)
     {
         Id dwPkgId = 0;
 
         dwError = TDNFNativeQueryResolveSinglePackageRef(
                       pTdnf->pSack,
-                      ppszExcludeLines[i],
+                      ppszHiddenRefs[i],
                       0,
                       &dwPkgId);
         BAIL_ON_TDNF_ERROR(dwError);
 
-        MAPSET(pMapMinVersions, dwPkgId);
+        MAPSET(pMapHidden, dwPkgId);
     }
 
     if (!pPool->considered)
@@ -1802,19 +1924,26 @@ TDNFSolvAddMinVersions(
                              1,
                              sizeof(Map),
                              (void**)&pPool->considered);
+        BAIL_ON_TDNF_ERROR(dwError);
         map_init(pPool->considered, pPool->nsolvables);
         map_setall(pPool->considered);
     }
 
-    map_subtract(pPool->considered, pMapMinVersions);
+    map_subtract(pPool->considered, pMapHidden);
+
+    pTdnf->ppszHiddenRefs = ppszHiddenRefs;
+    pTdnf->dwHiddenRefCount = dwHiddenRefCount;
+    ppszHiddenRefs = NULL;
 
 cleanup:
+    TDNF_SAFE_FREE_STRINGARRAY(ppszHiddenRefs);
     TDNFFreeStringArray(ppszExcludeLines);
+    TDNFFreeStringArray(ppszMinVersionLines);
     TDNFNativeQueryFreeRepoInputs(pRepos, dwRepoCount);
-    if(pMapMinVersions)
+    if(pMapHidden)
     {
-        map_free(pMapMinVersions);
-        TDNFFreeMemory(pMapMinVersions);
+        map_free(pMapHidden);
+        TDNFFreeMemory(pMapHidden);
     }
     return dwError;
 error:
