@@ -909,6 +909,20 @@ extern fn TDNFRemoveLastRefreshMarker(
     repository: ?*anyopaque,
 ) u32;
 extern fn log_console(level: c_int, format: [*:0]const u8, ...) void;
+/// Mirrors `TDNF_ID_LIST` in `common/structs.h`, the container `client/` uses
+/// in place of libsolv's `Queue` for package selections and solver jobs.
+/// Declared here rather than imported through the libsolv C-import binding:
+/// this module already reaches C through explicit `extern` declarations, and
+/// that binding is deliberately confined to libsolv's own headers.
+const IdList = extern struct {
+    pnElements: ?[*]i32,
+    dwCount: u32,
+    dwCapacity: u32,
+};
+
+extern fn TDNFIdListInit(list: *IdList) void;
+extern fn TDNFIdListFree(list: *IdList) void;
+
 extern fn TDNFPkgsToExclude(
     handle: ?*anyopaque,
     exclude_count: *u32,
@@ -917,14 +931,14 @@ extern fn TDNFPkgsToExclude(
 extern fn TDNFAddGoal(
     handle: ?*anyopaque,
     alter_type: c_int,
-    jobs: *c.Queue,
+    jobs: *IdList,
     package: c.Id,
     exclude_count: u32,
     excludes: ?[*]?[*:0]u8,
 ) u32;
 extern fn TDNFSolv(
     handle: ?*anyopaque,
-    jobs: *c.Queue,
+    jobs: *IdList,
     excludes: ?[*]?[*:0]u8,
     exclude_count: u32,
     allow_erasing: c_int,
@@ -935,7 +949,7 @@ extern fn TDNFSolv(
 ) u32;
 extern fn TDNFAddUserInstall(
     handle: ?*anyopaque,
-    install: *const c.Queue,
+    install: *const IdList,
     solved_info: ?*anyopaque,
 ) u32;
 extern fn TDNFFreeStringArray(values: ?[*]?[*:0]u8) void;
@@ -964,7 +978,7 @@ extern fn TDNFNativeQueryResolvePackageRefArrayToQueue(
     package_refs: ?[*]?[*:0]u8,
     package_count: u32,
     installed_only: c_int,
-    queue: *c.Queue,
+    queue: *IdList,
 ) u32;
 
 fn refreshState(input: *const abi.RepositoryRefreshInput) ?*State {
@@ -1653,9 +1667,9 @@ fn applySnapshot(
     );
     if (result != 0) return result;
 
-    var queue: c.Queue = undefined;
-    c.queue_init(&queue);
-    defer c.queue_free(&queue);
+    var queue: IdList = undefined;
+    TDNFIdListInit(&queue);
+    defer TDNFIdListFree(&queue);
     var matches: ?[*]?[*:0]u8 = null;
     defer TDNFFreeStringArray(matches);
     var index: usize = 0;
@@ -1702,8 +1716,8 @@ fn applySnapshot(
         if (solvable.repo == repository) c.map_clr(considered, solvid);
     }
     index = 0;
-    while (index < @as(usize, @intCast(queue.count))) : (index += 1) {
-        const selected = queue.elements[index];
+    while (index < queue.dwCount) : (index += 1) {
+        const selected = queue.pnElements.?[index];
         const raw_solvable = c.pool_id2solvable(pool, selected) orelse
             continue;
         const solvable: *c.Solvable = @ptrCast(raw_solvable);
@@ -1714,19 +1728,20 @@ fn applySnapshot(
 
 fn historyGoalImpl(
     handle: ?*anyopaque,
-    install: *c.Queue,
-    erase: *c.Queue,
+    install: *IdList,
+    erase: *IdList,
     unresolved_count: u32,
     solved_info: *?*anyopaque,
 ) u32 {
-    if (install.count < 0 or erase.count < 0 or
+    if (install.dwCount > std.math.maxInt(c_int) or
+        erase.dwCount > std.math.maxInt(c_int) or
         unresolved_count > std.math.maxInt(c_int))
     {
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     }
-    var jobs: c.Queue = undefined;
-    c.queue_init(&jobs);
-    defer c.queue_free(&jobs);
+    var jobs: IdList = undefined;
+    TDNFIdListInit(&jobs);
+    defer TDNFIdListFree(&jobs);
     var excludes: ?[*]?[*:0]u8 = null;
     defer TDNFFreeStringArray(excludes);
     var exclude_count: u32 = 0;
@@ -1736,9 +1751,9 @@ fn historyGoalImpl(
         &excludes,
     );
     if (result != 0) return result;
-    var index: c_int = 0;
-    while (index < install.count) : (index += 1) {
-        const package = install.elements[@intCast(index)];
+    var index: u32 = 0;
+    while (index < install.dwCount) : (index += 1) {
+        const package = install.pnElements.?[index];
         result = TDNFAddGoal(
             handle,
             5,
@@ -1750,8 +1765,8 @@ fn historyGoalImpl(
         if (result != 0) return result;
     }
     index = 0;
-    while (index < erase.count) : (index += 1) {
-        const package = erase.elements[@intCast(index)];
+    while (index < erase.dwCount) : (index += 1) {
+        const package = erase.pnElements.?[index];
         result = TDNFAddGoal(
             handle,
             4,
@@ -1779,8 +1794,8 @@ fn historyGoalImpl(
 
 fn historyGoal(
     handle: ?*anyopaque,
-    install: ?*c.Queue,
-    erase: ?*c.Queue,
+    install: ?*IdList,
+    erase: ?*IdList,
     solved_info: ?*?*anyopaque,
 ) callconv(.c) u32 {
     return historyGoalImpl(
@@ -1799,9 +1814,9 @@ fn historyGoalWithUnresolved(
     unresolved_count: u32,
     raw_solved_info: ?*anyopaque,
 ) callconv(.c) u32 {
-    const install: *c.Queue = @ptrCast(@alignCast(raw_install orelse
+    const install: *IdList = @ptrCast(@alignCast(raw_install orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER));
-    const erase: *c.Queue = @ptrCast(@alignCast(raw_erase orelse
+    const erase: *IdList = @ptrCast(@alignCast(raw_erase orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER));
     const solved_info: *?*anyopaque = @ptrCast(@alignCast(
         raw_solved_info orelse

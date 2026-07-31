@@ -59,7 +59,7 @@ TDNFPrepareAllPackages(
     PTDNF pTdnf,
     TDNF_ALTERTYPE* pAlterType,
     char** ppszPkgsNotResolved,
-    Queue* queueGoal
+    PTDNF_ID_LIST queueGoal
     )
 {
     uint32_t dwError = 0;
@@ -94,10 +94,10 @@ TDNFPrepareAllPackages(
     }
     else if (nAlterType == ALTER_AUTOERASEALL)
     {
-        nTraceStart = queueGoal->count;
+        nTraceStart = queueGoal->dwCount;
         dwError = TDNFGetAutoInstalledOrphans(pTdnf, queueGoal);
         BAIL_ON_TDNF_ERROR(dwError);
-        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf->pRequestTrace, queueGoal->elements, nTraceStart, queueGoal->count,
+        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf->pRequestTrace, queueGoal->pnElements, nTraceStart, queueGoal->dwCount,
             ALTER_AUTOERASEALL, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_CLEANUP, 0);
     }
 
@@ -220,7 +220,7 @@ TDNFFilterPackages(
     PTDNF pTdnf,
     TDNF_ALTERTYPE nAlterType,
     char** ppszPkgsNotResolved,
-    Queue* queueGoal)
+    PTDNF_ID_LIST queueGoal)
 {
     uint32_t dwError = 0;
     uint32_t dwPkgIndex = 0;
@@ -266,7 +266,7 @@ error:
 uint32_t
 TDNFGetAutoInstalledOrphans(
     PTDNF pTdnf,
-    Queue* pQueueGoal)
+    PTDNF_ID_LIST pQueueGoal)
 {
     uint32_t dwError = 0;
     struct history_ctx *pHistoryCtx = NULL;
@@ -330,7 +330,7 @@ TDNFPrepareSinglePkg(
     const char* pszPkgName,
     TDNF_ALTERTYPE nAlterType,
     char** ppszPkgsNotResolved,
-    Queue* queueGoal,
+    PTDNF_ID_LIST queueGoal,
     uint32_t dwRequestRef
     )
 {
@@ -350,7 +350,7 @@ TDNFPrepareSinglePkg(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    nTraceStart = queueGoal->count;
+    nTraceStart = queueGoal->dwCount;
 
     //Check if this is a known package. If not add to unresolved
     dwError = TDNFResolveListPackages(
@@ -470,7 +470,7 @@ TDNFPrepareSinglePkg(
 cleanup:
     if(!dwError)
     {
-        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf->pRequestTrace, queueGoal->elements, nTraceStart, queueGoal->count, nAlterType,
+        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf->pRequestTrace, queueGoal->pnElements, nTraceStart, queueGoal->dwCount, nAlterType,
             TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, dwRequestRef);
     }
     if (dwError)
@@ -572,7 +572,7 @@ TDNFResolveBuildDependencies(
     PTDNF pTdnf,
     char **ppszPackageNameSpecs,
     char **ppszPkgsNotResolved,
-    Queue* queueGoal
+    PTDNF_ID_LIST queueGoal
     )
 {
     uint32_t dwError = 0;
@@ -599,7 +599,7 @@ TDNFResolveBuildDependencies(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    if(queueGoal->count > 0)
+    if(queueGoal->dwCount > 0)
     {
         dwError = TDNFResolveCollectCmdLineRpmPaths(
                       pTdnf,
@@ -608,13 +608,13 @@ TDNFResolveBuildDependencies(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    if((queueGoal->count > 0 && !dwCmdLineRpmPathCount) || ppszPackageNameSpecs[0])
+    if((queueGoal->dwCount > 0 && !dwCmdLineRpmPathCount) || ppszPackageNameSpecs[0])
     {
         dwError = TDNFNativeQueryBuildRepoInputs(pTdnf, &pRepos, &dwRepoCount);
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    if (queueGoal->count > 0) {
+    if (queueGoal->dwCount > 0) {
         if(dwCmdLineRpmPathCount)
         {
             dwError = TDNFRepoMdNativeRequiresForCmdLineRpmPaths(
@@ -643,7 +643,7 @@ TDNFResolveBuildDependencies(
             BAIL_ON_TDNF_ERROR(dwError);
         }
     }
-    queue_empty(queueGoal);
+    TDNFIdListEmpty(queueGoal);
 
     if (ppszPackageNameSpecs[0]) {
         dwError = TDNFRepoMdNativeListConfig(

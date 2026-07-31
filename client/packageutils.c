@@ -90,7 +90,7 @@ PackageUtilsResolvePackageRefsToQueue(
     char **ppszPackageRefs,
     uint32_t dwCount,
     int nInstalledOnly,
-    Queue* pQueueGoal
+    PTDNF_ID_LIST pQueueGoal
     );
 
 static uint32_t
@@ -131,7 +131,7 @@ uint32_t
 TDNFMatchForReinstall(
     PSolvSack pSack,
     const char* pszName,
-    Queue* pQueueGoal
+    PTDNF_ID_LIST pQueueGoal
     )
 {
     uint32_t dwError = 0;
@@ -189,7 +189,8 @@ TDNFMatchForReinstall(
     BAIL_ON_TDNF_ERROR(dwError);
 
 
-    queue_push(pQueueGoal, dwAvailableId);
+    dwError = TDNFIdListPush(pQueueGoal, dwAvailableId);
+    BAIL_ON_TDNF_ERROR(dwError);
 
 cleanup:
     TDNF_SAFE_FREE_MEMORY(pszInstalledNevra);
@@ -423,7 +424,7 @@ TDNFGetGlobPackages(
     PSolvSack pSack,
     char* pszPkgGlob,
     int nIsInstalled,
-    Queue* pQueueGoal
+    PTDNF_ID_LIST pQueueGoal
     )
 {
     uint32_t dwError = 0;
@@ -463,7 +464,7 @@ error:
 uint32_t
 TDNFAddPackagesForErase(
     PSolvSack pSack,
-    Queue* pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     )
 {
@@ -577,7 +578,7 @@ error:
 uint32_t
 TDNFAddPackagesForInstall(
     PSolvSack pSack,
-    Queue* pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName,
     int nSource,
     int nInstallOnly
@@ -630,7 +631,8 @@ TDNFAddPackagesForInstall(
 
     if(dwInstallPackage == 1 || nInstallOnly || nSource)
     {
-        queue_push(pQueueGoal, dwHighestAvailable);
+        dwError = TDNFIdListPush(pQueueGoal, dwHighestAvailable);
+        BAIL_ON_TDNF_ERROR(dwError);
     }
     else
     {
@@ -719,7 +721,7 @@ error:
 uint32_t
 TDNFAddPackagesForUpgrade(
     PSolvSack pSack,
-    Queue* pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     )
 {
@@ -756,7 +758,8 @@ TDNFAddPackagesForUpgrade(
 
     if(dwUpgradePackage == 1)
     {
-        queue_push(pQueueGoal, dwHighestAvailable);
+        dwError = TDNFIdListPush(pQueueGoal, dwHighestAvailable);
+        BAIL_ON_TDNF_ERROR(dwError);
     }
 
 cleanup:
@@ -772,7 +775,7 @@ uint32_t
 TDNFAddPackagesForDowngrade(
     PTDNF pTdnf,
     PSolvSack pSack,
-    Queue* pQueueGoal,
+    PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     )
 {
@@ -832,7 +835,8 @@ TDNFAddPackagesForDowngrade(
                   &dwDownGradeId);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    queue_push(pQueueGoal, dwDownGradeId);
+    dwError = TDNFIdListPush(pQueueGoal, dwDownGradeId);
+    BAIL_ON_TDNF_ERROR(dwError);
 cleanup:
     TDNF_SAFE_FREE_MEMORY(pszInstalledRef);
     TDNF_SAFE_FREE_MEMORY(pszName);
@@ -1638,7 +1642,7 @@ PackageUtilsResolvePackageRefsToQueue(
     char **ppszPackageRefs,
     uint32_t dwCount,
     int nInstalledOnly,
-    Queue* pQueueGoal
+    PTDNF_ID_LIST pQueueGoal
     )
 {
     uint32_t dwError = 0;

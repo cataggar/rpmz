@@ -12,7 +12,7 @@ static
 uint32_t
 TDNFGoalSolveNative(
     PTDNF pTdnf,
-    const Queue *pQueueJobs,
+    const TDNF_ID_LIST *pQueueJobs,
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
     PTDNF_SOLVED_PKG_INFO *ppInfo,
@@ -26,7 +26,7 @@ static
 uint32_t
 TDNFGoalCaptureNativeSolve(
     PTDNF pTdnf,
-    const Queue *pQueueJobs,
+    const TDNF_ID_LIST *pQueueJobs,
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount,
     int nPrepareOnly,
@@ -53,7 +53,7 @@ TDNFGoalFreeNativeSolverRepoInputs(
 static
 uint32_t
 TDNFGoalBuildNativeSolverJobs(
-    PTDNF pTdnf, const Queue *pQueueJobs, int nStampFlags, int nStampedJobCount,
+    PTDNF pTdnf, const TDNF_ID_LIST *pQueueJobs, int nStampFlags, int nStampedJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppJobs, uint32_t *pdwJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppEraseJobs, uint32_t *pdwEraseJobCount,
     char ***pppszInstallOnlyPkgs, char ***pppszUserInstalledPkgs,
@@ -88,7 +88,7 @@ static
 uint32_t
 TDNFReportProblemsNative(
     PTDNF pTdnf,
-    const Queue *pQueueJobs,
+    const TDNF_ID_LIST *pQueueJobs,
     int nAllowErasing,
     int nAutoErase,
     int nStampFlags,
@@ -100,7 +100,7 @@ static
 uint32_t
 TDNFGoalFindProtectedInTransaction(
     PTDNF pTdnf,
-    const Queue *pQueueJobs,
+    const TDNF_ID_LIST *pQueueJobs,
     int nAllowErasing,
     int nAutoErase,
     int nStampFlags,
@@ -122,18 +122,18 @@ TDNFFindProtectedPkg(
         (_error) = TDNFGoalCaptureNativeSolve((_tdnf), (_jobs), (_allow_erasing), (_auto_erase), (_flags), (_stamped_count), (_prepare_only), (_refute_unsat), (_drop_protected), (_native)); \
         if ((_error)) { TDNFTransactionPlanStateClear((_tdnf)->pTransactionPlanState); (_error) = _saved_error; BAIL_ON_TDNF_ERROR(_error); } \
         (_error) = _saved_error;                                         \
-        TDNFTransactionPlanRequestTraceFinalize((_tdnf)->pRequestTrace, (_jobs)->elements, (_jobs)->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST); \
+        TDNFTransactionPlanRequestTraceFinalize((_tdnf)->pRequestTrace, (_jobs)->pnElements, (_jobs)->dwCount, SOLVER_CLEANDEPS, SOLVER_FORCEBEST); \
     } while (0)
 
 static uint32_t
 TDNFAddUserInstalledToJobs(
     PTDNF pTdnf,
-    Queue* pQueueJobs
+    PTDNF_ID_LIST pQueueJobs
     )
 {
     uint32_t dwError = 0;
     struct history_ctx *pHistoryCtx = NULL;
-    int nTraceStart = 0;
+    uint32_t nTraceStart = 0;
 
     if(!pTdnf || !pQueueJobs)
     {
@@ -144,13 +144,13 @@ TDNFAddUserInstalledToJobs(
     dwError = TDNFGetHistoryCtx(pTdnf, &pHistoryCtx, 1);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    nTraceStart = pQueueJobs->count;
+    nTraceStart = pQueueJobs->dwCount;
     dwError = SolvAddUserInstalledToJobs(pQueueJobs,
                                          pTdnf->pSack->pPool,
                                          pHistoryCtx);
     BAIL_ON_TDNF_ERROR(dwError);
-    TDNFTransactionPlanRequestTraceRecordPackageJobRange(pTdnf->pRequestTrace, pQueueJobs->elements,
-        nTraceStart, pQueueJobs->count, TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
+    TDNFTransactionPlanRequestTraceRecordPackageJobRange(pTdnf->pRequestTrace, pQueueJobs->pnElements,
+        nTraceStart, pQueueJobs->dwCount, TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
         TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
 cleanup:
     if (pHistoryCtx)
@@ -166,7 +166,7 @@ TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN
 uint32_t
 TDNFSolv(
     PTDNF pTdnf,
-    Queue *pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     char** ppszExcludes,
     uint32_t dwExcludeCount,
     int nAllowErasing,
@@ -201,9 +201,14 @@ TDNFSolv(
         nFlags = nFlags | SOLVER_CLEANDEPS;
     }
 
-    nStampedJobCount = pQueueJobs->count;
-    dwError = SolvAddFlagsToJobs(pQueueJobs, nFlags);
-    BAIL_ON_TDNF_ERROR(dwError);
+    nStampedJobCount = pQueueJobs->dwCount;
+    /* Stamp the solver flags onto the 'how' half of every job queued so far.
+       Everything appended after this point carries its own flags, which is
+       what nStampedJobCount records for the native job builder. */
+    for (uint32_t dwJob = 0; dwJob < pQueueJobs->dwCount; dwJob += 2)
+    {
+        pQueueJobs->pnElements[dwJob] |= nFlags;
+    }
 
     if (dwExcludeCount != 0 && ppszExcludes)
     {
@@ -339,8 +344,8 @@ TDNFSolv(
             TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_INSTALLONLY_LIMIT,
             ppszExcludes, nAllowErasing, nAutoErase, dwError);
     }
-    TDNFTransactionPlanRequestTraceFinalize(pTdnf->pRequestTrace, pQueueJobs->elements,
-        pQueueJobs->count, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);
+    TDNFTransactionPlanRequestTraceFinalize(pTdnf->pRequestTrace, pQueueJobs->pnElements,
+        pQueueJobs->dwCount, SOLVER_CLEANDEPS, SOLVER_FORCEBEST);
     BAIL_ON_TDNF_ERROR(dwError);
 
     /* The plan describes the transaction tdnf is about to run, which is the
@@ -378,7 +383,7 @@ error:
 uint32_t
 TDNFGoalNoDeps(
     PTDNF pTdnf,
-    Queue* pQueuePkgList,
+    PTDNF_ID_LIST pQueuePkgList,
     PTDNF_SOLVED_PKG_INFO* ppInfo
     )
 {
@@ -393,7 +398,9 @@ TDNFGoalNoDeps(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvQueueToPackageList(pQueuePkgList, &pPkgList);
+    dwError = SolvIdsToPackageList(pQueuePkgList->pnElements,
+                                   pQueuePkgList->dwCount,
+                                   &pPkgList);
     BAIL_ON_TDNF_ERROR(dwError);
 
     dwError = TDNFPopulatePkgInfos(pTdnf->pSack, pPkgList, &pPkgInfo);
@@ -421,17 +428,17 @@ error:
 uint32_t
 TDNFGoal(
     PTDNF pTdnf,
-    Queue* pQueuePkgList,
+    PTDNF_ID_LIST pQueuePkgList,
     PTDNF_SOLVED_PKG_INFO* ppInfo,
     TDNF_ALTERTYPE nAlterType, int nUnresolved
     )
 {
     uint32_t dwError = 0;
-    Queue queueJobs = {0};
+    TDNF_ID_LIST queueJobs = {0};
     int nAllowErasing = 0;
     char** ppszExcludes = NULL;
     uint32_t dwExcludeCount = 0;
-    int nTraceStart = 0;
+    uint32_t nTraceStart = 0;
 
     if(!pTdnf || !ppInfo || !pQueuePkgList)
     {
@@ -442,37 +449,37 @@ TDNFGoal(
     dwError = TDNFPkgsToExclude(pTdnf, &dwExcludeCount, &ppszExcludes);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    queue_init(&queueJobs);
+    TDNFIdListInit(&queueJobs);
     if (nAlterType == ALTER_UPGRADEALL)
     {
-        nTraceStart = queueJobs.count;
-        dwError = SolvAddUpgradeAllJob(&queueJobs);
+        nTraceStart = queueJobs.dwCount;
+        dwError = TDNFIdListPush2(&queueJobs, SOLVER_UPDATE|SOLVER_SOLVABLE_ALL, 0);
         BAIL_ON_TDNF_ERROR(dwError);
         TDNFTransactionPlanRequestTraceRecordAllJob(pTdnf->pRequestTrace, nTraceStart / 2,
-            TDNF_TRANSACTION_PLAN_CAPTURE_JOB_UPDATE, queueJobs.elements[nTraceStart], 0,
+            TDNF_TRANSACTION_PLAN_CAPTURE_JOB_UPDATE, queueJobs.pnElements[nTraceStart], 0,
             TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, 0);
     }
     else if(nAlterType == ALTER_DISTRO_SYNC)
     {
-        nTraceStart = queueJobs.count;
-        dwError = SolvAddDistUpgradeJob(&queueJobs);
+        nTraceStart = queueJobs.dwCount;
+        dwError = TDNFIdListPush2(&queueJobs, SOLVER_DISTUPGRADE|SOLVER_SOLVABLE_ALL, 0);
         BAIL_ON_TDNF_ERROR(dwError);
         TDNFTransactionPlanRequestTraceRecordAllJob(pTdnf->pRequestTrace, nTraceStart / 2,
-            TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DIST_SYNC, queueJobs.elements[nTraceStart], 0,
+            TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DIST_SYNC, queueJobs.pnElements[nTraceStart], 0,
             TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, 0);
     }
     else
     {
-        if (pQueuePkgList->count == 0 &&
+        if (pQueuePkgList->dwCount == 0 &&
             !TDNFTransactionPlanStateIsEnabled(pTdnf->pTransactionPlanState))
         {
             dwError = ERROR_TDNF_ALREADY_INSTALLED;
             BAIL_ON_TDNF_ERROR(dwError);
         }
 
-        for (int i = 0; i < pQueuePkgList->count; i++)
+        for (uint32_t i = 0; i < pQueuePkgList->dwCount; i++)
         {
-            Id dwId = pQueuePkgList->elements[i];
+            Id dwId = pQueuePkgList->pnElements[i];
             TDNFAddGoal(pTdnf, nAlterType, &queueJobs, dwId,
                         dwExcludeCount, ppszExcludes);
         }
@@ -508,7 +515,7 @@ TDNFGoal(
 
 cleanup:
     TDNF_SAFE_FREE_STRINGARRAY(ppszExcludes);
-    queue_free(&queueJobs);
+    TDNFIdListFree(&queueJobs);
     return dwError;
 
 error:
@@ -519,7 +526,7 @@ static
 uint32_t
 TDNFReportProblemsNative(
     PTDNF pTdnf,
-    const Queue *pQueueJobs,
+    const TDNF_ID_LIST *pQueueJobs,
     int nAllowErasing,
     int nAutoErase,
     int nStampFlags,
@@ -599,7 +606,7 @@ static
 uint32_t
 TDNFGoalFindProtectedInTransaction(
     PTDNF pTdnf,
-    const Queue *pQueueJobs,
+    const TDNF_ID_LIST *pQueueJobs,
     int nAllowErasing,
     int nAutoErase,
     int nStampFlags,
@@ -752,7 +759,7 @@ static
 uint32_t
 TDNFGoalCaptureNativeSolve(
     PTDNF pTdnf,
-    const Queue *pQueueJobs,
+    const TDNF_ID_LIST *pQueueJobs,
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount,
     int nPrepareOnly,
@@ -793,7 +800,7 @@ static
 uint32_t
 TDNFGoalSolveNative(
     PTDNF pTdnf,
-    const Queue *pQueueJobs,
+    const TDNF_ID_LIST *pQueueJobs,
     int nAllowErasing,
     int nAutoErase, int nStampFlags, int nStampedJobCount, int nReInstall,
     PTDNF_SOLVED_PKG_INFO *ppInfo,
@@ -1021,7 +1028,7 @@ static
 uint32_t
 TDNFGoalBuildNativeSolverJobs(
     PTDNF pTdnf,
-    const Queue *pQueueJobs,
+    const TDNF_ID_LIST *pQueueJobs,
     int nStampFlags, int nStampedJobCount,
     PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB *ppJobs,
     uint32_t *pdwJobCount,
@@ -1065,15 +1072,16 @@ TDNFGoalBuildNativeSolverJobs(
        !pppszUserInstalledPkgs || !pppszLockedPkgs || !pppszCmdLinePaths ||
        !ppdwLockedQueuePairs || !pdwGlobalQueuePair ||
        !pnHasGlobalQueuePair ||
-       !pnUpdateAll || !pnDistSyncAll || pQueueJobs->count < 0 ||
-       pQueueJobs->count % 2 != 0 || nStampedJobCount % 2 != 0 || nStampedJobCount < 0 || nStampedJobCount > pQueueJobs->count)
+       !pnUpdateAll || !pnDistSyncAll ||
+       pQueueJobs->dwCount % 2 != 0 || nStampedJobCount % 2 != 0 ||
+       nStampedJobCount < 0 || (uint32_t)nStampedJobCount > pQueueJobs->dwCount)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
     pPool = pTdnf->pSack->pPool;
-    dwCount = (uint32_t)pQueueJobs->count / 2;
+    dwCount = (uint32_t)pQueueJobs->dwCount / 2;
     /* One spare element throughout: an empty job queue is a real request --
        `history undo` and `history rollback` reach an already-satisfied target
        -- and TDNFAllocateMemory rejects a zero-element allocation. */
@@ -1115,15 +1123,15 @@ TDNFGoalBuildNativeSolverJobs(
 
     for(dwIndex = 0; dwIndex < dwCount; dwIndex++)
     {
-        /* XOR removes exactly the bits SolvAddFlagsToJobs set; wrong shapes
+        /* XOR removes exactly the bits the flag stamp above set; wrong shapes
            stay set. Jobs appended after it carry no policy bits, so XORing
            them would wrongly *add* cleandeps. Those late erases are the
            install-only evictions TDNFSolvCheckInstallOnlyLimitInTrans pushes
            from the retry loop, which the native solver derives itself. */
         int nStamped = (int)(dwIndex * 2) < nStampedJobCount;
-        Id rawHow = pQueueJobs->elements[dwIndex * 2];
+        Id rawHow = pQueueJobs->pnElements[dwIndex * 2];
         Id how = nStamped ? rawHow ^ nStampFlags : rawHow;
-        Id dwPkgId = pQueueJobs->elements[dwIndex * 2 + 1];
+        Id dwPkgId = pQueueJobs->pnElements[dwIndex * 2 + 1];
         Solvable *pSolvable = NULL;
         PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob = NULL;
         int nInstall = how == (SOLVER_SOLVABLE | SOLVER_INSTALL),
@@ -1413,7 +1421,7 @@ error:
 uint32_t
 TDNFAddUserInstall(
     PTDNF pTdnf,
-    const Queue* pQueueGoal,
+    const TDNF_ID_LIST *pQueueGoal,
     PTDNF_SOLVED_PKG_INFO ppInfo
     )
 {
@@ -1427,16 +1435,16 @@ TDNFAddUserInstall(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = TDNFAllocateMemory(pQueueGoal->count + 1,
+    dwError = TDNFAllocateMemory(pQueueGoal->dwCount + 1,
                                  sizeof(char **),
                                  (void **)&ppszPkgsUserInstall);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    for (i = 0; i < pQueueGoal->count; i++)
+    for (i = 0; i < (int)pQueueGoal->dwCount; i++)
     {
         dwError = SolvGetPkgNameFromId(
                        pTdnf->pSack,
-                       pQueueGoal->elements[i],
+                       pQueueGoal->pnElements[i],
                        &ppszPkgsUserInstall[i]);
         BAIL_ON_TDNF_ERROR(dwError);
     }
@@ -1560,7 +1568,7 @@ uint32_t
 TDNFAddGoal(
     PTDNF pTdnf,
     TDNF_ALTERTYPE nAlterType,
-    Queue* pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     Id dwId,
     uint32_t dwCount,
     char** ppszExcludes
@@ -1569,7 +1577,7 @@ TDNFAddGoal(
     uint32_t dwError = 0;
     char** ppszPackagesTemp = NULL;
     char* pszName = NULL;
-    int nTraceStart = 0;
+    uint32_t nTraceStart = 0;
 
     if(!pTdnf || !pQueueJobs || dwId == 0 || !pTdnf->pSack ||
        !pTdnf->pSack->pPool)
@@ -1577,7 +1585,7 @@ TDNFAddGoal(
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
-    nTraceStart = pQueueJobs->count;
+    nTraceStart = pQueueJobs->dwCount;
 
     if (dwCount != 0 && ppszExcludes)
     {
@@ -1609,19 +1617,23 @@ TDNFAddGoal(
     {
         case ALTER_DOWNGRADEALL:
         case ALTER_DOWNGRADE:
-            dwError = SolvAddPkgDowngradeJob(pQueueJobs, dwId);
+            /* Same job as an install: a downgrade is expressed by dwId already
+               naming the older solvable (packageutils.c picks it), not by a
+               distinct solver bit. The deleted SolvAddPkgDowngradeJob was a
+               verbatim copy of SolvAddPkgInstallJob, so this is not a change. */
+            dwError = TDNFIdListPush2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_INSTALL, dwId);
             BAIL_ON_TDNF_ERROR(dwError);
             break;
         case ALTER_ERASE:
         case ALTER_AUTOERASE:
         case ALTER_AUTOERASEALL:
-            dwError = SolvAddPkgEraseJob(pQueueJobs, dwId);
+            dwError = TDNFIdListPush2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_ERASE, dwId);
             BAIL_ON_TDNF_ERROR(dwError);
             break;
         case ALTER_REINSTALL:
         case ALTER_INSTALL:
         case ALTER_UPGRADE:
-            dwError = SolvAddPkgInstallJob(pQueueJobs, dwId);
+            dwError = TDNFIdListPush2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_INSTALL, dwId);
             BAIL_ON_TDNF_ERROR(dwError);
             break;
         default:
@@ -1632,7 +1644,7 @@ cleanup:
     if(!dwError)
     {
         TDNFTransactionPlanRequestTraceCommitGoal(pTdnf->pRequestTrace, dwId,
-            nAlterType, pQueueJobs->elements, nTraceStart, pQueueJobs->count);
+            nAlterType, pQueueJobs->pnElements, nTraceStart, pQueueJobs->dwCount);
     }
     TDNF_SAFE_FREE_MEMORY(pszName);
     return dwError;
@@ -1642,7 +1654,7 @@ error:
 }
 
 uint32_t
-TDNFSolvAddPkgLocks(PTDNF pTdnf, Queue* pQueueJobs, Pool *pPool)
+TDNFSolvAddPkgLocks(PTDNF pTdnf, PTDNF_ID_LIST pQueueJobs, Pool *pPool)
 {
     uint32_t dwError = 0;
     int i;
@@ -1658,8 +1670,9 @@ TDNFSolvAddPkgLocks(PTDNF pTdnf, Queue* pQueueJobs, Pool *pPool)
         {
             if (idPkg == s->name)
             {
-                queue_push2(pQueueJobs, SOLVER_SOLVABLE_NAME|SOLVER_LOCK, idPkg);
-                TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
+                dwError = TDNFIdListPush2(pQueueJobs, SOLVER_SOLVABLE_NAME|SOLVER_LOCK, idPkg);
+                BAIL_ON_TDNF_ERROR(dwError);
+                TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
                     TDNF_TRANSACTION_PLAN_CAPTURE_JOB_LOCK, pszPkg, SOLVER_SOLVABLE_NAME|SOLVER_LOCK, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
                     TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
                 break;
@@ -1675,7 +1688,7 @@ error:
 uint32_t
 TDNFSolvAddInstallOnlyPkgs(
     PTDNF pTdnf,
-    Queue* pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     Pool *pPool
     )
 {
@@ -1704,8 +1717,9 @@ TDNFSolvAddInstallOnlyPkgs(
             {
                 if (idPkg == s->name)
                 {
-                    queue_push2(pQueueJobs, SOLVER_SOLVABLE_NAME|SOLVER_MULTIVERSION, idPkg);
-                    TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
+                    dwError = TDNFIdListPush2(pQueueJobs, SOLVER_SOLVABLE_NAME|SOLVER_MULTIVERSION, idPkg);
+                    BAIL_ON_TDNF_ERROR(dwError);
+                    TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
                         TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION, pszPkg, SOLVER_SOLVABLE_NAME|SOLVER_MULTIVERSION, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
                         TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
                     break;
@@ -1810,14 +1824,14 @@ error:
 uint32_t
 TDNFSolvAddProtectPkgs(
     PTDNF pTdnf,
-    Queue* pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     Pool *pPool
     )
 {
     uint32_t dwError = 0;
     char **ppszProtectedPkgs = NULL;
     int i, j;
-    Queue qPkgs = {0};
+    TDNF_ID_LIST qPkgs = {0};
     Id p;
     Solvable *s;
 
@@ -1828,39 +1842,40 @@ TDNFSolvAddProtectPkgs(
     }
 
     ppszProtectedPkgs = pTdnf->pConf->ppszProtectedPkgs;
-    queue_init(&qPkgs);
+    TDNFIdListInit(&qPkgs);
     for (i = 0; ppszProtectedPkgs[i]; i++) {
         Id idPkg = pool_str2id(pPool, ppszProtectedPkgs[i], 1);
         if (idPkg) {
-            queue_push(&qPkgs, idPkg);
+            dwError = TDNFIdListPush(&qPkgs, idPkg);
+            BAIL_ON_TDNF_ERROR(dwError);
         }
     }
 
     /* Direct erases of protected names must be rejected explicitly. */
-    for (j = 0; j < pQueueJobs->count; j += 2) {
-        Id how = pQueueJobs->elements[j];
+    for (j = 0; j < (int)pQueueJobs->dwCount; j += 2) {
+        Id how = pQueueJobs->pnElements[j];
         if (((how & SOLVER_JOBMASK) == SOLVER_ERASE) && (how & SOLVER_SOLVABLE)) {
-            Id what = pQueueJobs->elements[j+1];
+            Id what = pQueueJobs->pnElements[j+1];
             s = pool_id2solvable(pPool, what);
-            for (i = 0; i < qPkgs.count; i++) {
-                if (qPkgs.elements[i] == s->name)
+            for (i = 0; i < (int)qPkgs.dwCount; i++) {
+                if (qPkgs.pnElements[i] == s->name)
                     break;
             }
-            if (i < qPkgs.count) {
+            if (i < (int)qPkgs.dwCount) {
                 const char *pszPkgName = ppszProtectedPkgs[i];
-                for (i = 0; i < pQueueJobs->count; i += 2) {
+                for (i = 0; i < (int)pQueueJobs->dwCount; i += 2) {
                     if (i == j)
                         continue;
-                    how = pQueueJobs->elements[i];
+                    how = pQueueJobs->pnElements[i];
                     if (((how & SOLVER_JOBMASK) == SOLVER_INSTALL) && (how & SOLVER_SOLVABLE)) {
-                        Id what_add = pQueueJobs->elements[i+1];
+                        Id what_add = pQueueJobs->pnElements[i+1];
                         const Solvable *s_add = pool_id2solvable(pPool, what_add);
                         if (s_add->name == s->name) {
                             break;
                         }
                     }
                 }
-                if (i == pQueueJobs->count) {
+                if (i == (int)pQueueJobs->dwCount) {
                     pr_err("package %s is protected\n", pszPkgName);
                     dwError = ERROR_TDNF_PROTECTED;
                     BAIL_ON_TDNF_ERROR(dwError);
@@ -1872,25 +1887,27 @@ TDNFSolvAddProtectPkgs(
     /* libsolv has no protected flag; allow uninstall only for other names. */
     FOR_REPO_SOLVABLES(pPool->installed, p, s)
     {
-        for (i = 0; i < qPkgs.count; i++) {
-            if (qPkgs.elements[i] == s->name)
+        for (i = 0; i < (int)qPkgs.dwCount; i++) {
+            if (qPkgs.pnElements[i] == s->name)
                 break;
         }
-        if (i == qPkgs.count) {
-            queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_ALLOWUNINSTALL, p);
-            TDNFTransactionPlanRequestTraceRecordPackageJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
+        if (i == (int)qPkgs.dwCount) {
+            dwError = TDNFIdListPush2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_ALLOWUNINSTALL, p);
+            BAIL_ON_TDNF_ERROR(dwError);
+            TDNFTransactionPlanRequestTraceRecordPackageJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
                 TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ALLOW_UNINSTALL, p, SOLVER_SOLVABLE|SOLVER_ALLOWUNINSTALL, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
                 TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
         } else {
-            queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_USERINSTALLED, p);
-            TDNFTransactionPlanRequestTraceRecordPackageJob(pTdnf->pRequestTrace, pQueueJobs->count / 2 - 1,
+            dwError = TDNFIdListPush2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_USERINSTALLED, p);
+            BAIL_ON_TDNF_ERROR(dwError);
+            TDNFTransactionPlanRequestTraceRecordPackageJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
                 TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED, p, SOLVER_SOLVABLE|SOLVER_USERINSTALLED, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
                 TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
         }
     }
 
 cleanup:
-    queue_free(&qPkgs);
+    TDNFIdListFree(&qPkgs);
     return dwError;
 error:
     goto cleanup;

@@ -55,3 +55,15 @@ typedef struct _hash_type {
 extern hash_op hash_ops[TDNF_HASH_SENTINEL];
 
 extern hash_type hashType[7];
+
+/*
+ * A growable list of 32-bit ids, implemented in common/idlist.zig. This is what
+ * client/ uses in place of libsolv's Queue to carry package selections and
+ * (how, id) solver job pairs.
+ */
+typedef struct _TDNF_ID_LIST
+{
+    int32_t *pnElements;
+    uint32_t dwCount;
+    uint32_t dwCapacity;
+}TDNF_ID_LIST, *PTDNF_ID_LIST;

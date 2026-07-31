@@ -16,69 +16,8 @@
 #define MODE_PATCH       6
 
 uint32_t
-SolvAddUpgradeAllJob(
-    Queue* pQueueJobs
-    )
-{
-    uint32_t dwError = 0;
-    if(!pQueueJobs)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-    }
-    queue_push2(pQueueJobs, SOLVER_UPDATE|SOLVER_SOLVABLE_ALL, 0);
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-uint32_t
-SolvAddDistUpgradeJob(
-    Queue* pQueueJobs
-    )
-{
-    uint32_t dwError = 0;
-    if(!pQueueJobs)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-    }
-    queue_push2(pQueueJobs, SOLVER_DISTUPGRADE|SOLVER_SOLVABLE_ALL, 0);
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-uint32_t
-SolvAddFlagsToJobs(
-    Queue* pQueueJobs,
-    int nFlags
-    )
-{
-    uint32_t dwError = 0;
-    if(!pQueueJobs)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-    }
-    for (int i = 0; i < pQueueJobs->count; i += 2)
-    {
-        pQueueJobs->elements[i] |= nFlags;
-    }
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-uint32_t
 SolvAddUserInstalledToJobs(
-    Queue* pQueueJobs,
+    PTDNF_ID_LIST pQueueJobs,
     Pool *pPool,
     struct history_ctx *pHistoryCtx
     )
@@ -106,72 +45,13 @@ SolvAddUserInstalledToJobs(
         }
         if (nFlag == 0)
         {
-            queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_USERINSTALLED, p);
+            dwError = TDNFIdListPush2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_USERINSTALLED, p);
+            BAIL_ON_TDNF_ERROR(dwError);
         }
     }
 
 cleanup:
     return dwError;
-error:
-    goto cleanup;
-}
-
-uint32_t
-SolvAddPkgInstallJob(
-    Queue*  pQueueJobs,
-    Id      dwId
-    )
-{
-    uint32_t dwError = 0;
-    if(!pQueueJobs)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-    }
-    queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_INSTALL, dwId);
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-uint32_t
-SolvAddPkgDowngradeJob(
-    Queue*  pQueueJobs,
-    Id      dwId
-    )
-{
-    uint32_t dwError = 0;
-    if(!pQueueJobs)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-    }
-    queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_INSTALL, dwId);
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-uint32_t
-SolvAddPkgEraseJob(
-    Queue*  pQueueJobs,
-    Id      dwId
-    )
-{
-    uint32_t dwError = 0;
-    if(!pQueueJobs)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-    }
-    queue_push2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_ERASE, dwId);
-cleanup:
-    return dwError;
-
 error:
     goto cleanup;
 }
