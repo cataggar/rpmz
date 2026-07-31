@@ -2481,12 +2481,14 @@ fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.P
     var repository_owners = std.ArrayList(*repository_capture.Owner).empty;
     defer for (repository_owners.items) |owner| owner.destroy();
     try validateRepositoryUniverse(input.pool, input.repositories);
+    const hidden_identities = try collectHiddenIdentities(arena, solver_data);
     const repositories = try captureRepositories(
         arena,
         state,
         input.pool,
         &live_digest_context,
         input.repositories,
+        hidden_identities,
         &repository_owners,
     );
     var data = try composeData(
@@ -2964,6 +2966,7 @@ fn captureRepositories(
     pool: *c.Pool,
     live_digest_context: *SolverDigestContext,
     inputs: []const abi.IntegrationRepository,
+    hidden: []const HiddenIdentity,
     owners: *std.ArrayList(*repository_capture.Owner),
 ) IntegrationError![]const transaction_plan.Repository {
     const repositories = try allocator.alloc(transaction_plan.Repository, inputs.len);
@@ -3014,10 +3017,15 @@ fn captureRepositories(
             error.OutOfMemory => error.OutOfMemory,
             else => error.RepositoryIntegrityMismatch,
         };
+        // The repository id is the same string the libsolv readback used as the
+        // fact-key repository: `findPoolAvailableRepository` selected this repo
+        // by `rawRepositoryName(repo) == id`, and the identity check above
+        // pinned it to this owner.
         const bound_repository = bindRepositoryVisibility(
             allocator,
-            pool,
-            @ptrCast(@alignCast(live_repository)),
+            owner.view().repository.id,
+            owner.solverRepository(),
+            hidden,
             owner.view().repository.*,
         ) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
@@ -3037,8 +3045,9 @@ const VisibilityFact = struct {
 
 fn bindRepositoryVisibility(
     allocator: Allocator,
-    pool: *c.Pool,
-    repository: *c.Repo,
+    repository_id: []const u8,
+    repository: *const metadata_model.RepositoryModel,
+    hidden: []const HiddenIdentity,
     captured: transaction_plan.Repository,
 ) IntegrationError!transaction_plan.Repository {
     const snapshot = captured.snapshot orelse return error.InvalidRepository;
@@ -3053,34 +3062,33 @@ fn bindRepositoryVisibility(
     defer facts.deinit(allocator);
     defer for (facts.items) |fact|
         deinitSolverPackageFact(allocator, fact.package);
-    const repository_name = try rawRepositoryName(repository);
-    var solvid = repository.start;
-    while (solvid < repository.end) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != repository or solvable.name == 0) continue;
-        const fact = try solverFactKeyForSolvid(
-            allocator,
-            pool,
-            repository_name,
-            solvid,
-        );
-        facts.append(allocator, .{
-            .package = fact,
-            .considered = if (pool.considered) |raw_map|
-                c.map_tst(@ptrCast(raw_map), solvid) != 0
-            else
-                true,
-        }) catch |err| {
-            deinitSolverPackageFact(allocator, fact);
-            return err;
-        };
-    }
-    std.mem.sort(VisibilityFact, facts.items, {}, visibilityFactLessThan);
+    try collectNativeVisibilityFacts(
+        allocator,
+        repository_id,
+        repository,
+        hidden,
+        &facts,
+    );
+    var output = captured;
+    output.snapshot = .{
+        .id = try visibilitySnapshotId(allocator, snapshot.id, facts.items),
+        .metadata_sha256 = snapshot.metadata_sha256,
+    };
+    return output;
+}
+
+/// Hash a visibility fact set into the repository snapshot id. Sorting lives
+/// here so the caller never has to care what order it produced facts in.
+fn visibilitySnapshotId(
+    allocator: Allocator,
+    captured_id: []const u8,
+    facts: []VisibilityFact,
+) IntegrationError![]const u8 {
+    std.mem.sort(VisibilityFact, facts, {}, visibilityFactLessThan);
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(visible_snapshot_identity_domain ++ "\x00");
-    try hashFramedBytes(&hasher, snapshot.id);
-    for (facts.items) |fact| {
+    try hashFramedBytes(&hasher, captured_id);
+    for (facts) |fact| {
         try hashSolverFactKey(&hasher, fact.package);
         hasher.update(&.{@intFromBool(fact.considered)});
     }
@@ -3088,16 +3096,343 @@ fn bindRepositoryVisibility(
     hasher.final(&digest);
     const hex = try lowerHexAlloc(allocator, digest);
     defer allocator.free(hex);
-    var output = captured;
-    output.snapshot = .{
-        .id = try std.fmt.allocPrint(
-            allocator,
-            "{s}{s}",
-            .{ repository_capture.snapshot_id_prefix, hex },
-        ),
-        .metadata_sha256 = snapshot.metadata_sha256,
-    };
+    return std.fmt.allocPrint(
+        allocator,
+        "{s}{s}",
+        .{ repository_capture.snapshot_id_prefix, hex },
+    );
+}
+
+/// One package hidden from the solver, in a form that can be compared against
+/// the native repository model without a libsolv bitmap.
+///
+/// This is the same set that stamps `pool->considered` in
+/// `TDNFGoalAddHiddenPackages`: both derive from `pTdnf->ppszHiddenRefs`, so
+/// resolving it here reads the decision rather than a round-trip of it.
+const HiddenIdentity = struct {
+    repository_id: []const u8,
+    name: []const u8,
+    arch: []const u8,
+    version: []const u8,
+    release: []const u8,
+    epoch: u32,
+};
+
+fn collectHiddenIdentities(
+    allocator: Allocator,
+    data: transaction_plan.Data,
+) IntegrationError![]const HiddenIdentity {
+    const output = try allocator.alloc(
+        HiddenIdentity,
+        data.hidden_packages.len,
+    );
+    for (data.hidden_packages, output) |reference, *destination| {
+        const package = for (data.packages) |candidate| {
+            if (std.mem.eql(u8, candidate.id, reference)) break candidate;
+        } else return error.InvalidPackageMapping;
+        destination.* = .{
+            .repository_id = package.repository_id,
+            .name = package.identity.name,
+            .arch = package.identity.arch,
+            .version = package.identity.version,
+            .release = package.identity.release,
+            .epoch = package.identity.epoch orelse 0,
+        };
+    }
     return output;
+}
+
+fn isHiddenPackage(
+    hidden: []const HiddenIdentity,
+    repository_id: []const u8,
+    nevra: metadata_model.Nevra,
+) bool {
+    return for (hidden) |candidate| {
+        if (std.mem.eql(u8, candidate.repository_id, repository_id) and
+            std.mem.eql(u8, candidate.name, nevra.name) and
+            std.mem.eql(u8, candidate.arch, nevra.arch) and
+            std.mem.eql(u8, candidate.version, nevra.version) and
+            std.mem.eql(u8, candidate.release, nevra.release) and
+            candidate.epoch == (nevra.epoch orelse 0)) break true;
+    } else false;
+}
+
+/// Rebuild the visibility fact set from the native repository model.
+///
+/// The pool this used to read is not an independent source: every available
+/// repository is loaded by `repomd/solvbridge.zig` **from this same model**
+/// (`SolvReadYumRepo` -> `TDNFRepoMdNativeLoadSolvRepo` ->
+/// `buildRepositoryIntoRepo`), so each hashed field is reproducible here. It is
+/// not reproducible *naively*, though: libsolv normalizes three of them on the
+/// way in, and the snapshot id must keep hashing the normalized bytes.
+/// `nativeChecksumFields` and `nativeLocation` document each rule, and the
+/// differential test below pins this function against the libsolv readback for
+/// as long as libsolv is still linked.
+///
+/// `SolvBuilder.build` creates solvables in exactly two places: one per model
+/// package, then one `patch:<id>` pseudo-solvable per advisory when the
+/// repository carries updateinfo. Both landed in the same repo and therefore
+/// both were hashed, so both are rebuilt here.
+fn collectNativeVisibilityFacts(
+    allocator: Allocator,
+    repository_id: []const u8,
+    repository: *const metadata_model.RepositoryModel,
+    hidden: []const HiddenIdentity,
+    facts: *std.ArrayList(VisibilityFact),
+) IntegrationError!void {
+    try facts.ensureUnusedCapacity(
+        allocator,
+        repository.packages.len +
+            if (repository.has_updateinfo) repository.advisories.len else 0,
+    );
+    for (repository.packages) |package| {
+        const fact = try nativePackageFact(
+            allocator,
+            repository_id,
+            package,
+        );
+        facts.appendAssumeCapacity(.{
+            .package = fact,
+            .considered = !isHiddenPackage(
+                hidden,
+                repository_id,
+                package.nevra,
+            ),
+        });
+    }
+    if (!repository.has_updateinfo) return;
+    for (repository.advisories) |advisory| {
+        const fact = try nativeAdvisoryFact(
+            allocator,
+            repository_id,
+            advisory,
+        );
+        facts.appendAssumeCapacity(.{ .package = fact, .considered = true });
+    }
+}
+
+fn nativePackageFact(
+    allocator: Allocator,
+    repository_id: []const u8,
+    package: metadata_model.Package,
+) IntegrationError!SolverPackageFact {
+    var fact = SolverPackageFact{
+        .repository = "",
+        .name = "",
+        .arch = "",
+        .evr = "",
+        .pkgid_kind = "",
+        .pkgid_value = "",
+        .checksum_kind = "",
+        .checksum_value = "",
+        .location = null,
+        .xml_base = null,
+        .download_size = package.size.package,
+        .digest = undefined,
+    };
+    errdefer deinitSolverPackageFact(allocator, fact);
+    fact.repository = try allocator.dupe(u8, repository_id);
+    fact.name = try allocator.dupe(u8, package.nevra.name);
+    fact.arch = try allocator.dupe(u8, package.nevra.arch);
+    fact.evr = try nativeEvrString(
+        allocator,
+        package.nevra.epoch,
+        package.nevra.version,
+        package.nevra.release,
+    );
+    const checksum = try nativeChecksumFields(
+        allocator,
+        package.checksum.kind,
+        package.checksum.value,
+    );
+    fact.checksum_kind = checksum.kind;
+    fact.checksum_value = checksum.value;
+    if (package.checksum.is_pkgid) {
+        const pkgid = try nativeChecksumFields(
+            allocator,
+            package.checksum.kind,
+            package.checksum.value,
+        );
+        fact.pkgid_kind = pkgid.kind;
+        fact.pkgid_value = pkgid.value;
+    }
+    fact.location = try nativeLocation(allocator, package.location.href);
+    if (package.location.xml_base) |xml_base| {
+        fact.xml_base = try allocator.dupe(u8, xml_base);
+    }
+    return fact;
+}
+
+/// `SolvBuilder.addUpdateinfo` gives an advisory solvable a `patch:` name, the
+/// `noarch` architecture and nothing else, so every remaining field reads back
+/// empty and `solvable_lookup_location` reports no location at all.
+fn nativeAdvisoryFact(
+    allocator: Allocator,
+    repository_id: []const u8,
+    advisory: metadata_model.Advisory,
+) IntegrationError!SolverPackageFact {
+    var fact = SolverPackageFact{
+        .repository = "",
+        .name = "",
+        .arch = "",
+        .evr = "",
+        .pkgid_kind = "",
+        .pkgid_value = "",
+        .checksum_kind = "",
+        .checksum_value = "",
+        .location = null,
+        .xml_base = null,
+        .download_size = null,
+        .digest = undefined,
+    };
+    errdefer deinitSolverPackageFact(allocator, fact);
+    fact.repository = try allocator.dupe(u8, repository_id);
+    fact.name = try std.fmt.allocPrint(
+        allocator,
+        "patch:{s}",
+        .{advisory.id},
+    );
+    fact.arch = try allocator.dupe(u8, "noarch");
+    if (advisory.version) |version| {
+        if (version.len != 0) fact.evr = try allocator.dupe(u8, version);
+    }
+    return fact;
+}
+
+/// Mirror of `repomd/solvbridge.zig`'s `evrIdOptional`: an empty component is
+/// absent, an all-absent EVR interns as id 0 (which `poolIdSlice` reports as an
+/// empty string), and a version that already carries its own `digits:` prefix
+/// forces an explicit zero epoch so libsolv does not read the version as one.
+fn nativeEvrString(
+    allocator: Allocator,
+    epoch: ?u32,
+    raw_version: []const u8,
+    raw_release: []const u8,
+) IntegrationError![]const u8 {
+    const version: ?[]const u8 =
+        if (raw_version.len == 0) null else raw_version;
+    const release: ?[]const u8 =
+        if (raw_release.len == 0) null else raw_release;
+    if (epoch == null and version == null and release == null) return "";
+    const effective_epoch: ?u32 = epoch orelse blk: {
+        if (version) |value| {
+            if (nativeNeedsZeroEpoch(value)) break :blk 0;
+        }
+        break :blk null;
+    };
+    var buffer = std.ArrayList(u8).empty;
+    errdefer buffer.deinit(allocator);
+    if (effective_epoch) |value| {
+        try buffer.print(allocator, "{d}:", .{value});
+    }
+    if (version) |value| try buffer.appendSlice(allocator, value);
+    if (release) |value| {
+        try buffer.append(allocator, '-');
+        try buffer.appendSlice(allocator, value);
+    }
+    if (buffer.items.len == 0) {
+        buffer.deinit(allocator);
+        return "";
+    }
+    return buffer.toOwnedSlice(allocator);
+}
+
+fn nativeNeedsZeroEpoch(version: []const u8) bool {
+    var index: usize = 0;
+    while (index < version.len and
+        version[index] >= '0' and version[index] <= '9') : (index += 1)
+    {}
+    return index > 0 and index < version.len and version[index] == ':';
+}
+
+const NativeChecksum = struct {
+    kind: []const u8 = "",
+    value: []const u8 = "",
+};
+
+const native_checksum_types = [_]struct {
+    name: []const u8,
+    knownid: []const u8,
+    digest_len: usize,
+}{
+    .{ .name = "md5", .knownid = "repokey:type:md5", .digest_len = 16 },
+    .{ .name = "sha", .knownid = "repokey:type:sha1", .digest_len = 20 },
+    .{ .name = "sha1", .knownid = "repokey:type:sha1", .digest_len = 20 },
+    .{ .name = "sha224", .knownid = "repokey:type:sha224", .digest_len = 28 },
+    .{ .name = "sha256", .knownid = "repokey:type:sha256", .digest_len = 32 },
+    .{ .name = "sha384", .knownid = "repokey:type:sha384", .digest_len = 48 },
+    .{ .name = "sha512", .knownid = "repokey:type:sha512", .digest_len = 64 },
+};
+
+/// Reproduce what a checksum looks like *after* a libsolv round trip.
+///
+/// Three rules, none of them obvious from the metadata:
+///   * the fact key records the knownid spelling (`repokey:type:sha256`), not
+///     the spelling from the metadata, and `solv_chksum_str2type` matches
+///     case-insensitively and folds `sha` onto sha1;
+///   * `repodata_set_checksum` silently stores nothing when the value does not
+///     begin with a full digest worth of hex, so a short or malformed value
+///     reads back as no checksum at all rather than as itself;
+///   * `repodata_chk2str` re-emits lowercase hex and ignores trailing bytes.
+///
+/// An unrecognised kind yields no checksum, matching `repodata_set_checksum`'s
+/// own early return for an unknown type. In practice it never gets that far:
+/// `SolvBuilder.addPrimary` rejects the whole repository for an unknown kind,
+/// so no such package can reach a pool at all.
+fn nativeChecksumFields(
+    allocator: Allocator,
+    kind: []const u8,
+    value: []const u8,
+) IntegrationError!NativeChecksum {
+    const entry = for (native_checksum_types) |candidate| {
+        if (std.ascii.eqlIgnoreCase(kind, candidate.name)) break candidate;
+    } else return .{};
+    const hex_len = entry.digest_len * 2;
+    if (value.len < hex_len) return .{};
+    for (value[0..hex_len]) |byte| {
+        if (!std.ascii.isHex(byte)) return .{};
+    }
+    const lowered = try allocator.alloc(u8, hex_len);
+    errdefer allocator.free(lowered);
+    for (value[0..hex_len], lowered) |byte, *destination| {
+        destination.* = std.ascii.toLower(byte);
+    }
+    return .{
+        .kind = try allocator.dupe(u8, entry.knownid),
+        .value = lowered,
+    };
+}
+
+/// Reproduce `repodata_set_location(data, solvid, 0, NULL, href)` followed by
+/// `solvable_lookup_location`.
+///
+/// libsolv splits the href at its last separator, strips one leading `./` from
+/// the directory and drops a bare `.`, then re-joins the two halves on read. It
+/// also elides a directory equal to the architecture and a file equal to the
+/// canonical `name-vr.arch.rpm`, but both are regenerated from the same
+/// solvable fields, so those two elisions are output-neutral and are not
+/// replayed here. The `./` normalization is not output-neutral, which is why it
+/// is.
+fn nativeLocation(
+    allocator: Allocator,
+    href: []const u8,
+) IntegrationError![]const u8 {
+    const separator = std.mem.lastIndexOfScalar(u8, href, '/') orelse
+        return allocator.dupe(u8, href);
+    const file = href[separator + 1 ..];
+    var directory = href[0 .. if (separator == 0) 1 else separator];
+    if (directory.len >= 2 and directory[0] == '.' and directory[1] == '/' and
+        (directory.len == 2 or directory[2] != '/'))
+    {
+        directory = directory[2..];
+    }
+    if (directory.len == 1 and directory[0] == '.') directory = directory[0..0];
+    if (directory.len == 0) return allocator.dupe(u8, file);
+    return std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ directory, file },
+    );
 }
 
 fn deinitSolverPackageFact(
@@ -7766,36 +8101,287 @@ test "solver digest context scans package universe once" {
     try std.testing.expectEqual(@as(u32, 1), context.universe_scans);
 }
 
-test "effective considered set changes repository snapshot identity" {
-    try std.testing.expectEqualStrings(
-        "tdnf.repository-visible-snapshot/v2",
-        visible_snapshot_identity_domain,
-    );
-    var universe = try TestUniverse.create();
-    defer universe.destroy();
-    const repository = try universe.addRepository("available", false, 0);
-    _ = try universe.addPackage(
-        repository,
-        "visible",
-        "1-1",
-        null,
-        "visible.rpm",
-        1,
-    );
-    const hidden = try universe.addPackage(
-        repository,
-        "hidden",
-        "1-1",
-        null,
-        "hidden.rpm",
-        1,
-    );
-    universe.finish(&.{repository});
+/// Every field the snapshot id hashes, read back out of libsolv exactly the way
+/// `bindRepositoryVisibility` used to read it.
+fn libsolvVisibilityFacts(
+    allocator: Allocator,
+    pool: *c.Pool,
+    repository: *c.Repo,
+    repository_name: []const u8,
+) IntegrationError![]VisibilityFact {
+    var facts = std.ArrayList(VisibilityFact).empty;
+    errdefer facts.deinit(allocator);
+    errdefer for (facts.items) |fact|
+        deinitSolverPackageFact(allocator, fact.package);
+    var solvid = repository.start;
+    while (solvid < repository.end) : (solvid += 1) {
+        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
+        const solvable: *c.Solvable = @ptrCast(raw);
+        if (solvable.repo != repository or solvable.name == 0) continue;
+        const fact = try solverFactKeyForSolvid(
+            allocator,
+            pool,
+            repository_name,
+            solvid,
+        );
+        facts.append(allocator, .{
+            .package = fact,
+            .considered = if (pool.considered) |raw_map|
+                c.map_tst(@ptrCast(raw_map), solvid) != 0
+            else
+                true,
+        }) catch |err| {
+            deinitSolverPackageFact(allocator, fact);
+            return err;
+        };
+    }
+    return facts.toOwnedSlice(allocator);
+}
+
+fn expectEqualOptionalStrings(
+    expected: ?[]const u8,
+    actual: ?[]const u8,
+) !void {
+    if (expected == null or actual == null) {
+        return std.testing.expectEqual(expected == null, actual == null);
+    }
+    return std.testing.expectEqualStrings(expected.?, actual.?);
+}
+
+/// Packages chosen to exercise every normalization libsolv applies between
+/// `SolvBuilder.addPrimary` and the fact-key readback. Each entry is a case
+/// that a naive native reimplementation gets wrong.
+fn differentialVisibilityPackages() []const metadata_model.Package {
+    const sha256_lower = "0123456789abcdef" ** 4;
+    const sha256_upper = "0123456789ABCDEF" ** 4;
+    const sha1_hex = "0123456789abcdef0123456789abcdef01234567";
+    const S = struct {
+        const packages = [_]metadata_model.Package{
+            // Ordinary case: canonical href, pkgid, explicit size.
+            .{
+                .pkg_id = "p1",
+                .nevra = .{
+                    .name = "alpha",
+                    .version = "1.2",
+                    .release = "3",
+                    .arch = "x86_64",
+                },
+                .checksum = .{
+                    .kind = "sha256",
+                    .value = sha256_lower,
+                    .is_pkgid = true,
+                },
+                .location = .{
+                    .href = "packages/alpha-1.2-3.x86_64.rpm",
+                },
+                .size = .{ .package = 4096 },
+            },
+            // Uppercase kind and value: both fold on the way through libsolv.
+            .{
+                .pkg_id = "p2",
+                .nevra = .{
+                    .name = "beta",
+                    .epoch = 2,
+                    .version = "4.5",
+                    .release = "6",
+                    .arch = "noarch",
+                },
+                .checksum = .{
+                    .kind = "SHA256",
+                    .value = sha256_upper,
+                    .is_pkgid = true,
+                },
+                .location = .{ .href = "beta-4.5-6.noarch.rpm" },
+            },
+            // "sha" is an alias for sha1, not a distinct identity.
+            .{
+                .pkg_id = "p3",
+                .nevra = .{
+                    .name = "gamma",
+                    .version = "7",
+                    .release = "8",
+                    .arch = "i686",
+                },
+                .checksum = .{ .kind = "sha", .value = sha1_hex },
+                .location = .{
+                    .href = "./gamma-7-8.i686.rpm",
+                    .xml_base = "../pool",
+                },
+                .size = .{ .package = 1 },
+            },
+            // Too short for its declared type: libsolv stores no checksum.
+            .{
+                .pkg_id = "p4",
+                .nevra = .{
+                    .name = "delta",
+                    .epoch = 0,
+                    .version = "9",
+                    .release = "10",
+                    .arch = "x86_64",
+                },
+                .checksum = .{ .kind = "sha256", .value = "abcd" },
+                .location = .{ .href = "" },
+            },
+            // Directory equal to the architecture, and a rooted href.
+            .{
+                .pkg_id = "p5",
+                .nevra = .{
+                    .name = "epsilon",
+                    .version = "11",
+                    .release = "12",
+                    .arch = "x86_64",
+                },
+                .checksum = .{ .kind = "sha256", .value = sha256_lower },
+                .location = .{ .href = "x86_64/epsilon-11-12.x86_64.rpm" },
+                .size = .{ .package = 0 },
+            },
+            .{
+                .pkg_id = "p6",
+                .nevra = .{
+                    .name = "zeta",
+                    .version = "13",
+                    .release = "14",
+                    .arch = "noarch",
+                },
+                .checksum = .{ .kind = "md5", .value = "0123456789abcdef" ** 2 },
+                .location = .{ .href = "/zeta-13-14.noarch.rpm" },
+            },
+            // A version that already looks epoch-prefixed forces a zero epoch.
+            .{
+                .pkg_id = "p7",
+                .nevra = .{
+                    .name = "eta",
+                    .version = "15:16",
+                    .release = "17",
+                    .arch = "noarch",
+                },
+                .checksum = .{ .kind = "sha512", .value = "0123456789abcdef" ** 8 },
+                .location = .{ .href = "./deep/eta.rpm" },
+            },
+            // No version, no release, no epoch: the EVR interns as nothing.
+            .{
+                .pkg_id = "p8",
+                .nevra = .{ .name = "theta", .arch = "noarch" },
+                .checksum = .{ .kind = "sha224", .value = "0123456789abcdef" ** 4 },
+                .location = .{ .href = "theta.rpm" },
+            },
+        };
+    };
+    return &S.packages;
+}
+
+fn differentialVisibilityAdvisories() []const metadata_model.Advisory {
+    const S = struct {
+        const advisories = [_]metadata_model.Advisory{
+            .{ .id = "TDNF-2026-0001", .raw_type = "security", .version = "3" },
+            .{ .id = "TDNF-2026-0002", .raw_type = "bugfix" },
+        };
+    };
+    return &S.advisories;
+}
+
+test "native visibility facts reproduce the libsolv readback byte for byte" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var context = try SolverDigestContext.init(arena, universe.pool);
-    defer context.deinit();
+
+    const model = metadata_model.RepositoryModel{
+        .packages = @constCast(differentialVisibilityPackages()),
+        .advisories = @constCast(differentialVisibilityAdvisories()),
+        .has_updateinfo = true,
+    };
+
+    const pool = c.pool_create() orelse return error.OutOfMemory;
+    defer c.pool_free(pool);
+    if (c.pool_setdisttype(pool, c.DISTTYPE_RPM) != 0) {
+        return error.TestUnexpectedResult;
+    }
+    c.pool_setarch(pool, "x86_64");
+    const raw_repo = c.repo_create(pool, "available") orelse
+        return error.OutOfMemory;
+    const repo: *c.Repo = @ptrCast(raw_repo);
+    try repository_metadata.solv_bridge.buildRepositoryIntoRepo(
+        arena,
+        repo,
+        &model,
+    );
+    c.pool_createwhatprovides(pool);
+
+    const libsolv_facts = try libsolvVisibilityFacts(
+        arena,
+        pool,
+        repo,
+        "available",
+    );
+    var native_facts = std.ArrayList(VisibilityFact).empty;
+    try collectNativeVisibilityFacts(
+        arena,
+        "available",
+        &model,
+        &.{},
+        &native_facts,
+    );
+
+    try std.testing.expectEqual(libsolv_facts.len, native_facts.items.len);
+    std.mem.sort(VisibilityFact, libsolv_facts, {}, visibilityFactLessThan);
+    std.mem.sort(
+        VisibilityFact,
+        native_facts.items,
+        {},
+        visibilityFactLessThan,
+    );
+    for (libsolv_facts, native_facts.items) |expected, actual| {
+        errdefer std.debug.print(
+            "\nvisibility fact mismatch for {s}\n",
+            .{expected.package.name},
+        );
+        try std.testing.expectEqualStrings(
+            expected.package.repository,
+            actual.package.repository,
+        );
+        try std.testing.expectEqualStrings(
+            expected.package.name,
+            actual.package.name,
+        );
+        try std.testing.expectEqualStrings(
+            expected.package.arch,
+            actual.package.arch,
+        );
+        try std.testing.expectEqualStrings(
+            expected.package.evr,
+            actual.package.evr,
+        );
+        try std.testing.expectEqualStrings(
+            expected.package.pkgid_kind,
+            actual.package.pkgid_kind,
+        );
+        try std.testing.expectEqualStrings(
+            expected.package.pkgid_value,
+            actual.package.pkgid_value,
+        );
+        try std.testing.expectEqualStrings(
+            expected.package.checksum_kind,
+            actual.package.checksum_kind,
+        );
+        try std.testing.expectEqualStrings(
+            expected.package.checksum_value,
+            actual.package.checksum_value,
+        );
+        try expectEqualOptionalStrings(
+            expected.package.location,
+            actual.package.location,
+        );
+        try expectEqualOptionalStrings(
+            expected.package.xml_base,
+            actual.package.xml_base,
+        );
+        try std.testing.expectEqual(
+            expected.package.download_size,
+            actual.package.download_size,
+        );
+        try std.testing.expectEqual(expected.considered, actual.considered);
+    }
+
     const captured = transaction_plan.Repository{
         .cost = default_repository_cost,
         .id = "available",
@@ -7803,51 +8389,143 @@ test "effective considered set changes repository snapshot identity" {
         .priority = 0,
         .repomd = null,
         .snapshot = .{
-            .id = "snapshot-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            .metadata_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            .id = "snapshot-v2-" ++ "a" ** 64,
+            .metadata_sha256 = "a" ** 64,
+        },
+    };
+    const libsolv_id = try visibilitySnapshotId(
+        arena,
+        captured.snapshot.?.id,
+        libsolv_facts,
+    );
+    const native = try bindRepositoryVisibility(
+        arena,
+        "available",
+        &model,
+        &.{},
+        captured,
+    );
+    try std.testing.expectEqualStrings(libsolv_id, native.snapshot.?.id);
+}
+
+test "advisory pseudo solvables stay inside the snapshot identity" {
+    try std.testing.expectEqualStrings(
+        "tdnf.repository-visible-snapshot/v2",
+        visible_snapshot_identity_domain,
+    );
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const captured = transaction_plan.Repository{
+        .cost = default_repository_cost,
+        .id = "available",
+        .kind = .available,
+        .priority = 0,
+        .repomd = null,
+        .snapshot = .{
+            .id = "snapshot-v2-" ++ "a" ** 64,
+            .metadata_sha256 = "a" ** 64,
+        },
+    };
+    var with_updateinfo = metadata_model.RepositoryModel{
+        .packages = @constCast(differentialVisibilityPackages()),
+        .advisories = @constCast(differentialVisibilityAdvisories()),
+        .has_updateinfo = true,
+    };
+    var without_updateinfo = with_updateinfo;
+    without_updateinfo.has_updateinfo = false;
+    const bound = try bindRepositoryVisibility(
+        arena,
+        "available",
+        &with_updateinfo,
+        &.{},
+        captured,
+    );
+    const unbound = try bindRepositoryVisibility(
+        arena,
+        "available",
+        &without_updateinfo,
+        &.{},
+        captured,
+    );
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        bound.snapshot.?.id,
+        unbound.snapshot.?.id,
+    ));
+}
+
+test "hiding a package changes the repository snapshot identity" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = metadata_model.RepositoryModel{
+        .packages = @constCast(differentialVisibilityPackages()),
+    };
+    const captured = transaction_plan.Repository{
+        .cost = default_repository_cost,
+        .id = "available",
+        .kind = .available,
+        .priority = 0,
+        .repomd = null,
+        .snapshot = .{
+            .id = "snapshot-v2-" ++ "a" ** 64,
+            .metadata_sha256 = "a" ** 64,
         },
     };
     var legacy_labeled = captured;
-    legacy_labeled.snapshot.?.id =
-        "snapshot-v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    legacy_labeled.snapshot.?.id = "snapshot-v1-" ++ "a" ** 64;
     try std.testing.expectError(
         error.InvalidRepository,
         bindRepositoryVisibility(
             arena,
-            universe.pool,
-            repository,
+            "available",
+            &model,
+            &.{},
             legacy_labeled,
         ),
     );
     const all_visible = try bindRepositoryVisibility(
         arena,
-        universe.pool,
-        repository,
+        "available",
+        &model,
+        &.{},
         captured,
     );
-    const considered = try std.testing.allocator.create(c.Map);
-    defer std.testing.allocator.destroy(considered);
-    c.map_init(considered, universe.pool.nsolvables);
-    defer c.map_free(considered);
-    c.map_setall(considered);
-    c.map_clr(considered, hidden);
-    universe.pool.considered = considered;
-    defer universe.pool.considered = null;
+    const hidden = [_]HiddenIdentity{.{
+        .repository_id = "available",
+        .name = "alpha",
+        .arch = "x86_64",
+        .version = "1.2",
+        .release = "3",
+        .epoch = 0,
+    }};
     const one_hidden = try bindRepositoryVisibility(
         arena,
-        universe.pool,
-        repository,
+        "available",
+        &model,
+        &hidden,
         captured,
     );
-    try std.testing.expectEqual(@as(u64, 0), context.digest_calls);
+    // A hidden package in another repository must not move this one.
+    const other_repository = [_]HiddenIdentity{.{
+        .repository_id = "other",
+        .name = "alpha",
+        .arch = "x86_64",
+        .version = "1.2",
+        .release = "3",
+        .epoch = 0,
+    }};
+    const unaffected = try bindRepositoryVisibility(
+        arena,
+        "available",
+        &model,
+        &other_repository,
+        captured,
+    );
     try std.testing.expect(std.mem.startsWith(
         u8,
         all_visible.snapshot.?.id,
-        repository_capture.snapshot_id_prefix,
-    ));
-    try std.testing.expect(std.mem.startsWith(
-        u8,
-        one_hidden.snapshot.?.id,
         repository_capture.snapshot_id_prefix,
     ));
     try std.testing.expect(!std.mem.eql(
@@ -7855,17 +8533,21 @@ test "effective considered set changes repository snapshot identity" {
         all_visible.snapshot.?.id,
         one_hidden.snapshot.?.id,
     ));
+    try std.testing.expectEqualStrings(
+        all_visible.snapshot.?.id,
+        unaffected.snapshot.?.id,
+    );
 }
 
 fn visibilityBindingAllocationCase(
     allocator: Allocator,
-    pool: *c.Pool,
-    repository: *c.Repo,
+    model: *const metadata_model.RepositoryModel,
 ) !void {
     const output = try bindRepositoryVisibility(
         allocator,
-        pool,
-        repository,
+        "available",
+        model,
+        &.{},
         .{
             .cost = default_repository_cost,
             .id = "available",
@@ -7873,8 +8555,8 @@ fn visibilityBindingAllocationCase(
             .priority = 0,
             .repomd = null,
             .snapshot = .{
-                .id = "snapshot-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                .metadata_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                .id = "snapshot-v2-" ++ "a" ** 64,
+                .metadata_sha256 = "a" ** 64,
             },
         },
     );
@@ -7882,22 +8564,15 @@ fn visibilityBindingAllocationCase(
 }
 
 test "visibility binding cleans every allocation failure" {
-    var universe = try TestUniverse.create();
-    defer universe.destroy();
-    const repository = try universe.addRepository("available", false, 0);
-    _ = try universe.addPackage(
-        repository,
-        "package",
-        "1-1",
-        null,
-        "package.rpm",
-        1,
-    );
-    universe.finish(&.{repository});
+    const model = metadata_model.RepositoryModel{
+        .packages = @constCast(differentialVisibilityPackages()),
+        .advisories = @constCast(differentialVisibilityAdvisories()),
+        .has_updateinfo = true,
+    };
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         visibilityBindingAllocationCase,
-        .{ universe.pool, repository },
+        .{&model},
     );
 }
 
