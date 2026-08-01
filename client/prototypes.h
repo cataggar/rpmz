@@ -26,12 +26,6 @@ tdnf_repomd_native_verified_transaction_solve_config(
 
 //client.c
 uint32_t
-TDNFApplyScopeFilter(
-    PSolvQuery qQuery,
-    TDNF_SCOPE nScope
-    );
-
-uint32_t
 TDNFNativeQueryBuildRepoInputs(
     PTDNF pTdnf,
     PTDNF_REPOMD_NATIVE_REPO_INPUT *ppRepos,

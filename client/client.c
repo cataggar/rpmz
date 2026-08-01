@@ -10,45 +10,6 @@
 #include "../llconf/nodes.h"
 
 uint32_t
-TDNFApplyScopeFilter(
-    PSolvQuery pQuery,
-    TDNF_SCOPE nScope
-    )
-{
-    uint32_t dwError = 0;
-
-    if(!pQuery || nScope == SCOPE_NONE)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pQuery->nScope = nScope;
-
-    switch(nScope)
-    {
-        case SCOPE_INSTALLED:
-            dwError = SolvAddSystemRepoFilter(pQuery);
-            BAIL_ON_TDNF_ERROR(dwError);
-            break;
-
-        case SCOPE_AVAILABLE:
-            dwError = SolvAddAvailableRepoFilter(pQuery);
-            BAIL_ON_TDNF_ERROR(dwError);
-            break;
-
-        default:
-            break;
-    }
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-uint32_t
 TDNFPkgsToExclude(
     PTDNF pTdnf,
     uint32_t *pdwCount,

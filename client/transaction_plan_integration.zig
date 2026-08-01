@@ -719,7 +719,6 @@ fn rebuildPoolIndexes(pool: *c.Pool) void {
 
 const SolvSack = extern struct {
     pool: ?*c.Pool,
-    command_package_count: u32,
     cache_dir: ?[*:0]u8,
     root_dir: ?[*:0]u8,
 };
@@ -1293,7 +1292,6 @@ fn cloneSackContents(
         if (source_repository == source_installed) saw_installed = true;
     }
     if (!saw_installed) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    destination.command_package_count = source.command_package_count;
     rebuildPoolIndexes(destination_pool);
     return 0;
 }
@@ -1729,7 +1727,6 @@ fn cloneReplacementSack(
     if (!saw_installed) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     if (source_target.pool != source_pool or target.pool != destination_pool)
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    replacement.command_package_count = source_sack.command_package_count;
     if (source_command_line != null and destination_command_line == null)
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     if (loaded_repo) |output| output.* = @ptrCast(target);
@@ -4207,7 +4204,6 @@ fn testInitRepoValidation(handle: ?*anyopaque) callconv(.c) u32 {
     const sack = handleLiveSack(&input) orelse return 0;
     var empty = SolvSack{
         .pool = null,
-        .command_package_count = 0,
         .cache_dir = null,
         .root_dir = null,
     };
