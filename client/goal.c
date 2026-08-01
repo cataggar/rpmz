@@ -1781,20 +1781,17 @@ TDNFSolvAddPkgLocks(PTDNF pTdnf, PTDNF_ID_LIST pQueueJobs, Pool *pPool)
     {
         char *pszPkg = pTdnf->pConf->ppszPkgLocks[i];
         TDNF_STR_ID idPkg = pool_str2id(pPool, pszPkg, 1);
-        TDNF_PKG_ID p;
-        Solvable *s;
+        int nInstalled = 0;
         if (!idPkg) continue;
-        FOR_REPO_SOLVABLES(pPool->installed, p, s)
+        dwError = TDNFInstalledHasName(pPool, idPkg, &nInstalled);
+        BAIL_ON_TDNF_ERROR(dwError);
+        if (nInstalled)
         {
-            if (idPkg == s->name)
-            {
-                dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_LOCK, idPkg);
-                BAIL_ON_TDNF_ERROR(dwError);
-                TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
-                    TDNF_TRANSACTION_PLAN_CAPTURE_JOB_LOCK, pszPkg, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_LOCK, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
-                    TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
-                break;
-            }
+            dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_LOCK, idPkg);
+            BAIL_ON_TDNF_ERROR(dwError);
+            TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
+                TDNF_TRANSACTION_PLAN_CAPTURE_JOB_LOCK, pszPkg, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_LOCK, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
+                TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
         }
     }
 cleanup:
@@ -1828,20 +1825,17 @@ TDNFSolvAddInstallOnlyPkgs(
         TDNF_STR_ID idPkg = pool_str2id(pPool, pszPkg, 1);
         if (idPkg)
         {
-            TDNF_PKG_ID p;
-            Solvable *s;
+            int nInstalled = 0;
             /* Name multiversion jobs matter only when an instance exists. */
-            FOR_REPO_SOLVABLES(pPool->installed, p, s)
+            dwError = TDNFInstalledHasName(pPool, idPkg, &nInstalled);
+            BAIL_ON_TDNF_ERROR(dwError);
+            if (nInstalled)
             {
-                if (idPkg == s->name)
-                {
-                    dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_MULTIVERSION, idPkg);
-                    BAIL_ON_TDNF_ERROR(dwError);
-                    TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
-                        TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION, pszPkg, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_MULTIVERSION, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
-                        TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
-                    break;
-                }
+                dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_MULTIVERSION, idPkg);
+                BAIL_ON_TDNF_ERROR(dwError);
+                TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
+                    TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION, pszPkg, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_MULTIVERSION, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
+                    TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
             }
         }
     }
@@ -1999,10 +1993,9 @@ TDNFSolvAddProtectPkgs(
 {
     uint32_t dwError = 0;
     char **ppszProtectedPkgs = NULL;
-    int i, j;
+    int i, j, k;
     TDNF_ID_LIST qPkgs = {0};
-    TDNF_PKG_ID p;
-    Solvable *s;
+    TDNF_ID_LIST qInstalled = {0};
 
     if(!pTdnf || !pQueueJobs || !pPool || !pTdnf->pConf)
     {
@@ -2012,6 +2005,7 @@ TDNFSolvAddProtectPkgs(
 
     ppszProtectedPkgs = pTdnf->pConf->ppszProtectedPkgs;
     TDNFIdListInit(&qPkgs);
+    TDNFIdListInit(&qInstalled);
     for (i = 0; ppszProtectedPkgs[i]; i++) {
         TDNF_STR_ID idPkg = pool_str2id(pPool, ppszProtectedPkgs[i], 1);
         if (idPkg) {
@@ -2028,9 +2022,12 @@ TDNFSolvAddProtectPkgs(
                when the job selects by name. The TDNF_JOB_SOLVABLE test above
                is what makes it a package handle here. */
             TDNF_PKG_ID what = pQueueJobs->pnElements[j+1];
-            s = pool_id2solvable(pPool, what);
+            TDNF_STR_ID idWhat = 0;
+
+            dwError = TDNFPkgHandleGetNameId(pPool, what, &idWhat);
+            BAIL_ON_TDNF_ERROR(dwError);
             for (i = 0; i < (int)qPkgs.dwCount; i++) {
-                if (qPkgs.pnElements[i] == s->name)
+                if (qPkgs.pnElements[i] == idWhat)
                     break;
             }
             if (i < (int)qPkgs.dwCount) {
@@ -2041,8 +2038,11 @@ TDNFSolvAddProtectPkgs(
                     how = pQueueJobs->pnElements[i];
                     if (((how & TDNF_JOB_JOBMASK) == TDNF_JOB_INSTALL) && (how & TDNF_JOB_SOLVABLE)) {
                         TDNF_PKG_ID what_add = pQueueJobs->pnElements[i+1];
-                        const Solvable *s_add = pool_id2solvable(pPool, what_add);
-                        if (s_add->name == s->name) {
+                        TDNF_STR_ID idAdd = 0;
+
+                        dwError = TDNFPkgHandleGetNameId(pPool, what_add, &idAdd);
+                        BAIL_ON_TDNF_ERROR(dwError);
+                        if (idAdd == idWhat) {
                             break;
                         }
                     }
@@ -2057,10 +2057,16 @@ TDNFSolvAddProtectPkgs(
     }
 
     /* libsolv has no protected flag; allow uninstall only for other names. */
-    FOR_REPO_SOLVABLES(pPool->installed, p, s)
-    {
+    dwError = TDNFInstalledGetPkgIds(pPool, &qInstalled);
+    BAIL_ON_TDNF_ERROR(dwError);
+    for (k = 0; k < (int)qInstalled.dwCount; k++) {
+        TDNF_PKG_ID p = qInstalled.pnElements[k];
+        TDNF_STR_ID idInstalled = 0;
+
+        dwError = TDNFPkgHandleGetNameId(pPool, p, &idInstalled);
+        BAIL_ON_TDNF_ERROR(dwError);
         for (i = 0; i < (int)qPkgs.dwCount; i++) {
-            if (qPkgs.pnElements[i] == s->name)
+            if (qPkgs.pnElements[i] == idInstalled)
                 break;
         }
         if (i == (int)qPkgs.dwCount) {
@@ -2080,6 +2086,7 @@ TDNFSolvAddProtectPkgs(
 
 cleanup:
     TDNFIdListFree(&qPkgs);
+    TDNFIdListFree(&qInstalled);
     return dwError;
 error:
     goto cleanup;

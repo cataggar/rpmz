@@ -2165,3 +2165,137 @@ error:
     TDNF_SAFE_FREE_MEMORY(pszLocation);
     goto cleanup;
 }
+
+/*
+ * Name handle of a package handle.
+ *
+ * Returns the interned name id rather than a string so that callers
+ * comparing a package's name against a set of names do not have to
+ * strcmp: pool_str2id() interns once up front and the comparison is
+ * then integer equality, which is what the job builders already do.
+ * TDNFPkgHandleGetName is the accessor to reach for when a string is
+ * actually wanted.
+ */
+uint32_t
+TDNFPkgHandleGetNameId(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    TDNF_STR_ID *pIdName
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+
+    if(!pPool || !pIdName)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *pIdName = pSolv->name;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/*
+ * Every installed package, as handles.
+ *
+ * The list is materialised rather than exposed as a cursor because the
+ * callers push jobs while iterating and a cursor would hand them back a
+ * live Solvable, which is the dereference this is meant to remove.
+ *
+ * An absent installed repo is an error, not an empty set. The loops this
+ * replaces indexed straight into pPool->installed and would have
+ * segfaulted, so nothing can be relying on a defined answer; reporting
+ * it is preferable to silently behaving as though nothing is installed,
+ * which would turn a broken sack into a plausible-looking transaction.
+ */
+uint32_t
+TDNFInstalledGetPkgIds(
+    Pool *pPool,
+    PTDNF_ID_LIST pIdList
+    )
+{
+    uint32_t dwError = 0;
+    TDNF_PKG_ID p = 0;
+    Solvable *s = NULL;
+
+    if(!pPool || !pIdList)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    if(!pPool->installed)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    FOR_REPO_SOLVABLES(pPool->installed, p, s)
+    {
+        dwError = TDNFIdListPush(pIdList, p);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/* Whether any installed package carries this name handle. Same absent-repo
+   contract as TDNFInstalledGetPkgIds. */
+uint32_t
+TDNFInstalledHasName(
+    Pool *pPool,
+    TDNF_STR_ID idName,
+    int *pnFound
+    )
+{
+    uint32_t dwError = 0;
+    TDNF_PKG_ID p = 0;
+    Solvable *s = NULL;
+    int nFound = 0;
+
+    if(!pPool || !pnFound)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    if(!pPool->installed)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    FOR_REPO_SOLVABLES(pPool->installed, p, s)
+    {
+        if(s->name == idName)
+        {
+            nFound = 1;
+            break;
+        }
+    }
+
+    *pnFound = nFound;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}

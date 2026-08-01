@@ -413,6 +413,39 @@ TDNFPkgHandleGetLocation(
     char **ppszLocation
     );
 
+/*
+ * The name handle of a package handle. Returns the interned id rather
+ * than a string so a caller matching against a set of names compares
+ * integers; TDNFPkgHandleGetName is the one to reach for when a string
+ * is wanted. Cannot fail for a handle that came out of the sack.
+ */
+uint32_t
+TDNFPkgHandleGetNameId(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    TDNF_STR_ID *pIdName
+    );
+
+/*
+ * Queries over the installed set. They take a Pool rather than a sack
+ * handle because that is what the job builders already hold; the name
+ * says "Installed" rather than "Sack" so it does not promise otherwise.
+ * An absent installed repo is reported as an error, never as an empty
+ * set.
+ */
+uint32_t
+TDNFInstalledGetPkgIds(
+    Pool *pPool,
+    PTDNF_ID_LIST pIdList
+    );
+
+uint32_t
+TDNFInstalledHasName(
+    Pool *pPool,
+    TDNF_STR_ID idName,
+    int *pnFound
+    );
+
 uint32_t
 TDNFMatchForReinstall(
     PSolvSack pSack,
