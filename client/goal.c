@@ -1179,6 +1179,7 @@ TDNFGoalBuildNativeSolverJobs(
         TDNF_PKG_ID dwPkgId = nRawWhat;
         const char *pszJobRepo = NULL;
         int nIsInstalled = 0;
+        int nPkgIdValid = 0;
         PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob = NULL;
         int nInstall = how == (TDNF_JOB_SOLVABLE | TDNF_JOB_INSTALL),
             nErase = nStamped && how == (TDNF_JOB_SOLVABLE | TDNF_JOB_ERASE),
@@ -1202,8 +1203,8 @@ TDNFGoalBuildNativeSolverJobs(
         if(nLocked)
         {
             TDNF_STR_ID idName = nRawWhat;
-            const char *pszName = idName > 0 ? pool_id2str(pPool, idName) : NULL;
-            if(idName <= 0 || IsNullOrEmptyString(pszName))
+            const char *pszName = NULL;
+            if(TDNFStrIdToString(pPool, idName, &pszName))
             {
                 dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -1215,8 +1216,8 @@ TDNFGoalBuildNativeSolverJobs(
         if(nInstallOnly)
         {
             TDNF_STR_ID idName = nRawWhat;
-            const char *pszName = idName > 0 ? pool_id2str(pPool, idName) : NULL;
-            if(idName <= 0 || IsNullOrEmptyString(pszName))
+            const char *pszName = NULL;
+            if(TDNFStrIdToString(pPool, idName, &pszName))
             {
                 dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -1224,8 +1225,14 @@ TDNFGoalBuildNativeSolverJobs(
             ppszInstallOnlyPkgs[dwInstallOnlyCount++] = (char *)pszName;
             continue;
         }
+        dwError = TDNFPkgHandleIsValid(pPool, dwPkgId, &nPkgIdValid);
+        if(dwError)
+        {
+            dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
+            BAIL_ON_TDNF_ERROR(dwError);
+        }
         if((!nInstall && !nErase && !nUserInstalled && !nAllowUninstall) ||
-           dwPkgId <= 0 || dwPkgId >= pPool->nsolvables)
+           !nPkgIdValid)
         {
             dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
             BAIL_ON_TDNF_ERROR(dwError);
@@ -1780,8 +1787,10 @@ TDNFSolvAddPkgLocks(PTDNF pTdnf, PTDNF_ID_LIST pQueueJobs, Pool *pPool)
     for (i = 0; pTdnf->pConf->ppszPkgLocks && pTdnf->pConf->ppszPkgLocks[i]; i++)
     {
         char *pszPkg = pTdnf->pConf->ppszPkgLocks[i];
-        TDNF_STR_ID idPkg = pool_str2id(pPool, pszPkg, 1);
+        TDNF_STR_ID idPkg = 0;
         int nInstalled = 0;
+        dwError = TDNFStrIdFromString(pPool, pszPkg, &idPkg);
+        BAIL_ON_TDNF_ERROR(dwError);
         if (!idPkg) continue;
         dwError = TDNFInstalledHasName(pPool, idPkg, &nInstalled);
         BAIL_ON_TDNF_ERROR(dwError);
@@ -1822,7 +1831,9 @@ TDNFSolvAddInstallOnlyPkgs(
     for (i = 0; ppszPackages && ppszPackages[i]; i++)
     {
         char *pszPkg = ppszPackages[i];
-        TDNF_STR_ID idPkg = pool_str2id(pPool, pszPkg, 1);
+        TDNF_STR_ID idPkg = 0;
+        dwError = TDNFStrIdFromString(pPool, pszPkg, &idPkg);
+        BAIL_ON_TDNF_ERROR(dwError);
         if (idPkg)
         {
             int nInstalled = 0;
@@ -2007,7 +2018,9 @@ TDNFSolvAddProtectPkgs(
     TDNFIdListInit(&qPkgs);
     TDNFIdListInit(&qInstalled);
     for (i = 0; ppszProtectedPkgs[i]; i++) {
-        TDNF_STR_ID idPkg = pool_str2id(pPool, ppszProtectedPkgs[i], 1);
+        TDNF_STR_ID idPkg = 0;
+        dwError = TDNFStrIdFromString(pPool, ppszProtectedPkgs[i], &idPkg);
+        BAIL_ON_TDNF_ERROR(dwError);
         if (idPkg) {
             dwError = TDNFIdListPush(&qPkgs, idPkg);
             BAIL_ON_TDNF_ERROR(dwError);

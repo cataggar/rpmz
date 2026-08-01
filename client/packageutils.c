@@ -2349,3 +2349,139 @@ cleanup:
 error:
     goto cleanup;
 }
+
+/*
+ * The string-handle space.
+ *
+ * A5-2b deliberately keeps these apart from the package-handle
+ * accessors above. Both spaces are int32_t and both are called "Id" by
+ * libsolv, so nothing but naming stops a caller passing one where the
+ * other is meant -- and a package handle used as a string handle
+ * silently reads whatever name happens to sit at that index rather
+ * than failing. Folding them into one family of accessors would remove
+ * the only distinction there is.
+ */
+
+/*
+ * Intern a string, returning its handle.
+ *
+ * The create flag is 1, matching every call site this replaces: the
+ * names come from configuration and may legitimately not be in the
+ * pool yet, and a handle is wanted for the name either way.
+ *
+ * Returns 0 only for a NULL string -- the empty string interns to
+ * STRID_EMPTY, which is 1. Callers that guard on a zero result are
+ * therefore guarding against a NULL entry in their own array, not
+ * against "not found", and two arrays walked with a shared index
+ * cannot get out of step here.
+ */
+uint32_t
+TDNFStrIdFromString(
+    Pool *pPool,
+    const char *pszStr,
+    TDNF_STR_ID *pIdStr
+    )
+{
+    uint32_t dwError = 0;
+
+    if(!pPool || !pIdStr)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *pIdStr = pool_str2id(pPool, pszStr, 1);
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/*
+ * Resolve a string handle to its text.
+ *
+ * The returned pointer is BORROWED and interned: it lives as long as
+ * the pool and must not be freed. This is safe to hold, unlike
+ * pool_solvable2str() and solvable_get_location(), which return pool
+ * scratch from a 16-slot ring buffer that later calls overwrite --
+ * borrowing one of those shipped a real bug (#281).
+ *
+ * A zero or negative handle is rejected rather than resolved. libsolv
+ * would answer ID_NULL with the empty string, which reads as a package
+ * legitimately named "", and every caller here treats an empty name as
+ * an error anyway.
+ */
+uint32_t
+TDNFStrIdToString(
+    Pool *pPool,
+    TDNF_STR_ID idStr,
+    const char **ppszStr
+    )
+{
+    uint32_t dwError = 0;
+    const char *pszStr = NULL;
+
+    if(!pPool || !ppszStr)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    if(idStr <= 0)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pszStr = pool_id2str(pPool, idStr);
+    if(IsNullOrEmptyString(pszStr))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *ppszStr = pszStr;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/*
+ * Is this package handle one the pool could resolve?
+ *
+ * A range check, not an existence check: handles below nsolvables may
+ * still refer to a freed or never-populated slot. It answers the
+ * question the job builder actually asks -- "can I hand this to an
+ * accessor without libsolv indexing out of its array" -- and is
+ * reported through pnValid rather than as an error because an
+ * out-of-range handle is an expected input there, mapped by the caller
+ * to its own error code.
+ */
+uint32_t
+TDNFPkgHandleIsValid(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    int *pnValid
+    )
+{
+    uint32_t dwError = 0;
+
+    if(!pPool || !pnValid)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *pnValid = (dwPkgId > 0 && dwPkgId < pPool->nsolvables);
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}

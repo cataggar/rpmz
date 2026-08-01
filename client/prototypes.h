@@ -455,6 +455,45 @@ TDNFInstalledHasName(
     int *pnFound
     );
 
+/*
+ * The string-handle space, kept separate from the package-handle
+ * accessors above on purpose (A5-2b). Both are int32_t and libsolv
+ * calls both "Id", so naming is the only thing preventing a package
+ * handle being passed where a string handle belongs -- which would
+ * silently resolve to whatever name sits at that index.
+ */
+
+/* Intern a string. create=1, so this fails only on a NULL string;
+   the empty string interns to STRID_EMPTY (1), never 0. */
+uint32_t
+TDNFStrIdFromString(
+    Pool *pPool,
+    const char *pszStr,
+    TDNF_STR_ID *pIdStr
+    );
+
+/* Resolve a string handle. *ppszStr is BORROWED and interned -- valid
+   for the life of the pool, must not be freed. Safe to hold, unlike
+   pool_solvable2str()/solvable_get_location(), which return ring-buffer
+   scratch (see #281). Rejects idStr <= 0 rather than resolving it to
+   the empty string. */
+uint32_t
+TDNFStrIdToString(
+    Pool *pPool,
+    TDNF_STR_ID idStr,
+    const char **ppszStr
+    );
+
+/* Range check on a package handle: is it safe to hand to an accessor.
+   Not an existence check. Reported via pnValid, not as an error,
+   because callers map it to their own error code. */
+uint32_t
+TDNFPkgHandleIsValid(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    int *pnValid
+    );
+
 uint32_t
 TDNFMatchForReinstall(
     PSolvSack pSack,
