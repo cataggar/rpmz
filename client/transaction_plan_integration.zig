@@ -8,7 +8,6 @@ const error_codes = @import("tdnf_error");
 const native_capture = @import("transaction_plan_native");
 const repository_capture = @import("transaction_plan_repository");
 const repository_metadata = @import("repository_metadata");
-const rpm_header = @import("rpm_header");
 const transaction_plan = @import("transaction_plan");
 
 const c = repository_metadata.solv_bridge.libsolv;
@@ -56,26 +55,6 @@ const SolvRepoInfo = extern struct {
     cookie: [32]u8 = [_]u8{0} ** 32,
     cookie_set: c_int = 0,
     cache_dir: ?[*:0]u8 = null,
-};
-
-const InstalledSolverPair = struct {
-    live: c.Id,
-    rebuilt: c.Id,
-};
-
-const file_dependency_keys = [_]c.Id{
-    c.SOLVABLE_REQUIRES,
-    c.SOLVABLE_RECOMMENDS,
-    c.SOLVABLE_SUGGESTS,
-    c.SOLVABLE_SUPPLEMENTS,
-    c.SOLVABLE_ENHANCES,
-    c.SOLVABLE_CONFLICTS,
-    c.SOLVABLE_OBSOLETES,
-};
-
-const FileDependency = struct {
-    path: []const u8,
-    key: c.Id,
 };
 
 extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
@@ -1944,15 +1923,8 @@ fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.P
         arena,
         solver_owner.view(),
     );
-    var live_digest_context = try SolverDigestContext.init(
-        arena,
-        input.pool,
-    );
-    defer live_digest_context.deinit();
     const environment = try captureEnvironment(
         arena,
-        input.pool,
-        &live_digest_context,
         input.environment,
         input.trace,
         solver_data.environment.resolution_status,
@@ -1960,13 +1932,12 @@ fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.P
 
     var repository_owners = std.ArrayList(*repository_capture.Owner).empty;
     defer for (repository_owners.items) |owner| owner.destroy();
-    try validateRepositoryUniverse(input.pool, input.repositories);
+    try validateRepositoryInputs(input.repositories);
     const hidden_identities = try collectHiddenIdentities(arena, solver_data);
     const repositories = try captureRepositories(
         arena,
         state,
         input.pool,
-        &live_digest_context,
         input.repositories,
         hidden_identities,
         &repository_owners,
@@ -2444,7 +2415,6 @@ fn captureRepositories(
     allocator: Allocator,
     state: *const State,
     pool: *c.Pool,
-    live_digest_context: *SolverDigestContext,
     inputs: []const abi.IntegrationRepository,
     hidden: []const HiddenIdentity,
     owners: *std.ArrayList(*repository_capture.Owner),
@@ -2488,15 +2458,6 @@ fn captureRepositories(
             &load_record.cookie_sha256,
             owner.loadCookieSha256(),
         )) return error.RepositoryIntegrityMismatch;
-        verifyAvailableSolverRepository(
-            allocator,
-            @ptrCast(@alignCast(live_repository)),
-            owner,
-            live_digest_context,
-        ) catch |err| return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => error.RepositoryIntegrityMismatch,
-        };
         // The repository id is the same string the libsolv readback used as the
         // fact-key repository: `findPoolAvailableRepository` selected this repo
         // by `rawRepositoryName(repo) == id`, and the identity check above
@@ -2933,6 +2894,61 @@ fn deinitSolverPackageFact(
     if (fact.xml_base) |value| allocator.free(value);
 }
 
+/// Orders two solver fact keys. Only the A4a differential visibility oracle
+/// uses this now; it is kept beside its sole caller rather than with the
+/// deleted verification harness.
+fn compareSolverFactKeys(
+    left: SolverPackageFact,
+    right: SolverPackageFact,
+) std.math.Order {
+    inline for (.{
+        .{ left.repository, right.repository },
+        .{ left.name, right.name },
+        .{ left.arch, right.arch },
+        .{ left.evr, right.evr },
+    }) |values| {
+        const order = std.mem.order(u8, values[0], values[1]);
+        if (order != .eq) return order;
+    }
+    inline for (.{
+        .{ left.pkgid_kind, right.pkgid_kind },
+        .{ left.checksum_kind, right.checksum_kind },
+    }) |values| {
+        const order = std.mem.order(u8, values[0], values[1]);
+        if (order != .eq) return order;
+    }
+    inline for (.{
+        .{ left.pkgid_value, right.pkgid_value },
+        .{ left.checksum_value, right.checksum_value },
+    }) |values| {
+        const order = asciiOrderIgnoreCase(values[0], values[1]);
+        if (order != .eq) return order;
+    }
+    inline for (.{
+        .{ left.location, right.location },
+        .{ left.xml_base, right.xml_base },
+    }) |values| {
+        const presence_order = std.math.order(
+            @intFromBool(values[0] != null),
+            @intFromBool(values[1] != null),
+        );
+        if (presence_order != .eq) return presence_order;
+        if (values[0]) |left_value| {
+            const order = std.mem.order(u8, left_value, values[1].?);
+            if (order != .eq) return order;
+        }
+    }
+    const size_presence = std.math.order(
+        @intFromBool(left.download_size != null),
+        @intFromBool(right.download_size != null),
+    );
+    if (size_presence != .eq) return size_presence;
+    return if (left.download_size) |left_size|
+        std.math.order(left_size, right.download_size.?)
+    else
+        .eq;
+}
+
 fn visibilityFactLessThan(_: void, left: VisibilityFact, right: VisibilityFact) bool {
     return compareSolverFactKeys(left.package, right.package) == .lt;
 }
@@ -2973,72 +2989,6 @@ fn hashFramedBytes(
     hasher.update(value);
 }
 
-fn verifyAvailableSolverRepository(
-    allocator: Allocator,
-    live_repo: *c.Repo,
-    owner: *const repository_capture.Owner,
-    live_context: *SolverDigestContext,
-) IntegrationError!void {
-    const scratch_pool = c.pool_create() orelse return error.OutOfMemory;
-    defer c.pool_free(scratch_pool);
-    if (c.pool_setdisttype(scratch_pool, c.DISTTYPE_RPM) != 0) {
-        return error.InvalidRepository;
-    }
-    _ = c.pool_set_flag(
-        scratch_pool,
-        c.POOL_FLAG_ADDFILEPROVIDESFILTERED,
-        1,
-    );
-    const repository_id = owner.view().repository.id;
-    const repository_id_z = try allocator.dupeZ(u8, repository_id);
-    const scratch_repo_raw = c.repo_create(
-        scratch_pool,
-        repository_id_z.ptr,
-    ) orelse return error.OutOfMemory;
-    const scratch_repo: *c.Repo = @ptrCast(scratch_repo_raw);
-    repository_metadata.solv_bridge.buildRepositoryIntoRepo(
-        allocator,
-        scratch_repo,
-        owner.solverRepository(),
-    ) catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.InvalidRepository,
-    };
-    live_context.seedScratch(
-        scratch_pool,
-        scratch_repo,
-    ) catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.InvalidRepository,
-    };
-    c.pool_addfileprovides(scratch_pool);
-    c.pool_createwhatprovides(scratch_pool);
-
-    var rebuilt_context = try SolverDigestContext.init(
-        allocator,
-        scratch_pool,
-    );
-    defer rebuilt_context.deinit();
-    const live = try repositorySolverFacts(
-        allocator,
-        live_context,
-        live_repo,
-    );
-    const rebuilt = try repositorySolverFacts(
-        allocator,
-        &rebuilt_context,
-        scratch_repo,
-    );
-    if (live.len != rebuilt.len) return error.InvalidRepository;
-    for (live, rebuilt) |left, right| {
-        if (compareSolverFactKeys(left, right) != .eq or
-            !std.mem.eql(u8, &left.digest, &right.digest))
-        {
-            return error.InvalidRepository;
-        }
-    }
-}
-
 const SolverPackageFact = struct {
     repository: []const u8,
     name: []const u8,
@@ -3053,56 +3003,6 @@ const SolverPackageFact = struct {
     download_size: ?u64,
     digest: [32]u8,
 };
-
-fn repositorySolverFacts(
-    allocator: Allocator,
-    context: *SolverDigestContext,
-    repository: *c.Repo,
-) IntegrationError![]SolverPackageFact {
-    const pool = context.pool;
-    var values = std.ArrayList(SolverPackageFact).empty;
-    const repository_name = try rawRepositoryName(repository);
-    var solvid = repository.start;
-    while (solvid < repository.end) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != repository or solvable.name == 0) continue;
-        try values.append(
-            allocator,
-            try solverFactForSolvid(
-                context,
-                repository_name,
-                solvid,
-            ),
-        );
-    }
-    const output = try values.toOwnedSlice(allocator);
-    std.mem.sort(SolverPackageFact, output, {}, solverFactLessThan);
-    if (output.len > 1) {
-        for (output[1..], output[0 .. output.len - 1]) |current, prior| {
-            if (compareSolverFactKeys(prior, current) == .eq) {
-                return error.InvalidRepository;
-            }
-        }
-    }
-    return output;
-}
-
-fn solverFactForSolvid(
-    context: *SolverDigestContext,
-    repository_name: []const u8,
-    solvid: c.Id,
-) IntegrationError!SolverPackageFact {
-    const pool = context.pool;
-    var fact = try solverFactKeyForSolvid(
-        context.allocator,
-        pool,
-        repository_name,
-        solvid,
-    );
-    fact.digest = try solverPackageDigest(context, solvid);
-    return fact;
-}
 
 fn solverFactKeyForSolvid(
     allocator: Allocator,
@@ -3201,62 +3101,6 @@ fn solverFactKeyForSolvid(
         .digest = undefined,
     };
 }
-fn solverFactLessThan(_: void, left: SolverPackageFact, right: SolverPackageFact) bool {
-    return compareSolverFactKeys(left, right) == .lt;
-}
-
-fn compareSolverFactKeys(
-    left: SolverPackageFact,
-    right: SolverPackageFact,
-) std.math.Order {
-    inline for (.{
-        .{ left.repository, right.repository },
-        .{ left.name, right.name },
-        .{ left.arch, right.arch },
-        .{ left.evr, right.evr },
-    }) |values| {
-        const order = std.mem.order(u8, values[0], values[1]);
-        if (order != .eq) return order;
-    }
-    inline for (.{
-        .{ left.pkgid_kind, right.pkgid_kind },
-        .{ left.checksum_kind, right.checksum_kind },
-    }) |values| {
-        const order = std.mem.order(u8, values[0], values[1]);
-        if (order != .eq) return order;
-    }
-    inline for (.{
-        .{ left.pkgid_value, right.pkgid_value },
-        .{ left.checksum_value, right.checksum_value },
-    }) |values| {
-        const order = asciiOrderIgnoreCase(values[0], values[1]);
-        if (order != .eq) return order;
-    }
-    inline for (.{
-        .{ left.location, right.location },
-        .{ left.xml_base, right.xml_base },
-    }) |values| {
-        const presence_order = std.math.order(
-            @intFromBool(values[0] != null),
-            @intFromBool(values[1] != null),
-        );
-        if (presence_order != .eq) return presence_order;
-        if (values[0]) |left_value| {
-            const order = std.mem.order(u8, left_value, values[1].?);
-            if (order != .eq) return order;
-        }
-    }
-    const size_presence = std.math.order(
-        @intFromBool(left.download_size != null),
-        @intFromBool(right.download_size != null),
-    );
-    if (size_presence != .eq) return size_presence;
-    return if (left.download_size) |left_size|
-        std.math.order(left_size, right.download_size.?)
-    else
-        .eq;
-}
-
 fn poolIdSlice(pool: *c.Pool, id: c.Id) IntegrationError![]const u8 {
     if (id == 0) return "";
     const raw = c.pool_id2str(pool, id) orelse
@@ -3329,6 +3173,24 @@ fn composeData(
             return error.InvalidRepository;
         }
     }
+    // The reverse direction. Without it a captured repository the solver never
+    // saw is copied into the plan below as a package-less repository, silently.
+    // Plain set equality is wrong: the native solver legitimately omits a
+    // repository that contributed no package, so absence is only acceptable
+    // when the capture contributed none either.
+    for (available_repositories) |captured| {
+        if (findRepository(solver_data.repositories, captured.id)) |solver_repository| {
+            if (solver_repository.kind != .available) {
+                return error.InvalidRepository;
+            }
+            continue;
+        }
+        for (solver_data.packages) |package| {
+            if (std.mem.eql(u8, package.repository_id, captured.id)) {
+                return error.InvalidRepository;
+            }
+        }
+    }
     for (available_repositories) |repository| {
         combined[output_index] = repository;
         output_index += 1;
@@ -3398,48 +3260,51 @@ fn composeData(
     };
 }
 
-fn validateRepositoryUniverse(
-    pool: *c.Pool,
+/// Validates the repository inputs the capture was handed, without consulting
+/// the pool.
+///
+/// Its predecessor `validateRepositoryUniverse` walked `pool->repos` and
+/// required the input list to cover the pool's available repositories exactly.
+/// Two of its checks are re-anchored rather than dropped:
+///
+///   * set equality now lives in `composeData`, which compares the capture
+///     against the *native solver's* repository list in both directions. That
+///     is the list the plan is actually built from, so it is the meaningful
+///     counterpart;
+///   * the `priority` sign convention (`input.priority == -pointer.priority`,
+///     the bug class of #251) is deliberately NOT reproduced. Priority reaches
+///     the native solver unnegated (`repomd/root.zig:851`,
+///     `solver_model.zig:177`, `solver_policy.zig:3666`); the sole surviving
+///     negation is the libsolv adapter in `repomd/solver_oracle.zig:348`, and
+///     `libsolv-oracle-test` covers it with a differential test that pits
+///     priority 10 against 90 for a contested name. A wrong sign changes which
+///     package wins, so that test fails loudly — a far stronger guard than the
+///     structural identity check was.
+///
+/// The `cost` check is kept here because this is its only site in the repo.
+fn validateRepositoryInputs(
     inputs: []const abi.IntegrationRepository,
 ) IntegrationError!void {
-    if (pool.nrepos <= 0 or pool.repos == null) {
-        return error.InvalidRepository;
-    }
-    var available_count: usize = 0;
-    var index: c.Id = 1;
-    while (index < pool.nrepos) : (index += 1) {
-        const repository = pool.repos[@intCast(index)] orelse continue;
-        const pointer: *c.Repo = @ptrCast(repository);
-        if (repositoryKind(pool, pointer) != .available) continue;
-        const name = try rawRepositoryName(pointer);
-        const input = findRepositoryInput(inputs, name) orelse {
-            if (pointer.nsolvables == 0) continue;
-            return error.InvalidRepository;
-        };
-        available_count += 1;
-        if (pointer.priority == std.math.minInt(i32) or
-            input.repository != @as(*anyopaque, @ptrCast(pointer)) or
-            input.priority != -pointer.priority or
-            input.cost != default_repository_cost)
-        {
+    for (inputs, 0..) |input, index| {
+        if (input.repository == null) return error.InvalidRepository;
+        if (input.priority == std.math.minInt(i32)) {
             return error.InvalidRepository;
         }
+        if (input.cost != default_repository_cost) {
+            return error.InvalidRepository;
+        }
+        const id = requiredZ(input.id) catch return error.InvalidRepository;
+        for (inputs[0..index]) |prior| {
+            const prior_id = requiredZ(prior.id) catch
+                return error.InvalidRepository;
+            if (std.mem.eql(u8, id, prior_id)) {
+                return error.AmbiguousRepository;
+            }
+            if (prior.repository == input.repository) {
+                return error.AmbiguousRepository;
+            }
+        }
     }
-    if (available_count != inputs.len) return error.InvalidRepository;
-}
-
-fn findRepositoryInput(
-    inputs: []const abi.IntegrationRepository,
-    id: []const u8,
-) ?*const abi.IntegrationRepository {
-    var match: ?*const abi.IntegrationRepository = null;
-    for (inputs) |*input| {
-        const input_id = requiredZ(input.id) catch return null;
-        if (!std.mem.eql(u8, input_id, id)) continue;
-        if (match != null) return null;
-        match = input;
-    }
-    return match;
 }
 
 fn repositoryKind(
@@ -3497,8 +3362,6 @@ const RawPolicy = struct {
 
 fn captureEnvironment(
     allocator: Allocator,
-    pool: *c.Pool,
-    live_digest_context: *SolverDigestContext,
     input: *const abi.IntegrationEnvironment,
     trace: *const abi.RequestTraceView,
     resolution_status: transaction_plan.ResolutionStatus,
@@ -3562,10 +3425,7 @@ fn captureEnvironment(
         .resolution_status = resolution_status,
         .rpmdb = try captureRpmdbIdentity(
             allocator,
-            pool,
-            live_digest_context,
             input.rpm_config orelse return error.RpmdbIdentityFailed,
-            include_installed,
         ),
     };
 }
@@ -3707,10 +3567,7 @@ fn parseMinVersion(
 
 fn captureRpmdbIdentity(
     allocator: Allocator,
-    pool: *c.Pool,
-    live_digest_context: *SolverDigestContext,
     config: *const anyopaque,
-    include_installed: bool,
 ) IntegrationError!transaction_plan.RpmdbIdentity {
     var cookie_raw: ?[*:0]u8 = null;
     const iterator = TDNFTransactionPlanRpmdbSnapshotOpenConfig(
@@ -3723,33 +3580,6 @@ fn captureRpmdbIdentity(
     defer tdnf_rpmdb_string_free(cookie_pointer);
     const cookie = std.mem.span(cookie_pointer);
 
-    var installed = std.AutoHashMapUnmanaged(u32, c.Id).empty;
-    defer installed.deinit(allocator);
-    try captureInstalledPackageMap(allocator, pool, include_installed, &installed);
-    const scratch_pool = c.pool_create() orelse return error.OutOfMemory;
-    defer c.pool_free(scratch_pool);
-    if (c.pool_setdisttype(scratch_pool, c.DISTTYPE_RPM) != 0) {
-        return error.RpmdbIdentityFailed;
-    }
-    _ = c.pool_set_flag(
-        scratch_pool,
-        c.POOL_FLAG_ADDFILEPROVIDESFILTERED,
-        1,
-    );
-    const scratch_repo_raw = c.repo_create(scratch_pool, "@System") orelse
-        return error.OutOfMemory;
-    const scratch_repo: *c.Repo = @ptrCast(scratch_repo_raw);
-    c.pool_set_installed(scratch_pool, scratch_repo);
-    var scratch_builder = repository_metadata.solv_bridge
-        .InstalledHeaderBatch.init(
-        allocator,
-        scratch_repo,
-    ) catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.RpmdbIdentityFailed,
-    };
-    var solver_pairs = std.ArrayList(InstalledSolverPair).empty;
-    defer solver_pairs.deinit(allocator);
     var package_hasher = std.crypto.hash.sha2.Sha256.init(.{});
     package_hasher.update(rpmdb_package_set_domain);
     package_hasher.update("\x00");
@@ -3777,52 +3607,8 @@ fn captureRpmdbIdentity(
         package_hasher.update(&length_bytes);
         const blob = blob_pointer.?[0..blob_length];
         package_hasher.update(blob);
-        try crossCheckInstalledPackage(
-            allocator,
-            pool,
-            &scratch_builder,
-            &installed,
-            &solver_pairs,
-            hnum,
-            blob,
-            include_installed,
-        );
         record_count = std.math.add(u64, record_count, 1) catch
             return error.RpmdbIdentityFailed;
-    }
-    if (installed.count() != 0) {
-        return error.RpmdbIdentityFailed;
-    }
-    scratch_builder.finish() catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.RpmdbIdentityFailed,
-    };
-    live_digest_context.seedScratch(
-        scratch_pool,
-        scratch_repo,
-    ) catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.RpmdbIdentityFailed,
-    };
-    c.pool_addfileprovides(scratch_pool);
-    c.pool_createwhatprovides(scratch_pool);
-    var rebuilt_context = try SolverDigestContext.init(
-        allocator,
-        scratch_pool,
-    );
-    defer rebuilt_context.deinit();
-    for (solver_pairs.items) |pair| {
-        const live_digest = try solverPackageDigest(
-            live_digest_context,
-            pair.live,
-        );
-        const rebuilt_digest = try solverPackageDigest(
-            &rebuilt_context,
-            pair.rebuilt,
-        );
-        if (!std.mem.eql(u8, &live_digest, &rebuilt_digest)) {
-            return error.RpmdbIdentityFailed;
-        }
     }
     var count_bytes: [8]u8 = undefined;
     writeBigEndian(count_bytes[0..], record_count);
@@ -3836,448 +3622,6 @@ fn captureRpmdbIdentity(
         .cookie_sha256 = try lowerHexAlloc(allocator, cookie_digest),
         .package_set_sha256 = try lowerHexAlloc(allocator, package_digest),
     };
-}
-
-fn captureInstalledPackageMap(
-    allocator: Allocator,
-    pool: *c.Pool,
-    include_installed: bool,
-    output: *std.AutoHashMapUnmanaged(u32, c.Id),
-) IntegrationError!void {
-    const raw_repository = pool.installed orelse
-        return error.RpmdbIdentityFailed;
-    const repository: *c.Repo = @ptrCast(raw_repository);
-    var solvid = repository.start;
-    while (solvid < repository.end) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != repository) continue;
-        if (!include_installed) return error.RpmdbIdentityFailed;
-        const missing = std.math.maxInt(u64);
-        const raw_hnum = c.solvable_lookup_num(
-            solvable,
-            c.RPM_RPMDBID,
-            missing,
-        );
-        const hnum = std.math.cast(u32, raw_hnum) orelse
-            return error.RpmdbIdentityFailed;
-        if (hnum == 0) return error.RpmdbIdentityFailed;
-        const entry = try output.getOrPut(allocator, hnum);
-        if (entry.found_existing) return error.RpmdbIdentityFailed;
-        entry.value_ptr.* = solvid;
-    }
-}
-
-fn crossCheckInstalledPackage(
-    allocator: Allocator,
-    pool: *c.Pool,
-    scratch_builder: *repository_metadata.solv_bridge.InstalledHeaderBatch,
-    installed: *std.AutoHashMapUnmanaged(u32, c.Id),
-    solver_pairs: *std.ArrayList(InstalledSolverPair),
-    hnum: u32,
-    blob: []const u8,
-    include_installed: bool,
-) IntegrationError!void {
-    const header = rpm_header.Header.parse(blob) catch
-        return error.RpmdbIdentityFailed;
-    const name = header.getString(.name) orelse
-        return error.RpmdbIdentityFailed;
-    if (std.mem.eql(u8, name, "gpg-pubkey")) return;
-    if (!include_installed) return;
-    const entry = installed.fetchRemove(hnum) orelse
-        return error.RpmdbIdentityFailed;
-    const raw = c.pool_id2solvable(pool, entry.value) orelse
-        return error.RpmdbIdentityFailed;
-    const solvable: *c.Solvable = @ptrCast(raw);
-    const identity = try solvableIdentity(pool, solvable);
-    if (!std.mem.eql(u8, identity.name, name) or
-        !std.mem.eql(
-            u8,
-            identity.version,
-            header.getString(.version) orelse
-                return error.RpmdbIdentityFailed,
-        ) or
-        !std.mem.eql(
-            u8,
-            identity.release,
-            header.getString(.release) orelse
-                return error.RpmdbIdentityFailed,
-        ) or
-        !std.mem.eql(
-            u8,
-            identity.arch,
-            header.getString(.arch) orelse
-                return error.RpmdbIdentityFailed,
-        ))
-    {
-        return error.RpmdbIdentityFailed;
-    }
-    const epoch = repository_metadata.solv_bridge.normalizeRpmEpoch(
-        header.getU32(.epoch),
-    );
-    if (identity.epoch != epoch) {
-        return error.RpmdbIdentityFailed;
-    }
-    const rebuilt = scratch_builder.add(header, hnum) catch |err|
-        return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => error.RpmdbIdentityFailed,
-        };
-    try solver_pairs.append(allocator, .{
-        .live = entry.value,
-        .rebuilt = rebuilt,
-    });
-}
-
-const SolverDigestContext = struct {
-    allocator: Allocator,
-    pool: *c.Pool,
-    provider_paths: std.AutoHashMapUnmanaged(
-        c.Id,
-        std.ArrayList([]const u8),
-    ) = .empty,
-    file_dependencies: []const FileDependency = &.{},
-    universe_scans: u32 = 0,
-    digest_calls: u64 = 0,
-    scratch_seed_calls: u32 = 0,
-
-    fn init(
-        allocator: Allocator,
-        pool: *c.Pool,
-    ) IntegrationError!SolverDigestContext {
-        var self = SolverDigestContext{
-            .allocator = allocator,
-            .pool = pool,
-        };
-        errdefer self.deinit();
-        self.universe_scans = 1;
-
-        var atoms = std.StringHashMapUnmanaged(u32).empty;
-        defer atoms.deinit(allocator);
-        var candidate: c.Id = 2;
-        while (candidate < pool.nsolvables) : (candidate += 1) {
-            const raw = c.pool_id2solvable(pool, candidate) orelse continue;
-            const solvable: *c.Solvable = @ptrCast(raw);
-            if (solvable.repo == null) continue;
-            inline for (file_dependency_keys, 0..) |key, key_index| {
-                var dependencies: c.Queue = undefined;
-                c.queue_init(&dependencies);
-                defer c.queue_free(&dependencies);
-                _ = c.solvable_lookup_deparray(
-                    solvable,
-                    key,
-                    &dependencies,
-                    0,
-                );
-                if (dependencies.count != 0) {
-                    for (dependencies.elements[0..@intCast(dependencies.count)]) |id| {
-                        try collectFileAtoms(
-                            allocator,
-                            pool,
-                            id,
-                            0,
-                            @as(u32, 1) << @intCast(key_index),
-                            &atoms,
-                        );
-                    }
-                }
-            }
-        }
-        var paths = std.ArrayList([]const u8).empty;
-        defer paths.deinit(allocator);
-        var iterator = atoms.iterator();
-        while (iterator.next()) |entry| {
-            try paths.append(allocator, entry.key_ptr.*);
-        }
-        std.mem.sort([]const u8, paths.items, {}, stringLessThan);
-        var file_dependencies = std.ArrayList(FileDependency).empty;
-        defer file_dependencies.deinit(allocator);
-        for (paths.items) |path| {
-            const origins = atoms.get(path).?;
-            inline for (file_dependency_keys, 0..) |key, key_index| {
-                if (origins & (@as(u32, 1) << @intCast(key_index)) != 0) {
-                    try file_dependencies.append(allocator, .{
-                        .path = path,
-                        .key = key,
-                    });
-                }
-            }
-            if (pool.whatprovides == null or pool.whatprovidesdata == null) {
-                return error.RpmdbIdentityFailed;
-            }
-            const path_id = c.pool_strn2id(
-                pool,
-                path.ptr,
-                @intCast(path.len),
-                0,
-            );
-            if (path_id <= 0) continue;
-            var offset: usize = @intCast(
-                pool.whatprovides[@intCast(path_id)],
-            );
-            while (pool.whatprovidesdata[offset] != 0) : (offset += 1) {
-                const provider = pool.whatprovidesdata[offset];
-                const entry = try self.provider_paths.getOrPut(
-                    allocator,
-                    provider,
-                );
-                if (!entry.found_existing) entry.value_ptr.* = .empty;
-                try entry.value_ptr.append(allocator, path);
-            }
-        }
-        self.file_dependencies = try file_dependencies.toOwnedSlice(allocator);
-        return self;
-    }
-
-    fn deinit(self: *SolverDigestContext) void {
-        var iterator = self.provider_paths.valueIterator();
-        while (iterator.next()) |paths| paths.deinit(self.allocator);
-        self.provider_paths.deinit(self.allocator);
-        if (self.file_dependencies.len != 0) {
-            self.allocator.free(self.file_dependencies);
-        }
-    }
-
-    fn pathsFor(self: *const SolverDigestContext, solvid: c.Id) []const []const u8 {
-        const paths = self.provider_paths.get(solvid) orelse return &.{};
-        return paths.items;
-    }
-
-    fn seedScratch(
-        self: *SolverDigestContext,
-        target_pool: *c.Pool,
-        target_repo: *c.Repo,
-    ) IntegrationError!void {
-        self.scratch_seed_calls += 1;
-        var dummy: ?*c.Solvable = null;
-        for (file_dependency_keys) |key| {
-            for (self.file_dependencies) |dependency| {
-                if (dependency.key != key) continue;
-                if (dummy == null) {
-                    const dummy_id = c.repo_add_solvable(target_repo);
-                    dummy = @ptrCast(c.pool_id2solvable(
-                        target_pool,
-                        dummy_id,
-                    ) orelse return error.RpmdbIdentityFailed);
-                }
-                const path_id = c.pool_strn2id(
-                    target_pool,
-                    dependency.path.ptr,
-                    @intCast(dependency.path.len),
-                    1,
-                );
-                const destination = dependencyOffset(
-                    dummy.?,
-                    key,
-                ) orelse return error.RpmdbIdentityFailed;
-                destination.* = c.repo_addid_dep(
-                    target_repo,
-                    destination.*,
-                    path_id,
-                    0,
-                );
-            }
-        }
-        c.repo_internalize(target_repo);
-    }
-};
-
-fn dependencyOffset(solvable: *c.Solvable, key: c.Id) ?*c.Offset {
-    return if (key == c.SOLVABLE_REQUIRES)
-        &solvable.requires
-    else if (key == c.SOLVABLE_RECOMMENDS)
-        &solvable.recommends
-    else if (key == c.SOLVABLE_SUGGESTS)
-        &solvable.suggests
-    else if (key == c.SOLVABLE_SUPPLEMENTS)
-        &solvable.supplements
-    else if (key == c.SOLVABLE_ENHANCES)
-        &solvable.enhances
-    else if (key == c.SOLVABLE_CONFLICTS)
-        &solvable.conflicts
-    else if (key == c.SOLVABLE_OBSOLETES)
-        &solvable.obsoletes
-    else
-        null;
-}
-
-fn solverPackageDigest(
-    context: *SolverDigestContext,
-    solvid: c.Id,
-) IntegrationError![32]u8 {
-    context.digest_calls += 1;
-    const pool = context.pool;
-    const raw = c.pool_id2solvable(pool, solvid) orelse
-        return error.RpmdbIdentityFailed;
-    const solvable: *c.Solvable = @ptrCast(raw);
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("tdnf.installed-solver-input/v1\x00");
-    inline for (.{
-        solvable.name,
-        solvable.arch,
-        solvable.evr,
-        solvable.vendor,
-    }) |id| {
-        try hashPoolString(&hasher, pool, id, false);
-    }
-    inline for (.{
-        c.SOLVABLE_PROVIDES,
-        c.SOLVABLE_REQUIRES,
-        c.SOLVABLE_CONFLICTS,
-        c.SOLVABLE_OBSOLETES,
-        c.SOLVABLE_RECOMMENDS,
-        c.SOLVABLE_SUGGESTS,
-        c.SOLVABLE_SUPPLEMENTS,
-        c.SOLVABLE_ENHANCES,
-    }) |key| {
-        var dependencies: c.Queue = undefined;
-        c.queue_init(&dependencies);
-        defer c.queue_free(&dependencies);
-        _ = c.solvable_lookup_deparray(
-            solvable,
-            key,
-            &dependencies,
-            0,
-        );
-        if (dependencies.count != 0)
-            canonicalizeDependencySegments(
-                pool,
-                key,
-                dependencies.elements[0..@intCast(dependencies.count)],
-            );
-        var count_bytes: [8]u8 = undefined;
-        writeBigEndian(count_bytes[0..], @intCast(dependencies.count));
-        hasher.update(&count_bytes);
-        if (dependencies.count != 0) {
-            for (dependencies.elements[0..@intCast(dependencies.count)]) |id| {
-                try hashPoolString(&hasher, pool, id, true);
-            }
-        }
-    }
-    const file_paths = context.pathsFor(solvid);
-    var count_bytes: [8]u8 = undefined;
-    writeBigEndian(count_bytes[0..], file_paths.len);
-    hasher.update(&count_bytes);
-    for (file_paths) |path| {
-        var length_bytes: [8]u8 = undefined;
-        writeBigEndian(length_bytes[0..], path.len);
-        hasher.update(&length_bytes);
-        hasher.update(path);
-    }
-    var digest: [32]u8 = undefined;
-    hasher.final(&digest);
-    return digest;
-}
-
-fn collectFileAtoms(
-    allocator: Allocator,
-    pool: *c.Pool,
-    dependency: c.Id,
-    depth: u8,
-    origin: u32,
-    atoms: *std.StringHashMapUnmanaged(u32),
-) IntegrationError!void {
-    if (depth == 64) return error.RpmdbIdentityFailed;
-    const bits: u32 = @bitCast(dependency);
-    if (bits & 0x80000000 != 0) {
-        const index: c.Id = @bitCast(bits ^ 0x80000000);
-        if (index <= 0 or index >= pool.nrels or pool.rels == null) {
-            return error.RpmdbIdentityFailed;
-        }
-        const relation = pool.rels[@intCast(index)];
-        try collectFileAtoms(
-            allocator,
-            pool,
-            relation.name,
-            depth + 1,
-            origin,
-            atoms,
-        );
-        try collectFileAtoms(
-            allocator,
-            pool,
-            relation.evr,
-            depth + 1,
-            origin,
-            atoms,
-        );
-        return;
-    }
-    if (dependency <= 0) return;
-    const raw = c.pool_id2str(pool, dependency) orelse
-        return error.RpmdbIdentityFailed;
-    const path = std.mem.span(raw);
-    if (path.len == 0 or path[0] != '/') return;
-    const entry = try atoms.getOrPut(allocator, path);
-    if (!entry.found_existing) entry.value_ptr.* = 0;
-    entry.value_ptr.* |= origin;
-}
-
-fn stringLessThan(_: void, left: []const u8, right: []const u8) bool {
-    return std.mem.order(u8, left, right) == .lt;
-}
-
-fn dependencyLessThan(pool: *c.Pool, left: c.Id, right: c.Id) bool {
-    const left_raw = c.pool_dep2str(pool, left);
-    const right_raw = c.pool_dep2str(pool, right);
-    if (left_raw == null or right_raw == null) {
-        if (left_raw == null and right_raw == null) return left < right;
-        return left_raw == null;
-    }
-    return std.mem.order(
-        u8,
-        std.mem.span(left_raw.?),
-        std.mem.span(right_raw.?),
-    ) == .lt;
-}
-
-fn canonicalizeDependencySegments(
-    pool: *c.Pool,
-    key: c.Id,
-    dependencies: []c.Id,
-) void {
-    var segment_start: usize = 0;
-    for (dependencies, 0..) |dependency, index| {
-        const is_boundary =
-            (key == c.SOLVABLE_REQUIRES and
-                dependency == c.SOLVABLE_PREREQMARKER) or
-            (key == c.SOLVABLE_PROVIDES and
-                dependency == c.SOLVABLE_FILEMARKER);
-        if (!is_boundary) continue;
-        std.mem.sort(
-            c.Id,
-            dependencies[segment_start..index],
-            pool,
-            dependencyLessThan,
-        );
-        segment_start = index + 1;
-    }
-    std.mem.sort(
-        c.Id,
-        dependencies[segment_start..],
-        pool,
-        dependencyLessThan,
-    );
-}
-
-fn hashPoolString(
-    hasher: *std.crypto.hash.sha2.Sha256,
-    pool: *c.Pool,
-    id: c.Id,
-    dependency: bool,
-) IntegrationError!void {
-    const value: []const u8 = if (id == 0)
-        ""
-    else if (dependency)
-        std.mem.span(c.pool_dep2str(pool, id) orelse
-            return error.RpmdbIdentityFailed)
-    else
-        std.mem.span(c.pool_id2str(pool, id) orelse
-            return error.RpmdbIdentityFailed);
-    var length_bytes: [8]u8 = undefined;
-    writeBigEndian(length_bytes[0..], value.len);
-    hasher.update(&length_bytes);
-    hasher.update(value);
 }
 
 fn writeBigEndian(buffer: []u8, value: u64) void {
@@ -5638,95 +4982,7 @@ const TestUniverse = struct {
         );
     }
 
-    fn setRequires(
-        self: *TestUniverse,
-        repository: *c.Repo,
-        package: c.Id,
-        normal: []const []const u8,
-        prerequisites: []const []const u8,
-    ) !void {
-        const solvable: *c.Solvable = @ptrCast(
-            c.pool_id2solvable(self.pool, package) orelse
-                return error.TestUnexpectedResult,
-        );
-        const count = normal.len + prerequisites.len +
-            @intFromBool(prerequisites.len != 0);
-        solvable.requires = c.repo_reserve_ids(
-            repository,
-            0,
-            @intCast(count),
-        );
-        var output = repository.idarraydata + solvable.requires;
-        for (normal) |name| {
-            output[0] = c.pool_strn2id(
-                self.pool,
-                name.ptr,
-                @intCast(name.len),
-                1,
-            );
-            output += 1;
-        }
-        if (prerequisites.len != 0) {
-            output[0] = c.SOLVABLE_PREREQMARKER;
-            output += 1;
-        }
-        for (prerequisites) |name| {
-            output[0] = c.pool_strn2id(
-                self.pool,
-                name.ptr,
-                @intCast(name.len),
-                1,
-            );
-            output += 1;
-        }
-        output[0] = 0;
-        repository.idarraysize += @intCast(count + 1);
-    }
 
-    fn setProvides(
-        self: *TestUniverse,
-        repository: *c.Repo,
-        package: c.Id,
-        explicit: []const []const u8,
-        generated_files: []const []const u8,
-    ) !void {
-        const solvable: *c.Solvable = @ptrCast(
-            c.pool_id2solvable(self.pool, package) orelse
-                return error.TestUnexpectedResult,
-        );
-        const count = explicit.len + generated_files.len +
-            @intFromBool(generated_files.len != 0);
-        solvable.provides = c.repo_reserve_ids(
-            repository,
-            0,
-            @intCast(count),
-        );
-        var output = repository.idarraydata + solvable.provides;
-        for (explicit) |name| {
-            output[0] = c.pool_strn2id(
-                self.pool,
-                name.ptr,
-                @intCast(name.len),
-                1,
-            );
-            output += 1;
-        }
-        if (generated_files.len != 0) {
-            output[0] = c.SOLVABLE_FILEMARKER;
-            output += 1;
-        }
-        for (generated_files) |name| {
-            output[0] = c.pool_strn2id(
-                self.pool,
-                name.ptr,
-                @intCast(name.len),
-                1,
-            );
-            output += 1;
-        }
-        output[0] = 0;
-        repository.idarraysize += @intCast(count + 1);
-    }
 
     fn provide(
         self: *TestUniverse,
@@ -6084,18 +5340,6 @@ fn poolHasPlainRequirement(pool: *c.Pool, expected: []const u8) bool {
         }
     }
     return false;
-}
-
-fn testSolverPackageDigest(
-    pool: *c.Pool,
-    solvid: c.Id,
-) ![32]u8 {
-    var context = try SolverDigestContext.init(
-        std.testing.allocator,
-        pool,
-    );
-    defer context.deinit();
-    return solverPackageDigest(&context, solvid);
 }
 
 test "minimum versions use production u32 epoch semantics" {
@@ -7084,42 +6328,13 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
             .include_other = true,
         },
     );
-    const app_solvable: *c.Solvable = @ptrCast(
-        c.pool_id2solvable(universe.pool, app) orelse
-            return error.TestUnexpectedResult,
-    );
-    const original_requires = app_solvable.requires;
-    try universe.require(available, app, "stale-cache-semantics");
-    try std.testing.expectError(
-        error.RepositoryIntegrityMismatch,
-        capturePending(state, input),
-    );
-    try std.testing.expect(state.model() == null);
-    app_solvable.requires = original_requires;
-    const stale_checksum = c.repo_add_repodata(available, 0) orelse
-        return error.OutOfMemory;
-    c.repodata_set_checksum(
-        stale_checksum,
-        app,
-        c.SOLVABLE_CHECKSUM,
-        c.REPOKEY_TYPE_SHA256,
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    );
-    c.repodata_internalize(stale_checksum);
-    try std.testing.expectError(
-        error.RepositoryIntegrityMismatch,
-        capturePending(state, input),
-    );
-    const restored_checksum = c.repo_add_repodata(available, 0) orelse
-        return error.OutOfMemory;
-    c.repodata_set_checksum(
-        restored_checksum,
-        app,
-        c.SOLVABLE_CHECKSUM,
-        c.REPOKEY_TYPE_SHA256,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    );
-    c.repodata_internalize(restored_checksum);
+    // The pool-only solvable mutations that used to be exercised here
+    // drove verifyAvailableSolverRepository's field-by-field digest and
+    // died with it. The production divergence route -- on-disk metadata
+    // changing between repository load and capture -- is caught one
+    // branch earlier by the load-cookie comparison asserted above, and a
+    // trace-referenced package that no longer matches its captured
+    // source fails closed in planPackageIdForSolvid.
     try capturePending(state, input);
     try std.testing.expectEqual(@as(u32, 0), statePublish(state));
 
@@ -7169,409 +6384,6 @@ test "authoritative plan is stored, fail-closed, and owned past teardown" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"app\"") != null);
 }
 
-test "rpmdb snapshot rejects a divergent live installed repository" {
-    var cache = try TestCache.create();
-    defer cache.cleanup();
-    var root_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_path = try cache.path(&root_path_buffer, "root");
-    var cwd_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    switch (std.os.linux.errno(std.os.linux.getcwd(
-        cwd_buffer[0..].ptr,
-        cwd_buffer.len,
-    ))) {
-        .SUCCESS => {},
-        else => return error.TestUnexpectedResult,
-    }
-    const cwd_length = std.mem.findScalar(u8, &cwd_buffer, 0) orelse
-        return error.TestUnexpectedResult;
-    const root_path_z = try std.fmt.allocPrintSentinel(
-        std.testing.allocator,
-        "{s}/{s}",
-        .{ cwd_buffer[0..cwd_length], root_path },
-        0,
-    );
-    defer std.testing.allocator.free(root_path_z);
-    const rpm_config = tdnf_rpm_config_create(root_path_z.ptr) orelse
-        return error.TestUnexpectedResult;
-    defer tdnf_rpm_config_destroy(rpm_config);
-
-    var universe = try TestUniverse.create();
-    defer universe.destroy();
-    const installed = try universe.addRepository("@System", true, 0);
-    _ = try universe.addPackage(
-        installed,
-        "not-in-rpmdb",
-        "1-1",
-        77,
-        "unused",
-        0,
-    );
-    universe.finish(&.{installed});
-    var live_context = try SolverDigestContext.init(
-        std.testing.allocator,
-        universe.pool,
-    );
-    defer live_context.deinit();
-    try std.testing.expectError(
-        error.RpmdbIdentityFailed,
-        captureRpmdbIdentity(
-            std.testing.allocator,
-            universe.pool,
-            &live_context,
-            rpm_config,
-            true,
-        ),
-    );
-}
-
-test "installed solver digest detects relation-only mutation" {
-    var original = try TestUniverse.create();
-    defer original.destroy();
-    const original_repo = try original.addRepository("@System", true, 0);
-    const original_package = try original.addPackage(
-        original_repo,
-        "installed",
-        "1-1",
-        42,
-        "unused",
-        0,
-    );
-    original.finish(&.{original_repo});
-
-    var mutated = try TestUniverse.create();
-    defer mutated.destroy();
-    const mutated_repo = try mutated.addRepository("@System", true, 0);
-    const mutated_package = try mutated.addPackage(
-        mutated_repo,
-        "installed",
-        "1-1",
-        42,
-        "unused",
-        0,
-    );
-    try mutated.require(
-        mutated_repo,
-        mutated_package,
-        "relation-only-mutation",
-    );
-    mutated.finish(&.{mutated_repo});
-
-    const original_digest = try testSolverPackageDigest(
-        original.pool,
-        original_package,
-    );
-    const mutated_digest = try testSolverPackageDigest(
-        mutated.pool,
-        mutated_package,
-    );
-    try std.testing.expect(!std.mem.eql(
-        u8,
-        &original_digest,
-        &mutated_digest,
-    ));
-}
-
-fn dependencyBoundaryFixtureDigest(
-    normal: []const []const u8,
-    prerequisites: []const []const u8,
-) ![32]u8 {
-    var universe = try TestUniverse.create();
-    defer universe.destroy();
-    const repository = try universe.addRepository(
-        "@System",
-        true,
-        0,
-    );
-    const package = try universe.addPackage(
-        repository,
-        "dependency-boundaries",
-        "1-1",
-        42,
-        "unused",
-        0,
-    );
-    try universe.setRequires(
-        repository,
-        package,
-        normal,
-        prerequisites,
-    );
-    universe.finish(&.{repository});
-    return testSolverPackageDigest(universe.pool, package);
-}
-
-test "solver digest canonicalizes within prerequisite boundaries" {
-    const original = try dependencyBoundaryFixtureDigest(
-        &.{ "normal-b", "normal-a", "normal-a" },
-        &.{ "pre-y", "pre-x" },
-    );
-    const permuted = try dependencyBoundaryFixtureDigest(
-        &.{ "normal-a", "normal-a", "normal-b" },
-        &.{ "pre-x", "pre-y" },
-    );
-    const swapped_pre_flags = try dependencyBoundaryFixtureDigest(
-        &.{ "pre-x", "normal-a", "normal-b" },
-        &.{ "pre-y", "normal-a" },
-    );
-    try std.testing.expectEqualSlices(u8, &original, &permuted);
-    try std.testing.expect(!std.mem.eql(
-        u8,
-        &original,
-        &swapped_pre_flags,
-    ));
-}
-
-fn fileProvideBoundaryFixtureDigest(
-    explicit: []const []const u8,
-    generated_files: []const []const u8,
-) ![32]u8 {
-    var universe = try TestUniverse.create();
-    defer universe.destroy();
-    const repository = try universe.addRepository(
-        "@System",
-        true,
-        0,
-    );
-    const package = try universe.addPackage(
-        repository,
-        "file-provide-boundaries",
-        "1-1",
-        42,
-        "unused",
-        0,
-    );
-    try universe.setProvides(
-        repository,
-        package,
-        explicit,
-        generated_files,
-    );
-    universe.finish(&.{repository});
-    return testSolverPackageDigest(universe.pool, package);
-}
-
-test "solver digest preserves file provide boundaries and duplicates" {
-    const original = try fileProvideBoundaryFixtureDigest(
-        &.{
-            "/usr/bin/shared",
-            "/usr/bin/explicit",
-            "/usr/bin/shared",
-        },
-        &.{ "/usr/bin/generated-b", "/usr/bin/generated-a" },
-    );
-    const permuted = try fileProvideBoundaryFixtureDigest(
-        &.{
-            "/usr/bin/shared",
-            "/usr/bin/shared",
-            "/usr/bin/explicit",
-        },
-        &.{ "/usr/bin/generated-a", "/usr/bin/generated-b" },
-    );
-    const reclassified = try fileProvideBoundaryFixtureDigest(
-        &.{
-            "/usr/bin/shared",
-            "/usr/bin/explicit",
-            "/usr/bin/shared",
-            "/usr/bin/generated-a",
-        },
-        &.{"/usr/bin/generated-b"},
-    );
-    const duplicate_mismatch = try fileProvideBoundaryFixtureDigest(
-        &.{ "/usr/bin/shared", "/usr/bin/explicit" },
-        &.{ "/usr/bin/generated-b", "/usr/bin/generated-a" },
-    );
-
-    try std.testing.expectEqualSlices(u8, &original, &permuted);
-    try std.testing.expect(!std.mem.eql(
-        u8,
-        &original,
-        &reclassified,
-    ));
-    try std.testing.expect(!std.mem.eql(
-        u8,
-        &original,
-        &duplicate_mismatch,
-    ));
-}
-
-const ProviderOrderFixture = enum {
-    forward,
-    reverse,
-    mismatch,
-};
-
-const ProviderOrderFixtureDigest = struct {
-    canonical: [32]u8,
-    discovery_order: [32]u8,
-};
-
-fn providerOrderFixtureDigest(
-    installed: bool,
-    fixture: ProviderOrderFixture,
-) !ProviderOrderFixtureDigest {
-    var universe = try TestUniverse.create();
-    defer universe.destroy();
-    const repository = try universe.addRepository(
-        if (installed) "@System" else "available",
-        installed,
-        0,
-    );
-    const package = try universe.addPackage(
-        repository,
-        "provider-order",
-        "1-1",
-        if (installed) 42 else null,
-        "provider-order.rpm",
-        1,
-    );
-    switch (fixture) {
-        .forward => {
-            try universe.provide(repository, package, "alpha-capability");
-            try universe.provide(repository, package, "beta-capability");
-        },
-        .reverse => {
-            try universe.provide(repository, package, "beta-capability");
-            try universe.provide(repository, package, "alpha-capability");
-        },
-        .mismatch => {
-            try universe.provide(repository, package, "alpha-capability");
-            try universe.provide(repository, package, "gamma-capability");
-        },
-    }
-    universe.finish(&.{repository});
-    const solvable: *c.Solvable = @ptrCast(
-        c.pool_id2solvable(universe.pool, package) orelse
-            return error.TestUnexpectedResult,
-    );
-    var provides: c.Queue = undefined;
-    c.queue_init(&provides);
-    defer c.queue_free(&provides);
-    _ = c.solvable_lookup_deparray(
-        solvable,
-        c.SOLVABLE_PROVIDES,
-        &provides,
-        0,
-    );
-    var discovery_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    for (provides.elements[0..@intCast(provides.count)]) |id|
-        try hashPoolString(
-            &discovery_hasher,
-            universe.pool,
-            id,
-            true,
-        );
-    var discovery_order: [32]u8 = undefined;
-    discovery_hasher.final(&discovery_order);
-    return .{
-        .canonical = try testSolverPackageDigest(
-            universe.pool,
-            package,
-        ),
-        .discovery_order = discovery_order,
-    };
-}
-
-test "provider digests canonicalize order for available and rpmdb snapshots" {
-    inline for (.{ false, true }) |installed| {
-        const forward = try providerOrderFixtureDigest(
-            installed,
-            .forward,
-        );
-        const reverse = try providerOrderFixtureDigest(
-            installed,
-            .reverse,
-        );
-        const mismatch = try providerOrderFixtureDigest(
-            installed,
-            .mismatch,
-        );
-        try std.testing.expect(!std.mem.eql(
-            u8,
-            &forward.discovery_order,
-            &reverse.discovery_order,
-        ));
-        try std.testing.expectEqualSlices(
-            u8,
-            &forward.canonical,
-            &reverse.canonical,
-        );
-        try std.testing.expect(!std.mem.eql(
-            u8,
-            &forward.canonical,
-            &mismatch.canonical,
-        ));
-    }
-}
-
-test "solver digest context scans package universe once" {
-    var universe = try TestUniverse.create();
-    defer universe.destroy();
-    const repositories = [_]*c.Repo{
-        try universe.addRepository("@System", true, 0),
-        try universe.addRepository("repo-a", false, 0),
-        try universe.addRepository("repo-b", false, 0),
-        try universe.addRepository("repo-c", false, 0),
-    };
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var packages: [128]c.Id = undefined;
-    for (&packages, 0..) |*package, index| {
-        const name = try std.fmt.allocPrintSentinel(
-            arena,
-            "scale-package-{d}",
-            .{index},
-            0,
-        );
-        package.* = try universe.addPackage(
-            repositories[index % repositories.len],
-            name,
-            "1-1",
-            @intCast(index + 1),
-            "unused",
-            0,
-        );
-    }
-    universe.finish(&repositories);
-    var context = try SolverDigestContext.init(
-        std.testing.allocator,
-        universe.pool,
-    );
-    defer context.deinit();
-    try std.testing.expectEqual(@as(u32, 1), context.universe_scans);
-    var scratch_pools: [4]?*c.Pool = [_]?*c.Pool{null} ** 4;
-    defer for (scratch_pools) |scratch| {
-        if (scratch) |pool| c.pool_free(pool);
-    };
-    for (&scratch_pools, 0..) |*scratch, index| {
-        const pool = c.pool_create() orelse return error.OutOfMemory;
-        scratch.* = pool;
-        _ = c.pool_setdisttype(pool, c.DISTTYPE_RPM);
-        const name = try std.fmt.allocPrintSentinel(
-            arena,
-            "scratch-{d}",
-            .{index},
-            0,
-        );
-        const repo: *c.Repo = @ptrCast(
-            c.repo_create(pool, name.ptr) orelse return error.OutOfMemory,
-        );
-        try context.seedScratch(pool, repo);
-    }
-    try std.testing.expectEqual(@as(u32, 4), context.scratch_seed_calls);
-    for (packages) |package| {
-        _ = try solverPackageDigest(&context, package);
-    }
-    try std.testing.expectEqual(
-        @as(u64, packages.len),
-        context.digest_calls,
-    );
-    try std.testing.expectEqual(@as(u32, 1), context.universe_scans);
-}
-
-/// The architecture read back out of `pool->id2arch`, exactly the way
-/// `captureEnvironment` used to read it. Kept as the oracle for
-/// `effectiveArchitecture` for as long as libsolv is linked.
 fn libsolvPoolArchitecture(pool: *c.Pool) IntegrationError![]const u8 {
     if (pool.id2arch == null or pool.lastarch <= 1) {
         return error.InvalidEnvironment;
@@ -8131,352 +6943,194 @@ test "visibility binding cleans every allocation failure" {
 }
 
 
-test "repository solver facts key same-nevra packages by checksum" {
-    const checksum_one =
-        "1111111111111111111111111111111111111111111111111111111111111111";
-    const checksum_two =
-        "2222222222222222222222222222222222222222222222222222222222222222";
-    var live = try TestUniverse.create();
-    defer live.destroy();
-    const live_repo = try live.addRepository("available", false, 0);
-    const live_one = try live.addPackageChecksum(
-        live_repo,
-        "duplicate",
-        "1-1",
-        null,
-        "one.rpm",
-        1,
-        checksum_one,
-    );
-    const live_two = try live.addPackageChecksum(
-        live_repo,
-        "duplicate",
-        "1-1",
-        null,
-        "two.rpm",
-        1,
-        checksum_two,
-    );
-    try live.require(live_repo, live_one, "dependency-one");
-    try live.require(live_repo, live_two, "dependency-two");
-    live.finish(&.{live_repo});
 
-    var swapped = try TestUniverse.create();
-    defer swapped.destroy();
-    const swapped_repo = try swapped.addRepository("available", false, 0);
-    const swapped_one = try swapped.addPackageChecksum(
-        swapped_repo,
-        "duplicate",
-        "1-1",
-        null,
-        "one.rpm",
-        1,
-        checksum_one,
-    );
-    const swapped_two = try swapped.addPackageChecksum(
-        swapped_repo,
-        "duplicate",
-        "1-1",
-        null,
-        "two.rpm",
-        1,
-        checksum_two,
-    );
-    try swapped.require(swapped_repo, swapped_one, "dependency-two");
-    try swapped.require(swapped_repo, swapped_two, "dependency-one");
-    swapped.finish(&.{swapped_repo});
-
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var live_context = try SolverDigestContext.init(arena, live.pool);
-    defer live_context.deinit();
-    var swapped_context = try SolverDigestContext.init(arena, swapped.pool);
-    defer swapped_context.deinit();
-    const live_facts = try repositorySolverFacts(
-        arena,
-        &live_context,
-        live_repo,
-    );
-    const swapped_facts = try repositorySolverFacts(
-        arena,
-        &swapped_context,
-        swapped_repo,
-    );
-    try std.testing.expectEqual(live_facts.len, swapped_facts.len);
-    var saw_mismatch = false;
-    for (live_facts, swapped_facts) |left, right| {
-        try std.testing.expectEqual(
-            std.math.Order.eq,
-            compareSolverFactKeys(left, right),
-        );
-        saw_mismatch = saw_mismatch or
-            !std.mem.eql(u8, &left.digest, &right.digest);
-    }
-    try std.testing.expect(saw_mismatch);
-}
-
-test "repository solver key detects changed download checksum with same pkgid" {
-    const pkgid =
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const checksum_one =
-        "1111111111111111111111111111111111111111111111111111111111111111";
-    const checksum_two =
-        "2222222222222222222222222222222222222222222222222222222222222222";
-    var first = try TestUniverse.create();
-    defer first.destroy();
-    const first_repo = try first.addRepository("available", false, 0);
-    _ = try first.addPackageChecksums(
-        first_repo,
-        "package",
-        "1-1",
-        null,
-        "package.rpm",
-        1,
-        pkgid,
-        checksum_one,
-    );
-    first.finish(&.{first_repo});
-    var second = try TestUniverse.create();
-    defer second.destroy();
-    const second_repo = try second.addRepository("available", false, 0);
-    _ = try second.addPackageChecksums(
-        second_repo,
-        "package",
-        "1-1",
-        null,
-        "package.rpm",
-        1,
-        pkgid,
-        checksum_two,
-    );
-    second.finish(&.{second_repo});
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var first_context = try SolverDigestContext.init(arena, first.pool);
-    defer first_context.deinit();
-    var second_context = try SolverDigestContext.init(arena, second.pool);
-    defer second_context.deinit();
-    const first_facts = try repositorySolverFacts(
-        arena,
-        &first_context,
-        first_repo,
-    );
-    const second_facts = try repositorySolverFacts(
-        arena,
-        &second_context,
-        second_repo,
-    );
-    try std.testing.expectEqual(@as(usize, 1), first_facts.len);
-    try std.testing.expectEqual(@as(usize, 1), second_facts.len);
-    try std.testing.expect(
-        compareSolverFactKeys(first_facts[0], second_facts[0]) != .eq,
-    );
-}
-
-test "solver fact keys own lookup ring strings beyond sixteen packages" {
-    var universe = try TestUniverse.create();
-    var universe_live = true;
-    defer if (universe_live) universe.destroy();
-    const repository = try universe.addRepository("available", false, 0);
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    for (0..32) |index| {
-        const name = try std.fmt.allocPrintSentinel(
-            arena,
-            "package-{d:0>2}",
-            .{index},
-            0,
-        );
-        const location = try std.fmt.allocPrintSentinel(
-            arena,
-            "packages/{d:0>2}.rpm",
-            .{index},
-            0,
-        );
-        const checksum = try std.fmt.allocPrintSentinel(
-            arena,
-            "{x:0>64}",
-            .{index + 1},
-            0,
-        );
-        _ = try universe.addPackageChecksum(
-            repository,
-            name,
-            "1-1",
-            null,
-            location,
-            index + 1,
-            checksum,
-        );
-    }
-    universe.finish(&.{repository});
-    var context = try SolverDigestContext.init(arena, universe.pool);
-    const facts = try repositorySolverFacts(
-        arena,
-        &context,
-        repository,
-    );
-    context.deinit();
-    universe.destroy();
-    universe_live = false;
-    try std.testing.expectEqual(@as(usize, 32), facts.len);
-    for (facts, 0..) |fact, index| {
-        const checksum = try std.fmt.allocPrint(
-            arena,
-            "{x:0>64}",
-            .{index + 1},
-        );
-        const location = try std.fmt.allocPrint(
-            arena,
-            "packages/{d:0>2}.rpm",
-            .{index},
-        );
-        try std.testing.expectEqualStrings(checksum, fact.pkgid_value);
-        try std.testing.expectEqualStrings(location, fact.location.?);
-    }
-}
-
-test "file dependency seeding stays linear across ten thousand mixed kinds" {
-    var universe = try TestUniverse.create();
-    defer universe.destroy();
-    const repository = try universe.addRepository("scratch", false, 0);
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const dependencies = try arena.alloc(FileDependency, 10_000);
-    for (dependencies, 0..) |*dependency, index| {
-        dependency.* = .{
-            .key = file_dependency_keys[index % file_dependency_keys.len],
-            .path = try std.fmt.allocPrint(
-                arena,
-                "/scaled/path-{d}",
-                .{index},
-            ),
-        };
-    }
-    var context = SolverDigestContext{
-        .allocator = arena,
-        .pool = universe.pool,
-        .file_dependencies = dependencies,
+fn testRepositoryInput(
+    id: [*:0]const u8,
+    repository: *anyopaque,
+) abi.IntegrationRepository {
+    return .{
+        .repository = repository,
+        .id = id,
+        .cache_dir = "/nonexistent",
+        .priority = 0,
+        .cost = default_repository_cost,
     };
-    try context.seedScratch(universe.pool, repository);
-    const dummy: *c.Solvable = @ptrCast(
-        c.pool_id2solvable(universe.pool, repository.start) orelse
-            return error.TestUnexpectedResult,
-    );
-    var total: usize = 0;
-    for (file_dependency_keys) |key| {
-        var queue: c.Queue = undefined;
-        c.queue_init(&queue);
-        defer c.queue_free(&queue);
-        _ = c.solvable_lookup_deparray(dummy, key, &queue, 0);
-        total += @intCast(queue.count);
-    }
-    try std.testing.expectEqual(@as(usize, 10_000), total);
-    try std.testing.expectEqual(@as(u32, 1), context.scratch_seed_calls);
 }
 
-test "installed solver digest includes synthesized file provides" {
-    var production = try TestUniverse.create();
-    defer production.destroy();
-    const production_repo = try production.addRepository("@System", true, 0);
-    const production_package = try production.addPackage(
-        production_repo,
-        "file-provider",
-        "1-1",
-        1,
-        "unused",
-        0,
-    );
-    try production.addFile(
-        production_repo,
-        production_package,
-        "/usr/bin",
-        "tool",
-    );
-    try production.addFile(
-        production_repo,
-        production_package,
-        "/opt/nonstandard",
-        "nested-tool",
-    );
-    const consumer_repo = try production.addRepository("available", false, 0);
-    const consumer = try production.addPackage(
-        consumer_repo,
-        "consumer",
-        "1-1",
-        null,
-        "consumer.rpm",
-        1,
-    );
-    try production.require(consumer_repo, consumer, "/usr/bin/tool");
-    try production.requireRichFile(
-        consumer_repo,
-        consumer,
-        "/opt/nonstandard/nested-tool",
-        "companion-capability",
-    );
-    production.finish(&.{ production_repo, consumer_repo });
-    c.pool_addfileprovides(production.pool);
-    c.pool_createwhatprovides(production.pool);
+test "repository input validation rejects malformed capture inputs" {
+    var first: u8 = 0;
+    var second: u8 = 0;
+    const first_repo: *anyopaque = @ptrCast(&first);
+    const second_repo: *anyopaque = @ptrCast(&second);
 
-    var rebuilt = try TestUniverse.create();
-    defer rebuilt.destroy();
-    const rebuilt_repo = try rebuilt.addRepository("@System", true, 0);
-    const rebuilt_package = try rebuilt.addPackage(
-        rebuilt_repo,
-        "file-provider",
-        "1-1",
-        1,
-        "unused",
-        0,
+    try validateRepositoryInputs(&.{
+        testRepositoryInput("base", first_repo),
+        testRepositoryInput("extras", second_repo),
+    });
+
+    var missing = testRepositoryInput("base", first_repo);
+    missing.repository = null;
+    try std.testing.expectError(
+        error.InvalidRepository,
+        validateRepositoryInputs(&.{missing}),
     );
-    try rebuilt.addFile(
-        rebuilt_repo,
-        rebuilt_package,
-        "/usr/bin",
-        "tool",
+
+    var unnegatable = testRepositoryInput("base", first_repo);
+    unnegatable.priority = std.math.minInt(i32);
+    try std.testing.expectError(
+        error.InvalidRepository,
+        validateRepositoryInputs(&.{unnegatable}),
     );
-    try rebuilt.addFile(
-        rebuilt_repo,
-        rebuilt_package,
-        "/opt/nonstandard",
-        "nested-tool",
+
+    // The only validation of the repository cost convention in the tree.
+    var costly = testRepositoryInput("base", first_repo);
+    costly.cost = default_repository_cost + 1;
+    try std.testing.expectError(
+        error.InvalidRepository,
+        validateRepositoryInputs(&.{costly}),
     );
-    rebuilt.finish(&.{rebuilt_repo});
-    var seed_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer seed_arena.deinit();
-    var seed_context = try SolverDigestContext.init(
-        seed_arena.allocator(),
-        production.pool,
+    var free = testRepositoryInput("base", first_repo);
+    free.cost = 0;
+    try std.testing.expectError(
+        error.InvalidRepository,
+        validateRepositoryInputs(&.{free}),
     );
-    defer seed_context.deinit();
-    try seed_context.seedScratch(
-        rebuilt.pool,
-        rebuilt_repo,
+
+    try std.testing.expectError(
+        error.AmbiguousRepository,
+        validateRepositoryInputs(&.{
+            testRepositoryInput("base", first_repo),
+            testRepositoryInput("base", second_repo),
+        }),
     );
-    try std.testing.expectEqual(@as(u32, 1), seed_context.universe_scans);
-    try std.testing.expectEqual(@as(u32, 1), seed_context.scratch_seed_calls);
-    try std.testing.expect(poolHasPlainRequirement(
-        rebuilt.pool,
-        "/opt/nonstandard/nested-tool",
-    ));
-    c.pool_addfileprovides(rebuilt.pool);
-    c.pool_createwhatprovides(rebuilt.pool);
-    const production_digest = try testSolverPackageDigest(
-        production.pool,
-        production_package,
+    try std.testing.expectError(
+        error.AmbiguousRepository,
+        validateRepositoryInputs(&.{
+            testRepositoryInput("base", first_repo),
+            testRepositoryInput("extras", first_repo),
+        }),
     );
-    const rebuilt_digest = try testSolverPackageDigest(
-        rebuilt.pool,
-        rebuilt_package,
+}
+
+fn testPlanRepository(
+    id: []const u8,
+    kind: transaction_plan.RepositoryKind,
+) transaction_plan.Repository {
+    return .{
+        .cost = default_repository_cost,
+        .id = id,
+        .kind = kind,
+        .priority = 0,
+        .repomd = null,
+        .snapshot = null,
+    };
+}
+
+fn testComposeDataOwner(
+    allocator: Allocator,
+    id: []const u8,
+) !*repository_capture.Owner {
+    const owner = try allocator.create(repository_capture.Owner);
+    owner.* = .{
+        .allocator = allocator,
+        .arena_state = std.heap.ArenaAllocator.init(allocator),
+        .repository = testPlanRepository(id, .available),
+        .packages = &.{},
+        .entries = &.{},
+        .solver_entries = &.{},
+        .solver_lookup_steps = 0,
+        .load_cookie_sha256 = [_]u8{0} ** 32,
+        .solver_repository = undefined,
+    };
+    return owner;
+}
+
+fn testComposeData(
+    allocator: Allocator,
+    solver_repositories: []const transaction_plan.Repository,
+    solver_packages: []const transaction_plan.Package,
+    captured: []const transaction_plan.Repository,
+) IntegrationError!void {
+    var owners = std.ArrayList(*repository_capture.Owner).empty;
+    defer {
+        for (owners.items) |owner| owner.destroy();
+        owners.deinit(allocator);
+    }
+    for (captured) |repository|
+        owners.append(
+            allocator,
+            testComposeDataOwner(allocator, repository.id) catch
+                return error.OutOfMemory,
+        ) catch return error.OutOfMemory;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    _ = try composeData(
+        arena.allocator(),
+        .{
+            .actions = &.{},
+            .environment = undefined,
+            .hidden_packages = &.{},
+            .jobs = &.{},
+            .packages = solver_packages,
+            .problems = &.{},
+            .repositories = solver_repositories,
+            .requests = &.{},
+            .selected = &.{},
+            .skipped = &.{},
+        },
+        undefined,
+        captured,
+        owners.items,
     );
-    try std.testing.expectEqualSlices(
-        u8,
-        &production_digest,
-        &rebuilt_digest,
+}
+
+test "composed repositories reject capture entries the solver contradicts" {
+    const allocator = std.testing.allocator;
+
+    // A package-less captured repository is legitimately absent from the
+    // native solver's repository list, so absence alone is not an error.
+    try testComposeData(
+        allocator,
+        &.{testPlanRepository("@System", .installed)},
+        &.{},
+        &.{testPlanRepository("empty", .available)},
+    );
+
+    // The same id claimed by the solver under a different kind would append
+    // a duplicate to the combined list and shadow the solver's entry.
+    try std.testing.expectError(
+        error.InvalidRepository,
+        testComposeData(
+            allocator,
+            &.{testPlanRepository("base", .command_line)},
+            &.{},
+            &.{testPlanRepository("base", .available)},
+        ),
+    );
+
+    // Absent from the solver's list, yet referenced by a solver package:
+    // the capture and the solve disagree about which repositories exist.
+    try std.testing.expectError(
+        error.InvalidRepository,
+        testComposeData(
+            allocator,
+            &.{testPlanRepository("@System", .installed)},
+            &.{.{
+                .id = "package-1",
+                .identity = .{
+                    .name = "app",
+                    .arch = "x86_64",
+                    .epoch = null,
+                    .version = "1",
+                    .release = "1",
+                },
+                .repository_id = "ghost",
+                .rpmdb_hnum = null,
+                .source = null,
+                .state = .available,
+            }},
+            &.{testPlanRepository("ghost", .available)},
+        ),
     );
 }

@@ -557,10 +557,6 @@ pub fn build(b: *Build) void {
         "transaction_plan_request_trace",
         transaction_plan_request_trace_mod,
     );
-    transaction_plan_integration_mod.addImport(
-        "rpm_header",
-        rpmzig_header_mod,
-    );
     transaction_plan_integration_mod.addImport("tdnf_error", tdnf_error_mod);
 
     // ----- static libraries ----- //
