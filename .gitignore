@@ -89,6 +89,7 @@ bin/tdnf
 zig-out/
 .zig-cache/
 out/
+out-rs/
 /bin/tdnf-automatic
 /zig-pkg/
 /.scriptlet-zig-tests/
