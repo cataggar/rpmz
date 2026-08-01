@@ -208,3 +208,64 @@ def test_install_as_file_nocmdlinegpgcheck_conf(utils):
     ret = utils.run(['tdnf', 'install', '-y', '--setopt=gpgcheck=1', '--setopt=cligpgcheck=0', path])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
+
+
+# Packages that are known to co-install cleanly, used to build a single
+# transaction with more command line rpms than the libsolv pool scratch ring
+# buffer has slots.
+MANY_FILE_PKGS = [
+    'tdnf-dummy-pretrans',
+    'tdnf-native-order-helper',
+    'tdnf-native-order-post',
+    'tdnf-native-order-postun',
+    'tdnf-native-order-pre',
+    'tdnf-native-order-preun',
+    'tdnf-repoquery-changelog',
+    'tdnf-repoquery-enhances',
+    'tdnf-repoquery-recommends',
+    'tdnf-repoquery-requires',
+    'tdnf-repoquery-suggests',
+    'tdnf-repoquery-supplements',
+    'tdnf-test-cleanreq-leaf1',
+    'tdnf-test-cleanreq-leaf2',
+    'tdnf-test-cleanreq-required',
+    'tdnf-test-doc',
+    'tdnf-test-one',
+    'tdnf-test-two',
+    'tdnf-test3',
+    'tdnf-test4',
+]
+
+
+# test "tdnf install a.rpm b.rpm ... " with more files than libsolv's pool
+# scratch ring buffer (POOL_TMPSPACEBUF, 16) can hold at once.
+# solvable_get_location() returns that scratch memory, so when the paths were
+# borrowed rather than copied the 17th file recycled the slot the 1st was still
+# pointing at and the solve failed with PackageNotFound.
+def test_install_many_files_at_once(utils):
+    dir = os.path.join(utils.config['repo_path'], 'photon-test', 'RPMS', ARCH)
+    paths = []
+    for pkgname in MANY_FILE_PKGS:
+        # sorted() so the file picked never depends on readdir order, which
+        # differs between filesystems (tmpfs yields creation order, ext4 hash
+        # order). The overall order is fixed by MANY_FILE_PKGS.
+        matches = sorted(glob.glob('{}/{}-[0-9]*.rpm'.format(dir, pkgname)))
+        if matches:
+            paths.append(matches[0])
+
+    # Guard against the test quietly becoming vacuous: fewer than 17 files
+    # would no longer wrap the ring buffer and would pass either way.
+    assert len(paths) > 16, \
+        "need more than 16 rpm files to exercise the pool scratch wraparound"
+
+    before = utils.list_installed_packages()
+    try:
+        ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck'] + paths)
+        assert ret['retval'] == 0
+        for pkgname in MANY_FILE_PKGS:
+            if any(os.path.basename(p).startswith(pkgname + '-') for p in paths):
+                assert utils.check_package(pkgname)
+    finally:
+        added = [p for p in utils.list_installed_packages() if p not in before]
+        if added:
+            utils.run(['tdnf', 'erase', '-y'] + added)
