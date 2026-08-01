@@ -2299,3 +2299,53 @@ cleanup:
 error:
     goto cleanup;
 }
+
+/*
+ * Every package the sack knows about, installed or not, as handles.
+ *
+ * The counterpart to TDNFInstalledGetPkgIds. It is named for the pool
+ * rather than against it: the Pool type is already in the signature, so
+ * spelling it in the name reveals nothing that was hidden, and "pool"
+ * is the accurate word for "every package known" as opposed to the
+ * installed subset.
+ *
+ * The body delegates to libsolv's FOR_POOL_SOLVABLES rather than
+ * reimplementing it, so the set and the order are exactly the macro's
+ * by construction and there is no duplicated invariant to keep in sync.
+ */
+uint32_t
+TDNFPoolGetPkgIds(
+    Pool *pPool,
+    PTDNF_ID_LIST pIdList
+    )
+{
+    uint32_t dwError = 0;
+    TDNF_PKG_ID p = 0;
+    Pool *pool = NULL;
+
+    if(!pPool || !pIdList)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    /* FOR_POOL_SOLVABLES takes no pool argument -- it expands to code
+       referring to a variable that must be spelled exactly "pool". That
+       invisibility is why this macro escaped the dereference count for
+       several increments; the alias is what the macro needs, not a
+       second handle. */
+    pool = pPool;
+
+    FOR_POOL_SOLVABLES(p)
+    {
+        dwError = TDNFIdListPush(pIdList, p);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}

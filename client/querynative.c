@@ -527,8 +527,8 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
     uint32_t dwIndex = 0;
     char **ppszRefs = NULL;
     Pool *pPool = NULL;
-    TDNF_PKG_ID p = 0;
-    Solvable *s = NULL;
+    TDNF_ID_LIST qInstalled = {0};
+    int k = 0;
 
     if(!pTdnf || !pTdnf->pSack || !pHistoryCtx || !pppszRefs || !pdwCount)
     {
@@ -538,8 +538,16 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
 
     pPool = pTdnf->pSack->pPool;
 
-    FOR_REPO_SOLVABLES(pPool->installed, p, s)
+    /* Snapshot once and walk it twice. The two passes have to agree on
+       the count, and a snapshot makes that structural rather than a
+       property of nothing having changed in between. */
+    TDNFIdListInit(&qInstalled);
+    dwError = TDNFInstalledGetPkgIds(pPool, &qInstalled);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    for(k = 0; k < (int)qInstalled.dwCount; k++)
     {
+        TDNF_PKG_ID p = qInstalled.pnElements[k];
         const char *pszName = NULL;
         int nIsAuto = 0;
         int rc = 0;
@@ -565,8 +573,9 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
                   (void **)&ppszRefs);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    FOR_REPO_SOLVABLES(pPool->installed, p, s)
+    for(k = 0; k < (int)qInstalled.dwCount; k++)
     {
+        TDNF_PKG_ID p = qInstalled.pnElements[k];
         const char *pszName = NULL;
         int nIsAuto = 0;
         int rc = 0;
@@ -596,6 +605,7 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
     *pdwCount = dwCount;
 
 cleanup:
+    TDNFIdListFree(&qInstalled);
     return dwError;
 error:
     if(ppszRefs)
@@ -1012,9 +1022,8 @@ NativeQueryAppendRefMatches(
     char *pszEvr = NULL;
     char *pszArch = NULL;
     uint32_t dwMatches = 0;
-    TDNF_PKG_ID p = 0;
-    Solvable *s = NULL;
-    Pool *pool = NULL;
+    TDNF_ID_LIST qCandidates = {0};
+    int k = 0;
 
     if(!pSack || !pSack->pPool || IsNullOrEmptyString(pszPackageRef) || !pQueue)
     {
@@ -1023,7 +1032,7 @@ NativeQueryAppendRefMatches(
     }
 
     pPool = pSack->pPool;
-    pool = pPool;
+    TDNFIdListInit(&qCandidates);
 
     dwError = TDNFAllocateString(pszPackageRef, &pszCopy);
     BAIL_ON_TDNF_ERROR(dwError);
@@ -1052,33 +1061,28 @@ NativeQueryAppendRefMatches(
 
     if(nInstalledOnly)
     {
-        FOR_REPO_SOLVABLES(pPool->installed, p, s)
-        {
-            if(!NativeQueryRefMatchesPkg(
-                   pPool, p, pszRepo, pszName, pszArch, pszEvr))
-            {
-                continue;
-            }
-
-            dwError = TDNFIdListPushUnique(pQueue, p);
-            BAIL_ON_TDNF_ERROR(dwError);
-            dwMatches++;
-        }
+        dwError = TDNFInstalledGetPkgIds(pPool, &qCandidates);
+        BAIL_ON_TDNF_ERROR(dwError);
     }
     else
     {
-        FOR_POOL_SOLVABLES(p)
-        {
-            if(!NativeQueryRefMatchesPkg(
-                   pPool, p, pszRepo, pszName, pszArch, pszEvr))
-            {
-                continue;
-            }
+        dwError = TDNFPoolGetPkgIds(pPool, &qCandidates);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
 
-            dwError = TDNFIdListPushUnique(pQueue, p);
-            BAIL_ON_TDNF_ERROR(dwError);
-            dwMatches++;
+    for(k = 0; k < (int)qCandidates.dwCount; k++)
+    {
+        TDNF_PKG_ID p = qCandidates.pnElements[k];
+
+        if(!NativeQueryRefMatchesPkg(
+               pPool, p, pszRepo, pszName, pszArch, pszEvr))
+        {
+            continue;
         }
+
+        dwError = TDNFIdListPushUnique(pQueue, p);
+        BAIL_ON_TDNF_ERROR(dwError);
+        dwMatches++;
     }
 
     if(pdwMatches)
@@ -1087,6 +1091,7 @@ NativeQueryAppendRefMatches(
     }
 
 cleanup:
+    TDNFIdListFree(&qCandidates);
     TDNF_SAFE_FREE_MEMORY(pszCopy);
     return dwError;
 error:

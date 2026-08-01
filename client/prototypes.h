@@ -439,6 +439,15 @@ TDNFInstalledGetPkgIds(
     PTDNF_ID_LIST pIdList
     );
 
+/* Every package the sack knows about, the counterpart to
+   TDNFInstalledGetPkgIds. Delegates to FOR_POOL_SOLVABLES, so the set
+   and order are the macro's exactly. */
+uint32_t
+TDNFPoolGetPkgIds(
+    Pool *pPool,
+    PTDNF_ID_LIST pIdList
+    );
+
 uint32_t
 TDNFInstalledHasName(
     Pool *pPool,
