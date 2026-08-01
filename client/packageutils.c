@@ -81,7 +81,7 @@ PackageUtilsResolveSinglePackageRef(
     PSolvSack pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
-    Id* pdwPkgId
+    TDNF_PKG_ID* pdwPkgId
     );
 
 static uint32_t
@@ -135,7 +135,7 @@ TDNFMatchForReinstall(
     )
 {
     uint32_t dwError = 0;
-    Id  dwAvailableId = 0;
+    TDNF_PKG_ID  dwAvailableId = 0;
     char *pszInstalledNevra = NULL;
     char **ppszInstalledRefs = NULL;
     char **ppszAvailableRefs = NULL;
@@ -350,14 +350,14 @@ error:
 uint32_t
 TDNFPackageGetDowngrade(
     PTDNF pTdnf,
-    Id dwInstalled,
+    TDNF_PKG_ID dwInstalled,
     PSolvSack pSack,
     PSolvPackageList pAvailabePkgList,
-    Id* pdwDowngradePkgId
+    TDNF_PKG_ID* pdwDowngradePkgId
     )
 {
     uint32_t dwError = 0;
-    Id dwDownGradeId = 0;
+    TDNF_PKG_ID dwDownGradeId = 0;
     PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos = NULL;
     uint32_t dwRepoCount = 0;
     char *pszInstalledRef = NULL;
@@ -506,7 +506,7 @@ error:
 uint32_t
 TDNFVerifyInstallPackage(
     PSolvSack pSack,
-    Id dwPkg,
+    TDNF_PKG_ID dwPkg,
     uint32_t* pdwInstallPackage
     )
 {
@@ -585,7 +585,7 @@ TDNFAddPackagesForInstall(
     )
 {
     uint32_t dwError = 0;
-    Id dwHighestAvailable = 0;
+    TDNF_PKG_ID dwHighestAvailable = 0;
     uint32_t  dwInstallPackage = 0;
     char *pszHighestAvailableRef = NULL;
     char *pszInstalledRef = NULL;
@@ -653,7 +653,7 @@ error:
 uint32_t
 TDNFVerifyUpgradePackage(
     PSolvSack pSack,
-    Id dwPkg,
+    TDNF_PKG_ID dwPkg,
     uint32_t* pdwUpgradePackage
     )
 {
@@ -726,7 +726,7 @@ TDNFAddPackagesForUpgrade(
     )
 {
     uint32_t dwError = 0;
-    Id dwHighestAvailable = 0;
+    TDNF_PKG_ID dwHighestAvailable = 0;
     uint32_t  dwUpgradePackage = 0;
     char *pszHighestAvailableRef = NULL;
 
@@ -780,8 +780,8 @@ TDNFAddPackagesForDowngrade(
     )
 {
     uint32_t dwError = 0;
-    Id dwInstalledId = 0;
-    Id dwDownGradeId = 0;
+    TDNF_PKG_ID dwInstalledId = 0;
+    TDNF_PKG_ID dwDownGradeId = 0;
     char *pszName = NULL;
     char *pszInstalledRef = NULL;
     char **ppszAvailableRefs = NULL;
@@ -1607,7 +1607,7 @@ PackageUtilsResolveSinglePackageRef(
     PSolvSack pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
-    Id* pdwPkgId
+    TDNF_PKG_ID* pdwPkgId
     )
 {
     uint32_t dwError = 0;

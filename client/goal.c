@@ -27,6 +27,12 @@ _Static_assert(TDNF_JOB_ALLOWUNINSTALL == SOLVER_ALLOWUNINSTALL, "job action val
 _Static_assert(TDNF_JOB_JOBMASK == SOLVER_JOBMASK, "job mask value changed");
 _Static_assert(TDNF_JOB_CLEANDEPS == SOLVER_CLEANDEPS, "job flag value changed");
 _Static_assert(TDNF_JOB_FORCEBEST == SOLVER_FORCEBEST, "job flag value changed");
+_Static_assert(sizeof(TDNF_PKG_ID) == sizeof(Id), "package handle width changed");
+_Static_assert(sizeof(TDNF_STR_ID) == sizeof(Id), "string handle width changed");
+_Static_assert(((Id)-1 < 0) == ((TDNF_PKG_ID)-1 < 0),
+               "package handle signedness diverged from libsolv");
+_Static_assert(((Id)-1 < 0) == ((TDNF_STR_ID)-1 < 0),
+               "string handle signedness diverged from libsolv");
 
 static
 uint32_t
@@ -507,7 +513,7 @@ TDNFGoal(
 
         for (uint32_t i = 0; i < pQueuePkgList->dwCount; i++)
         {
-            Id dwId = pQueuePkgList->pnElements[i];
+            TDNF_PKG_ID dwId = pQueuePkgList->pnElements[i];
             TDNFAddGoal(pTdnf, nAlterType, &queueJobs, dwId,
                         dwExcludeCount, ppszExcludes);
         }
@@ -1157,9 +1163,14 @@ TDNFGoalBuildNativeSolverJobs(
            install-only evictions TDNFSolvCheckInstallOnlyLimitInTrans pushes
            from the retry loop, which the native solver derives itself. */
         int nStamped = (int)(dwIndex * 2) < nStampedJobCount;
-        Id rawHow = pQueueJobs->pnElements[dwIndex * 2];
-        Id how = nStamped ? rawHow ^ nStampFlags : rawHow;
-        Id dwPkgId = pQueueJobs->pnElements[dwIndex * 2 + 1];
+        int32_t rawHow = pQueueJobs->pnElements[dwIndex * 2];
+        int32_t how = nStamped ? rawHow ^ nStampFlags : rawHow;
+        /* The operand slot is polymorphic, so it is read untyped here and
+           given a type below by whichever branch the decoded how word
+           selects: a string handle for the name-selected jobs, a package
+           handle for the rest, and an ignored zero for the ALL jobs. */
+        int32_t nRawWhat = pQueueJobs->pnElements[dwIndex * 2 + 1];
+        TDNF_PKG_ID dwPkgId = nRawWhat;
         Solvable *pSolvable = NULL;
         PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob = NULL;
         int nInstall = how == (TDNF_JOB_SOLVABLE | TDNF_JOB_INSTALL),
@@ -1173,7 +1184,7 @@ TDNFGoalBuildNativeSolverJobs(
             nUpdateAllJob = how == (TDNF_JOB_SOLVABLE_ALL | TDNF_JOB_UPDATE),
             nDistSyncAllJob = how == (TDNF_JOB_SOLVABLE_ALL | TDNF_JOB_DISTUPGRADE);
         if(!nStamped && how == (TDNF_JOB_SOLVABLE | TDNF_JOB_ERASE)) continue;
-        if((nUpdateAllJob || nDistSyncAllJob) && !dwPkgId && !nUpdateAll && !nDistSyncAll)
+        if((nUpdateAllJob || nDistSyncAllJob) && !nRawWhat && !nUpdateAll && !nDistSyncAll)
         {
             nUpdateAll = nUpdateAllJob;
             nDistSyncAll = nDistSyncAllJob;
@@ -1183,8 +1194,9 @@ TDNFGoalBuildNativeSolverJobs(
         }
         if(nLocked)
         {
-            const char *pszName = dwPkgId > 0 ? pool_id2str(pPool, dwPkgId) : NULL;
-            if(dwPkgId <= 0 || IsNullOrEmptyString(pszName))
+            TDNF_STR_ID idName = nRawWhat;
+            const char *pszName = idName > 0 ? pool_id2str(pPool, idName) : NULL;
+            if(idName <= 0 || IsNullOrEmptyString(pszName))
             {
                 dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -1195,8 +1207,9 @@ TDNFGoalBuildNativeSolverJobs(
         }
         if(nInstallOnly)
         {
-            const char *pszName = dwPkgId > 0 ? pool_id2str(pPool, dwPkgId) : NULL;
-            if(dwPkgId <= 0 || IsNullOrEmptyString(pszName))
+            TDNF_STR_ID idName = nRawWhat;
+            const char *pszName = idName > 0 ? pool_id2str(pPool, idName) : NULL;
+            if(idName <= 0 || IsNullOrEmptyString(pszName))
             {
                 dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -1641,7 +1654,7 @@ TDNFAddGoal(
     PTDNF pTdnf,
     TDNF_ALTERTYPE nAlterType,
     PTDNF_ID_LIST pQueueJobs,
-    Id dwId,
+    TDNF_PKG_ID dwId,
     uint32_t dwCount,
     char** ppszExcludes
     )
@@ -1735,7 +1748,8 @@ TDNFSolvAddPkgLocks(PTDNF pTdnf, PTDNF_ID_LIST pQueueJobs, Pool *pPool)
     for (i = 0; pTdnf->pConf->ppszPkgLocks && pTdnf->pConf->ppszPkgLocks[i]; i++)
     {
         char *pszPkg = pTdnf->pConf->ppszPkgLocks[i];
-        Id idPkg = pool_str2id(pPool, pszPkg, 1), p;
+        TDNF_STR_ID idPkg = pool_str2id(pPool, pszPkg, 1);
+        TDNF_PKG_ID p;
         Solvable *s;
         if (!idPkg) continue;
         FOR_REPO_SOLVABLES(pPool->installed, p, s)
@@ -1779,10 +1793,10 @@ TDNFSolvAddInstallOnlyPkgs(
     for (i = 0; ppszPackages && ppszPackages[i]; i++)
     {
         char *pszPkg = ppszPackages[i];
-        Id idPkg = pool_str2id(pPool, pszPkg, 1);
+        TDNF_STR_ID idPkg = pool_str2id(pPool, pszPkg, 1);
         if (idPkg)
         {
-            Id p;
+            TDNF_PKG_ID p;
             Solvable *s;
             /* Name multiversion jobs matter only when an instance exists. */
             FOR_REPO_SOLVABLES(pPool->installed, p, s)
@@ -1920,7 +1934,7 @@ TDNFGoalAddHiddenPackages(
 
     for(i = 0; i < dwHiddenRefCount; i++)
     {
-        Id dwPkgId = 0;
+        TDNF_PKG_ID dwPkgId = 0;
 
         dwError = TDNFNativeQueryResolveSinglePackageRef(
                       pTdnf->pSack,
@@ -1955,7 +1969,7 @@ TDNFSolvAddProtectPkgs(
     char **ppszProtectedPkgs = NULL;
     int i, j;
     TDNF_ID_LIST qPkgs = {0};
-    Id p;
+    TDNF_PKG_ID p;
     Solvable *s;
 
     if(!pTdnf || !pQueueJobs || !pPool || !pTdnf->pConf)
@@ -1967,7 +1981,7 @@ TDNFSolvAddProtectPkgs(
     ppszProtectedPkgs = pTdnf->pConf->ppszProtectedPkgs;
     TDNFIdListInit(&qPkgs);
     for (i = 0; ppszProtectedPkgs[i]; i++) {
-        Id idPkg = pool_str2id(pPool, ppszProtectedPkgs[i], 1);
+        TDNF_STR_ID idPkg = pool_str2id(pPool, ppszProtectedPkgs[i], 1);
         if (idPkg) {
             dwError = TDNFIdListPush(&qPkgs, idPkg);
             BAIL_ON_TDNF_ERROR(dwError);
@@ -1976,9 +1990,12 @@ TDNFSolvAddProtectPkgs(
 
     /* Direct erases of protected names must be rejected explicitly. */
     for (j = 0; j < (int)pQueueJobs->dwCount; j += 2) {
-        Id how = pQueueJobs->pnElements[j];
+        int32_t how = pQueueJobs->pnElements[j];
         if (((how & TDNF_JOB_JOBMASK) == TDNF_JOB_ERASE) && (how & TDNF_JOB_SOLVABLE)) {
-            Id what = pQueueJobs->pnElements[j+1];
+            /* The operand slot is polymorphic -- it holds a string handle
+               when the job selects by name. The TDNF_JOB_SOLVABLE test above
+               is what makes it a package handle here. */
+            TDNF_PKG_ID what = pQueueJobs->pnElements[j+1];
             s = pool_id2solvable(pPool, what);
             for (i = 0; i < (int)qPkgs.dwCount; i++) {
                 if (qPkgs.pnElements[i] == s->name)
@@ -1991,7 +2008,7 @@ TDNFSolvAddProtectPkgs(
                         continue;
                     how = pQueueJobs->pnElements[i];
                     if (((how & TDNF_JOB_JOBMASK) == TDNF_JOB_INSTALL) && (how & TDNF_JOB_SOLVABLE)) {
-                        Id what_add = pQueueJobs->pnElements[i+1];
+                        TDNF_PKG_ID what_add = pQueueJobs->pnElements[i+1];
                         const Solvable *s_add = pool_id2solvable(pPool, what_add);
                         if (s_add->name == s->name) {
                             break;

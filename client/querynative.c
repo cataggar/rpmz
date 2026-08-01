@@ -8,7 +8,7 @@
 static uint32_t
 NativeQuerySerializePackageIdCommon(
     Pool *pPool,
-    Id dwPkgId,
+    TDNF_PKG_ID dwPkgId,
     char **ppszLine
     );
 
@@ -319,7 +319,7 @@ error:
 uint32_t
 TDNFNativeQuerySerializePackageId(
     PSolvSack pSack,
-    Id dwPkgId,
+    TDNF_PKG_ID dwPkgId,
     char **ppszLine
     )
 {
@@ -390,7 +390,7 @@ TDNFNativeQuerySerializePackageListRefs(
     uint32_t dwCount = 0;
     uint32_t i = 0;
     char **ppszRefs = NULL;
-    Id dwPkgId = 0;
+    TDNF_PKG_ID dwPkgId = 0;
 
     if(!pSack || !pPkgList || !pppszRefs || !pdwCount)
     {
@@ -516,7 +516,7 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
     uint32_t dwIndex = 0;
     char **ppszRefs = NULL;
     Pool *pPool = NULL;
-    Id p = 0;
+    TDNF_PKG_ID p = 0;
     Solvable *s = NULL;
 
     if(!pTdnf || !pTdnf->pSack || !pHistoryCtx || !pppszRefs || !pdwCount)
@@ -639,7 +639,7 @@ TDNFNativeQueryResolveSinglePackageRef(
     PSolvSack pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
-    Id *pdwPkgId
+    TDNF_PKG_ID *pdwPkgId
     )
 {
     uint32_t dwError = 0;
@@ -888,7 +888,7 @@ error:
 static uint32_t
 NativeQuerySerializePackageIdCommon(
     Pool *pPool,
-    Id dwPkgId,
+    TDNF_PKG_ID dwPkgId,
     char **ppszLine
     )
 {
@@ -1009,7 +1009,7 @@ NativeQueryAppendRefMatches(
     char *pszEvr = NULL;
     char *pszArch = NULL;
     uint32_t dwMatches = 0;
-    Id p = 0;
+    TDNF_PKG_ID p = 0;
     Solvable *s = NULL;
     Pool *pool = NULL;
 
