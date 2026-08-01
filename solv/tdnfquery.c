@@ -38,6 +38,13 @@ SolvAddUserInstalledToJobs(
         }
         if (nFlag == 0)
         {
+            /* This pushes into the same job list that client/goal.c reads
+               back, where the encoding is spelled with tdnf's own
+               TDNF_JOB_* macros (client/defines.h). The two spellings are
+               numerically identical and goal.c static-asserts that against
+               libsolv, but solv/ may not include a client/ header, so the
+               libsolv names stay here until this file is deleted with the
+               rest of libsolv. Do not change one side alone. */
             dwError = TDNFIdListPush2(pQueueJobs, SOLVER_SOLVABLE|SOLVER_USERINSTALLED, p);
             BAIL_ON_TDNF_ERROR(dwError);
         }

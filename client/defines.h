@@ -142,3 +142,34 @@ typedef void (*TDNF_ML_FREE_FUNC) (void* data);
     (!(pRepo)->nHasMetaData && (pRepo)->ppszBaseUrls && \
      !IsNullOrEmptyString((pRepo)->ppszBaseUrls[0]) ? \
      (pRepo)->ppszBaseUrls[0] : NULL)
+
+/* Job-list encoding.
+
+   tdnf builds its own job list and hands it to the native solver in
+   repomd/; libsolv's solver is never invoked -- there is no solver_solve()
+   call anywhere in the tree. These values were historically spelled with
+   libsolv's SOLVER_* macros from <solv/solver.h>, which made client/ depend
+   on a libsolv header for what is really tdnf's own wire format between
+   goal.c, the request trace and the capture layer.
+
+   The numeric values are reproduced byte-identically and must not change:
+   they are recorded in the request trace and matched by exact whole-word
+   equality when the job list is read back in
+   TDNFGoalBuildNativeSolverJobs(). goal.c carries _Static_asserts proving
+   the equality for as long as libsolv is still vendored. */
+#define TDNF_JOB_SOLVABLE           0x01
+#define TDNF_JOB_SOLVABLE_NAME      0x02
+#define TDNF_JOB_SOLVABLE_ALL       0x06
+
+#define TDNF_JOB_INSTALL            0x0100
+#define TDNF_JOB_ERASE              0x0200
+#define TDNF_JOB_UPDATE             0x0300
+#define TDNF_JOB_MULTIVERSION       0x0500
+#define TDNF_JOB_LOCK               0x0600
+#define TDNF_JOB_DISTUPGRADE        0x0700
+#define TDNF_JOB_USERINSTALLED      0x0a00
+#define TDNF_JOB_ALLOWUNINSTALL     0x0b00
+#define TDNF_JOB_JOBMASK            0xff00
+
+#define TDNF_JOB_CLEANDEPS          0x040000
+#define TDNF_JOB_FORCEBEST          0x100000
