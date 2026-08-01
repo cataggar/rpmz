@@ -113,3 +113,13 @@ typedef struct progress_cb_data {
     time_t prev_time;
     char pszData[64];
 } pcb_data;
+
+/* The identifying fields behind a package handle. All strings are
+   borrowed from the sack; see the accessors in querynative.c. */
+typedef struct _TDNF_PKG_FIELDS
+{
+    const char *pszName;
+    const char *pszArch;
+    const char *pszEvr;
+    const char *pszRepo;
+} TDNF_PKG_FIELDS, *PTDNF_PKG_FIELDS;

@@ -5,6 +5,7 @@
 #define NATIVE_QUERY_GROUP_SEP ((char)0x1e)
 #define NATIVE_QUERY_ITEM_SEP  ((char)0x1d)
 
+
 static uint32_t
 NativeQuerySerializePackageIdCommon(
     Pool *pPool,
@@ -57,6 +58,45 @@ static char*
 NativeQuerySplitField(
     char **ppszCursor,
     char chSep
+    );
+
+static int
+NativeQueryRefMatchesPkg(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char *pszRepo,
+    const char *pszName,
+    const char *pszArch,
+    const char *pszEvr
+    );
+
+static uint32_t
+TDNFPkgHandleGetFields(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    PTDNF_PKG_FIELDS pFields
+    );
+
+static uint32_t
+TDNFPkgHandleGetName(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszName
+    );
+
+static uint32_t
+TDNFPkgHandleGetRepoNevra(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszRepo,
+    char **ppszNevra
+    );
+
+static int
+TDNFPkgHandleEvrCompare(
+    Pool *pPool,
+    const char *pszEvrLeft,
+    const char *pszEvrRight
     );
 
 uint32_t
@@ -529,9 +569,13 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
 
     FOR_REPO_SOLVABLES(pPool->installed, p, s)
     {
-        const char *pszName = pool_id2str(pPool, s->name);
+        const char *pszName = NULL;
         int nIsAuto = 0;
-        int rc = history_get_auto_flag(pHistoryCtx, pszName, &nIsAuto);
+        int rc = 0;
+
+        dwError = TDNFPkgHandleGetName(pPool, p, &pszName);
+        BAIL_ON_TDNF_ERROR(dwError);
+        rc = history_get_auto_flag(pHistoryCtx, pszName, &nIsAuto);
 
         if(rc != 0)
         {
@@ -552,9 +596,13 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
 
     FOR_REPO_SOLVABLES(pPool->installed, p, s)
     {
-        const char *pszName = pool_id2str(pPool, s->name);
+        const char *pszName = NULL;
         int nIsAuto = 0;
-        int rc = history_get_auto_flag(pHistoryCtx, pszName, &nIsAuto);
+        int rc = 0;
+
+        dwError = TDNFPkgHandleGetName(pPool, p, &pszName);
+        BAIL_ON_TDNF_ERROR(dwError);
+        rc = history_get_auto_flag(pHistoryCtx, pszName, &nIsAuto);
 
         if(rc != 0)
         {
@@ -893,9 +941,8 @@ NativeQuerySerializePackageIdCommon(
     )
 {
     uint32_t dwError = 0;
-    Solvable *pSolv = NULL;
     const char *pszRepo = "";
-    const char *pszNevra = NULL;
+    char *pszNevra = NULL;
     char *pszLine = NULL;
 
     if(!pPool || !ppszLine)
@@ -904,24 +951,8 @@ NativeQuerySerializePackageIdCommon(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pPool, dwPkgId);
-    if(!pSolv)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    if(pSolv->repo && pSolv->repo->name)
-    {
-        pszRepo = pSolv->repo->name;
-    }
-
-    pszNevra = pool_solvable2str(pPool, pSolv);
-    if(!pszNevra)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
+    dwError = TDNFPkgHandleGetRepoNevra(pPool, dwPkgId, &pszRepo, &pszNevra);
+    BAIL_ON_TDNF_ERROR(dwError);
 
     dwError = TDNFAllocateStringPrintf(
                   &pszLine,
@@ -934,6 +965,7 @@ NativeQuerySerializePackageIdCommon(
     *ppszLine = pszLine;
 
 cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszNevra);
     return dwError;
 error:
     if(ppszLine)
@@ -1051,33 +1083,8 @@ NativeQueryAppendRefMatches(
     {
         FOR_REPO_SOLVABLES(pPool->installed, p, s)
         {
-            const char *pszPkgName = NULL;
-            const char *pszPkgArch = NULL;
-            const char *pszPkgEvr = NULL;
-            const char *pszPkgRepo = NULL;
-
-            if(!s || !s->repo || !s->repo->name)
-            {
-                continue;
-            }
-
-            pszPkgRepo = s->repo->name;
-            if(strcmp(pszPkgRepo, pszRepo))
-            {
-                continue;
-            }
-
-            pszPkgName = pool_id2str(pPool, s->name);
-            pszPkgArch = pool_id2str(pPool, s->arch);
-            pszPkgEvr = solvable_lookup_str(s, SOLVABLE_EVR);
-            if(!pszPkgName || !pszPkgArch || !pszPkgEvr)
-            {
-                continue;
-            }
-
-            if(strcmp(pszPkgName, pszName) ||
-               strcmp(pszPkgArch, pszArch) ||
-               pool_evrcmp_str(pPool, pszPkgEvr, pszEvr, EVRCMP_COMPARE) != 0)
+            if(!NativeQueryRefMatchesPkg(
+                   pPool, p, pszRepo, pszName, pszArch, pszEvr))
             {
                 continue;
             }
@@ -1091,34 +1098,8 @@ NativeQueryAppendRefMatches(
     {
         FOR_POOL_SOLVABLES(p)
         {
-            const char *pszPkgName = NULL;
-            const char *pszPkgArch = NULL;
-            const char *pszPkgEvr = NULL;
-            const char *pszPkgRepo = NULL;
-
-            s = pool_id2solvable(pPool, p);
-            if(!s || !s->repo || !s->repo->name)
-            {
-                continue;
-            }
-
-            pszPkgRepo = s->repo->name;
-            if(strcmp(pszPkgRepo, pszRepo))
-            {
-                continue;
-            }
-
-            pszPkgName = pool_id2str(pPool, s->name);
-            pszPkgArch = pool_id2str(pPool, s->arch);
-            pszPkgEvr = solvable_lookup_str(s, SOLVABLE_EVR);
-            if(!pszPkgName || !pszPkgArch || !pszPkgEvr)
-            {
-                continue;
-            }
-
-            if(strcmp(pszPkgName, pszName) ||
-               strcmp(pszPkgArch, pszArch) ||
-               pool_evrcmp_str(pPool, pszPkgEvr, pszEvr, EVRCMP_COMPARE) != 0)
+            if(!NativeQueryRefMatchesPkg(
+                   pPool, p, pszRepo, pszName, pszArch, pszEvr))
             {
                 continue;
             }
@@ -1453,4 +1434,214 @@ NativeQuerySplitField(
         *ppszCursor = NULL;
     }
     return pszField;
+}
+
+/* Both ref-matching scans below need the same field-by-field comparison,
+   and neither may dereference the package handle itself. */
+static int
+NativeQueryRefMatchesPkg(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char *pszRepo,
+    const char *pszName,
+    const char *pszArch,
+    const char *pszEvr
+    )
+{
+    TDNF_PKG_FIELDS stFields = {0};
+
+    if(TDNFPkgHandleGetFields(pPool, dwPkgId, &stFields))
+    {
+        return 0;
+    }
+
+    return !strcmp(stFields.pszRepo, pszRepo) &&
+           !strcmp(stFields.pszName, pszName) &&
+           !strcmp(stFields.pszArch, pszArch) &&
+           TDNFPkgHandleEvrCompare(pPool, stFields.pszEvr, pszEvr) == 0;
+}
+
+/*
+ * Package-handle accessors.
+ *
+ * Reading a field out of a TDNF_PKG_ID is the only place client/ still
+ * has to know how the handle is represented, so every such read is
+ * routed through this section. Replacing the representation is then a
+ * change confined here rather than a change to each caller.
+ *
+ * These are static: querynative.c is their only caller today, and the
+ * ABI audit is there to make growing libtdnf's public surface a
+ * deliberate act. They can be promoted when a second caller appears.
+ *
+ * Field strings returned by TDNFPkgHandleGetFields and
+ * TDNFPkgHandleGetName are borrowed from the sack and stay valid for as
+ * long as it does; callers must not free them. The NEVRA is different
+ * and is documented at TDNFPkgHandleGetRepoNevra.
+ */
+
+static uint32_t
+TDNFPkgHandleGetFields(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    PTDNF_PKG_FIELDS pFields
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+    TDNF_PKG_FIELDS stFields = {0};
+
+    if(!pPool || !pFields)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv || !pSolv->repo)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    stFields.pszRepo = pSolv->repo->name;
+    stFields.pszName = pool_id2str(pPool, pSolv->name);
+    stFields.pszArch = pool_id2str(pPool, pSolv->arch);
+    stFields.pszEvr = solvable_lookup_str(pSolv, SOLVABLE_EVR);
+
+    if(IsNullOrEmptyString(stFields.pszRepo) ||
+       IsNullOrEmptyString(stFields.pszName) ||
+       IsNullOrEmptyString(stFields.pszArch) ||
+       IsNullOrEmptyString(stFields.pszEvr))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *pFields = stFields;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+static uint32_t
+TDNFPkgHandleGetName(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszName
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+    const char *pszName = NULL;
+
+    if(!pPool || !ppszName)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pszName = pool_id2str(pPool, pSolv->name);
+    if(IsNullOrEmptyString(pszName))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *ppszName = pszName;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/*
+ * Unlike the other accessors this one returns an ALLOCATED NEVRA that
+ * the caller owns and must free. The underlying pool_solvable2str hands
+ * back a slot in a small fixed-size ring buffer that later pool string
+ * operations recycle, so handing that pointer out would give this file
+ * two different lifetime contracts and invite a caller to hold a
+ * dangling one. Copying costs a malloc and removes the trap; a future
+ * non-libsolv implementation would have to build the string anyway.
+ * The repo name is borrowed as usual.
+ */
+static uint32_t
+TDNFPkgHandleGetRepoNevra(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszRepo,
+    char **ppszNevra
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+    const char *pszRepo = "";
+    const char *pszTmpNevra = NULL;
+    char *pszNevra = NULL;
+
+    if(!pPool || !ppszRepo || !ppszNevra)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    /* An unnamed repo is reported as the empty string rather than
+       refused: the caller uses this to build a display ref. */
+    if(pSolv->repo && pSolv->repo->name)
+    {
+        pszRepo = pSolv->repo->name;
+    }
+
+    pszTmpNevra = pool_solvable2str(pPool, pSolv);
+    if(IsNullOrEmptyString(pszTmpNevra))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFAllocateString(pszTmpNevra, &pszNevra);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszRepo = pszRepo;
+    *ppszNevra = pszNevra;
+
+cleanup:
+    return dwError;
+
+error:
+    TDNF_SAFE_FREE_MEMORY(pszNevra);
+    goto cleanup;
+}
+
+/* Both operands must be non-NULL; there is no error channel here, so a
+   NULL is a caller bug and is left to fault rather than be papered over
+   with an arbitrary ordering. */
+static int
+TDNFPkgHandleEvrCompare(
+    Pool *pPool,
+    const char *pszEvrLeft,
+    const char *pszEvrRight
+    )
+{
+    /* Compares in the sack's EVR ordering, which is not string equality:
+       an omitted epoch and an explicit "0:" compare equal. */
+    return pool_evrcmp_str(pPool, pszEvrLeft, pszEvrRight, EVRCMP_COMPARE);
 }
