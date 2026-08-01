@@ -67,7 +67,7 @@ TDNFNativeQueryApplyLocationUrls(
 uint32_t
 TDNFNativeQuerySerializePackageId(
     PSolvSack pSack,
-    Id dwPkgId,
+    TDNF_PKG_ID dwPkgId,
     char **ppszLine
     );
 
@@ -117,7 +117,7 @@ TDNFNativeQueryResolveSinglePackageRef(
     PSolvSack pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
-    Id *pdwPkgId
+    TDNF_PKG_ID *pdwPkgId
     );
 
 uint32_t
@@ -401,10 +401,10 @@ TDNFPopulatePkgInfoArray(
 uint32_t
 TDNFPackageGetDowngrade(
     PTDNF pTdnf,
-    Id dwInstalled,
+    TDNF_PKG_ID dwInstalled,
     PSolvSack pSack,
     PSolvPackageList pAvailabePkgList,
-    Id* pdwDowngradePkgId
+    TDNF_PKG_ID* pdwDowngradePkgId
     );
 
 uint32_t
@@ -454,14 +454,14 @@ TDNFAddPackagesForUpgrade(
 uint32_t
 TDNFVerifyUpgradePackage(
     PSolvSack pSack,
-    Id dwPkg,
+    TDNF_PKG_ID dwPkg,
     uint32_t* pdwUpgradePackage
     );
 
 uint32_t
 TDNFVerifyInstallPackage(
     PSolvSack pSack,
-    Id dwPkg,
+    TDNF_PKG_ID dwPkg,
     uint32_t* pdwInstallPackage
     );
 
@@ -564,7 +564,7 @@ TDNFAddGoal(
     PTDNF pTdnf,
     TDNF_ALTERTYPE nAlterType,
     PTDNF_ID_LIST pQueueJobs,
-    Id dwId,
+    TDNF_PKG_ID dwId,
     uint32_t dwCount,
     char** ppszExcludes
     );

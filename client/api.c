@@ -744,7 +744,7 @@ TDNFAddCmdLinePackages(
     char *pszPkgName;
     char *pszCopyOfPkgName = NULL;
     char* pszRPMPath = NULL;
-    Id id;
+    TDNF_PKG_ID id;
     uint32_t dwSolvableId = 0;
     uint32_t nTraceStart = 0;
 
@@ -838,7 +838,7 @@ TDNFAddCmdLinePackages(
                       RPM_ADD_WITH_HDRID|RPM_ADD_WITH_SHA256SUM,
                       &dwSolvableId);
         BAIL_ON_TDNF_ERROR(dwError);
-        id = (Id)dwSolvableId;
+        id = (TDNF_PKG_ID)dwSolvableId;
         nTraceStart = pQueueGoal->dwCount;
         dwError = TDNFIdListPush(pQueueGoal, id);
         BAIL_ON_TDNF_ERROR(dwError);
