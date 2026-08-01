@@ -948,7 +948,14 @@ cleanup:
     TDNF_SAFE_FREE_MEMORY(pszNativeArchOwned);
     TDNF_SAFE_FREE_MEMORY(ppszLockedPkgs);
     TDNF_SAFE_FREE_MEMORY(pdwLockedQueuePairs);
-    TDNF_SAFE_FREE_MEMORY(ppszCmdLinePaths);
+    /* Only the install jobs can have contributed a path, and each entry is an
+       owned copy, so free by count -- the array is sparse and a NULL hole would
+       stop TDNFFreeStringArray() early. */
+    if(ppszCmdLinePaths)
+    {
+        TDNFFreeStringArrayWithCount(ppszCmdLinePaths, (int)dwJobCount);
+        ppszCmdLinePaths = NULL;
+    }
     TDNF_SAFE_FREE_MEMORY(ppszUserInstalledPkgs);
     TDNF_SAFE_FREE_MEMORY(ppszInstallOnlyPkgs);
     TDNFGoalFreeNativeSolverHiddenAvailable(pHiddenAvailable, dwHiddenAvailableCount);
@@ -1259,8 +1266,16 @@ TDNFGoalBuildNativeSolverJobs(
         if(pSolvable->repo == pTdnf->pSolvCmdLineRepo ||
            !strcmp(pSolvable->repo->name, CMDLINE_REPO_NAME))
         {
-            ppszCmdLinePaths[dwInstallCount - 1] =
-                (char *)solvable_get_location(pSolvable, &nMediaNr);
+            /* solvable_get_location() hands back pool scratch space, which is a
+               16-slot ring buffer: the 17th command-line package in a single
+               transaction recycles the slot the 1st one is still pointing at.
+               This array outlives the loop, so it has to own its strings.
+               The Safe variant keeps the previous behaviour for a solvable with
+               no location at all, which used to leave the entry NULL. */
+            dwError = TDNFSafeAllocateString(
+                          solvable_get_location(pSolvable, &nMediaNr),
+                          &ppszCmdLinePaths[dwInstallCount - 1]);
+            BAIL_ON_TDNF_ERROR(dwError);
         }
         dwError = SolvGetNevraFromId(
                       pTdnf->pSack,
@@ -1301,7 +1316,11 @@ cleanup:
 error:
     TDNF_SAFE_FREE_MEMORY(ppszLockedPkgs);
     TDNF_SAFE_FREE_MEMORY(pdwLockedQueuePairs);
-    TDNF_SAFE_FREE_MEMORY(ppszCmdLinePaths);
+    if(ppszCmdLinePaths)
+    {
+        TDNFFreeStringArrayWithCount(ppszCmdLinePaths, (int)dwCount);
+        ppszCmdLinePaths = NULL;
+    }
     TDNF_SAFE_FREE_MEMORY(ppszUserInstalledPkgs);
     TDNF_SAFE_FREE_MEMORY(ppszInstallOnlyPkgs);
     TDNFGoalFreeNativeSolverJobs(pJobs, dwCount);
