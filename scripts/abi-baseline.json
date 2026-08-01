@@ -195,6 +195,7 @@
       "TDNFPkgInfoFilterNewest",
       "TDNFPkgsToExclude",
       "TDNFPluginRaiseEvent",
+      "TDNFPoolGetPkgIds",
       "TDNFPopulatePkgInfoArray",
       "TDNFPopulatePkgInfoArrayDependencies",
       "TDNFPopulatePkgInfoArrayFileList",
