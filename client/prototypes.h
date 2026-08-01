@@ -484,6 +484,28 @@ TDNFStrIdToString(
     const char **ppszStr
     );
 
+/* Repo lifecycle and the installed-repo handle. These hand back a
+   Repo * the caller passes on without dereferencing; that plumbing goes
+   away when Pool/Repo become opaque typedefs. */
+uint32_t
+TDNFPoolGetInstalledRepo(
+    Pool *pPool,
+    Repo **ppRepo
+    );
+
+uint32_t
+TDNFPoolCreateRepo(
+    Pool *pPool,
+    const char *pszName,
+    Repo **ppRepo
+    );
+
+/* Frees the repo and its solvables. Null-tolerant. */
+void
+TDNFRepoFree(
+    Repo *pRepo
+    );
+
 /* Range check on a package handle: is it safe to hand to an accessor.
    Not an existence check. Reported via pnValid, not as an error,
    because callers map it to their own error code. */

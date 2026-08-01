@@ -46,8 +46,6 @@ TDNFInitCmdLineRepo(
 {
     uint32_t dwError = 0;
     Repo* pRepo = NULL;
-    Pool* pPool = NULL;
-    PSOLV_REPO_INFO_INTERNAL pSolvRepoInfo = NULL;
 
     if(!pTdnf || !pTdnf->pConf || !pSack || !pSack->pPool)
     {
@@ -55,44 +53,18 @@ TDNFInitCmdLineRepo(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pPool = pSack->pPool;
-
-    dwError = TDNFAllocateMemory(
-                  1,
-                  sizeof(SOLV_REPO_INFO_INTERNAL),
-                  (void**)&pSolvRepoInfo);
+    dwError = TDNFPoolCreateRepo(pSack->pPool, CMDLINE_REPO_NAME, &pRepo);
     BAIL_ON_TDNF_ERROR(dwError);
-
-    pRepo = repo_create(pPool, CMDLINE_REPO_NAME);
-    if (!pRepo)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pSolvRepoInfo->pRepo = pRepo;
-    pRepo->appdata = pSolvRepoInfo;
 
     pTdnf->pSolvCmdLineRepo = pRepo;
 
 cleanup:
-    if(!dwError && pRepo && pRepo->appdata == pSolvRepoInfo)
-    {
-        pRepo->appdata = NULL;
-    }
-    TDNF_SAFE_FREE_MEMORY(pSolvRepoInfo);
     return dwError;
 error:
-    /*
-     * coverty scan throws below warning
-     * Execution cannot reach this statement: "repo_free(pRepo, 1);"
-     * Ignoring this because it's good to have this condition check
-     */
-    if(pRepo)
-    {
-        /* coverity[dead_error_line] */
-        repo_free(pRepo, 1);
-    }
+    /* Unreachable in practice -- TDNFPoolCreateRepo is the only failure
+       after pRepo is set, and it does not set it on failure. Kept
+       because a future statement between the two would make it live. */
+    TDNFRepoFree(pRepo);
     goto cleanup;
 }
 
