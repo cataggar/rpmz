@@ -2485,3 +2485,91 @@ cleanup:
 error:
     goto cleanup;
 }
+
+/*
+ * Repo lifecycle and the installed-repo handle.
+ *
+ * These are the last libsolv calls that lived outside this file. They
+ * are lifecycle rather than package reads, so they do not fit the
+ * accessor shapes above: they hand back a Repo * that the caller then
+ * passes on. That is deliberate plumbing, not a leak -- the callers
+ * never dereference what they receive, and the handle becomes an opaque
+ * typedef when Pool and Repo do.
+ */
+uint32_t
+TDNFPoolGetInstalledRepo(
+    Pool *pPool,
+    Repo **ppRepo
+    )
+{
+    uint32_t dwError = 0;
+
+    if(!pPool || !ppRepo)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    /* Unlike the query helpers, an absent installed repo is returned as
+       NULL rather than an error: the one caller passes it straight to
+       SolvReadInstalledRpms, which has its own contract for it. */
+    *ppRepo = pPool->installed;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+uint32_t
+TDNFPoolCreateRepo(
+    Pool *pPool,
+    const char *pszName,
+    Repo **ppRepo
+    )
+{
+    uint32_t dwError = 0;
+    Repo *pRepo = NULL;
+
+    if(!pPool || IsNullOrEmptyString(pszName) || !ppRepo)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pRepo = repo_create(pPool, pszName);
+    if(!pRepo)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *ppRepo = pRepo;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/*
+ * Frees the repo and its solvables (repo_free's reuse_ids = 1).
+ *
+ * Null-tolerant, so callers can free unconditionally in an error path
+ * the way TDNF_SAFE_FREE_MEMORY lets them. Not exposed as a macro
+ * because it cannot null the caller's pointer through a value argument,
+ * and a freed Repo * left live is exactly the mistake worth not
+ * inviting.
+ */
+void
+TDNFRepoFree(
+    Repo *pRepo
+    )
+{
+    if(pRepo)
+    {
+        repo_free(pRepo, 1);
+    }
+}

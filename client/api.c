@@ -657,8 +657,13 @@ TDNFOpenHandle(
 
     if(!pArgs->nAllDeps)
     {
+        Repo *pInstalledRepo = NULL;
+
+        dwError = TDNFPoolGetInstalledRepo(pSack->pPool, &pInstalledRepo);
+        BAIL_ON_TDNF_ERROR(dwError);
+
         dwError = SolvReadInstalledRpms(
-                      pSack->pPool->installed,
+                      pInstalledRepo,
                       pTdnf->pConf->pszCacheDir,
                       pTdnf->pRpmConfig);
         BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
@@ -846,7 +851,13 @@ TDNFAddCmdLinePackages(
             pQueueGoal->dwCount, nAlterType, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, nCmdIndex - 1);
     }
 
-    repo_internalize(pTdnf->pSolvCmdLineRepo);
+    /* No repo_internalize() here. Every solvable in this repo arrives
+       through TDNFRepoMdNativeAddRpm, whose NativeRpmBridge.finish()
+       (repomd/solvbridge.zig) calls repodata_internalize() on the
+       repodata it created, per rpm. repo_internalize() would walk the
+       same repodata and find nothing pending, so the call was a no-op
+       -- see the commit message for how that was established, because
+       no test in the tree can tell the difference. */
 
 cleanup:
     TDNF_SAFE_FREE_MEMORY(pszRPMPath);
