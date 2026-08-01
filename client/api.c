@@ -675,9 +675,6 @@ TDNFOpenHandle(
     dwError = TDNFInitCmdLineRepo(pTdnf, pSack);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    pool_addfileprovides(pSack->pPool);
-    pool_createwhatprovides(pSack->pPool);
-
     pTdnf->pSack = pSack;
     *ppTdnf = pTdnf;
 
@@ -741,7 +738,6 @@ TDNFAddCmdLinePackages(
 {
     uint32_t dwError = 0;
     PTDNF_CMD_ARGS pCmdArgs = NULL;
-    PSolvSack pSack;
     int nIsFile;
     int nIsRemote;
     int nCmdIndex;
@@ -760,7 +756,6 @@ TDNFAddCmdLinePackages(
 
     *pnUnresolved = 0;
     pCmdArgs = pTdnf->pArgs;
-    pSack = pTdnf->pSack;
 
     for(nCmdIndex = 1; nCmdIndex < pCmdArgs->nCmdCount; ++nCmdIndex)
     {
@@ -852,8 +847,6 @@ TDNFAddCmdLinePackages(
     }
 
     repo_internalize(pTdnf->pSolvCmdLineRepo);
-    pool_addfileprovides(pSack->pPool);
-    pool_createwhatprovides(pSack->pPool);
 
 cleanup:
     TDNF_SAFE_FREE_MEMORY(pszRPMPath);

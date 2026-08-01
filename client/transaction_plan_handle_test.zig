@@ -67,7 +67,6 @@ const HistoryDelta = extern struct {
 
 const SolvSackView = extern struct {
     pool: ?*anyopaque,
-    command_package_count: u32,
     cache_dir: ?[*:0]u8,
     root_dir: ?[*:0]u8,
 };
@@ -1969,7 +1968,6 @@ test "private handle capture follows production resolve lifecycle" {
     defer if (handle_live) TDNFCloseHandle(handle);
     var sack_without_pool = SolvSackView{
         .pool = null,
-        .command_package_count = 0,
         .cache_dir = null,
         .root_dir = null,
     };

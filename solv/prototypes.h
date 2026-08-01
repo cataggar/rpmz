@@ -18,23 +18,9 @@ extern "C" {
 typedef struct _SolvSack
 {
     Pool*       pPool;
-    uint32_t    dwNumOfCommandPkgs;
     char*       pszCacheDir;
     char*       pszRootDir;
 } SolvSack, *PSolvSack;
-
-typedef struct _SolvQuery
-{
-    PSolvSack   pSack;
-    Queue       queueJob;
-    Solver      *pSolv;
-    Transaction *pTrans;
-    Queue       queueRepoFilter;
-    char**      ppszPackageNames;
-    Queue       queueResult;
-    uint32_t    dwNewPackages;
-    TDNF_SCOPE  nScope;
-} SolvQuery, *PSolvQuery;
 
 typedef struct _SolvPackageList
 {
@@ -110,16 +96,6 @@ SolvInitSack(
 );
 
 // tdnfquery.c
-uint32_t
-SolvAddSystemRepoFilter(
-    PSolvQuery pQuery
-    );
-
-uint32_t
-SolvAddAvailableRepoFilter(
-    PSolvQuery pQuery
-    );
-
 uint32_t
 SolvAddUserInstalledToJobs(
     PTDNF_ID_LIST pQueueJobs,

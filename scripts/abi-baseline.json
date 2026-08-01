@@ -38,7 +38,6 @@
       "TDNFAlterHistoryCommand",
       "TDNFAlterRepoState",
       "TDNFAppendPath",
-      "TDNFApplyScopeFilter",
       "TDNFCheckDownloadCacheBytes",
       "TDNFCheckHash",
       "TDNFCheckHexDigest",
