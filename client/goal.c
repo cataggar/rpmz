@@ -1101,7 +1101,6 @@ TDNFGoalBuildNativeSolverJobs(
     char **ppszInstallOnlyPkgs = NULL;
     char **ppszUserInstalledPkgs = NULL;
     Pool *pPool = NULL;
-    unsigned int nMediaNr = 0;
     int nUpdateAll = 0;
     int nDistSyncAll = 0;
     uint32_t dwGlobalQueuePair = 0;
@@ -1178,7 +1177,8 @@ TDNFGoalBuildNativeSolverJobs(
            handle for the rest, and an ignored zero for the ALL jobs. */
         int32_t nRawWhat = pQueueJobs->pnElements[dwIndex * 2 + 1];
         TDNF_PKG_ID dwPkgId = nRawWhat;
-        Solvable *pSolvable = NULL;
+        const char *pszJobRepo = NULL;
+        int nIsInstalled = 0;
         PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob = NULL;
         int nInstall = how == (TDNF_JOB_SOLVABLE | TDNF_JOB_INSTALL),
             nErase = nStamped && how == (TDNF_JOB_SOLVABLE | TDNF_JOB_ERASE),
@@ -1230,19 +1230,30 @@ TDNFGoalBuildNativeSolverJobs(
             dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
             BAIL_ON_TDNF_ERROR(dwError);
         }
-        pSolvable = pool_id2solvable(pPool, dwPkgId);
-        if(!pSolvable || !pSolvable->repo ||
-           IsNullOrEmptyString(pSolvable->repo->name) ||
-           (nInstall && pSolvable->repo == pPool->installed) ||
-           (!nInstall && pSolvable->repo != pPool->installed))
+        dwError = TDNFPkgHandleGetRepoName(pPool, dwPkgId, &pszJobRepo);
+        if(dwError)
+        {
+            dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
+            BAIL_ON_TDNF_ERROR(dwError);
+        }
+        dwError = TDNFPkgHandleIsInstalled(pPool, dwPkgId, &nIsInstalled);
+        if(dwError)
+        {
+            dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
+            BAIL_ON_TDNF_ERROR(dwError);
+        }
+        /* An install job must name something not yet installed, and an
+           erase job must name something that is. */
+        if(nInstall ? nIsInstalled : !nIsInstalled)
         {
             dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
             BAIL_ON_TDNF_ERROR(dwError);
         }
         if(nUserInstalled || nAllowUninstall)
         {
-            const char *pszName = pool_id2str(pPool, pSolvable->name);
-            if(IsNullOrEmptyString(pszName))
+            const char *pszName = NULL;
+
+            if(TDNFPkgHandleGetName(pPool, dwPkgId, &pszName))
             {
                 dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -1260,21 +1271,23 @@ TDNFGoalBuildNativeSolverJobs(
            translation into the native job list. */
         pJob->dwQueuePair = dwIndex;
         pJob->nHasQueuePair = 1;
-        pJob->pszRepository = pSolvable->repo->name;
+        pJob->pszRepository = pszJobRepo;
         /* A command-line solvable has no downloadable metadata, so the native
-           solver rebuilds it from the .rpm that libsolv itself read. */
-        if(pSolvable->repo == pTdnf->pSolvCmdLineRepo ||
-           !strcmp(pSolvable->repo->name, CMDLINE_REPO_NAME))
+           solver rebuilds it from the .rpm that libsolv itself read.
+           Testing the repo name alone is equivalent to also comparing against
+           pTdnf->pSolvCmdLineRepo: every writer of that slot creates the repo
+           as CMDLINE_REPO_NAME, so pointer equality implies name equality. */
+        if(!strcmp(pszJobRepo, CMDLINE_REPO_NAME))
         {
-            /* solvable_get_location() hands back pool scratch space, which is a
-               16-slot ring buffer: the 17th command-line package in a single
-               transaction recycles the slot the 1st one is still pointing at.
-               This array outlives the loop, so it has to own its strings.
-               The Safe variant keeps the previous behaviour for a solvable with
-               no location at all, which used to leave the entry NULL. */
-            dwError = TDNFSafeAllocateString(
-                          solvable_get_location(pSolvable, &nMediaNr),
-                          &ppszCmdLinePaths[dwInstallCount - 1]);
+            /* Allocated, not borrowed: the underlying location lives in a
+               16-slot pool ring buffer and this array outlives the loop.
+               Unlike the accessor calls above, this error is deliberately
+               NOT remapped to ERROR_TDNF_CALL_NOT_SUPPORTED. Its validation
+               failures are already excluded by the dwPkgId range check
+               above, so the only reachable failure is an allocation one,
+               which this call site has always propagated unchanged. */
+            dwError = TDNFPkgHandleGetLocation(
+                          pPool, dwPkgId, &ppszCmdLinePaths[dwInstallCount - 1]);
             BAIL_ON_TDNF_ERROR(dwError);
         }
         dwError = SolvGetNevraFromId(

@@ -1851,3 +1851,317 @@ int _pkginfo_compare(
     }
     return ret;
 }
+/*
+ * Package-handle accessors.
+ *
+ * Reading a field out of a TDNF_PKG_ID is the only place client/ still
+ * has to know how the handle is represented, so every such read is
+ * routed through this section. Replacing the representation is then a
+ * change confined here rather than a change to each caller.
+ *
+ * They live here, rather than in either caller, because querynative.c
+ * and goal.c both need them. Promoting them from static grows libtdnf's
+ * exported surface, so the new names are recorded in
+ * scripts/abi-baseline.json as a deliberate act rather than a side
+ * effect -- that is what the ABI audit exists to force.
+ *
+ * Field strings returned by TDNFPkgHandleGetFields and
+ * TDNFPkgHandleGetName are borrowed from the sack and stay valid for as
+ * long as it does; callers must not free them. The NEVRA is different
+ * and is documented at TDNFPkgHandleGetRepoNevra.
+ */
+
+uint32_t
+TDNFPkgHandleGetFields(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    PTDNF_PKG_FIELDS pFields
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+    TDNF_PKG_FIELDS stFields = {0};
+
+    if(!pPool || !pFields)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv || !pSolv->repo)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    stFields.pszRepo = pSolv->repo->name;
+    stFields.pszName = pool_id2str(pPool, pSolv->name);
+    stFields.pszArch = pool_id2str(pPool, pSolv->arch);
+    stFields.pszEvr = solvable_lookup_str(pSolv, SOLVABLE_EVR);
+
+    if(IsNullOrEmptyString(stFields.pszRepo) ||
+       IsNullOrEmptyString(stFields.pszName) ||
+       IsNullOrEmptyString(stFields.pszArch) ||
+       IsNullOrEmptyString(stFields.pszEvr))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *pFields = stFields;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+uint32_t
+TDNFPkgHandleGetName(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszName
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+    const char *pszName = NULL;
+
+    if(!pPool || !ppszName)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pszName = pool_id2str(pPool, pSolv->name);
+    if(IsNullOrEmptyString(pszName))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *ppszName = pszName;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/*
+ * Unlike the other accessors this one returns an ALLOCATED NEVRA that
+ * the caller owns and must free. The underlying pool_solvable2str hands
+ * back a slot in a small fixed-size ring buffer that later pool string
+ * operations recycle, so handing that pointer out would give this file
+ * two different lifetime contracts and invite a caller to hold a
+ * dangling one. Copying costs a malloc and removes the trap; a future
+ * non-libsolv implementation would have to build the string anyway.
+ * The repo name is borrowed as usual.
+ */
+uint32_t
+TDNFPkgHandleGetRepoNevra(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszRepo,
+    char **ppszNevra
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+    const char *pszRepo = "";
+    const char *pszTmpNevra = NULL;
+    char *pszNevra = NULL;
+
+    if(!pPool || !ppszRepo || !ppszNevra)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    /* An unnamed repo is reported as the empty string rather than
+       refused: the caller uses this to build a display ref. */
+    if(pSolv->repo && pSolv->repo->name)
+    {
+        pszRepo = pSolv->repo->name;
+    }
+
+    pszTmpNevra = pool_solvable2str(pPool, pSolv);
+    if(IsNullOrEmptyString(pszTmpNevra))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFAllocateString(pszTmpNevra, &pszNevra);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszRepo = pszRepo;
+    *ppszNevra = pszNevra;
+
+cleanup:
+    return dwError;
+
+error:
+    TDNF_SAFE_FREE_MEMORY(pszNevra);
+    goto cleanup;
+}
+
+/* Both operands must be non-NULL; there is no error channel here, so a
+   NULL is a caller bug and is left to fault rather than be papered over
+   with an arbitrary ordering. */
+int
+TDNFPkgHandleEvrCompare(
+    Pool *pPool,
+    const char *pszEvrLeft,
+    const char *pszEvrRight
+    )
+{
+    /* Compares in the sack's EVR ordering, which is not string equality:
+       an omitted epoch and an explicit "0:" compare equal. */
+    return pool_evrcmp_str(pPool, pszEvrLeft, pszEvrRight, EVRCMP_COMPARE);
+}
+
+/*
+ * Repo name of a package handle, with exactly the validation the job
+ * builder needs: the handle must resolve, belong to a repo, and that
+ * repo must be named. Deliberately stricter than
+ * TDNFPkgHandleGetRepoNevra, which tolerates an unnamed repo because it
+ * is only building a display string.
+ */
+uint32_t
+TDNFPkgHandleGetRepoName(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszRepo
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+
+    if(!pPool || !ppszRepo)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv || !pSolv->repo || IsNullOrEmptyString(pSolv->repo->name))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *ppszRepo = pSolv->repo->name;
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/*
+ * Whether the handle names an already-installed package. This is repo
+ * *identity*, not a repo name, so it cannot be answered by comparing
+ * strings -- the installed repo is whichever one the pool has adopted
+ * as such.
+ */
+uint32_t
+TDNFPkgHandleIsInstalled(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    int *pnIsInstalled
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+
+    if(!pPool || !pnIsInstalled)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv || !pSolv->repo)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *pnIsInstalled = (pSolv->repo == pPool->installed);
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+/*
+ * On-disk location of a package handle, ALLOCATED for the caller to
+ * free. It is not borrowed on purpose: the underlying
+ * solvable_get_location() returns a slot in a 16-slot ring buffer that
+ * later pool string operations recycle, so a borrowed pointer silently
+ * rots once seventeen of them are live. That was a real bug (#281).
+ *
+ * A solvable with no location at all yields NULL rather than an error,
+ * which is how callers distinguish "not a downloadable file" from a
+ * failure.
+ */
+uint32_t
+TDNFPkgHandleGetLocation(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    char **ppszLocation
+    )
+{
+    uint32_t dwError = 0;
+    Solvable *pSolv = NULL;
+    unsigned int nMediaNr = 0;
+    char *pszLocation = NULL;
+
+    if(!pPool || !ppszLocation)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    pSolv = pool_id2solvable(pPool, dwPkgId);
+    if(!pSolv)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFSafeAllocateString(
+                  solvable_get_location(pSolv, &nMediaNr),
+                  &pszLocation);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszLocation = pszLocation;
+
+cleanup:
+    return dwError;
+
+error:
+    TDNF_SAFE_FREE_MEMORY(pszLocation);
+    goto cleanup;
+}
