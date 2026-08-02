@@ -298,13 +298,6 @@ TDNFPoolGetPkgIds(
     PTDNF_ID_LIST pIdList
     );
 
-uint32_t
-TDNFInstalledHasName(
-    Pool *pPool,
-    TDNF_STR_ID idName,
-    int *pnFound
-    );
-
 /*
  * The string-handle space, kept separate from the package-handle
  * accessors above on purpose (A5-2b). Both are int32_t and libsolv
@@ -320,18 +313,6 @@ TDNFStrIdFromString(
     Pool *pPool,
     const char *pszStr,
     TDNF_STR_ID *pIdStr
-    );
-
-/* Resolve a string handle. *ppszStr is BORROWED and interned -- valid
-   for the life of the pool, must not be freed. Safe to hold, unlike
-   pool_solvable2str()/solvable_get_location(), which return ring-buffer
-   scratch (see #281). Rejects idStr <= 0 rather than resolving it to
-   the empty string. */
-uint32_t
-TDNFStrIdToString(
-    Pool *pPool,
-    TDNF_STR_ID idStr,
-    const char **ppszStr
     );
 
 /* Repo lifecycle and the installed-repo handle. These hand back a

@@ -129,6 +129,22 @@ TDNFFindProtectedPkg(
     PTDNF_PKG_INFO pPkgs
 );
 
+static
+uint32_t
+TDNFGoalLoadInstalledPkgs(
+    PTDNF pTdnf,
+    PTDNF_PKG_INFO *ppPkgInfo,
+    uint32_t *pdwCount
+);
+
+static
+int
+TDNFGoalNameIsInstalled(
+    const char *pszName,
+    PTDNF_PKG_INFO pPkgInfo,
+    uint32_t dwInstalledCount
+);
+
 #define TDNF_GOAL_CAPTURE_NATIVE_OR_RETHROW(_tdnf, _jobs, _allow_erasing, _auto_erase, _flags, _stamped_count, _prepare_only, _refute_unsat, _drop_protected, _native, _error) \
     do {                                                                 \
         uint32_t _saved_error = (_error);                                \
@@ -194,6 +210,8 @@ TDNFSolv(
     int nFlags = 0;
     int nStampedJobCount = 0;
     void *pNativeSolve = NULL;
+    PTDNF_PKG_INFO pInstalledPkgs = NULL;
+    uint32_t dwInstalledPkgCount = 0;
 
     if(!pTdnf || !ppInfo)
     {
@@ -232,10 +250,23 @@ TDNFSolv(
         }
     }
 
-    dwError = TDNFSolvAddInstallOnlyPkgs(pTdnf, pQueueJobs, pTdnf->pSack->pPool);
+    /* Locks and install-only names are filtered against the installed set.
+       Listing it is only worth doing when something is configured. */
+    if((pTdnf->pConf->ppszInstallOnlyPkgs &&
+        pTdnf->pConf->ppszInstallOnlyPkgs[0]) ||
+       (pTdnf->pConf->ppszPkgLocks && pTdnf->pConf->ppszPkgLocks[0]))
+    {
+        dwError = TDNFGoalLoadInstalledPkgs(
+                      pTdnf, &pInstalledPkgs, &dwInstalledPkgCount);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFSolvAddInstallOnlyPkgs(pTdnf, pQueueJobs,
+                                         pInstalledPkgs, dwInstalledPkgCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = TDNFSolvAddPkgLocks(pTdnf, pQueueJobs, pTdnf->pSack->pPool);
+    dwError = TDNFSolvAddPkgLocks(pTdnf, pQueueJobs,
+                                  pInstalledPkgs, dwInstalledPkgCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
     dwError = TDNFGoalAddHiddenPackages(
@@ -375,6 +406,10 @@ TDNFSolv(
     *ppInfo = pInfo;
 
 cleanup:
+    if(pInstalledPkgs)
+    {
+        TDNFFreePackageInfoArray(pInstalledPkgs, dwInstalledPkgCount);
+    }
     TDNFRepoMdNativeSolverLiveSolveRelease(pNativeSolve);
     return dwError;
 
@@ -1181,9 +1216,9 @@ TDNFGoalBuildNativeSolverJobs(
         }
         if(nLocked)
         {
-            TDNF_STR_ID idName = nRawWhat;
             const char *pszName = NULL;
-            if(TDNFStrIdToString(pPool, idName, &pszName))
+            if(nRawWhat < 0 || !pTdnf->pConf->ppszPkgLocks ||
+               !(pszName = pTdnf->pConf->ppszPkgLocks[nRawWhat]))
             {
                 dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -1194,9 +1229,9 @@ TDNFGoalBuildNativeSolverJobs(
         }
         if(nInstallOnly)
         {
-            TDNF_STR_ID idName = nRawWhat;
             const char *pszName = NULL;
-            if(TDNFStrIdToString(pPool, idName, &pszName))
+            if(nRawWhat < 0 || !pTdnf->pConf->ppszInstallOnlyPkgs ||
+               !(pszName = pTdnf->pConf->ppszInstallOnlyPkgs[nRawWhat]))
             {
                 dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -1757,25 +1792,20 @@ error:
 }
 
 uint32_t
-TDNFSolvAddPkgLocks(PTDNF pTdnf, PTDNF_ID_LIST pQueueJobs, Pool *pPool)
+TDNFSolvAddPkgLocks(PTDNF pTdnf, PTDNF_ID_LIST pQueueJobs,
+                    PTDNF_PKG_INFO pInstalled, uint32_t dwInstalledCount)
 {
     uint32_t dwError = 0;
     int i;
-    if(!pTdnf || !pQueueJobs || !pPool) dwError = ERROR_TDNF_INVALID_PARAMETER;
+    if(!pTdnf || !pQueueJobs) dwError = ERROR_TDNF_INVALID_PARAMETER;
     BAIL_ON_TDNF_ERROR(dwError);
     for (i = 0; pTdnf->pConf->ppszPkgLocks && pTdnf->pConf->ppszPkgLocks[i]; i++)
     {
         char *pszPkg = pTdnf->pConf->ppszPkgLocks[i];
-        TDNF_STR_ID idPkg = 0;
-        int nInstalled = 0;
-        dwError = TDNFStrIdFromString(pPool, pszPkg, &idPkg);
-        BAIL_ON_TDNF_ERROR(dwError);
-        if (!idPkg) continue;
-        dwError = TDNFInstalledHasName(pPool, idPkg, &nInstalled);
-        BAIL_ON_TDNF_ERROR(dwError);
-        if (nInstalled)
+        if (IsNullOrEmptyString(pszPkg)) continue;
+        if (TDNFGoalNameIsInstalled(pszPkg, pInstalled, dwInstalledCount))
         {
-            dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_LOCK, idPkg);
+            dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_LOCK, i);
             BAIL_ON_TDNF_ERROR(dwError);
             TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
                 TDNF_TRANSACTION_PLAN_CAPTURE_JOB_LOCK, pszPkg, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_LOCK, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
@@ -1792,14 +1822,15 @@ uint32_t
 TDNFSolvAddInstallOnlyPkgs(
     PTDNF pTdnf,
     PTDNF_ID_LIST pQueueJobs,
-    Pool *pPool
+    PTDNF_PKG_INFO pInstalled,
+    uint32_t dwInstalledCount
     )
 {
     uint32_t dwError = 0;
     char **ppszPackages = NULL;
     int i;
 
-    if(!pTdnf || !pQueueJobs || !pPool)
+    if(!pTdnf || !pQueueJobs)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -1810,23 +1841,18 @@ TDNFSolvAddInstallOnlyPkgs(
     for (i = 0; ppszPackages && ppszPackages[i]; i++)
     {
         char *pszPkg = ppszPackages[i];
-        TDNF_STR_ID idPkg = 0;
-        dwError = TDNFStrIdFromString(pPool, pszPkg, &idPkg);
-        BAIL_ON_TDNF_ERROR(dwError);
-        if (idPkg)
+        if (IsNullOrEmptyString(pszPkg))
         {
-            int nInstalled = 0;
-            /* Name multiversion jobs matter only when an instance exists. */
-            dwError = TDNFInstalledHasName(pPool, idPkg, &nInstalled);
+            continue;
+        }
+        /* Name multiversion jobs matter only when an instance exists. */
+        if (TDNFGoalNameIsInstalled(pszPkg, pInstalled, dwInstalledCount))
+        {
+            dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_MULTIVERSION, i);
             BAIL_ON_TDNF_ERROR(dwError);
-            if (nInstalled)
-            {
-                dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_MULTIVERSION, idPkg);
-                BAIL_ON_TDNF_ERROR(dwError);
-                TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
-                    TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION, pszPkg, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_MULTIVERSION, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
-                    TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
-            }
+            TDNFTransactionPlanRequestTraceRecordNameJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
+                TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION, pszPkg, TDNF_JOB_SOLVABLE_NAME|TDNF_JOB_MULTIVERSION, 0, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
+                TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
         }
     }
 
@@ -1834,6 +1860,102 @@ cleanup:
     return dwError;
 error:
     goto cleanup;
+}
+
+/*
+ * The installed set backing TDNFSolvAddPkgLocks and
+ * TDNFSolvAddInstallOnlyPkgs. Both used to intern each configured name into
+ * the libsolv pool and ask the pool whether an installed solvable carried it;
+ * the pool was doing nothing but string interning and an installed-name
+ * lookup, and the interned Id was handed straight back to
+ * TDNFGoalBuildNativeSolverJobs which turned it back into the same string.
+ *
+ * The whole set is listed once, unfiltered, and compared by exact name:
+ * passing the configured names as specs would subject them to the native
+ * lister's glob matching, which the pool lookup never did.
+ *
+ * The filter is load-bearing, and not merely for bookkeeping -- but only for
+ * locks. solver_rules.zig's `.lock` arm emits
+ * Literal.init(id, package.installed != null), which for an
+ * available-but-uninstalled package is a negative unit clause forbidding its
+ * installation, and nothing downstream gates lock names on installed state.
+ * So emitting a lock job for a configured name that names nothing installed
+ * would refuse installs that must succeed. This filter is the only gate.
+ *
+ * For multiversion it is redundant, not load-bearing: solver_coordinator.zig's
+ * hasInstalledName check drops the multiversion job for a name with nothing
+ * installed before any rule is generated, and that is the sole production
+ * producer of such jobs. Do not assume this filter covers what that one does.
+ * What it still buys for multiversion is consistency of the recorded job set:
+ * `tdnf plan` would otherwise advertise a multiversion job the solver discards.
+ *
+ * Mutation-checked against the 21-probe a62a set: never emitting a
+ * lock/multiversion job moves 13, an off-by-one in the lock index moves 10,
+ * skipping config index 0 in the install-only producer moves 4, and deleting
+ * this filter moves 3 -- two `tdnf plan` probes plus one transaction whose
+ * outcome flips from a successful install to a refusal.
+ */
+static
+uint32_t
+TDNFGoalLoadInstalledPkgs(
+    PTDNF pTdnf,
+    PTDNF_PKG_INFO *ppPkgInfo,
+    uint32_t *pdwCount
+    )
+{
+    uint32_t dwError = 0;
+
+    if(!pTdnf || !ppPkgInfo || !pdwCount)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    /* No repo inputs: SCOPE_INSTALLED admits only the installed dataset, which
+       is built from pRpmConfig alone. Passing enabled repos here would parse
+       every repomd.xml and primary.xml only for the scope filter to drop them. */
+    dwError = TDNFRepoMdNativeListConfig(
+                  NULL,
+                  0,
+                  pTdnf->pRpmConfig,
+                  SCOPE_INSTALLED,
+                  NULL,
+                  DETAIL_LIST,
+                  ppPkgInfo,
+                  pdwCount);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+cleanup:
+    return dwError;
+error:
+    goto cleanup;
+}
+
+static
+int
+TDNFGoalNameIsInstalled(
+    const char *pszName,
+    PTDNF_PKG_INFO pPkgInfo,
+    uint32_t dwInstalledCount
+    )
+{
+    uint32_t i = 0;
+
+    if(IsNullOrEmptyString(pszName) || !pPkgInfo)
+    {
+        return 0;
+    }
+
+    for(i = 0; i < dwInstalledCount; i++)
+    {
+        if(!IsNullOrEmptyString(pPkgInfo[i].pszName) &&
+           strcmp(pPkgInfo[i].pszName, pszName) == 0)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 

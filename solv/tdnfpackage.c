@@ -888,50 +888,6 @@ error:
     goto cleanup;
 }
 
-/* Whether any installed package carries this name handle. Same absent-repo
-   contract as TDNFInstalledGetPkgIds. */
-uint32_t
-TDNFInstalledHasName(
-    Pool *pPool,
-    TDNF_STR_ID idName,
-    int *pnFound
-    )
-{
-    uint32_t dwError = 0;
-    TDNF_PKG_ID p = 0;
-    Solvable *s = NULL;
-    int nFound = 0;
-
-    if(!pPool || !pnFound)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    if(!pPool->installed)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    FOR_REPO_SOLVABLES(pPool->installed, p, s)
-    {
-        if(s->name == idName)
-        {
-            nFound = 1;
-            break;
-        }
-    }
-
-    *pnFound = nFound;
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
 /*
  * Every package the sack knows about, installed or not, as handles.
  *
@@ -1031,57 +987,6 @@ error:
     goto cleanup;
 }
 
-/*
- * Resolve a string handle to its text.
- *
- * The returned pointer is BORROWED and interned: it lives as long as
- * the pool and must not be freed. This is safe to hold, unlike
- * pool_solvable2str() and solvable_get_location(), which return pool
- * scratch from a 16-slot ring buffer that later calls overwrite --
- * borrowing one of those shipped a real bug (#281).
- *
- * A zero or negative handle is rejected rather than resolved. libsolv
- * would answer ID_NULL with the empty string, which reads as a package
- * legitimately named "", and every caller here treats an empty name as
- * an error anyway.
- */
-uint32_t
-TDNFStrIdToString(
-    Pool *pPool,
-    TDNF_STR_ID idStr,
-    const char **ppszStr
-    )
-{
-    uint32_t dwError = 0;
-    const char *pszStr = NULL;
-
-    if(!pPool || !ppszStr)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    if(idStr <= 0)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pszStr = pool_id2str(pPool, idStr);
-    if(IsNullOrEmptyString(pszStr))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    *ppszStr = pszStr;
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
 
 /*
  * Is this package handle one the pool could resolve?
