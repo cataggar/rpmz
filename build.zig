@@ -20,6 +20,14 @@ const project_name = "tdnf";
 const default_project_version = "4.0.0";
 const default_project_semver: std.SemanticVersion = .{ .major = 4, .minor = 0, .patch = 0 };
 
+/// Patch level of the vendored libsolv (see `.libsolv` in build.zig.zon).
+/// Handed to both the C and Zig sides as a macro so each can assert the
+/// libsolv headers it compiled against are the vendored ones this build
+/// links -- see the _Static_assert in solv/includes.h and the comptime
+/// check in repomd/solvbridge.zig. Bump alongside build.zig.zon; not
+/// doing so is a loud build error rather than a silent ABI mismatch.
+const vendored_libsolv_version_patch = "39";
+
 /// Every client/ C translation unit. libsolv has been pushed out of
 /// client/'s C sources entirely (issue #39): these files must keep
 /// compiling with no libsolv header anywhere in scope, which the
@@ -44,6 +52,17 @@ const client_libsolv_free_srcs = [_][]const u8{
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
 /// to the strict set clang accepts. GCC-only warnings have been removed.
 const tdnf_cflags = [_][]const u8{
+    // Vendored libsolv's headers are reached with -I rather than
+    // -isystem, because zig cc orders /usr/include *ahead* of user
+    // -isystem directories: with -isystem, a host libsolv-devel silently
+    // wins and the build compiles against the host's headers while
+    // linking the vendored .a. -I restores the intended precedence, and
+    // this flag restores the warning suppression that -isystem used to
+    // provide, without exempting any of tdnf's own sources -- every
+    // libsolv header is spelled <solv/...> (see solv/includes.h), and a
+    // header included from a system header is itself a system header, so
+    // libsolv's internal quoted includes are covered too.
+    "--system-header-prefix=solv/",
     "-Wall",
     "-Wundef",
     "-Wstrict-prototypes",
@@ -153,9 +172,11 @@ pub fn build(b: *Build) void {
     });
     const libsolv = libsolv_dep.artifact("solv");
     const libsolvext = libsolv_dep.artifact("solvext");
-    const libsolv_include = libsolv.getEmittedIncludeTree();
-    const libsolvext_include = libsolvext.getEmittedIncludeTree();
-    const libsolv_flat_include = libsolv_include.path(b, "solv");
+    // Bundled and derived, not three loose LazyPaths: they are the same
+    // type, so five hand-written call sites could silently swap or repeat
+    // one, and passing the core tree where the ext tree belongs builds and
+    // links fine while leaving <solv/solv_xfopen.h> on /usr/include.
+    const libsolv_includes = LibsolvIncludes.init(b, libsolv, libsolvext);
 
     // ----- generated headers (written into source tree to match the CMake
     //       layout, which avoids the "two config.h" search-order problem).
@@ -500,10 +521,9 @@ pub fn build(b: *Build) void {
     repomd_mod.addImport("tdnf_error", tdnf_error_mod);
     repomd_mod.addIncludePath(b.path("include"));
     repomd_mod.addIncludePath(b.path("rpmzig"));
-    addLibsolvCoreIncludes(
+    addLibsolvIncludes(
         repomd_mod,
-        libsolv_include,
-        libsolv_flat_include,
+        libsolv_includes,
     );
 
     const transaction_plan_native_mod = b.createModule(.{
@@ -659,9 +679,7 @@ pub fn build(b: *Build) void {
         mod.addIncludePath(b.path("rpmzig"));
         addLibsolvIncludes(
             mod,
-            libsolv_include,
-            libsolv_flat_include,
-            libsolvext_include,
+            libsolv_includes,
         );
         mod.addCSourceFiles(.{
             .root = b.path("solv"),
@@ -768,10 +786,9 @@ pub fn build(b: *Build) void {
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
         test_mod.addIncludePath(b.path("include"));
         test_mod.addIncludePath(b.path("rpmzig"));
-        addLibsolvCoreIncludes(
+        addLibsolvIncludes(
             test_mod,
-            libsolv_include,
-            libsolv_flat_include,
+            libsolv_includes,
         );
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(llconf_lib);
@@ -1448,6 +1465,18 @@ pub fn build(b: *Build) void {
         "Prove every C file in client/ builds without libsolv headers",
     );
     libsolv_confinement_step.dependOn(&client_confinement.step);
+    // The -I pin is attached per module by addLibsolvIncludes, so a file
+    // in a module that never calls it can still spell <solv/pool.h> and
+    // resolve it from /usr/include with no version assert in scope --
+    // exactly the bug the pin exists to prevent, reachable everywhere
+    // except solv/ and repomd/. Nothing in the build graph can catch
+    // that, because such a file compiles cleanly; only the spelling
+    // gives it away.
+    const run_libsolv_include_audit = b.addSystemCommand(
+        &.{ "python3", "scripts/libsolv-include-audit.py" },
+    );
+    run_libsolv_include_audit.setCwd(b.path("."));
+    libsolv_confinement_step.dependOn(&run_libsolv_include_audit.step);
 
 
     const transaction_plan_handle_test_step = b.step(
@@ -1772,9 +1801,7 @@ pub fn build(b: *Build) void {
         test_mod.addIncludePath(b.path("rpmzig"));
         addLibsolvIncludes(
             test_mod,
-            libsolv_include,
-            libsolv_flat_include,
-            libsolvext_include,
+            libsolv_includes,
         );
         test_mod.addObjectFile(libsolv.getEmittedBin());
         test_mod.addObjectFile(libsolvext.getEmittedBin());
@@ -1799,10 +1826,9 @@ pub fn build(b: *Build) void {
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
         test_mod.addIncludePath(b.path("include"));
         test_mod.addIncludePath(b.path("rpmzig"));
-        addLibsolvCoreIncludes(
+        addLibsolvIncludes(
             test_mod,
-            libsolv_include,
-            libsolv_flat_include,
+            libsolv_includes,
         );
         test_mod.addObjectFile(libsolv.getEmittedBin());
         const tests = b.addTest(.{ .root_module = test_mod });
@@ -2111,23 +2137,79 @@ fn linkSystem(mod: *Build.Module, names: []const []const u8) void {
     for (names) |n| mod.linkSystemLibrary(n, .{});
 }
 
-fn addLibsolvCoreIncludes(
-    mod: *Build.Module,
-    include_tree: LazyPath,
-    flat_include: LazyPath,
-) void {
-    mod.addSystemIncludePath(include_tree);
-    mod.addSystemIncludePath(flat_include);
-}
+const LibsolvIncludes = struct {
+    /// Emitted tree; supplies <solv/*.h>.
+    core: LazyPath,
+    /// The same tree's solv/ subdir. Derived in init() rather than set by
+    /// the caller: as a third field it could be pointed at a different
+    /// tree, or at the core root, with no diagnostic. Nothing spells a
+    /// flat include today, and nothing should: --system-header-prefix
+    /// matches the written spelling, so <pool.h> gets no system
+    /// exemption and brings back the 18 -Wextra -Werror failures in
+    /// libsolv's own headers.
+    flat: LazyPath,
+    /// libsolvext's tree; supplies <solv/{solv_xfopen,testcase,tools_util}.h>.
+    ext: LazyPath,
 
-fn addLibsolvIncludes(
-    mod: *Build.Module,
-    include_tree: LazyPath,
-    flat_include: LazyPath,
-    ext_include_tree: LazyPath,
-) void {
-    addLibsolvCoreIncludes(mod, include_tree, flat_include);
-    mod.addSystemIncludePath(ext_include_tree);
+    fn init(
+        b: *Build,
+        libsolv: *Build.Step.Compile,
+        libsolvext: *Build.Step.Compile,
+    ) LibsolvIncludes {
+        const core = libsolv.getEmittedIncludeTree();
+        return .{
+            .core = core,
+            .flat = core.path(b, "solv"),
+            .ext = libsolvext.getEmittedIncludeTree(),
+        };
+    }
+};
+
+fn addLibsolvIncludes(mod: *Build.Module, trees: LibsolvIncludes) void {
+    // -I, not -isystem: zig cc searches /usr/include *before* user
+    // -isystem directories, so with -isystem a host libsolv-devel wins
+    // and the build compiles against the host's headers while linking the
+    // vendored .a. tdnf_cflags carries --system-header-prefix=solv/ to
+    // keep libsolv's own warnings suppressed, and both the C and Zig
+    // sides assert on TDNF_VENDORED_LIBSOLV_VERSION_PATCH below so a
+    // regression here fails the build instead of passing quietly.
+    //
+    // Known boundary -- read this before trusting the asserts. They
+    // detect "the vendored tree is not on the include path at all". They
+    // are NOT a per-header leakage detector, and cannot be made into one:
+    // libsolv's headers are guard-macro protected, so once any vendored
+    // header has been included, a host header that wins a later lookup
+    // has its own #include "pool.h" skipped by the already-defined guard.
+    // LIBSOLV_VERSION_PATCH stays 39 and the asserts stay silent while
+    // host declarations are in scope. Only a host header included
+    // *before* every vendored one trips them.
+    //
+    // This matters because -I pins a header only if the vendored tree
+    // emits a file of that name. The pinned set is 31: the fork installs
+    // libsolv's public set from src/CMakeLists.txt (27 + generated
+    // solvversion.h) plus libsolvext's 3. A distro libsolv-devel also
+    // ships feature headers such as repo_rpmdb.h and pool_fileconflicts.h
+    // that the fork does not build, and spelling one would resolve
+    // against /usr/include silently. If the translation unit calls one of
+    // the functions such a header declares, the link then fails on the
+    // missing symbol; macro-, enum- or typedef-only use (RPM_ADD_*,
+    // FINDFILECONFLICTS_*) produces no diagnostic anywhere. Nothing in
+    // the tree spells one today. Do not add such an include without
+    // first making the fork emit the header.
+    mod.addIncludePath(trees.core);
+    mod.addIncludePath(trees.flat);
+    // The ext tree goes to every consumer, not just the ones that spell
+    // an ext header today. It is <dir>/solv/{solv_xfopen,testcase,
+    // tools_util}.h, so omitting it did not merely leave those three
+    // unavailable -- it left them resolvable from /usr/include/solv, and
+    // a host testcase.h then drags in the whole host core set through
+    // includer-relative quoted lookup, without -I ordering ever being
+    // consulted.
+    mod.addIncludePath(trees.ext);
+    mod.addCMacro(
+        "TDNF_VENDORED_LIBSOLV_VERSION_PATCH",
+        vendored_libsolv_version_patch,
+    );
 }
 
 fn configureLuaScriptletSupport(
