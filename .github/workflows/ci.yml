@@ -76,6 +76,7 @@ jobs:
         run: |
           zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out
+          zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
 
       - name: Generate ztest repository seed
         run: |
@@ -138,6 +139,7 @@ jobs:
           zig build -Doptimize=ReleaseSafe abi-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out
+          zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
 
   lint:
     name: Source policy

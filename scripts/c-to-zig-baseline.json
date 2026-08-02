@@ -6,7 +6,7 @@
     "tracked_c_lines": 29665,
     "zig_cimport_files": 47,
     "zig_cinclude_directives": 285,
-    "build_add_c_source_calls": 24,
+    "build_add_c_source_calls": 23,
     "build_add_system_include_calls": 3,
     "build_link_system_library_calls": 1,
     "build_link_system_helper_calls": 4,
