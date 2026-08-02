@@ -197,3 +197,181 @@ SolvUseMetaDataCache(
 #ifdef __cplusplus
 }
 #endif
+
+uint32_t
+SolvGetRepoDataList(
+    PSolvSack pSack,
+    PTDNF_REPO_DATA **pppRepoData,
+    uint32_t *pdwCount
+    );
+
+/*
+ * Package-handle accessors. Every read of a field out of a
+ * TDNF_PKG_ID goes through these, so the handle representation is
+ * changeable in one place. Strings from TDNFPkgHandleGetFields,
+ * TDNFPkgHandleGetName and TDNFPkgHandleGetRepoName are borrowed from
+ * the sack; the NEVRA and the location are allocated and owned by the
+ * caller.
+ */
+uint32_t
+TDNFPkgHandleGetFields(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    PTDNF_PKG_FIELDS pFields
+    );
+
+uint32_t
+TDNFPkgHandleGetName(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszName
+    );
+
+uint32_t
+TDNFPkgHandleGetRepoNevra(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszRepo,
+    char **ppszNevra
+    );
+
+int
+TDNFPkgHandleEvrCompare(
+    Pool *pPool,
+    const char *pszEvrLeft,
+    const char *pszEvrRight
+    );
+
+uint32_t
+TDNFPkgHandleGetRepoName(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    const char **ppszRepo
+    );
+
+uint32_t
+TDNFPkgHandleIsInstalled(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    int *pnIsInstalled
+    );
+
+uint32_t
+TDNFPkgHandleGetLocation(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    char **ppszLocation
+    );
+
+/*
+ * The name handle of a package handle. Returns the interned id rather
+ * than a string so a caller matching against a set of names compares
+ * integers; TDNFPkgHandleGetName is the one to reach for when a string
+ * is wanted. Cannot fail for a handle that came out of the sack.
+ */
+uint32_t
+TDNFPkgHandleGetNameId(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    TDNF_STR_ID *pIdName
+    );
+
+/*
+ * Queries over the installed set. They take a Pool rather than a sack
+ * handle because that is what the job builders already hold; the name
+ * says "Installed" rather than "Sack" so it does not promise otherwise.
+ * An absent installed repo is reported as an error, never as an empty
+ * set.
+ */
+uint32_t
+TDNFInstalledGetPkgIds(
+    Pool *pPool,
+    PTDNF_ID_LIST pIdList
+    );
+
+/* Every package the sack knows about, the counterpart to
+   TDNFInstalledGetPkgIds. Delegates to FOR_POOL_SOLVABLES, so the set
+   and order are the macro's exactly. */
+uint32_t
+TDNFPoolGetPkgIds(
+    Pool *pPool,
+    PTDNF_ID_LIST pIdList
+    );
+
+uint32_t
+TDNFInstalledHasName(
+    Pool *pPool,
+    TDNF_STR_ID idName,
+    int *pnFound
+    );
+
+/*
+ * The string-handle space, kept separate from the package-handle
+ * accessors above on purpose (A5-2b). Both are int32_t and libsolv
+ * calls both "Id", so naming is the only thing preventing a package
+ * handle being passed where a string handle belongs -- which would
+ * silently resolve to whatever name sits at that index.
+ */
+
+/* Intern a string. create=1, so this fails only on a NULL string;
+   the empty string interns to STRID_EMPTY (1), never 0. */
+uint32_t
+TDNFStrIdFromString(
+    Pool *pPool,
+    const char *pszStr,
+    TDNF_STR_ID *pIdStr
+    );
+
+/* Resolve a string handle. *ppszStr is BORROWED and interned -- valid
+   for the life of the pool, must not be freed. Safe to hold, unlike
+   pool_solvable2str()/solvable_get_location(), which return ring-buffer
+   scratch (see #281). Rejects idStr <= 0 rather than resolving it to
+   the empty string. */
+uint32_t
+TDNFStrIdToString(
+    Pool *pPool,
+    TDNF_STR_ID idStr,
+    const char **ppszStr
+    );
+
+/* Repo lifecycle and the installed-repo handle. These hand back a
+   Repo * the caller passes on without dereferencing; that plumbing goes
+   away when Pool/Repo become opaque typedefs. */
+uint32_t
+TDNFPoolGetInstalledRepo(
+    Pool *pPool,
+    Repo **ppRepo
+    );
+
+uint32_t
+TDNFPoolCreateRepo(
+    Pool *pPool,
+    const char *pszName,
+    Repo **ppRepo
+    );
+
+/* Frees the repo and its solvables. Null-tolerant. */
+void
+TDNFRepoFree(
+    Repo *pRepo
+    );
+
+/* Range check on a package handle: is it safe to hand to an accessor.
+   Not an existence check. Reported via pnValid, not as an error,
+   because callers map it to their own error code. */
+uint32_t
+TDNFPkgHandleIsValid(
+    Pool *pPool,
+    TDNF_PKG_ID dwPkgId,
+    int *pnValid
+    );
+
+/* The package handles held by a SolvPackageList, in list order. The
+   list carries them in an embedded libsolv Queue, so this is the one
+   accessor whose libsolv dereference is not spelled with any libsolv
+   identifier at the call site. */
+uint32_t
+TDNFPkgListGetIds(
+    PSolvPackageList pPkgList,
+    PTDNF_ID_LIST pIdList
+    );

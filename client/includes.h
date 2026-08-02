@@ -44,16 +44,21 @@
 #include "../rpmzig/rpmdb.h"
 
 /* Deliberately not ../solv/includes.h, which would drag in libsolv:
-   client/ is libsolv-free and the libsolv-confinement-audit build step
-   proves it. Only solv/defines.h (repo name constants) and
-   solv/prototypes.h (the Solv* entry points, whose libsolv types are all
-   opaque there) are needed here. client/packageutils.c is the single
-   exception and includes ../solv/includes.h itself. */
+   every C file in client/ is libsolv-free and the libsolv-confinement-audit
+   build step proves it, with no exceptions left. This says nothing about
+   client/transaction_plan_integration.zig, which is compiled into libtdnf
+   from this directory and does reach libsolv, through repomd's bindings
+   rather than through this header; porting it is Part B of issue #39.
+   Only solv/defines.h (the client/solv interface types and repo name
+   constants) and solv/prototypes.h (the Solv* entry points, whose libsolv
+   types are all opaque there) are needed here. */
 /* Every module that compiles client/ must declare whether libsolv headers
-   are in scope for it, and exactly one answer is allowed. libtdnf and the
-   two plugins declare IN_SCOPE (libtdnf because packageutils.c goes on to
-   include ../solv/includes.h); libsolv-confinement-audit declares
-   OUT_OF_SCOPE.
+   are in scope for it, and exactly one answer is allowed.
+   libsolv-confinement-audit declares OUT_OF_SCOPE and is the module that
+   proves the claim. libtdnf and the two plugins declare IN_SCOPE: they no
+   longer add libsolv's include paths at all, but they are built for the
+   native target, where a host libsolv-devel is reachable through
+   /usr/include, so they assert nothing.
 
    Requiring the declaration is what makes the negative control below fail
    closed: deleting the audit's -D would otherwise disarm the control
