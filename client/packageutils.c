@@ -9,6 +9,12 @@
 #define _GNU_SOURCE 1
 #include "includes.h"
 
+/* The one file in client/ that is allowed to see libsolv. Everything the
+   rest of client/ needs from the pool, a repo or a package list goes
+   through an accessor defined below. Keeping this include here rather than
+   in client/includes.h is what makes that rule compiler-enforced. */
+#include "../solv/includes.h"
+
 #define PACKAGEUTILS_NATIVE_REF_SEP ((char)0x1f)
 
 /* The job-list encoding in defines.h is tdnf's own, but its values are

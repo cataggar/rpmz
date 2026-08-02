@@ -15,6 +15,14 @@ extern "C" {
 #define TDNF_ID_DEPENDS "tdnf:depends"
 #define TDNF_ID_REQUIRES_PRE "tdnf:requires-pre"
 
+/* The libsolv pool handle, incomplete on purpose. Unlike Repo it appears
+   in no public header, so it is declared here rather than in tdnftypes.h:
+   Pool is a generic enough name that leaking it into every consumer of
+   <tdnf.h> would be a gratuitous compatibility hazard. The tag must match
+   libsolv's own (pooltypes.h: `typedef struct s_Pool Pool;`) so that
+   translation units seeing both get one identical typedef. */
+typedef struct s_Pool Pool;
+
 typedef struct _SolvSack
 {
     Pool*       pPool;
@@ -22,10 +30,10 @@ typedef struct _SolvSack
     char*       pszRootDir;
 } SolvSack, *PSolvSack;
 
-typedef struct _SolvPackageList
-{
-    Queue       queuePackages;
-} SolvPackageList, *PSolvPackageList;
+/* Opaque to every consumer except solv/, which alone can see the libsolv
+   Queue the list carries. client/ reaches the contents through
+   TDNFPkgListGetIds(). The definition is in solv/includes.h. */
+typedef struct _SolvPackageList SolvPackageList, *PSolvPackageList;
 
 typedef struct _SOLV_REPO_INFO_INTERNAL_
 {
@@ -57,7 +65,7 @@ SolvFreePackageList(
 
 uint32_t
 SolvIdsToPackageList(
-    const Id* pIds,
+    const int32_t* pIds,
     uint32_t dwIdCount,
     PSolvPackageList* ppPkgList
     );
@@ -151,7 +159,7 @@ SolvAddRpmNative(
     Repo *pRepo,
     const char *pszPath,
     int dwFlags,
-    Id *pdwSolvableId
+    int32_t *pdwSolvableId
     );
 
 

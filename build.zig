@@ -20,6 +20,25 @@ const project_name = "tdnf";
 const default_project_version = "4.0.0";
 const default_project_semver: std.SemanticVersion = .{ .major = 4, .minor = 0, .patch = 0 };
 
+/// Every client/ translation unit except packageutils.c. libsolv has been
+/// pushed out of client/ (issue #39): these files must keep compiling with
+/// no libsolv header anywhere in scope, which the libsolv-confinement-audit
+/// step below proves by building them without libsolv's include paths.
+/// packageutils.c is the single remaining libsolv consumer and is compiled
+/// separately.
+const client_libsolv_free_srcs = [_][]const u8{
+    "api.c",             "client.c",     "config.c",  "eventdata.c",
+    "goal.c",            "gpgcheck.c",   "init.c",    "querynative.c",
+    "plugins.c",         "repo.c",       "repoutils.c",
+    "remoterepo.c",      "repolist.c",   "resolve.c", "rpmtrans.c",
+    "rpmtrans_native.c", "updateinfo.c", "utils.c",   "history.c",
+    "varsdir.c",
+    // The C-side entry point into the rpmzig verifier. An ordinary
+    // client/ translation unit: it includes client/includes.h and is
+    // audited like the rest.
+    "gpgcheck_zig.c",
+};
+
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
 /// to the strict set clang accepts. GCC-only warnings have been removed.
 const tdnf_cflags = [_][]const u8{
@@ -1342,24 +1361,13 @@ pub fn build(b: *Build) void {
     // Native transaction ordering, dependency/conflict checks, and the
     // composed transaction executor are unconditional.
     tdnf_so_mod.addCMacro("TDNF_RPMZIG_TRANSACTION_CHECK", "1");
+    // See the stance check at the top of client/includes.h.
+    tdnf_so_mod.addCMacro("TDNF_CLIENT_LIBSOLV_IN_SCOPE", "1");
+    // packageutils.c is the only client/ file allowed to see libsolv; the
+    // rest are proved libsolv-free by libsolv-confinement-audit below.
     tdnf_so_mod.addCSourceFiles(.{
         .root = b.path("client"),
-        .files = &.{
-            "api.c",             "client.c",     "config.c",  "eventdata.c",
-            "goal.c",            "gpgcheck.c",   "init.c",    "packageutils.c",
-            "querynative.c",     "plugins.c",    "repo.c",    "repoutils.c",
-            "remoterepo.c",      "repolist.c",   "resolve.c", "rpmtrans.c",
-            "rpmtrans_native.c", "updateinfo.c", "utils.c",   "history.c",
-            "varsdir.c",
-        },
-        .flags = &tdnf_cflags,
-    });
-    // gpgcheck_zig.c is the single C-side entry point into the
-    // rpmzig verifier; verify_pure.c bridges into rpmzig/pgp
-    // without any gpgme dependency.
-    tdnf_so_mod.addCSourceFiles(.{
-        .root = b.path("client"),
-        .files = &.{"gpgcheck_zig.c"},
+        .files = &(client_libsolv_free_srcs ++ [_][]const u8{"packageutils.c"}),
         .flags = &tdnf_cflags,
     });
     tdnf_so_mod.addCSourceFiles(.{
@@ -1384,6 +1392,56 @@ pub fn build(b: *Build) void {
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureCreate");
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureDestroy");
     b.installArtifact(libtdnf);
+
+    // Compiler-enforced libsolv confinement (issue #39). Build every
+    // client/ file except packageutils.c with libsolv's headers
+    // unreachable. A regex over the sources was wrong eight times; this
+    // cannot be: if any of these files reaches for a libsolv type, macro
+    // or function -- with or without an #include -- the build fails.
+    //
+    // Two things make it hermetic rather than merely convenient:
+    //
+    //   * A separate module. tdnf_so_mod adds libsolv's -isystem paths for
+    //     packageutils.c, and include paths are per-module, so the check
+    //     cannot be expressed by subtracting from the production module.
+    //   * An explicitly-spelled target. Zig only searches the host's
+    //     /usr/include for a *native* target, and libsolv-devel is a
+    //     normal build dependency on the distributions tdnf targets
+    //     (Photon, Azure Linux). Naming the triple, even the host's own,
+    //     restricts the search to Zig's bundled libc headers, so
+    //     <solv/pool.h> is genuinely absent instead of accidentally so.
+    const confinement_target = b.resolveTargetQuery(.{
+        .cpu_arch = target.result.cpu.arch,
+        .os_tag = .linux,
+        .abi = .gnu,
+    });
+    const client_confinement = staticLib(b, confinement_target, optimize, .{
+        .name = "client-libsolv-confinement",
+        .root = "client",
+        .files = &client_libsolv_free_srcs,
+    });
+    client_confinement.root_module.addIncludePath(b.path("rpmzig"));
+    client_confinement.root_module.addCMacro(
+        "TDNF_RPMZIG_TRANSACTION_CHECK",
+        "1",
+    );
+    // Arms the negative control in client/includes.h. The audit is only
+    // evidence if libsolv is genuinely unreachable; if it were reachable
+    // the audit would pass while proving nothing, which is the exact
+    // failure mode this series keeps hitting. Compiling the check inside
+    // the audited module means it sees the configuration under test by
+    // construction -- it cannot drift out of step with it, and there is
+    // no second compiler invocation to keep in sync.
+    client_confinement.root_module.addCMacro(
+        "TDNF_CLIENT_LIBSOLV_OUT_OF_SCOPE",
+        "1",
+    );
+    const libsolv_confinement_step = b.step(
+        "libsolv-confinement-audit",
+        "Prove client/ builds without libsolv headers (packageutils.c aside)",
+    );
+    libsolv_confinement_step.dependOn(&client_confinement.step);
+
 
     const transaction_plan_handle_test_step = b.step(
         "transaction-plan-handle-test",
@@ -1792,6 +1850,9 @@ pub fn build(b: *Build) void {
         libsolv_flat_include,
         libsolvext_include,
     );
+    // Only because this plugin includes client/includes.h; it uses no
+    // libsolv itself. See the stance check there.
+    metalink_mod.addCMacro("TDNF_CLIENT_LIBSOLV_IN_SCOPE", "1");
     metalink_mod.addCSourceFiles(.{
         .root = b.path("plugins/metalink"),
         .files = &.{ "api.c", "metalink.c", "utils.c", "list.c" },
@@ -1823,6 +1884,9 @@ pub fn build(b: *Build) void {
         libsolv_flat_include,
         libsolvext_include,
     );
+    // Only because this plugin includes client/includes.h; it uses no
+    // libsolv itself. See the stance check there.
+    repogpgcheck_mod.addCMacro("TDNF_CLIENT_LIBSOLV_IN_SCOPE", "1");
     repogpgcheck_mod.addCSourceFiles(.{
         .root = b.path("plugins/repogpgcheck"),
         .files = &.{ "api.c", "repogpgcheck.c" },
