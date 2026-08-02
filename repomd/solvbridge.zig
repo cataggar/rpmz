@@ -16,6 +16,34 @@ const c = @cImport({
 
 pub const libsolv = c;
 
+// The Zig side reaches libsolv through this @cImport, so it needs the
+// same pin as solv/includes.h: zig cc searches /usr/include before user
+// -isystem directories, and this module used to be handed libsolv with
+// -isystem, which meant a host libsolv-devel silently supplied the
+// headers while the vendored libsolv was linked. Measured, 0.7.28 and
+// 0.7.39 agree on every public field offset reachable from here (the
+// declarations this @cImport pulls in differ by nine additions -- eight
+// prototypes and the static inline allochashtable -- and one removal,
+// stringpool_resize_hash, none of them used): struct s_Dirpool grew, but
+// .dirpool is the last
+// member outside LIBSOLV_INTERNAL, so only sizeof(Repodata) and
+// sizeof(Dirpool) differ, and the *c.Repodata pointers this file holds
+// were all allocated by libsolv itself (the .start/.end reads below sit
+// at identical offsets in both). So that mismatch was accidentally
+// harmless, not harmless by design, and the next .libsolv bump could
+// change that with no diagnostic. build.zig now uses -I; this is what
+// makes an include-path regression loud rather than silent. It detects
+// the vendored tree being off the path, not every host header in scope
+// -- see the known-boundary comment on addLibsolvIncludes.
+comptime {
+    if (c.LIBSOLV_VERSION_PATCH != c.TDNF_VENDORED_LIBSOLV_VERSION_PATCH) {
+        @compileError(
+            "libsolv headers are not the vendored ones build.zig links; " ++
+                "a host libsolv-devel is shadowing the vendored copy (.libsolv in build.zig.zon)",
+        );
+    }
+}
+
 const available_loader = @import("available_loader.zig");
 const model = @import("model.zig");
 const rpmpkg = @import("rpmpkg.zig");
