@@ -22,6 +22,12 @@ NativeQuerySplitNevra(
     );
 
 static uint32_t
+NativeQueryRefExtractName(
+    const char *pszRef,
+    char **ppszName
+    );
+
+static uint32_t
 NativeQueryAppendRefMatches(
     PSolvSack pSack,
     const char *pszPackageRef,
@@ -529,65 +535,65 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
 {
     uint32_t dwError = 0;
     uint32_t dwCount = 0;
+    uint32_t dwLineCount = 0;
     uint32_t dwIndex = 0;
     char **ppszRefs = NULL;
-    Pool *pPool = NULL;
-    TDNF_ID_LIST qInstalled = {0};
-    int k = 0;
+    char **ppszLines = NULL;
 
-    if(!pTdnf || !pTdnf->pSack || !pHistoryCtx || !pppszRefs || !pdwCount)
+    if(!pTdnf || !pTdnf->pRpmConfig || !pHistoryCtx || !pppszRefs || !pdwCount)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pPool = pTdnf->pSack->pPool;
+    /* Ask the native layer for the installed refs directly instead of
+       walking the pool and serializing each Id. The lines come back in the
+       same "repo<sep>nevra" form this file already parses, because both
+       sides drop a zero epoch: the native formatter at
+       repomd/pkgquery.zig:492 and pool_solvable2str agree. Rebuilding the
+       nevra by hand from PTDNF_PKG_INFO fields would be the unsafe route,
+       so it is deliberately not taken.
 
-    /* Snapshot once and walk it twice. The two passes have to agree on
-       the count, and a snapshot makes that structural rather than a
-       property of nothing having changed in between. */
-    TDNFIdListInit(&qInstalled);
-    dwError = TDNFInstalledGetPkgIds(pPool, &qInstalled);
+       No repo inputs: SCOPE_INSTALLED admits only the installed dataset.
+       Passing enabled repos would parse every repomd.xml only for the
+       scope filter to discard them. */
+    dwError = TDNFRepoMdNativePackageRefLinesConfig(
+                  NULL,
+                  0,
+                  pTdnf->pRpmConfig,
+                  SCOPE_INSTALLED,
+                  "*",
+                  &ppszLines,
+                  &dwLineCount);
+    /* An empty installed set is not an error here - the caller treats a
+       zero count as "nothing to do". */
+    if(dwError == ERROR_TDNF_NO_MATCH)
+    {
+        dwError = 0;
+        dwLineCount = 0;
+    }
     BAIL_ON_TDNF_ERROR(dwError);
 
-    for(k = 0; k < (int)qInstalled.dwCount; k++)
-    {
-        TDNF_PKG_ID p = qInstalled.pnElements[k];
-        const char *pszName = NULL;
-        int nIsAuto = 0;
-        int rc = 0;
-
-        dwError = TDNFPkgHandleGetName(pPool, p, &pszName);
-        BAIL_ON_TDNF_ERROR(dwError);
-        rc = history_get_auto_flag(pHistoryCtx, pszName, &nIsAuto);
-
-        if(rc != 0)
-        {
-            dwError = ERROR_TDNF_HISTORY_ERROR;
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-        if(nIsAuto)
-        {
-            dwCount++;
-        }
-    }
-
+    /* Sized for every installed package. The auto subset is never larger,
+       and the array stays NULL terminated, so one pass replaces the
+       count-then-fill pair the pool walk needed. */
     dwError = TDNFAllocateMemory(
-                  dwCount + 1,
+                  dwLineCount + 1,
                   sizeof(char *),
                   (void **)&ppszRefs);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    for(k = 0; k < (int)qInstalled.dwCount; k++)
+    for(dwIndex = 0; dwIndex < dwLineCount; dwIndex++)
     {
-        TDNF_PKG_ID p = qInstalled.pnElements[k];
-        const char *pszName = NULL;
+        char *pszName = NULL;
         int nIsAuto = 0;
         int rc = 0;
 
-        dwError = TDNFPkgHandleGetName(pPool, p, &pszName);
+        dwError = NativeQueryRefExtractName(ppszLines[dwIndex], &pszName);
         BAIL_ON_TDNF_ERROR(dwError);
+
         rc = history_get_auto_flag(pHistoryCtx, pszName, &nIsAuto);
+        TDNF_SAFE_FREE_MEMORY(pszName);
 
         if(rc != 0)
         {
@@ -599,18 +605,16 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
             continue;
         }
 
-        dwError = NativeQuerySerializePackageIdCommon(
-                      pPool,
-                      p,
-                      &ppszRefs[dwIndex++]);
+        dwError = TDNFAllocateString(ppszLines[dwIndex], &ppszRefs[dwCount]);
         BAIL_ON_TDNF_ERROR(dwError);
+        dwCount++;
     }
 
     *pppszRefs = ppszRefs;
     *pdwCount = dwCount;
 
 cleanup:
-    TDNFIdListFree(&qInstalled);
+    TDNFFreeStringArray(ppszLines);
     return dwError;
 error:
     if(ppszRefs)
@@ -1007,6 +1011,68 @@ NativeQuerySplitNevra(
     *ppszEvr = p + 1;
     *ppszName = pszNevra;
     return 0;
+}
+
+/* Pull the package name out of a "repo<sep>nevra" ref line. The splitter
+   works in place, so the line is copied first and the name duplicated out
+   of that copy. */
+static uint32_t
+NativeQueryRefExtractName(
+    const char *pszRef,
+    char **ppszName
+    )
+{
+    uint32_t dwError = 0;
+    char *pszCopy = NULL;
+    char *pszNevra = NULL;
+    char *pszName = NULL;
+    char *pszEvr = NULL;
+    char *pszArch = NULL;
+    char *pszResult = NULL;
+
+    if(IsNullOrEmptyString(pszRef) || !ppszName)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFAllocateString(pszRef, &pszCopy);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    pszNevra = strchr(pszCopy, NATIVE_QUERY_FIELD_SEP);
+    if(!pszNevra)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+    pszNevra++;
+
+    if(NativeQuerySplitNevra(pszNevra, &pszName, &pszEvr, &pszArch) != 0)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+    if(IsNullOrEmptyString(pszName))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFAllocateString(pszName, &pszResult);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszName = pszResult;
+
+cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszCopy);
+    return dwError;
+error:
+    if(ppszName)
+    {
+        *ppszName = NULL;
+    }
+    TDNF_SAFE_FREE_MEMORY(pszResult);
+    goto cleanup;
 }
 
 static uint32_t
