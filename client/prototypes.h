@@ -582,14 +582,16 @@ uint32_t
 TDNFSolvAddPkgLocks(
     PTDNF pTdnf,
     PTDNF_ID_LIST pQueueJobs,
-    Pool *pPool
+    PTDNF_PKG_INFO pInstalled,
+    uint32_t dwInstalledCount
     );
 
 uint32_t
 TDNFSolvAddInstallOnlyPkgs(
     PTDNF pTdnf,
     PTDNF_ID_LIST pQueueJobs,
-    Pool *pPool
+    PTDNF_PKG_INFO pInstalled,
+    uint32_t dwInstalledCount
     );
 
 uint32_t
