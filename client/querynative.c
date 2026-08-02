@@ -402,6 +402,7 @@ TDNFNativeQuerySerializePackageListRefs(
     uint32_t i = 0;
     char **ppszRefs = NULL;
     TDNF_PKG_ID dwPkgId = 0;
+    TDNF_ID_LIST idList = {0};
 
     if(!pSack || !pPkgList || !pppszRefs || !pdwCount)
     {
@@ -409,7 +410,10 @@ TDNFNativeQuerySerializePackageListRefs(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwCount = pPkgList->queuePackages.count;
+    dwError = TDNFPkgListGetIds(pPkgList, &idList);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwCount = idList.dwCount;
 
     dwError = TDNFAllocateMemory(
                   dwCount + 1,
@@ -419,7 +423,7 @@ TDNFNativeQuerySerializePackageListRefs(
 
     for(i = 0; i < dwCount; i++)
     {
-        dwPkgId = pPkgList->queuePackages.elements[i];
+        dwPkgId = idList.pnElements[i];
 
         dwError = TDNFNativeQuerySerializePackageId(
                       pSack,
@@ -432,6 +436,7 @@ TDNFNativeQuerySerializePackageListRefs(
     *pdwCount = dwCount;
 
 cleanup:
+    TDNFIdListFree(&idList);
     return dwError;
 error:
     if(ppszRefs)

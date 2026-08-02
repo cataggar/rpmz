@@ -11,6 +11,34 @@
 
 #define PACKAGEUTILS_NATIVE_REF_SEP ((char)0x1f)
 
+/* The job-list encoding in defines.h is tdnf's own, but its values are
+   inherited from libsolv and are recorded in the request trace, so they must
+   stay byte-identical. While libsolv is still vendored we can prove that at
+   compile time rather than trusting the copy. Delete this block along with
+   libsolv itself. */
+_Static_assert(TDNF_JOB_SOLVABLE == SOLVER_SOLVABLE, "job select value changed");
+_Static_assert(TDNF_JOB_SOLVABLE_NAME == SOLVER_SOLVABLE_NAME, "job select value changed");
+_Static_assert(TDNF_JOB_SOLVABLE_ALL == SOLVER_SOLVABLE_ALL, "job select value changed");
+_Static_assert(TDNF_JOB_INSTALL == SOLVER_INSTALL, "job action value changed");
+_Static_assert(TDNF_JOB_ERASE == SOLVER_ERASE, "job action value changed");
+_Static_assert(TDNF_JOB_UPDATE == SOLVER_UPDATE, "job action value changed");
+_Static_assert(TDNF_JOB_MULTIVERSION == SOLVER_MULTIVERSION, "job action value changed");
+_Static_assert(TDNF_JOB_LOCK == SOLVER_LOCK, "job action value changed");
+_Static_assert(TDNF_JOB_DISTUPGRADE == SOLVER_DISTUPGRADE, "job action value changed");
+_Static_assert(TDNF_JOB_USERINSTALLED == SOLVER_USERINSTALLED, "job action value changed");
+_Static_assert(TDNF_JOB_ALLOWUNINSTALL == SOLVER_ALLOWUNINSTALL, "job action value changed");
+_Static_assert(TDNF_JOB_JOBMASK == SOLVER_JOBMASK, "job mask value changed");
+_Static_assert(TDNF_JOB_CLEANDEPS == SOLVER_CLEANDEPS, "job flag value changed");
+_Static_assert(TDNF_JOB_FORCEBEST == SOLVER_FORCEBEST, "job flag value changed");
+_Static_assert(sizeof(TDNF_PKG_ID) == sizeof(Id), "package handle width changed");
+_Static_assert(sizeof(TDNF_STR_ID) == sizeof(Id), "string handle width changed");
+_Static_assert(((Id)-1 < 0) == ((TDNF_PKG_ID)-1 < 0),
+               "package handle signedness diverged from libsolv");
+_Static_assert(((Id)-1 < 0) == ((TDNF_STR_ID)-1 < 0),
+               "string handle signedness diverged from libsolv");
+_Static_assert(TDNF_REPO_REUSE_REPODATA == REPO_REUSE_REPODATA,
+               "repo flag value changed");
+
 static uint32_t
 PackageUtilsBuildNativeRepoInputsFromSack(
     PSolvSack pSack,
@@ -2572,4 +2600,46 @@ TDNFRepoFree(
     {
         repo_free(pRepo, 1);
     }
+}
+
+/*
+ * The package handles held by a SolvPackageList, in list order.
+ *
+ * SolvPackageList is tdnf's own struct, but it carries its selection in
+ * an embedded libsolv Queue, so reading one is a libsolv dereference
+ * wearing a tdnf name. That is precisely why it stayed invisible to the
+ * dereference metric for the whole confinement effort: nothing in
+ * `pPkgList->queuePackages.elements[i]` spells a libsolv identifier.
+ *
+ * Copies rather than lending the array out, because Queue.elements is
+ * reallocated by queue_insertn and a borrowed pointer would dangle the
+ * moment the list grew.
+ */
+uint32_t
+TDNFPkgListGetIds(
+    PSolvPackageList pPkgList,
+    PTDNF_ID_LIST pIdList
+    )
+{
+    uint32_t dwError = 0;
+    int i = 0;
+
+    if(!pPkgList || !pIdList)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    for(i = 0; i < pPkgList->queuePackages.count; i++)
+    {
+        dwError = TDNFIdListPush(pIdList,
+                                 pPkgList->queuePackages.elements[i]);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+cleanup:
+    return dwError;
+
+error:
+    goto cleanup;
 }

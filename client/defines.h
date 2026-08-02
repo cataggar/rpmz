@@ -155,8 +155,10 @@ typedef void (*TDNF_ML_FREE_FUNC) (void* data);
    The numeric values are reproduced byte-identically and must not change:
    they are recorded in the request trace and matched by exact whole-word
    equality when the job list is read back in
-   TDNFGoalBuildNativeSolverJobs(). goal.c carries _Static_asserts proving
-   the equality for as long as libsolv is still vendored. */
+   TDNFGoalBuildNativeSolverJobs(). packageutils.c carries _Static_asserts
+   proving the equality for as long as libsolv is still vendored -- they
+   live there rather than at the point of use because packageutils.c is
+   the only file in client/ that still speaks libsolv. */
 #define TDNF_JOB_SOLVABLE           0x01
 #define TDNF_JOB_SOLVABLE_NAME      0x02
 #define TDNF_JOB_SOLVABLE_ALL       0x06
@@ -188,6 +190,7 @@ typedef void (*TDNF_ML_FREE_FUNC) (void* data);
    and nothing in the type system stops a string id being read as a package
    id. A job's operand slot is deliberately polymorphic and stays int32_t.
 
-   goal.c static-asserts these against libsolv's Id while it is vendored. */
+   packageutils.c static-asserts these against libsolv's Id while it is
+   vendored. */
 typedef int32_t TDNF_PKG_ID;
 typedef int32_t TDNF_STR_ID;

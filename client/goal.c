@@ -8,31 +8,10 @@
 
 #include "includes.h"
 
-/* The job-list encoding in defines.h is tdnf's own, but its values are
-   inherited from libsolv and are recorded in the request trace, so they must
-   stay byte-identical. While libsolv is still vendored we can prove that at
-   compile time rather than trusting the copy. Delete this block along with
-   libsolv itself. */
-_Static_assert(TDNF_JOB_SOLVABLE == SOLVER_SOLVABLE, "job select value changed");
-_Static_assert(TDNF_JOB_SOLVABLE_NAME == SOLVER_SOLVABLE_NAME, "job select value changed");
-_Static_assert(TDNF_JOB_SOLVABLE_ALL == SOLVER_SOLVABLE_ALL, "job select value changed");
-_Static_assert(TDNF_JOB_INSTALL == SOLVER_INSTALL, "job action value changed");
-_Static_assert(TDNF_JOB_ERASE == SOLVER_ERASE, "job action value changed");
-_Static_assert(TDNF_JOB_UPDATE == SOLVER_UPDATE, "job action value changed");
-_Static_assert(TDNF_JOB_MULTIVERSION == SOLVER_MULTIVERSION, "job action value changed");
-_Static_assert(TDNF_JOB_LOCK == SOLVER_LOCK, "job action value changed");
-_Static_assert(TDNF_JOB_DISTUPGRADE == SOLVER_DISTUPGRADE, "job action value changed");
-_Static_assert(TDNF_JOB_USERINSTALLED == SOLVER_USERINSTALLED, "job action value changed");
-_Static_assert(TDNF_JOB_ALLOWUNINSTALL == SOLVER_ALLOWUNINSTALL, "job action value changed");
-_Static_assert(TDNF_JOB_JOBMASK == SOLVER_JOBMASK, "job mask value changed");
-_Static_assert(TDNF_JOB_CLEANDEPS == SOLVER_CLEANDEPS, "job flag value changed");
-_Static_assert(TDNF_JOB_FORCEBEST == SOLVER_FORCEBEST, "job flag value changed");
-_Static_assert(sizeof(TDNF_PKG_ID) == sizeof(Id), "package handle width changed");
-_Static_assert(sizeof(TDNF_STR_ID) == sizeof(Id), "string handle width changed");
-_Static_assert(((Id)-1 < 0) == ((TDNF_PKG_ID)-1 < 0),
-               "package handle signedness diverged from libsolv");
-_Static_assert(((Id)-1 < 0) == ((TDNF_STR_ID)-1 < 0),
-               "string handle signedness diverged from libsolv");
+/* The _Static_asserts that pin tdnf's job encoding and handle widths to
+   libsolv's live in packageutils.c, the one file in client/ that still
+   speaks libsolv. Keeping them here would have made goal.c depend on
+   <solv/solver.h> for constants it no longer uses. */
 
 static
 uint32_t
