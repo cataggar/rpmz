@@ -350,6 +350,13 @@ enum {
 #define RPMDB_EMPTY_REFREPO            (1 << 30)
 #endif
 
+/* Low bits of the same flag word. libsolv spells these REPO_* in
+   <solv/repo.h>; they are named here so callers can pass them to
+   TDNFRepoMdNativeAddRpm without including a libsolv header.
+   client/packageutils.c static-asserts the equality for as long as
+   libsolv is vendored. */
+#define TDNF_REPO_REUSE_REPODATA       (1 << 0)
+
 /*
  * Parse a repomd.xml buffer. `buf` need not be NUL-terminated.
  * On success stores a document handle in `*ppDoc`; caller frees it with

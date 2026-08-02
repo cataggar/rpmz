@@ -516,6 +516,16 @@ TDNFPkgHandleIsValid(
     int *pnValid
     );
 
+/* The package handles held by a SolvPackageList, in list order. The
+   list carries them in an embedded libsolv Queue, so this is the one
+   accessor whose libsolv dereference is not spelled with any libsolv
+   identifier at the call site. */
+uint32_t
+TDNFPkgListGetIds(
+    PSolvPackageList pPkgList,
+    PTDNF_ID_LIST pIdList
+    );
+
 uint32_t
 TDNFMatchForReinstall(
     PSolvSack pSack,

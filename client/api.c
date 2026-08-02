@@ -839,7 +839,7 @@ TDNFAddCmdLinePackages(
         dwError = TDNFRepoMdNativeAddRpm(
                       pTdnf->pSolvCmdLineRepo,
                       pszRPMPath,
-                      REPO_REUSE_REPODATA|REPO_NO_INTERNALIZE|
+                      TDNF_REPO_REUSE_REPODATA|
                       RPM_ADD_WITH_HDRID|RPM_ADD_WITH_SHA256SUM,
                       &dwSolvableId);
         BAIL_ON_TDNF_ERROR(dwError);
@@ -857,7 +857,14 @@ TDNFAddCmdLinePackages(
        repodata it created, per rpm. repo_internalize() would walk the
        same repodata and find nothing pending, so the call was a no-op
        -- see the commit message for how that was established, because
-       no test in the tree can tell the difference. */
+       no test in the tree can tell the difference.
+
+       REPO_NO_INTERNALIZE used to be passed in the flag word above and
+       was dropped for the same reason, but on stronger evidence: the
+       word reaches exactly three readers -- the RPM_ADD_WITH_HDRID test
+       here, optionsFromRpmFlags() (RPM_ADD_* bits only) and
+       repo_add_repodata(), which reads REPO_USE_LOADING,
+       REPO_REUSE_REPODATA and REPO_LOCALPOOL. Nothing reads bit 1. */
 
 cleanup:
     TDNF_SAFE_FREE_MEMORY(pszRPMPath);
