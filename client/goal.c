@@ -13,6 +13,22 @@
    speaks libsolv. Keeping them here would have made goal.c depend on
    <solv/solver.h> for constants it no longer uses. */
 
+/*
+ * A package handle's name, without asking the pool for it.
+ *
+ * Serializing the handle to a native ref and splitting it back out is
+ * how the job builder above already reads package identity, so this
+ * keeps the two agreeing rather than reaching into libsolv for the one
+ * field. Only the name survives; the rest of the split is discarded.
+ */
+static
+uint32_t
+GoalGetPkgNameFromHandle(
+    PTDNF pTdnf,
+    TDNF_PKG_ID dwPkgId,
+    char **ppszName
+);
+
 static
 uint32_t
 TDNFGoalSolveNative(
@@ -875,6 +891,52 @@ error:
 
 static
 uint32_t
+GoalGetPkgNameFromHandle(
+    PTDNF pTdnf,
+    TDNF_PKG_ID dwPkgId,
+    char **ppszName
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwEpoch = 0;
+    char *pszRef = NULL;
+    char *pszRepo = NULL;
+    char *pszName = NULL;
+    char *pszVersion = NULL;
+    char *pszRelease = NULL;
+    char *pszArch = NULL;
+
+    if(!pTdnf || !ppszName)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFNativeQuerySerializePackageId(pTdnf->pSack, dwPkgId, &pszRef);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    dwError = TDNFNativeQuerySplitPackageRef(pszRef, &pszRepo, &dwEpoch,
+                  &pszName, &pszVersion, &pszRelease, &pszArch);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    *ppszName = pszName;
+    pszName = NULL;
+
+cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszRef);
+    TDNF_SAFE_FREE_MEMORY(pszRepo);
+    TDNF_SAFE_FREE_MEMORY(pszName);
+    TDNF_SAFE_FREE_MEMORY(pszVersion);
+    TDNF_SAFE_FREE_MEMORY(pszRelease);
+    TDNF_SAFE_FREE_MEMORY(pszArch);
+    return dwError;
+
+error:
+    goto cleanup;
+}
+
+static
+uint32_t
 TDNFGoalSolveNative(
     PTDNF pTdnf,
     const TDNF_ID_LIST *pQueueJobs,
@@ -1635,8 +1697,8 @@ TDNFAddUserInstall(
 
     for (i = 0; i < (int)pQueueGoal->dwCount; i++)
     {
-        dwError = SolvGetPkgNameFromId(
-                       pTdnf->pSack,
+        dwError = GoalGetPkgNameFromHandle(
+                       pTdnf,
                        pQueueGoal->pnElements[i],
                        &ppszPkgsUserInstall[i]);
         BAIL_ON_TDNF_ERROR(dwError);
@@ -1646,7 +1708,10 @@ TDNFAddUserInstall(
 cleanup:
     return dwError;
 error:
-    TDNF_SAFE_FREE_MEMORY(ppszPkgsUserInstall);
+    /* Frees the names too. Bailing partway through the loop above leaves
+       the earlier ones allocated, and releasing only the array leaked
+       them; the spare zeroed slot terminates the walk. */
+    TDNFFreeStringArray(ppszPkgsUserInstall);
     goto cleanup;
 }
 
@@ -1782,10 +1847,7 @@ TDNFAddGoal(
 
     if (dwCount != 0 && ppszExcludes)
     {
-        dwError = SolvGetPkgNameFromId(
-                      pTdnf->pSack,
-                      dwId,
-                      &pszName);
+        dwError = GoalGetPkgNameFromHandle(pTdnf, dwId, &pszName);
         BAIL_ON_TDNF_ERROR(dwError);
         ppszPackagesTemp = ppszExcludes;
 
