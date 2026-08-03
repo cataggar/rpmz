@@ -29,6 +29,18 @@ GoalGetPkgNameFromHandle(
     char **ppszName
 );
 
+/*
+ * The configured protected entry equal to pszName, or NULL. Same contract
+ * as TDNFFindProtectedPkg() below; see the definition for why comparing
+ * names is what the pool string ids used to stand in for.
+ */
+static
+const char *
+GoalFindProtectedName(
+    char **ppszProtectedPkgs,
+    const char *pszName
+);
+
 static
 uint32_t
 TDNFGoalSolveNative(
@@ -2213,6 +2225,48 @@ error:
     goto cleanup;
 }
 
+/*
+ * Protected-package matching used to run in the pool's string-id space:
+ * intern every configured name, ask each candidate handle for its name id,
+ * and compare ids. libsolv interns each distinct string exactly once, so id
+ * equality there was string equality -- which makes comparing the names
+ * themselves the same test, expressed without the pool. It is also the test
+ * TDNFFindProtectedPkg() below already applies to the same configured list,
+ * so the two protected-package checks now agree by construction instead of
+ * by coincidence.
+ *
+ * Two things improve as a side effect. TDNFStrIdFromString() passed
+ * create=1, so every configured name was interned into the pool's string
+ * table whether or not any package had it; nothing is interned now. And the
+ * old code took the matching name from ppszProtectedPkgs[] using a position
+ * in a separate id list that skipped entries whose id was zero -- sound only
+ * because create=1 meant the id was never zero. Returning the matched entry
+ * itself removes that coupling.
+ */
+static
+const char *
+GoalFindProtectedName(
+    char **ppszProtectedPkgs,
+    const char *pszName
+    )
+{
+    int i = 0;
+
+    if(!ppszProtectedPkgs || IsNullOrEmptyString(pszName))
+    {
+        return NULL;
+    }
+
+    for(i = 0; ppszProtectedPkgs[i]; i++)
+    {
+        if(!strcmp(ppszProtectedPkgs[i], pszName))
+        {
+            return ppszProtectedPkgs[i];
+        }
+    }
+    return NULL;
+}
+
 uint32_t
 TDNFSolvAddProtectPkgs(
     PTDNF pTdnf,
@@ -2222,8 +2276,10 @@ TDNFSolvAddProtectPkgs(
 {
     uint32_t dwError = 0;
     char **ppszProtectedPkgs = NULL;
+    char *pszWhatName = NULL;
+    char *pszAddName = NULL;
+    char *pszInstalledName = NULL;
     int i, j, k;
-    TDNF_ID_LIST qPkgs = {0};
     TDNF_ID_LIST qInstalled = {0};
 
     if(!pTdnf || !pQueueJobs || !pPool || !pTdnf->pConf)
@@ -2233,17 +2289,7 @@ TDNFSolvAddProtectPkgs(
     }
 
     ppszProtectedPkgs = pTdnf->pConf->ppszProtectedPkgs;
-    TDNFIdListInit(&qPkgs);
     TDNFIdListInit(&qInstalled);
-    for (i = 0; ppszProtectedPkgs[i]; i++) {
-        TDNF_STR_ID idPkg = 0;
-        dwError = TDNFStrIdFromString(pPool, ppszProtectedPkgs[i], &idPkg);
-        BAIL_ON_TDNF_ERROR(dwError);
-        if (idPkg) {
-            dwError = TDNFIdListPush(&qPkgs, idPkg);
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
-    }
 
     /* Direct erases of protected names must be rejected explicitly. */
     for (j = 0; j < (int)pQueueJobs->dwCount; j += 2) {
@@ -2253,27 +2299,24 @@ TDNFSolvAddProtectPkgs(
                when the job selects by name. The TDNF_JOB_SOLVABLE test above
                is what makes it a package handle here. */
             TDNF_PKG_ID what = pQueueJobs->pnElements[j+1];
-            TDNF_STR_ID idWhat = 0;
+            const char *pszPkgName = NULL;
 
-            dwError = TDNFPkgHandleGetNameId(pPool, what, &idWhat);
+            TDNF_SAFE_FREE_MEMORY(pszWhatName);
+            dwError = GoalGetPkgNameFromHandle(pTdnf, what, &pszWhatName);
             BAIL_ON_TDNF_ERROR(dwError);
-            for (i = 0; i < (int)qPkgs.dwCount; i++) {
-                if (qPkgs.pnElements[i] == idWhat)
-                    break;
-            }
-            if (i < (int)qPkgs.dwCount) {
-                const char *pszPkgName = ppszProtectedPkgs[i];
+            pszPkgName = GoalFindProtectedName(ppszProtectedPkgs, pszWhatName);
+            if (pszPkgName) {
                 for (i = 0; i < (int)pQueueJobs->dwCount; i += 2) {
                     if (i == j)
                         continue;
                     how = pQueueJobs->pnElements[i];
                     if (((how & TDNF_JOB_JOBMASK) == TDNF_JOB_INSTALL) && (how & TDNF_JOB_SOLVABLE)) {
                         TDNF_PKG_ID what_add = pQueueJobs->pnElements[i+1];
-                        TDNF_STR_ID idAdd = 0;
 
-                        dwError = TDNFPkgHandleGetNameId(pPool, what_add, &idAdd);
+                        TDNF_SAFE_FREE_MEMORY(pszAddName);
+                        dwError = GoalGetPkgNameFromHandle(pTdnf, what_add, &pszAddName);
                         BAIL_ON_TDNF_ERROR(dwError);
-                        if (idAdd == idWhat) {
+                        if (!strcmp(pszAddName, pszWhatName)) {
                             break;
                         }
                     }
@@ -2292,15 +2335,11 @@ TDNFSolvAddProtectPkgs(
     BAIL_ON_TDNF_ERROR(dwError);
     for (k = 0; k < (int)qInstalled.dwCount; k++) {
         TDNF_PKG_ID p = qInstalled.pnElements[k];
-        TDNF_STR_ID idInstalled = 0;
 
-        dwError = TDNFPkgHandleGetNameId(pPool, p, &idInstalled);
+        TDNF_SAFE_FREE_MEMORY(pszInstalledName);
+        dwError = GoalGetPkgNameFromHandle(pTdnf, p, &pszInstalledName);
         BAIL_ON_TDNF_ERROR(dwError);
-        for (i = 0; i < (int)qPkgs.dwCount; i++) {
-            if (qPkgs.pnElements[i] == idInstalled)
-                break;
-        }
-        if (i == (int)qPkgs.dwCount) {
+        if (!GoalFindProtectedName(ppszProtectedPkgs, pszInstalledName)) {
             dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE|TDNF_JOB_ALLOWUNINSTALL, p);
             BAIL_ON_TDNF_ERROR(dwError);
             TDNFTransactionPlanRequestTraceRecordPackageJob(pTdnf->pRequestTrace, pQueueJobs->dwCount / 2 - 1,
@@ -2316,7 +2355,9 @@ TDNFSolvAddProtectPkgs(
     }
 
 cleanup:
-    TDNFIdListFree(&qPkgs);
+    TDNF_SAFE_FREE_MEMORY(pszWhatName);
+    TDNF_SAFE_FREE_MEMORY(pszAddName);
+    TDNF_SAFE_FREE_MEMORY(pszInstalledName);
     TDNFIdListFree(&qInstalled);
     return dwError;
 error:
