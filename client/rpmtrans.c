@@ -1329,24 +1329,6 @@ error:
     goto cleanup;
 }
 
-void*
-TDNFRpmCB(
-    const void *pArg,
-    int nWhat,
-    int64_t llAmount,
-    int64_t llTotal,
-    const void *pKey,
-    void *pData
-    )
-{
-    (void)pArg;
-    (void)nWhat;
-    (void)llAmount;
-    (void)llTotal;
-    (void)pKey;
-    (void)pData;
-    return NULL;
-}
 
 uint32_t
 TDNFRemoveCachedRpms(

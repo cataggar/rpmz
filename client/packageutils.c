@@ -317,47 +317,6 @@ error:
     goto cleanup;
 }
 
-uint32_t
-TDNFGetGlobPackages(
-    PSolvSack pSack,
-    char* pszPkgGlob,
-    int nIsInstalled,
-    PTDNF_ID_LIST pQueueGoal
-    )
-{
-    uint32_t dwError = 0;
-    char **ppszPackageRefs = NULL;
-    uint32_t dwCount = 0;
-
-    if(!pSack || IsNullOrEmptyString(pszPkgGlob) || !pQueueGoal)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = PackageUtilsFindNativePackageRefs(
-                  pSack,
-                  pszPkgGlob,
-                  nIsInstalled ? SCOPE_INSTALLED : SCOPE_AVAILABLE,
-                  &ppszPackageRefs,
-                  &dwCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = PackageUtilsResolvePackageRefsToQueue(
-                  pSack,
-                  ppszPackageRefs,
-                  dwCount,
-                  nIsInstalled,
-                  pQueueGoal);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-cleanup:
-    TDNFFreeStringArray(ppszPackageRefs);
-    return dwError;
-
-error:
-    goto cleanup;
-}
 
 uint32_t
 TDNFAddPackagesForErase(

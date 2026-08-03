@@ -18,14 +18,6 @@
 #define OS_REL_FILE "/etc/os-release"
 #define KEY_MAX_LEN                     32
 
-int
-TDNFConfGetRpmVerbosity(
-    PTDNF pTdnf
-    )
-{
-    (void)pTdnf;
-    return 6;
-}
 
 static uint32_t TDNFParseOSInfo(PTDNF_CONF pConf, const char *os_rel_fn)
 {

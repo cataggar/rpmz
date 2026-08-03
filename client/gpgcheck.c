@@ -79,48 +79,6 @@ error:
     goto cleanup;
 }
 
-uint32_t
-TDNFImportGPGKeyFile(
-    void *pLegacyTransaction,
-    const char* pszFile
-    )
-{
-    uint32_t dwError = 0;
-    tdnf_rpm_config *pRpmConfig = NULL;
-    char* pszKeyData = NULL;
-    int nKeyDataSize = 0;
-
-    if(pLegacyTransaction == NULL || IsNullOrEmptyString(pszFile))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = ReadGPGKeyFile(pszFile, &pszKeyData, &nKeyDataSize);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    pRpmConfig = tdnf_rpm_config_create("/");
-    if(!pRpmConfig)
-    {
-        pr_err("Unable to initialize native package configuration: %s\n",
-               tdnf_rpm_config_last_error());
-        dwError = ERROR_TDNF_RPM_CHECK;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFImportGPGKeyData(
-                  pRpmConfig,
-                  pszKeyData,
-                  (size_t)nKeyDataSize);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-cleanup:
-    tdnf_rpm_config_destroy(pRpmConfig);
-    TDNF_SAFE_FREE_MEMORY(pszKeyData);
-    return dwError;
-error:
-    goto cleanup;
-}
 
 uint32_t
 TDNFImportGPGKeyData(
@@ -483,21 +441,6 @@ error:
     goto cleanup;
 }
 
-uint32_t
-TDNFGPGCheckPackage(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo,
-    const char* pszFilePath,
-    tdnf_rpm_file **ppRpmFile
-    )
-{
-    return TDNFGPGCheckPackageEx(
-               pTdnf,
-               pRepo,
-               pszFilePath,
-               ppRpmFile,
-               NULL);
-}
 
 static void
 TDNFFreeFreshGPGKeys(
