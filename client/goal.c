@@ -30,6 +30,19 @@ GoalGetPkgNameFromHandle(
 );
 
 /*
+ * The recorded local path of a command-line .rpm, ALLOCATED for the
+ * caller to free. Single caller in this file; kept static so it adds no
+ * exported symbol.
+ */
+static
+uint32_t
+TDNFFindCmdLinePkgPath(
+    PTDNF pTdnf,
+    TDNF_PKG_ID dwPkgId,
+    char **ppszPath
+);
+
+/*
  * Turn the configured protected names into solver policy, and reject a
  * request that would erase one. Single caller in this file; kept static
  * so it adds no exported symbol.
@@ -1294,7 +1307,6 @@ TDNFGoalBuildNativeSolverJobs(
     char **ppszCmdLinePaths = NULL;
     char **ppszInstallOnlyPkgs = NULL;
     char **ppszUserInstalledPkgs = NULL;
-    Pool *pPool = NULL;
     /* Job identity is read back from a native ref, so these hold the split
        fields for the pair being translated. They are function-scoped rather
        than loop-scoped so every exit frees whatever the current iteration
@@ -1311,6 +1323,10 @@ TDNFGoalBuildNativeSolverJobs(
     uint32_t dwGlobalQueuePair = 0;
     int nHasGlobalQueuePair = 0;
 
+    /* pSack->pPool is still checked although this function no longer
+       reads the pool: dropping the check would let a caller with a
+       half-built sack through, which is a behaviour change this
+       increment does not want to make on the side. */
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
        !pTdnf->pSack->pPool || !pQueueJobs || !ppJobs || !pdwJobCount ||
        !ppEraseJobs || !pdwEraseJobCount || !pppszInstallOnlyPkgs ||
@@ -1325,7 +1341,6 @@ TDNFGoalBuildNativeSolverJobs(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pPool = pTdnf->pSack->pPool;
     dwCount = (uint32_t)pQueueJobs->dwCount / 2;
     /* One spare element throughout: an empty job queue is a real request --
        `history undo` and `history rollback` reach an already-satisfied target
@@ -1506,15 +1521,27 @@ TDNFGoalBuildNativeSolverJobs(
            as CMDLINE_REPO_NAME, so pointer equality implies name equality. */
         if(!strcmp(pJob->pszRepository, CMDLINE_REPO_NAME))
         {
-            /* Allocated, not borrowed: the underlying location lives in a
-               16-slot pool ring buffer and this array outlives the loop.
+            /* Allocated, not borrowed: this array outlives the loop.
+
+               The path is looked up rather than re-derived from libsolv.
+               A miss is not a fallback case, it is an invariant
+               violation: TDNFAddCmdLinePackages empties the table and
+               then re-adds every command-line .rpm through
+               TDNFRepoMdNativeAddRpm, recording the path as it goes, and
+               that is the only thing that ever puts a solvable in this
+               repo -- so the table describes exactly the current
+               generation of it. Nothing else can be named "cmdline"
+               either: all three repo-creation paths
+               (client/repolist.c:376, :466 and :692) reject that id as
+               reserved. So a miss is reported rather than papered over.
+
                This error is deliberately NOT remapped to
                ERROR_TDNF_CALL_NOT_SUPPORTED. A handle that names no
                package has already been rejected by the serialization
-               above, so the only reachable failure is an allocation one,
-               which this call site has always propagated unchanged. */
-            dwError = TDNFPkgHandleGetLocation(
-                          pPool, dwPkgId, &ppszCmdLinePaths[dwInstallCount - 1]);
+               above, so the only failure this call site has ever
+               propagated is an allocation one, and that is preserved. */
+            dwError = TDNFFindCmdLinePkgPath(
+                          pTdnf, dwPkgId, &ppszCmdLinePaths[dwInstallCount - 1]);
             BAIL_ON_TDNF_ERROR(dwError);
         }
         /* Ownership moves into the job; the loop's locals are cleared so
@@ -2442,3 +2469,63 @@ error:
     goto cleanup;
 }
 
+
+/*
+ * The local .rpm path recorded for a command-line package handle.
+ *
+ * A linear scan: the array holds one entry per .rpm named on the
+ * command line, and the caller is already inside a loop over the job
+ * list, so anything cleverer would cost more to maintain than it saves.
+ *
+ * ERROR_TDNF_NO_DATA on a miss is a deliberate refusal to fall back.
+ * The path used to be re-derived from libsolv, which would have quietly
+ * answered for a solvable this table had never seen; there is no such
+ * solvable (see the call site for why), so if one ever appears the right
+ * answer is to say so rather than to reconstruct it from the component
+ * this code is being moved off.
+ */
+static
+uint32_t
+TDNFFindCmdLinePkgPath(
+    PTDNF pTdnf,
+    TDNF_PKG_ID dwPkgId,
+    char **ppszPath
+    )
+{
+    uint32_t dwError = 0;
+    uint32_t dwIndex = 0;
+    char *pszPath = NULL;
+
+    if(!pTdnf || !ppszPath)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    for(dwIndex = 0; dwIndex < pTdnf->dwCmdLinePkgCount; dwIndex++)
+    {
+        if(pTdnf->pdwCmdLinePkgIds[dwIndex] != dwPkgId)
+        {
+            continue;
+        }
+        dwError = TDNFAllocateString(
+                      pTdnf->ppszCmdLinePkgPaths[dwIndex], &pszPath);
+        BAIL_ON_TDNF_ERROR(dwError);
+        break;
+    }
+
+    if(!pszPath)
+    {
+        dwError = ERROR_TDNF_NO_DATA;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    *ppszPath = pszPath;
+
+cleanup:
+    return dwError;
+
+error:
+    TDNF_SAFE_FREE_MEMORY(pszPath);
+    goto cleanup;
+}

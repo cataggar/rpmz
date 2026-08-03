@@ -37,6 +37,21 @@ typedef struct _TDNF_
        the plan's repository visibility snapshot. */
     char **ppszHiddenRefs;
     uint32_t dwHiddenRefCount;
+    /* Local .rpm path of every solvable in the command-line repository,
+       recorded where it is already known -- when the file is handed to
+       TDNFRepoMdNativeAddRpm -- and indexed by the handle that call
+       returns. Goal translation needs the path back and used to re-derive
+       it from libsolv; keeping it here means the only component that has
+       ever known it is also the one that reports it.
+
+       The two arrays are parallel and share dwCmdLinePkgCount. They are
+       emptied at the top of TDNFAddCmdLinePackages, not just at
+       TDNFCloseHandle: TDNFRefresh() rebuilds the sack into a replacement
+       pool with a new, empty command-line repo, so ids recorded before a
+       refresh name nothing afterwards and the fresh pool reissues them. */
+    TDNF_PKG_ID *pdwCmdLinePkgIds;
+    char **ppszCmdLinePkgPaths;
+    uint32_t dwCmdLinePkgCount;
     uint32_t nTestReloadFailureStage;
 } TDNF;
 
