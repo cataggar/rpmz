@@ -683,7 +683,7 @@ pub fn build(b: *Build) void {
         );
         mod.addCSourceFiles(.{
             .root = b.path("solv"),
-            .files = &.{ "tdnfpackage.c", "tdnfpool.c", "tdnfquery.c", "tdnfrepo.c", "tdnfrepo_native.c", "simplequery.c" },
+            .files = &.{ "tdnfpackage.c", "tdnfpool.c", "tdnfrepo.c", "tdnfrepo_native.c", "simplequery.c" },
             .flags = &tdnf_cflags,
         });
         break :blk b.addLibrary(.{
