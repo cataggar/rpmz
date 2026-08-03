@@ -8,6 +8,48 @@
 
 #include "includes.h"
 
+/*
+ * Bounds-checked pool_id2solvable().
+ *
+ * libsolv's pool_id2solvable() is `pool->solvables + p` -- plain pointer
+ * arithmetic that never returns NULL and never validates p. Every caller
+ * below already guards on a NULL result, but against that inline those
+ * guards were dead code: an out-of-range handle read past the end of the
+ * solvables array instead of being refused. Returning NULL for a handle
+ * the pool cannot address makes each of those existing guards live, so
+ * each call site keeps reporting its own error code.
+ *
+ * The bound is [0, nsolvables), which is exactly the allocated extent of
+ * the solvables array -- pool_create() allocates the block and sets
+ * nsolvables together, and every grow and truncate keeps them in step.
+ * TDNFPkgHandleIsValid() reports the same range minus handle 0.
+ *
+ * Handle 0 is deliberately admitted. It is libsolv's reserved "no
+ * solvable" slot: allocated, zeroed, and therefore safe to read. This
+ * helper is a memory-safety bound and nothing more, so what each caller
+ * makes of handle 0 is unchanged. Do not read that as "every caller
+ * rejects it" -- only the four that test pSolv->repo, or look up a
+ * repo-backed field, do. The rest still succeed on it and report the
+ * zero solvable's empty fields, exactly as they did before: pool_id2str()
+ * renders its name as the literal "<NULL>" (knownid.h ID_NULL), which is
+ * a non-empty string and passes an IsNullOrEmptyString() guard. Anyone
+ * adding a tenth accessor needs its own guard; this one will not supply
+ * it.
+ */
+static
+Solvable *
+PkgHandleToSolvable(
+    const Pool *pPool,
+    TDNF_PKG_ID dwPkgId
+    )
+{
+    if(!pPool || dwPkgId < 0 || dwPkgId >= pPool->nsolvables)
+    {
+        return NULL;
+    }
+    return pool_id2solvable(pPool, dwPkgId);
+}
+
 uint32_t
 SolvGetPkgNameFromId(
     PSolvSack pSack,
@@ -25,7 +67,7 @@ SolvGetPkgNameFromId(
         BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pSack->pPool, dwPkgId);
+    pSolv = PkgHandleToSolvable(pSack->pPool, dwPkgId);
     if(!pSolv)
     {
         dwError = ERROR_TDNF_NO_DATA;
@@ -193,7 +235,7 @@ SolvGetNevraFromId(
         BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pSack->pPool, dwPkgId);
+    pSolv = PkgHandleToSolvable(pSack->pPool, dwPkgId);
     if(!pSolv)
     {
         dwError = ERROR_TDNF_NO_DATA;
@@ -436,7 +478,7 @@ TDNFPkgHandleGetFields(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pPool, dwPkgId);
+    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
     if(!pSolv || !pSolv->repo)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
@@ -483,7 +525,7 @@ TDNFPkgHandleGetName(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pPool, dwPkgId);
+    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
     if(!pSolv)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
@@ -536,7 +578,7 @@ TDNFPkgHandleGetRepoNevra(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pPool, dwPkgId);
+    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
     if(!pSolv)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
@@ -594,7 +636,7 @@ TDNFPkgHandleGetRepoName(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pPool, dwPkgId);
+    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
     if(!pSolv || !pSolv->repo || IsNullOrEmptyString(pSolv->repo->name))
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
@@ -632,7 +674,7 @@ TDNFPkgHandleIsInstalled(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pPool, dwPkgId);
+    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
     if(!pSolv || !pSolv->repo)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
@@ -677,7 +719,7 @@ TDNFPkgHandleGetLocation(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pPool, dwPkgId);
+    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
     if(!pSolv)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
@@ -725,7 +767,7 @@ TDNFPkgHandleGetNameId(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pSolv = pool_id2solvable(pPool, dwPkgId);
+    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
     if(!pSolv)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
