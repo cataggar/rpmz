@@ -441,15 +441,21 @@ _Static_assert(TDNF_REPO_REUSE_REPODATA == REPO_REUSE_REPODATA,
  * routed through this section. Replacing the representation is then a
  * change confined here rather than a change to each caller.
  *
- * They live here, rather than in either caller, because querynative.c
- * and goal.c both need them. Promoting them from static grows libtdnf's
- * exported surface, so the new names are recorded in
+ * They live here rather than in their caller because they dereference
+ * Solvable, and client/ is not allowed to include a libsolv header --
+ * scripts/libsolv-include-audit.py enforces that. Being in solv/ and
+ * TDNF*-prefixed, they are exported and so recorded in
  * scripts/abi-baseline.json as a deliberate act rather than a side
- * effect -- that is what the ABI audit exists to force. Note this holds
+ * effect; that is what the ABI audit exists to force. Note this holds
  * because they are TDNF*-prefixed: the audit's baseline tracks the
  * public API, so internal Solv*-prefixed helpers below (which libtdnf
  * also exports, for want of a version script) are outside it and are
  * not recorded.
+ *
+ * client/querynative.c is now their only caller. It used to be both
+ * querynative.c and goal.c; goal.c stopped needing a handle accessor
+ * when the command-line .rpm path was recorded at creation instead of
+ * being re-derived from the pool.
  *
  * Field strings returned by TDNFPkgHandleGetFields are borrowed from
  * the sack and stay valid for as long as it does; callers must not
@@ -572,56 +578,6 @@ error:
 
 
 
-/*
- * On-disk location of a package handle, ALLOCATED for the caller to
- * free. It is not borrowed on purpose: the underlying
- * solvable_get_location() returns a slot in a 16-slot ring buffer that
- * later pool string operations recycle, so a borrowed pointer silently
- * rots once seventeen of them are live. That was a real bug (#281).
- *
- * A solvable with no location at all yields NULL rather than an error,
- * which is how callers distinguish "not a downloadable file" from a
- * failure.
- */
-uint32_t
-TDNFPkgHandleGetLocation(
-    Pool *pPool,
-    TDNF_PKG_ID dwPkgId,
-    char **ppszLocation
-    )
-{
-    uint32_t dwError = 0;
-    Solvable *pSolv = NULL;
-    unsigned int nMediaNr = 0;
-    char *pszLocation = NULL;
-
-    if(!pPool || !ppszLocation)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
-    if(!pSolv)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFSafeAllocateString(
-                  solvable_get_location(pSolv, &nMediaNr),
-                  &pszLocation);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    *ppszLocation = pszLocation;
-
-cleanup:
-    return dwError;
-
-error:
-    TDNF_SAFE_FREE_MEMORY(pszLocation);
-    goto cleanup;
-}
 
 /*
  * Every installed package, as handles.

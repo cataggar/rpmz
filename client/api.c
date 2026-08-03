@@ -16,6 +16,8 @@ static int instanceLockFd = -1;
 static void TdnfExitHandler(void);
 static void IsTdnfAlreadyRunning(void);
 static uint32_t TDNFApplyRpmDefine(PTDNF pTdnf, const char *pszValue);
+static uint32_t TDNFRecordCmdLinePkgPath(
+                    PTDNF pTdnf, TDNF_PKG_ID dwPkgId, const char *pszPath);
 
 static void TdnfExitHandler(void)
 {
@@ -757,6 +759,28 @@ TDNFAddCmdLinePackages(
     *pnUnresolved = 0;
     pCmdArgs = pTdnf->pArgs;
 
+    /* Discard anything recorded by an earlier call on this handle.
+       TDNFRefresh() rebuilds the sack from scratch -- refreshLiveSack()
+       in client/transaction_plan_integration.zig creates a replacement
+       pool, creates a NEW empty command-line repo in it, repoints
+       pTdnf->pSolvCmdLineRepo at it and frees the old pool -- so package
+       handles recorded against the previous pool name nothing here, and
+       the fresh pool hands out the same low ids again. Keeping the old
+       entries would let a stale one shadow the correct one, because the
+       lookup takes the first id match.
+
+       tdnf(1) never reaches that state (it refreshes once, then calls
+       this once), but a libtdnf consumer that reuses a handle across two
+       TDNFResolve() calls does, and the handle is public API. Clearing
+       here rather than at the refresh is deliberate: this function
+       re-adds the whole command line every time it runs, so the table it
+       builds is always exactly one generation old at most. */
+    TDNFFreeStringArrayWithCount(
+        pTdnf->ppszCmdLinePkgPaths, (int)pTdnf->dwCmdLinePkgCount);
+    pTdnf->ppszCmdLinePkgPaths = NULL;
+    TDNF_SAFE_FREE_MEMORY(pTdnf->pdwCmdLinePkgIds);
+    pTdnf->dwCmdLinePkgCount = 0;
+
     for(nCmdIndex = 1; nCmdIndex < pCmdArgs->nCmdCount; ++nCmdIndex)
     {
         pszPkgName = pCmdArgs->ppszCmds[nCmdIndex];
@@ -839,6 +863,8 @@ TDNFAddCmdLinePackages(
                       &dwSolvableId);
         BAIL_ON_TDNF_ERROR(dwError);
         id = (TDNF_PKG_ID)dwSolvableId;
+        dwError = TDNFRecordCmdLinePkgPath(pTdnf, id, pszRPMPath);
+        BAIL_ON_TDNF_ERROR(dwError);
         nTraceStart = pQueueGoal->dwCount;
         dwError = TDNFIdListPush(pQueueGoal, id);
         BAIL_ON_TDNF_ERROR(dwError);
@@ -2485,6 +2511,11 @@ TDNFCloseHandle(
         TDNF_SAFE_FREE_STRINGARRAY(pTdnf->ppszRepoFromDirIds);
         TDNF_SAFE_FREE_STRINGARRAY(pTdnf->ppszHiddenRefs);
         pTdnf->dwHiddenRefCount = 0;
+        TDNFFreeStringArrayWithCount(
+            pTdnf->ppszCmdLinePkgPaths, (int)pTdnf->dwCmdLinePkgCount);
+        pTdnf->ppszCmdLinePkgPaths = NULL;
+        TDNF_SAFE_FREE_MEMORY(pTdnf->pdwCmdLinePkgIds);
+        pTdnf->dwCmdLinePkgCount = 0;
         TDNFTransactionPlanRequestTraceDestroy(pTdnf->pRequestTrace);
         TDNFTransactionPlanStateDestroy(pTdnf->pTransactionPlanState);
         TDNFFreeMemory(pTdnf);
@@ -2502,4 +2533,89 @@ const char*
 TDNFGetPackageName(void)
 {
     return PACKAGE_NAME;
+}
+
+/*
+ * Remember where a command-line .rpm came from, keyed by the handle
+ * TDNFRepoMdNativeAddRpm just returned for it.
+ *
+ * Goal translation needs this path back when it builds the native job
+ * list. It used to ask libsolv for it, which meant the path made a
+ * round trip out to the pool and back for no reason: this function is
+ * the only way a solvable enters the command-line repository, so the
+ * path is already in hand right here.
+ *
+ * Grown one entry at a time. The bound is the number of .rpm files
+ * named on a command line, so the quadratic reallocation is not worth
+ * avoiding, and growing in step keeps the two arrays parallel without
+ * a separate capacity to keep consistent.
+ *
+ * TDNFReAllocateMemory does not zero what it grows into (see the note
+ * at common/idlist.zig:74), so neither new slot may be read before it
+ * is written. That is why dwCmdLinePkgCount is bumped last, after both
+ * writes have succeeded: if the string allocation fails, the count
+ * still describes the old contents and the two uninitialised slots are
+ * unreachable -- in particular TDNFFreeStringArrayWithCount, which
+ * frees by count, will not walk into the garbage one.
+ *
+ * A failing TDNFReAllocateMemory needs more than that. It does not
+ * leave the old block alone: it frees it and writes NULL back through
+ * the pointer (common/memory.zig:128-134). Leaving the count as it was
+ * would then describe storage that no longer exists, and the lookup
+ * indexes both arrays without a NULL check. So the error path empties
+ * the table outright -- the recorded paths are lost either way, and an
+ * empty table turns a would-be NULL dereference into the same clean
+ * ERROR_TDNF_NO_DATA a miss already produces.
+ */
+static uint32_t
+TDNFRecordCmdLinePkgPath(
+    PTDNF pTdnf,
+    TDNF_PKG_ID dwPkgId,
+    const char *pszPath
+    )
+{
+    uint32_t dwError = 0;
+    TDNF_PKG_ID *pdwIds = NULL;
+    char **ppszPaths = NULL;
+    uint32_t dwCount = 0;
+
+    if(!pTdnf || IsNullOrEmptyString(pszPath))
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwCount = pTdnf->dwCmdLinePkgCount;
+
+    dwError = TDNFReAllocateMemory(
+                  (dwCount + 1) * sizeof(*pdwIds),
+                  (void **)&pTdnf->pdwCmdLinePkgIds);
+    BAIL_ON_TDNF_ERROR(dwError);
+    pdwIds = pTdnf->pdwCmdLinePkgIds;
+
+    dwError = TDNFReAllocateMemory(
+                  (dwCount + 1) * sizeof(*ppszPaths),
+                  (void **)&pTdnf->ppszCmdLinePkgPaths);
+    BAIL_ON_TDNF_ERROR(dwError);
+    ppszPaths = pTdnf->ppszCmdLinePkgPaths;
+
+    dwError = TDNFAllocateString(pszPath, &ppszPaths[dwCount]);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+    pdwIds[dwCount] = dwPkgId;
+    pTdnf->dwCmdLinePkgCount = dwCount + 1;
+
+cleanup:
+    return dwError;
+
+error:
+    if(pTdnf)
+    {
+        TDNFFreeStringArrayWithCount(
+            pTdnf->ppszCmdLinePkgPaths, (int)pTdnf->dwCmdLinePkgCount);
+        pTdnf->ppszCmdLinePkgPaths = NULL;
+        TDNF_SAFE_FREE_MEMORY(pTdnf->pdwCmdLinePkgIds);
+        pTdnf->dwCmdLinePkgCount = 0;
+    }
+    goto cleanup;
 }

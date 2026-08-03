@@ -187,8 +187,8 @@ SolvGetRepoDataList(
  * Package-handle accessors. Every read of a field out of a
  * TDNF_PKG_ID goes through these, so the handle representation is
  * changeable in one place. Strings from TDNFPkgHandleGetFields are
- * borrowed from the sack; the NEVRA and the location are allocated
- * and owned by the caller.
+ * borrowed from the sack; the NEVRA is allocated and owned by the
+ * caller.
  */
 uint32_t
 TDNFPkgHandleGetFields(
@@ -208,12 +208,6 @@ TDNFPkgHandleGetRepoNevra(
 
 
 
-uint32_t
-TDNFPkgHandleGetLocation(
-    Pool *pPool,
-    TDNF_PKG_ID dwPkgId,
-    char **ppszLocation
-    );
 
 
 /*

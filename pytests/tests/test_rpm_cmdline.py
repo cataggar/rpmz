@@ -211,8 +211,7 @@ def test_install_as_file_nocmdlinegpgcheck_conf(utils):
 
 
 # Packages that are known to co-install cleanly, used to build a single
-# transaction with more command line rpms than the libsolv pool scratch ring
-# buffer has slots.
+# transaction from many command line rpms at once.
 MANY_FILE_PKGS = [
     'tdnf-dummy-pretrans',
     'tdnf-native-order-helper',
@@ -237,11 +236,19 @@ MANY_FILE_PKGS = [
 ]
 
 
-# test "tdnf install a.rpm b.rpm ... " with more files than libsolv's pool
-# scratch ring buffer (POOL_TMPSPACEBUF, 16) can hold at once.
-# solvable_get_location() returns that scratch memory, so when the paths were
-# borrowed rather than copied the 17th file recycled the slot the 1st was still
-# pointing at and the solve failed with PackageNotFound.
+# test "tdnf install a.rpm b.rpm ... " with many files in one transaction.
+#
+# This began as a regression test for a libsolv ring-buffer bug: the paths came
+# from solvable_get_location(), which returns pool scratch memory
+# (POOL_TMPSPACEBUF, 16 slots), so a borrowed 17th path recycled the slot the
+# 1st still pointed at and the solve failed with PackageNotFound.
+#
+# That mechanism is gone -- the path of a command line rpm is now recorded when
+# the file is added and never re-derived from the pool -- so what this pins is
+# no longer the wraparound. It is that every one of many @cmdline packages in a
+# single transaction gets its own correct path, which is what the recorder's
+# grow-by-one array has to get right. The threshold below is kept as a fixed
+# size rather than a claim about libsolv.
 def test_install_many_files_at_once(utils):
     dir = os.path.join(utils.config['repo_path'], 'photon-test', 'RPMS', ARCH)
     paths = []
@@ -253,10 +260,10 @@ def test_install_many_files_at_once(utils):
         if matches:
             paths.append(matches[0])
 
-    # Guard against the test quietly becoming vacuous: fewer than 17 files
-    # would no longer wrap the ring buffer and would pass either way.
+    # Guard against the test quietly becoming vacuous: with only a file or
+    # two, a recorder that mixed up paths could still pass by luck.
     assert len(paths) > 16, \
-        "need more than 16 rpm files to exercise the pool scratch wraparound"
+        "need more than 16 rpm files to exercise many @cmdline paths at once"
 
     before = utils.list_installed_packages()
     try:

@@ -179,7 +179,6 @@
       "TDNFParseRepoMD",
       "TDNFPathFromUri",
       "TDNFPkgHandleGetFields",
-      "TDNFPkgHandleGetLocation",
       "TDNFPkgHandleGetRepoNevra",
       "TDNFPkgInfoFilterNewest",
       "TDNFPkgsToExclude",
