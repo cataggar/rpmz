@@ -183,7 +183,6 @@
       "TDNFParseMetadataExpire",
       "TDNFParseRepoMD",
       "TDNFPathFromUri",
-      "TDNFPkgHandleEvrCompare",
       "TDNFPkgHandleGetFields",
       "TDNFPkgHandleGetLocation",
       "TDNFPkgHandleGetName",

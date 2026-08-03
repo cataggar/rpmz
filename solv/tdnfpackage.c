@@ -222,27 +222,6 @@ error:
     goto cleanup;
 }
 
-int
-SolvIsGlob(
-    const char* pszString
-    )
-{
-    int nResult = 0;
-    while(*pszString)
-    {
-        char ch = *pszString;
-
-        if(ch == '*' || ch == '?' || ch == '[')
-        {
-            nResult = 1;
-            break;
-        }
-
-        pszString++;
-    }
-    return nResult;
-}
-
 uint32_t
 SolvGetNevraFromId(
     PSolvSack pSack,
@@ -653,21 +632,6 @@ cleanup:
 error:
     TDNF_SAFE_FREE_MEMORY(pszNevra);
     goto cleanup;
-}
-
-/* Both operands must be non-NULL; there is no error channel here, so a
-   NULL is a caller bug and is left to fault rather than be papered over
-   with an arbitrary ordering. */
-int
-TDNFPkgHandleEvrCompare(
-    Pool *pPool,
-    const char *pszEvrLeft,
-    const char *pszEvrRight
-    )
-{
-    /* Compares in the sack's EVR ordering, which is not string equality:
-       an omitted epoch and an explicit "0:" compare equal. */
-    return pool_evrcmp_str(pPool, pszEvrLeft, pszEvrRight, EVRCMP_COMPARE);
 }
 
 /*

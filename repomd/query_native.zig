@@ -2878,8 +2878,9 @@ fn computeMinVersionExcludeLines(ctx: *NativeContext, entries: []const MinVersio
 
 /// Package refs whose name matches any of `patterns`, mirroring the libsolv
 /// `SolvDataIterator` scan this replaces: a pattern containing `*`, `?` or `[`
-/// is a glob (`SolvIsGlob` tested for exactly those three), anything else is an
-/// exact name match, and both installed and available repositories are scanned.
+/// is a glob (`TDNFIsGlob` in `client/utils.c` tests for exactly those three),
+/// anything else is an exact name match, and both installed and available
+/// repositories are scanned.
 /// Refs are deduplicated because the solver rejects a repeated hidden package
 /// with `error.InvalidInput` (`repomd/solver_live.zig:411`).
 ///
