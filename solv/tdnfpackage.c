@@ -8,18 +8,6 @@
 
 #include "includes.h"
 
-void
-SolvFreePackageList(
-    PSolvPackageList pPkgList
-    )
-{
-    if(pPkgList)
-    {
-        queue_free(&pPkgList->queuePackages);
-        TDNF_SAFE_FREE_MEMORY(pPkgList);
-    }
-}
-
 uint32_t
 SolvGetPkgNameFromId(
     PSolvSack pSack,

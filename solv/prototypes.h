@@ -30,12 +30,6 @@ typedef struct _SolvSack
     char*       pszRootDir;
 } SolvSack, *PSolvSack;
 
-/* Opaque to every consumer except solv/, which alone can see the libsolv
-   Queue the list carries. No client/ code reaches the contents any more --
-   package selections cross that boundary as refs. The definition is in
-   solv/includes.h. */
-typedef struct _SolvPackageList SolvPackageList, *PSolvPackageList;
-
 typedef struct _SOLV_REPO_INFO_INTERNAL_
 {
     Repo*         pRepo;
@@ -58,11 +52,6 @@ SolvSplitEvr(
     char **ppEpoch,
     char **ppVersion,
     char **ppLease);
-
-void
-SolvFreePackageList(
-    PSolvPackageList pPkgList
-    );
 
 uint32_t
 SolvGetNevraFromId(
