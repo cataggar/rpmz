@@ -7,6 +7,12 @@
 
 
 static uint32_t
+NativeQueryAllPkgIds(
+    PSolvSack pSack,
+    PTDNF_ID_LIST pQueue
+    );
+
+static uint32_t
 NativeQuerySerializePackageIdCommon(
     Pool *pPool,
     TDNF_PKG_ID dwPkgId,
@@ -68,7 +74,7 @@ NativeQuerySplitField(
 
 static int
 NativeQueryRefMatchesPkg(
-    Pool *pPool,
+    PSolvSack pSack,
     TDNF_PKG_ID dwPkgId,
     const char *pszRepo,
     const char *pszName,
@@ -358,6 +364,44 @@ TDNFNativeQueryInstalledPkgIds(
     }
 
     dwError = TDNFInstalledGetPkgIds(pSack->pPool, pQueue);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+cleanup:
+    return dwError;
+error:
+    goto cleanup;
+}
+
+/*
+ * Every known package, installed or not, as handles.
+ *
+ * The sibling of TDNFNativeQueryInstalledPkgIds() for the unfiltered
+ * walk. Ref resolution picks one or the other depending on whether the
+ * ref is being resolved against the installed set, so keeping both on
+ * the same side of the bridge means the choice is made without a Pool
+ * in scope at the call site.
+ *
+ * Static, unlike its sibling: ref resolution in this file is its only
+ * caller. TDNFNativeQueryInstalledPkgIds() is exported because goal.c
+ * calls it too. Growing libtdnf's public surface is meant to be a
+ * deliberate act rather than a side effect of adding a helper, so this
+ * gets promoted when a second caller appears and not before.
+ */
+static uint32_t
+NativeQueryAllPkgIds(
+    PSolvSack pSack,
+    PTDNF_ID_LIST pQueue
+    )
+{
+    uint32_t dwError = 0;
+
+    if(!pSack || !pSack->pPool || !pQueue)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFPoolGetPkgIds(pSack->pPool, pQueue);
     BAIL_ON_TDNF_ERROR(dwError);
 
 cleanup:
@@ -1061,7 +1105,6 @@ NativeQueryAppendRefMatches(
     )
 {
     uint32_t dwError = 0;
-    Pool *pPool = NULL;
     char *pszCopy = NULL;
     char *pszRepo = NULL;
     char *pszNevra = NULL;
@@ -1078,7 +1121,6 @@ NativeQueryAppendRefMatches(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pPool = pSack->pPool;
     TDNFIdListInit(&qCandidates);
 
     dwError = TDNFAllocateString(pszPackageRef, &pszCopy);
@@ -1108,12 +1150,12 @@ NativeQueryAppendRefMatches(
 
     if(nInstalledOnly)
     {
-        dwError = TDNFInstalledGetPkgIds(pPool, &qCandidates);
+        dwError = TDNFNativeQueryInstalledPkgIds(pSack, &qCandidates);
         BAIL_ON_TDNF_ERROR(dwError);
     }
     else
     {
-        dwError = TDNFPoolGetPkgIds(pPool, &qCandidates);
+        dwError = NativeQueryAllPkgIds(pSack, &qCandidates);
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
@@ -1122,7 +1164,7 @@ NativeQueryAppendRefMatches(
         TDNF_PKG_ID p = qCandidates.pnElements[k];
 
         if(!NativeQueryRefMatchesPkg(
-               pPool, p, pszRepo, pszName, pszArch, pszEvr))
+               pSack, p, pszRepo, pszName, pszArch, pszEvr))
         {
             continue;
         }
@@ -1459,11 +1501,18 @@ NativeQuerySplitField(
     return pszField;
 }
 
-/* Both ref-matching scans below need the same field-by-field comparison,
-   and neither may dereference the package handle itself. */
+/* The field-by-field comparison behind ref resolution, which may not
+   dereference the package handle itself. It takes the sack rather than a
+   Pool so that ref resolution has no Pool in scope at all: the caller
+   enumerates through the bridge and compares through this, and the one
+   remaining dereference is here.
+
+   (This said "Both ref-matching scans below" from #280, where there
+   really were two, until #284 merged them and left the plural behind.
+   There is one caller.) */
 static int
 NativeQueryRefMatchesPkg(
-    Pool *pPool,
+    PSolvSack pSack,
     TDNF_PKG_ID dwPkgId,
     const char *pszRepo,
     const char *pszName,
@@ -1474,7 +1523,12 @@ NativeQueryRefMatchesPkg(
     TDNF_PKG_FIELDS stFields = {0};
     int nEvrCompare = 0;
 
-    if(TDNFPkgHandleGetFields(pPool, dwPkgId, &stFields))
+    if(!pSack || !pSack->pPool)
+    {
+        return 0;
+    }
+
+    if(TDNFPkgHandleGetFields(pSack->pPool, dwPkgId, &stFields))
     {
         return 0;
     }
