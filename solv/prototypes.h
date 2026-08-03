@@ -116,6 +116,13 @@ SolvReadRpmsFromDirectory(
 );
 
 uint32_t
+SolvSackReadInstalledRpms(
+    PSolvSack pSack,
+    const char *pszCacheFileName,
+    const tdnf_rpm_config *pRpmConfig
+    );
+
+uint32_t
 SolvReadInstalledRpms(
     Repo* pRepo,
     const char *pszCacheFileName,
@@ -279,15 +286,9 @@ TDNFStrIdFromString(
     TDNF_STR_ID *pIdStr
     );
 
-/* Repo lifecycle and the installed-repo handle. These hand back a
-   Repo * the caller passes on without dereferencing; that plumbing goes
-   away when Pool/Repo become opaque typedefs. */
-uint32_t
-TDNFPoolGetInstalledRepo(
-    Pool *pPool,
-    Repo **ppRepo
-    );
-
+/* Repo lifecycle. These hand back a Repo * the caller passes on without
+   dereferencing; that plumbing goes away when Pool/Repo become opaque
+   typedefs. */
 uint32_t
 TDNFPoolCreateRepo(
     Pool *pPool,
