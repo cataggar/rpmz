@@ -8,6 +8,22 @@
 
 #include "includes.h"
 
+
+static uint32_t
+TDNFSolvAddPkgLocks(
+    PTDNF pTdnf,
+    PTDNF_ID_LIST pQueueJobs,
+    PTDNF_PKG_INFO pInstalled,
+    uint32_t dwInstalledCount
+    );
+
+static uint32_t
+TDNFSolvAddInstallOnlyPkgs(
+    PTDNF pTdnf,
+    PTDNF_ID_LIST pQueueJobs,
+    PTDNF_PKG_INFO pInstalled,
+    uint32_t dwInstalledCount
+    );
 /* The _Static_asserts that pin tdnf's job encoding and handle widths to
    libsolv's live in packageutils.c, the one file in client/ that still
    speaks libsolv. Keeping them here would have made goal.c depend on
@@ -2024,7 +2040,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFSolvAddPkgLocks(PTDNF pTdnf, PTDNF_ID_LIST pQueueJobs,
                     PTDNF_PKG_INFO pInstalled, uint32_t dwInstalledCount)
 {
@@ -2051,7 +2067,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFSolvAddInstallOnlyPkgs(
     PTDNF pTdnf,
     PTDNF_ID_LIST pQueueJobs,

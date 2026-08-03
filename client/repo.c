@@ -9,6 +9,37 @@
 #include "includes.h"
 
 
+
+static uint32_t
+TDNFEnsureRepoMDParts(
+    PTDNF pTdnf,
+    PTDNF_REPO_DATA pRepo,
+    PTDNF_REPO_METADATA pRepoMDRel,
+    PTDNF_REPO_METADATA *ppRepoMD
+    );
+static uint32_t
+TDNFFindRepoMDPart(
+    const TDNF_REPOMD_DOC *pRepoMd,
+    const char *pszType,
+    char **ppszPart
+    );
+static uint32_t
+TDNFParseRepoMD(
+    PTDNF_REPO_METADATA pRepoMD
+    );
+static uint32_t
+TDNFReplaceFile(
+    const char *pszSrcFile,
+    const char *pszDstFile
+    );
+static uint32_t
+TDNFDownloadRepoMDParts(
+    PTDNF pTdnf,
+    const TDNF_REPOMD_DOC *pRepoMd,
+    PTDNF_REPO_DATA pRepo,
+    const char *pszDir,
+    int nPrintOnly
+    );
 uint32_t
 TDNFInitCmdLineRepo(
     PTDNF pTdnf,
@@ -541,7 +572,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFEnsureRepoMDParts(
     PTDNF pTdnf,
     PTDNF_REPO_DATA pRepo,
@@ -641,7 +672,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFFindRepoMDPart(
     const TDNF_REPOMD_DOC *pRepoMd,
     const char *pszType,
@@ -757,7 +788,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFParseRepoMD(
     PTDNF_REPO_METADATA pRepoMD
     )
@@ -839,7 +870,7 @@ TDNFFreeRepoMetadata(
     TDNF_SAFE_FREE_MEMORY(pRepoMD);
 }
 
-uint32_t
+static uint32_t
 TDNFReplaceFile(
     const char *pszSrcFile,
     const char *pszDstFile
@@ -934,7 +965,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFDownloadRepoMDParts(
     PTDNF pTdnf,
     const TDNF_REPOMD_DOC *pRepoMd,

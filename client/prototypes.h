@@ -152,12 +152,6 @@ ReadGPGKeyFile(
    );
 
 
-uint32_t
-TDNFImportGPGKeyData(
-    const tdnf_rpm_config *pRpmConfig,
-    const void *pKeyData,
-    size_t nKeyDataSize
-    );
 
 
 uint32_t
@@ -202,12 +196,6 @@ TDNFRefreshSack(
     );
 
 //repoutils.c
-uint32_t
-TDNFRepoGetRpmCacheDir(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo,
-    char** ppszRpmCacheDir
-    );
 
 uint32_t
 TDNFRepoRemoveCacheDir(
@@ -301,14 +289,6 @@ TDNFCreatePackageUrl(
     char **ppszPackageUrl
     );
 
-uint32_t
-TDNFDownloadPackage(
-    PTDNF pTdnf,
-    const char* pszPackageLocation,
-    const char* pszPkgName,
-    PTDNF_REPO_DATA pRepo,
-    const char* pszRpmCacheDir
-    );
 
 uint32_t
 TDNFDownloadPackageToCache(
@@ -342,6 +322,15 @@ TDNFDownloadPackageToDirectory(
 //packageutils.c
 
 uint32_t
+TDNFAddPackagesForInstall(
+    PSolvSack pSack,
+    PTDNF_ID_LIST pQueueGoal,
+    const char* pszPkgName,
+    int nSource,
+    int nInstallOnly
+    );
+
+uint32_t
 TDNFMatchForReinstall(
     PSolvSack pSack,
     const char* pszName,
@@ -362,36 +351,9 @@ TDNFPkgInfoFilterNewest(
     PTDNF_PKG_INFO pPkgInfos
 );
 
-uint32_t
-TDNFPackageGetDowngrade(
-    PTDNF pTdnf,
-    TDNF_PKG_ID dwInstalled,
-    PSolvSack pSack,
-    TDNF_PKG_ID* pdwDowngradePkgId
-    );
 
 
-uint32_t
-TDNFFilterPackages(
-    PTDNF pTdnf,
-    TDNF_ALTERTYPE nAlterType,
-    char** ppszPkgsNotResolved,
-    PTDNF_ID_LIST pQueueGoal
-    );
 
-uint32_t
-TDNFGetAutoInstalledOrphans(
-    PTDNF pTdnf,
-    PTDNF_ID_LIST pQueueGoal);
-
-uint32_t
-TDNFAddPackagesForInstall(
-    PSolvSack pSack,
-    PTDNF_ID_LIST pQueueGoal,
-    const char* pszPkgName,
-    int nSource,
-    int nInstallOnly
-    );
 
 uint32_t
 TDNFAddPackagesForErase(
@@ -407,19 +369,7 @@ TDNFAddPackagesForUpgrade(
     const char* pszPkgName
     );
 
-uint32_t
-TDNFVerifyUpgradePackage(
-    PSolvSack pSack,
-    TDNF_PKG_ID dwPkg,
-    uint32_t* pdwUpgradePackage
-    );
 
-uint32_t
-TDNFVerifyInstallPackage(
-    PSolvSack pSack,
-    TDNF_PKG_ID dwPkg,
-    uint32_t* pdwInstallPackage
-    );
 
 uint32_t
 TDNFAddPackagesForDowngrade(
@@ -518,21 +468,7 @@ TDNFPkgsToExclude(
     char***  pppszExclude
     );
 
-uint32_t
-TDNFSolvAddPkgLocks(
-    PTDNF pTdnf,
-    PTDNF_ID_LIST pQueueJobs,
-    PTDNF_PKG_INFO pInstalled,
-    uint32_t dwInstalledCount
-    );
 
-uint32_t
-TDNFSolvAddInstallOnlyPkgs(
-    PTDNF pTdnf,
-    PTDNF_ID_LIST pQueueJobs,
-    PTDNF_PKG_INFO pInstalled,
-    uint32_t dwInstalledCount
-    );
 
 uint32_t
 TDNFGoalAddHiddenPackages(
@@ -722,11 +658,6 @@ TDNFConfigReplaceVars(
     char** pszString
     );
 
-uint32_t
-TDNFReadConfFilesFromDir(
-    char *pszDir,
-    char ***pppszMinVersions
-    );
 
 //repo.c
 
@@ -768,36 +699,14 @@ TDNFGetRepoMD(
     PTDNF_REPO_METADATA *ppRepoMD
     );
 
-uint32_t
-TDNFParseRepoMD(
-    PTDNF_REPO_METADATA pRepoMD
-    );
 
-uint32_t
-TDNFFindRepoMDPart(
-    const TDNF_REPOMD_DOC *pRepoMd,
-    const char *pszType,
-    char **ppszPart
-    );
 
 void
 TDNFFreeRepoMetadata(
     PTDNF_REPO_METADATA pRepoMD
     );
 
-uint32_t
-TDNFEnsureRepoMDParts(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo,
-    PTDNF_REPO_METADATA pRepoMDRel,
-    PTDNF_REPO_METADATA *ppRepoMD
-    );
 
-uint32_t
-TDNFReplaceFile(
-    const char *pszSrcFile,
-    const char *pszDstFile
-    );
 
 uint32_t
 TDNFDownloadMetadata(
@@ -807,22 +716,8 @@ TDNFDownloadMetadata(
     int nPrintOnly
     );
 
-uint32_t
-TDNFDownloadRepoMDParts(
-    PTDNF pTdnf,
-    const TDNF_REPOMD_DOC *pRepoMd,
-    PTDNF_REPO_DATA pRepo,
-    const char *pszDir,
-    int nPrintOnly
-    );
 
 //repolist.c
-uint32_t
-TDNFLoadReposFromFile(
-    PTDNF pTdnf,
-    const char* pszRepoFile,
-    PTDNF_REPO_DATA* ppRepos
-    );
 
 uint32_t
 TDNFLoadRepoData(
@@ -835,12 +730,6 @@ TDNFRepoListFinalize(
     PTDNF pTdnf
     );
 
-uint32_t
-TDNFAlterRepoState(
-    PTDNF_REPO_DATA pRepos,
-    int nEnable,
-    const char* pszId
-    );
 
 uint32_t
 TDNFCloneRepo(
@@ -862,15 +751,6 @@ TDNFPrepareAllPackages(
     PTDNF_ID_LIST pQueueGoal
     );
 
-uint32_t
-TDNFPrepareSinglePkg(
-    PTDNF pTdnf,
-    const char* pszPkgName,
-    TDNF_ALTERTYPE nAlterType,
-    char** ppszPkgsNotResolved,
-    PTDNF_ID_LIST pQueueGoal,
-    uint32_t dwRequestRef
-    );
 
 uint32_t
 TDNFAddNotResolved(
@@ -901,59 +781,13 @@ TDNFRpmExecHistoryTransaction(
     );
 
 
-uint32_t
-TDNFPopulateTransaction(
-    PTDNFRPMTS pTS,
-    PTDNF pTdnf,
-    PTDNF_SOLVED_PKG_INFO pInfo
-    );
 
-uint32_t
-TDNFTransAddErasePkgs(
-    PTDNFRPMTS pTS,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO pInfo
-    );
 
-uint32_t
-TDNFTransAddErasePkg(
-    PTDNFRPMTS pTS,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO pInfo
-    );
 
-uint32_t
-TDNFTransAddInstallPkgs(
-    PTDNFRPMTS pTS,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO pInfo,
-    int nUpgrade
-    );
 
-uint32_t
-TDNFTransAddInstallPkg(
-    PTDNFRPMTS pTS,
-    PTDNF pTdnf,
-    PTDNF_PKG_INFO pInfo,
-    PTDNF_REPO_DATA pRepo,
-    int nUpgrade
-    );
 
-uint32_t
-TDNFRunTransaction(
-    PTDNFRPMTS pTS,
-    PTDNF pTdnf
-    );
 
-uint32_t
-TDNFRemoveCachedRpms(
-    PTDNF_CACHED_RPM_LIST pCachedRpmsList
-    );
 
-void
-TDNFFreeCachedRpmsArray(
-    PTDNF_CACHED_RPM_LIST pArray
-    );
 
 //updateinfo.c
 uint32_t
@@ -963,11 +797,6 @@ TDNFGetSecuritySeverityOption(
     char **ppszSeverity
     );
 
-uint32_t
-TDNFNumUpdatePkgs(
-    PTDNF_UPDATEINFO pInfo,
-    uint32_t *pdwCount
-    );
 
 uint32_t
 TDNFGetUpdatePkgs(
@@ -983,15 +812,7 @@ TDNFGetRebootRequiredOption(
     );
 
 //utils.c
-uint32_t
-TDNFIsSystemError(
-    uint32_t dwError
-    );
 
-uint32_t
-TDNFGetSystemError(
-    uint32_t dwError
-    );
 
 uint32_t
 TDNFIsFileOrSymlink(
@@ -1091,12 +912,6 @@ TDNFFreePlugins(
     PTDNF_PLUGIN pPlugins
     );
 
-void
-TDNFShowPluginError(
-    PTDNF pTdnf,
-    PTDNF_PLUGIN pPlugin,
-    uint32_t nErrorCode
-    );
 /* eventdata.c */
 
 uint32_t
@@ -1119,15 +934,6 @@ TDNFFreeEventData(
     );
 
 /* api.c */
-uint32_t
-TDNFListInternal(
-    PTDNF pTdnf,
-    TDNF_SCOPE nScope,
-    char** ppszPackageNameSpecs,
-    PTDNF_PKG_INFO* ppPkgInfo,
-    uint32_t* pdwCount,
-    TDNF_PKG_DETAIL nDetail
-    );
 
 uint32_t
 TDNFGetHistoryCtx(

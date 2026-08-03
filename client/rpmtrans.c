@@ -16,6 +16,53 @@
 #define INSTALL_UPGRADE 1
 #define INSTALL_REINSTALL 2
 
+
+static uint32_t
+TDNFPopulateTransaction(
+    PTDNFRPMTS pTS,
+    PTDNF pTdnf,
+    PTDNF_SOLVED_PKG_INFO pInfo
+    );
+static uint32_t
+TDNFRunTransaction(
+    PTDNFRPMTS pTS,
+    PTDNF pTdnf
+    );
+static uint32_t
+TDNFTransAddInstallPkgs(
+    PTDNFRPMTS pTS,
+    PTDNF pTdnf,
+    PTDNF_PKG_INFO pInfo,
+    int nUpgrade
+    );
+static uint32_t
+TDNFTransAddInstallPkg(
+    PTDNFRPMTS pTS,
+    PTDNF pTdnf,
+    PTDNF_PKG_INFO pInfo,
+    PTDNF_REPO_DATA pRepo,
+    int nUpgrade
+    );
+static uint32_t
+TDNFTransAddErasePkgs(
+    PTDNFRPMTS pTS,
+    PTDNF pTdnf,
+    PTDNF_PKG_INFO pInfo
+    );
+static uint32_t
+TDNFTransAddErasePkg(
+    PTDNFRPMTS pTS,
+    PTDNF pTdnf,
+    PTDNF_PKG_INFO pInfo
+    );
+static uint32_t
+TDNFRemoveCachedRpms(
+    PTDNF_CACHED_RPM_LIST pCachedRpmsList
+    );
+static void
+TDNFFreeCachedRpmsArray(
+    PTDNF_CACHED_RPM_LIST pArray
+    );
 static void
 TDNFClearNativePlan(
     PTDNFRPMTS pTS
@@ -353,7 +400,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFPopulateTransaction(
     PTDNFRPMTS pTS,
     PTDNF pTdnf,
@@ -846,7 +893,7 @@ reportProblems(PTDNFRPMTS pTS)
  * is a no-op.
  */
 
-uint32_t
+static uint32_t
 TDNFRunTransaction(
     PTDNFRPMTS pTS,
     PTDNF pTdnf
@@ -889,7 +936,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFTransAddInstallPkgs(
     PTDNFRPMTS pTS,
     PTDNF pTdnf,
@@ -933,7 +980,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFTransAddInstallPkg(
     PTDNFRPMTS pTS,
     PTDNF pTdnf,
@@ -1230,7 +1277,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFTransAddErasePkgs(
     PTDNFRPMTS pTS,
     PTDNF pTdnf,
@@ -1262,7 +1309,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFTransAddErasePkg(
     PTDNFRPMTS pTS,
     PTDNF pTdnf,
@@ -1330,7 +1377,7 @@ error:
 }
 
 
-uint32_t
+static uint32_t
 TDNFRemoveCachedRpms(
     PTDNF_CACHED_RPM_LIST pCachedRpmsList
     )
@@ -1364,7 +1411,7 @@ error:
     goto cleanup;
 }
 
-void
+static void
 TDNFFreeCachedRpmsArray(
     PTDNF_CACHED_RPM_LIST pArray
     )

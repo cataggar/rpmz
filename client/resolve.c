@@ -8,6 +8,27 @@
 
 #include "includes.h"
 
+
+static uint32_t
+TDNFFilterPackages(
+    PTDNF pTdnf,
+    TDNF_ALTERTYPE nAlterType,
+    char** ppszPkgsNotResolved,
+    PTDNF_ID_LIST pQueueGoal
+    );
+static uint32_t
+TDNFGetAutoInstalledOrphans(
+    PTDNF pTdnf,
+    PTDNF_ID_LIST pQueueGoal);
+static uint32_t
+TDNFPrepareSinglePkg(
+    PTDNF pTdnf,
+    const char* pszPkgName,
+    TDNF_ALTERTYPE nAlterType,
+    char** ppszPkgsNotResolved,
+    PTDNF_ID_LIST pQueueGoal,
+    uint32_t dwRequestRef
+    );
 static uint32_t
 TDNFResolveListPackages(
     PTDNF pTdnf,
@@ -215,7 +236,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFFilterPackages(
     PTDNF pTdnf,
     TDNF_ALTERTYPE nAlterType,
@@ -263,7 +284,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFGetAutoInstalledOrphans(
     PTDNF pTdnf,
     PTDNF_ID_LIST pQueueGoal)
@@ -324,7 +345,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFPrepareSinglePkg(
     PTDNF pTdnf,
     const char* pszPkgName,

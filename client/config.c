@@ -19,6 +19,12 @@
 #define KEY_MAX_LEN                     32
 
 
+
+static uint32_t
+TDNFReadConfFilesFromDir(
+    char *pszDir,
+    char ***pppszMinVersions
+    );
 static uint32_t TDNFParseOSInfo(PTDNF_CONF pConf, const char *os_rel_fn)
 {
     char *name = NULL;
@@ -680,7 +686,7 @@ error:
  * string array pointed to by pppszLines. pppszLines may already
  * have values set from the config file, which are preserved.
  */
-uint32_t
+static uint32_t
 TDNFReadConfFilesFromDir(
     char *pszDir,
     char ***pppszLines

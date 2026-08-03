@@ -9,6 +9,16 @@
 #include "includes.h"
 #include "../llconf/nodes.h"
 
+
+static uint32_t
+TDNFListInternal(
+    PTDNF pTdnf,
+    TDNF_SCOPE nScope,
+    char** ppszPackageNameSpecs,
+    PTDNF_PKG_INFO* ppPkgInfo,
+    uint32_t* pdwCount,
+    TDNF_PKG_DETAIL nDetail
+    );
 uid_t gEuid;
 
 static int instanceLockFd = -1;
@@ -488,7 +498,7 @@ TDNFList(
                     DETAIL_LIST);
 }
 
-uint32_t
+static uint32_t
 TDNFListInternal(
     PTDNF pTdnf,
     TDNF_SCOPE nScope,

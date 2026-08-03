@@ -8,6 +8,15 @@
 
 #include "includes.h"
 
+
+static uint32_t
+TDNFIsSystemError(
+    uint32_t dwError
+    );
+static uint32_t
+TDNFGetSystemError(
+    uint32_t dwError
+    );
 uint32_t
 TDNFGetErrorString(
     uint32_t dwErrorCode,
@@ -68,7 +77,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFIsSystemError(
     uint32_t dwError
     )
@@ -76,7 +85,7 @@ TDNFIsSystemError(
     return dwError > ERROR_TDNF_SYSTEM_BASE;
 }
 
-uint32_t
+static uint32_t
 TDNFGetSystemError(
     uint32_t dwError
     )

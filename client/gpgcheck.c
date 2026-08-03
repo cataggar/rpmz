@@ -10,6 +10,13 @@
 
 #include "gpgcheck_zig.h"
 
+
+static uint32_t
+TDNFImportGPGKeyData(
+    const tdnf_rpm_config *pRpmConfig,
+    const void *pKeyData,
+    size_t nKeyDataSize
+    );
 static void
 TDNFFreeFreshGPGKeys(
     void **ppKeys,
@@ -80,7 +87,7 @@ error:
 }
 
 
-uint32_t
+static uint32_t
 TDNFImportGPGKeyData(
     const tdnf_rpm_config *pRpmConfig,
     const void *pKeyData,
