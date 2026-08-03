@@ -65,6 +65,12 @@ TDNFNativeQueryApplyLocationUrls(
     );
 
 uint32_t
+TDNFNativeQueryInstalledPkgIds(
+    PSolvSack pSack,
+    PTDNF_ID_LIST pQueue
+    );
+
+uint32_t
 TDNFNativeQuerySerializePackageId(
     PSolvSack pSack,
     TDNF_PKG_ID dwPkgId,

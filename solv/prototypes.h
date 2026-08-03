@@ -86,13 +86,6 @@ SolvInitSack(
     const char* pszArch
 );
 
-// tdnfquery.c
-uint32_t
-SolvAddUserInstalledToJobs(
-    PTDNF_ID_LIST pQueueJobs,
-    Pool *pPool,
-    struct history_ctx *pHistoryCtx
-    );
 
 // tdnfrepo.c
 uint32_t

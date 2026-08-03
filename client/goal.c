@@ -182,6 +182,26 @@ TDNFGoalNameIsInstalled(
         TDNFTransactionPlanRequestTraceFinalize((_tdnf)->pRequestTrace, (_jobs)->pnElements, (_jobs)->dwCount, TDNF_JOB_CLEANDEPS, TDNF_JOB_FORCEBEST); \
     } while (0)
 
+/*
+ * The user-installed jobs, built here rather than in solv/.
+ *
+ * The loop this replaces lived in solv/tdnfquery.c so that it could walk
+ * pPool->installed directly, and it had to spell the job encoding in
+ * libsolv's SOLVER_* names because solv/ may not include a client/ header
+ * -- with a comment warning that the two spellings must be changed
+ * together. Enumerating the installed set through the handle bridge
+ * removes both problems at once: the encoding is now written once, in
+ * tdnf's own TDNF_JOB_* macros, next to every other job this file pushes.
+ *
+ * Order is unchanged. TDNFInstalledGetPkgIds() walks the installed repo
+ * with the same FOR_REPO_SOLVABLES the deleted loop used, so the handles
+ * arrive in the same sequence and the jobs land at the same positions.
+ *
+ * One behaviour does change, in the safe direction: the old loop indexed
+ * straight into pPool->installed and would have segfaulted if there were
+ * no installed repo, where TDNFInstalledGetPkgIds() reports the missing
+ * sack instead.
+ */
 static uint32_t
 TDNFAddUserInstalledToJobs(
     PTDNF pTdnf,
@@ -191,6 +211,9 @@ TDNFAddUserInstalledToJobs(
     uint32_t dwError = 0;
     struct history_ctx *pHistoryCtx = NULL;
     uint32_t nTraceStart = 0;
+    char *pszName = NULL;
+    TDNF_ID_LIST qInstalled = {0};
+    int k = 0;
 
     if(!pTdnf || !pQueueJobs)
     {
@@ -198,18 +221,49 @@ TDNFAddUserInstalledToJobs(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
+    TDNFIdListInit(&qInstalled);
+
     dwError = TDNFGetHistoryCtx(pTdnf, &pHistoryCtx, 1);
     BAIL_ON_TDNF_ERROR(dwError);
 
     nTraceStart = pQueueJobs->dwCount;
-    dwError = SolvAddUserInstalledToJobs(pQueueJobs,
-                                         pTdnf->pSack->pPool,
-                                         pHistoryCtx);
+
+    dwError = TDNFNativeQueryInstalledPkgIds(pTdnf->pSack, &qInstalled);
     BAIL_ON_TDNF_ERROR(dwError);
+
+    for(k = 0; k < (int)qInstalled.dwCount; k++)
+    {
+        TDNF_PKG_ID p = qInstalled.pnElements[k];
+        int nAutoFlag = 0;
+
+        TDNF_SAFE_FREE_MEMORY(pszName);
+        dwError = GoalGetPkgNameFromHandle(pTdnf, p, &pszName);
+        BAIL_ON_TDNF_ERROR(dwError);
+
+        if(history_get_auto_flag(pHistoryCtx, pszName, &nAutoFlag) != 0)
+        {
+            dwError = ERROR_TDNF_HISTORY_ERROR;
+            BAIL_ON_TDNF_ERROR(dwError);
+        }
+
+        /* Auto-installed packages are the solver's to remove; only the
+           ones the user asked for are pinned. */
+        if(nAutoFlag != 0)
+        {
+            continue;
+        }
+
+        dwError = TDNFIdListPush2(pQueueJobs,
+                      TDNF_JOB_SOLVABLE|TDNF_JOB_USERINSTALLED, p);
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
     TDNFTransactionPlanRequestTraceRecordPackageJobRange(pTdnf->pRequestTrace, pQueueJobs->pnElements,
         nTraceStart, pQueueJobs->dwCount, TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY,
         TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
 cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszName);
+    TDNFIdListFree(&qInstalled);
     if (pHistoryCtx)
     {
         destroy_history_ctx(pHistoryCtx);
@@ -597,9 +651,18 @@ TDNFGoal(
         nAlterType == ALTER_AUTOERASEALL;
     if(nAllowErasing)
     {
-        TDNFAddUserInstalledToJobs(pTdnf, &queueJobs);
+        /* A root with no history database has nothing to pin, and that has
+           always been tolerated here. Every other failure is different: the
+           jobs are pushed one package at a time, so bailing part way leaves
+           a truncated pin set, and running the solve on it would quietly
+           treat explicitly installed packages as automatic and offer to
+           erase them. Only the no-database case is absorbed. */
+        dwError = TDNFAddUserInstalledToJobs(pTdnf, &queueJobs);
+        if(dwError == ERROR_TDNF_HISTORY_NODB)
+        {
+            dwError = 0;
+        }
         BAIL_ON_TDNF_ERROR(dwError);
-        /* TODO: deal with no db error? */
     }
 
     dwError = TDNFSolv(pTdnf, &queueJobs, ppszExcludes, dwExcludeCount,
@@ -2331,7 +2394,7 @@ TDNFSolvAddProtectPkgs(
     }
 
     /* libsolv has no protected flag; allow uninstall only for other names. */
-    dwError = TDNFInstalledGetPkgIds(pPool, &qInstalled);
+    dwError = TDNFNativeQueryInstalledPkgIds(pTdnf->pSack, &qInstalled);
     BAIL_ON_TDNF_ERROR(dwError);
     for (k = 0; k < (int)qInstalled.dwCount; k++) {
         TDNF_PKG_ID p = qInstalled.pnElements[k];

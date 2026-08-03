@@ -333,6 +333,39 @@ error:
     goto cleanup;
 }
 
+/*
+ * Every installed package, as handles, without the caller holding a Pool.
+ *
+ * goal.c builds two different job sets by walking the installed set, and
+ * both used to reach through pTdnf->pSack->pPool to do it. The walk itself
+ * is one of the last things in client/ that needs libsolv, so it lives
+ * here with the rest of the handle bridge rather than being repeated at
+ * each call site. Order is the underlying repo order and is preserved
+ * exactly: the jobs the callers push are position-sensitive.
+ */
+uint32_t
+TDNFNativeQueryInstalledPkgIds(
+    PSolvSack pSack,
+    PTDNF_ID_LIST pQueue
+    )
+{
+    uint32_t dwError = 0;
+
+    if(!pSack || !pSack->pPool || !pQueue)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFInstalledGetPkgIds(pSack->pPool, pQueue);
+    BAIL_ON_TDNF_ERROR(dwError);
+
+cleanup:
+    return dwError;
+error:
+    goto cleanup;
+}
+
 uint32_t
 TDNFNativeQuerySerializePackageId(
     PSolvSack pSack,
