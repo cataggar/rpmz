@@ -363,9 +363,10 @@ TDNFMatchForReinstall(
     );
 
 uint32_t
-TDNFPopulatePkgInfos(
+TDNFPopulatePkgInfosFromRefs(
     PSolvSack pSack,
-    PSolvPackageList pPkgList,
+    char **ppszPackageRefs,
+    uint32_t dwRefCount,
     PTDNF_PKG_INFO* ppPkgInfo
     );
 

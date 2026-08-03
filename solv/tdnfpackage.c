@@ -20,57 +20,6 @@ SolvFreePackageList(
     }
 }
 
-/*
- * Builds a package list from a plain array of ids. client/ no longer owns a
- * libsolv Queue, so the id array is the only shape both sides can speak.
- */
-uint32_t
-SolvIdsToPackageList(
-    const Id* pIds,
-    uint32_t dwIdCount,
-    PSolvPackageList* ppPkgList
-    )
-{
-    uint32_t dwError = 0;
-    PSolvPackageList pPkgList = NULL;
-    if(!ppPkgList || !pIds)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    if(dwIdCount == 0)
-    {
-        dwError = ERROR_TDNF_NO_DATA;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-    dwError = TDNFAllocateMemory(
-                  1,
-                  sizeof(SolvPackageList),
-                  (void **)&pPkgList);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    queue_init(&pPkgList->queuePackages);
-    queue_insertn(&pPkgList->queuePackages,
-                  pPkgList->queuePackages.count,
-                  (int)dwIdCount,
-                  pIds);
-    *ppPkgList = pPkgList;
-cleanup:
-    return dwError;
-
-error:
-    if(ppPkgList)
-    {
-        *ppPkgList = NULL;
-    }
-    if(pPkgList)
-    {
-        SolvFreePackageList(pPkgList);
-    }
-    goto cleanup;
-}
-
 uint32_t
 SolvGetPkgNameFromId(
     PSolvSack pSack,

@@ -932,10 +932,16 @@ error:
     return dwError;
 }
 
+/* Builds the same DETAIL_LIST package infos as the package-list form this
+   replaced, but from refs directly: the caller already holds ids, and the
+   old path only turned them into a SolvPackageList so that
+   PackageUtilsPopulatePkgInfoFromPackageList could turn them straight back
+   into ids and then refs. */
 uint32_t
-TDNFPopulatePkgInfos(
+TDNFPopulatePkgInfosFromRefs(
     PSolvSack pSack,
-    PSolvPackageList pPkgList,
+    char **ppszPackageRefs,
+    uint32_t dwRefCount,
     PTDNF_PKG_INFO* ppPkgInfos
     )
 {
@@ -946,15 +952,16 @@ TDNFPopulatePkgInfos(
     PTDNF_PKG_INFO pPkgInfos = NULL;
     PTDNF_PKG_INFO pPkgInfo = NULL;
 
-    if(!ppPkgInfos || !pSack || !pPkgList)
+    if(!ppPkgInfos || !pSack || !ppszPackageRefs)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = PackageUtilsPopulatePkgInfoFromPackageList(
+    dwError = PackageUtilsPopulatePkgInfoFromRefs(
                   pSack,
-                  pPkgList,
+                  ppszPackageRefs,
+                  dwRefCount,
                   DETAIL_LIST,
                   1,
                   0,

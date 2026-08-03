@@ -145,7 +145,8 @@ fn buildBucket(
     var tail: [*c]legacy_abi.LegacyPackage = null;
     errdefer freePackageList(head);
 
-    // Emit the reverse of the canonical order. TDNFPopulatePkgInfos built
+    // Emit the reverse of the canonical order. TDNFPopulatePkgInfosFromRefs
+    // (TDNFPopulatePkgInfos before it was taken off the solv layer) built
     // every bucket by prepending, so the list handed to the transaction
     // executor was the reverse of the order libsolv walked. That order is the
     // executor's last tie-break between packages with no dependency edge
@@ -206,7 +207,8 @@ fn containsKind(kinds: []const u32, kind: u32) bool {
 /// in job order -- jobs are built from the command line in order, so reversing
 /// the result hands the transaction executor the packages in the reverse of
 /// the order the user wrote them, which is what libsolv plus
-/// TDNFPopulatePkgInfos used to produce and what rpm's own ordering expects.
+/// TDNFPopulatePkgInfosFromRefs used to produce and what rpm's own ordering
+/// expects.
 fn packageRefLessThan(
     result: *const result_abi.Result,
     left_ref: BucketRef,

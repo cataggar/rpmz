@@ -436,7 +436,8 @@ TDNFGoalNoDeps(
     )
 {
     uint32_t dwError = 0;
-    PSolvPackageList pPkgList = NULL;
+    char **ppszPackageRefs = NULL;
+    uint32_t dwRefCount = 0;
     PTDNF_PKG_INFO pPkgInfo = NULL;
     PTDNF_SOLVED_PKG_INFO pInfo = NULL;
 
@@ -446,12 +447,39 @@ TDNFGoalNoDeps(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = SolvIdsToPackageList(pQueuePkgList->pnElements,
-                                   pQueuePkgList->dwCount,
-                                   &pPkgList);
+    /* These two reproduce the deleted SolvIdsToPackageList's guards, in its
+       order, because both codes are observable and neither is the
+       ERROR_TDNF_NO_MATCH the refs path raises for an empty ref set. A queue
+       that was never pushed to still has pnElements NULL, which reported
+       ERROR_TDNF_INVALID_PARAMETER (1622); a queue that was pushed to and
+       then emptied keeps its allocation (TDNFIdListEmpty clears only
+       dwCount), so it reported ERROR_TDNF_NO_DATA. An A/B probe of
+       `install --nodeps --downloadonly` on an already-installed package
+       caught the first case being collapsed into the second. */
+    if(!pQueuePkgList->pnElements)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    if(pQueuePkgList->dwCount == 0)
+    {
+        dwError = ERROR_TDNF_NO_DATA;
+        BAIL_ON_TDNF_ERROR(dwError);
+    }
+
+    dwError = TDNFNativeQuerySerializeQueuePackageRefs(
+                  pTdnf->pSack,
+                  pQueuePkgList,
+                  &ppszPackageRefs,
+                  &dwRefCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = TDNFPopulatePkgInfos(pTdnf->pSack, pPkgList, &pPkgInfo);
+    dwError = TDNFPopulatePkgInfosFromRefs(
+                  pTdnf->pSack,
+                  ppszPackageRefs,
+                  dwRefCount,
+                  &pPkgInfo);
     BAIL_ON_TDNF_ERROR(dwError);
 
     dwError = TDNFAllocateMemory(
@@ -464,6 +492,7 @@ TDNFGoalNoDeps(
     *ppInfo = pInfo;
 
 cleanup:
+    TDNFFreeStringArray(ppszPackageRefs);
     return dwError;
 error:
     if(pPkgInfo) {
