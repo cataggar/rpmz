@@ -164,11 +164,6 @@ SolvAddRpmNative(
 
 
 
-int
-SolvIsGlob(
-    const char* pszString
-    );
-
 uint32_t
 SolvGetMetaDataCachePath(
     PSOLV_REPO_INFO_INTERNAL pSolvRepoInfo,
@@ -233,13 +228,6 @@ TDNFPkgHandleGetRepoNevra(
     TDNF_PKG_ID dwPkgId,
     const char **ppszRepo,
     char **ppszNevra
-    );
-
-int
-TDNFPkgHandleEvrCompare(
-    Pool *pPool,
-    const char *pszEvrLeft,
-    const char *pszEvrRight
     );
 
 uint32_t

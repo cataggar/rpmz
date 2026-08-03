@@ -1496,15 +1496,26 @@ NativeQueryRefMatchesPkg(
     )
 {
     TDNF_PKG_FIELDS stFields = {0};
+    int nEvrCompare = 0;
 
     if(TDNFPkgHandleGetFields(pPool, dwPkgId, &stFields))
     {
         return 0;
     }
 
-    return !strcmp(stFields.pszRepo, pszRepo) &&
-           !strcmp(stFields.pszName, pszName) &&
-           !strcmp(stFields.pszArch, pszArch) &&
-           TDNFPkgHandleEvrCompare(pPool, stFields.pszEvr, pszEvr) == 0;
+    if(strcmp(stFields.pszRepo, pszRepo) ||
+       strcmp(stFields.pszName, pszName) ||
+       strcmp(stFields.pszArch, pszArch))
+    {
+        return 0;
+    }
+
+    /* Same non-match-on-failure contract as the field fetch above. */
+    if(TDNFRepoMdNativeCompareEvr(stFields.pszEvr, pszEvr, &nEvrCompare))
+    {
+        return 0;
+    }
+
+    return nEvrCompare == 0;
 }
 

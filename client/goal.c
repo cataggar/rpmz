@@ -1736,7 +1736,7 @@ TDNFAddGoal(
 
         while(ppszPackagesTemp && *ppszPackagesTemp)
         {
-            if (SolvIsGlob(*ppszPackagesTemp))
+            if (TDNFIsGlob(*ppszPackagesTemp))
             {
                 if (!fnmatch(*ppszPackagesTemp, pszName, 0))
                 {
