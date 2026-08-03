@@ -70,14 +70,6 @@ _Static_assert(LIBSOLV_VERSION_PATCH == TDNF_VENDORED_LIBSOLV_VERSION_PATCH,
 #include "../history/history.h"
 #include "prototypes.h"
 
-/* Definition of the type solv/prototypes.h leaves opaque. It lives here so
-   that only translation units which have already committed to libsolv can
-   see the Queue; everyone else gets the incomplete type. */
-struct _SolvPackageList
-{
-    Queue       queuePackages;
-};
-
 /* solv/prototypes.h spells the ids it exchanges with client/ as int32_t so
    that its consumers need no libsolv header. That is only sound while the
    two types are interchangeable. Note the signedness check has to be
