@@ -9,8 +9,7 @@
 #include "includes.h"
 #include <glob.h>
 
-
-uint32_t
+static uint32_t
 TDNFRepoGetRpmCacheDir(
     PTDNF pTdnf,
     PTDNF_REPO_DATA pRepo,

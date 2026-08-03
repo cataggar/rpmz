@@ -14,6 +14,19 @@
 #include "../llconf/ini.h"
 
 
+
+static uint32_t
+TDNFLoadReposFromFile(
+    PTDNF pTdnf,
+    const char* pszRepoFile,
+    PTDNF_REPO_DATA* ppRepos
+    );
+static uint32_t
+TDNFAlterRepoState(
+    PTDNF_REPO_DATA pRepos,
+    int nEnable,
+    const char* pszId
+    );
 static
 uint32_t
 TDNFCreateCmdLineRepo(
@@ -645,7 +658,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFLoadReposFromFile(
     PTDNF pTdnf,
     const char* pszRepoFile,
@@ -877,7 +890,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFAlterRepoState(
     PTDNF_REPO_DATA pRepos,
     int nEnable,

@@ -8,6 +8,15 @@
 
 #include "includes.h"
 
+
+static uint32_t
+TDNFDownloadPackage(
+    PTDNF pTdnf,
+    const char* pszPackageLocation,
+    const char* pszPkgName,
+    PTDNF_REPO_DATA pRepo,
+    const char* pszRpmCacheDir
+    );
 static int
 progress_cb_impl(
     void *pUserData,
@@ -406,7 +415,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFDownloadPackage(
     PTDNF pTdnf,
     const char* pszPackageLocation,

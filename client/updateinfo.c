@@ -9,6 +9,12 @@
 #include "includes.h"
 #include "../llconf/nodes.h"
 
+
+static uint32_t
+TDNFNumUpdatePkgs(
+    PTDNF_UPDATEINFO pInfo,
+    uint32_t *pdwCount
+    );
 uint32_t
 TDNFUpdateInfoSummary(
     PTDNF pTdnf,
@@ -121,7 +127,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFNumUpdatePkgs(
     PTDNF_UPDATEINFO pInfo,
     uint32_t *pdwCount

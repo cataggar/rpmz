@@ -14,6 +14,13 @@
 #include "../llconf/entry.h"
 #include "../llconf/ini.h"
 
+
+static void
+TDNFShowPluginError(
+    PTDNF pTdnf,
+    PTDNF_PLUGIN pPlugin,
+    uint32_t nErrorCode
+    );
 static
 uint32_t
 _TDNFLoadPlugins(
@@ -629,7 +636,7 @@ error:
     goto cleanup;
 }
 
-void
+static void
 TDNFShowPluginError(
     PTDNF pTdnf,
     PTDNF_PLUGIN pPlugin,

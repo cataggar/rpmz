@@ -12,6 +12,26 @@
 #define PACKAGEUTILS_NATIVE_REF_SEP ((char)0x1f)
 
 
+
+static uint32_t
+TDNFPackageGetDowngrade(
+    PTDNF pTdnf,
+    TDNF_PKG_ID dwInstalled,
+    PSolvSack pSack,
+    TDNF_PKG_ID* pdwDowngradePkgId
+    );
+static uint32_t
+TDNFVerifyInstallPackage(
+    PSolvSack pSack,
+    TDNF_PKG_ID dwPkg,
+    uint32_t* pdwInstallPackage
+    );
+static uint32_t
+TDNFVerifyUpgradePackage(
+    PSolvSack pSack,
+    TDNF_PKG_ID dwPkg,
+    uint32_t* pdwUpgradePackage
+    );
 static uint32_t
 PackageUtilsBuildNativeRepoInputsFromSack(
     PSolvSack pSack,
@@ -248,7 +268,7 @@ error:
     goto cleanup;
 }
 
-uint32_t
+static uint32_t
 TDNFPackageGetDowngrade(
     PTDNF pTdnf,
     TDNF_PKG_ID dwInstalled,
@@ -360,7 +380,7 @@ error:
 }
 
 
-uint32_t
+static uint32_t
 TDNFVerifyInstallPackage(
     PSolvSack pSack,
     TDNF_PKG_ID dwPkg,
@@ -507,7 +527,7 @@ error:
 }
 
 
-uint32_t
+static uint32_t
 TDNFVerifyUpgradePackage(
     PSolvSack pSack,
     TDNF_PKG_ID dwPkg,
