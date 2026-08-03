@@ -234,18 +234,6 @@ TDNFPkgHandleGetLocation(
     char **ppszLocation
     );
 
-/*
- * The name handle of a package handle. Returns the interned id rather
- * than a string so a caller matching against a set of names compares
- * integers; TDNFPkgHandleGetName is the one to reach for when a string
- * is wanted. Cannot fail for a handle that came out of the sack.
- */
-uint32_t
-TDNFPkgHandleGetNameId(
-    Pool *pPool,
-    TDNF_PKG_ID dwPkgId,
-    TDNF_STR_ID *pIdName
-    );
 
 /*
  * Queries over the installed set. They take a Pool rather than a sack
@@ -269,23 +257,6 @@ TDNFPoolGetPkgIds(
     PTDNF_ID_LIST pIdList
     );
 
-/*
- * The string-handle space, kept separate from the package-handle
- * accessors above on purpose (A5-2b). Both are int32_t and libsolv
- * calls both "Id", so naming is the only thing preventing a package
- * handle being passed where a string handle belongs -- which would
- * silently resolve to whatever name sits at that index.
- */
-
-/* Intern a string. create=1, so this fails only on a NULL string;
-   the empty string interns to STRID_EMPTY (1), never 0. */
-uint32_t
-TDNFStrIdFromString(
-    Pool *pPool,
-    const char *pszStr,
-    TDNF_STR_ID *pIdStr
-    );
-
 /* Repo lifecycle. These hand back a Repo * the caller passes on without
    dereferencing; that plumbing goes away when Pool/Repo become opaque
    typedefs. */
@@ -302,13 +273,4 @@ TDNFRepoFree(
     Repo *pRepo
     );
 
-/* Range check on a package handle: is it safe to hand to an accessor.
-   Not an existence check. Reported via pnValid, not as an error,
-   because callers map it to their own error code. */
-uint32_t
-TDNFPkgHandleIsValid(
-    Pool *pPool,
-    TDNF_PKG_ID dwPkgId,
-    int *pnValid
-    );
 

@@ -30,6 +30,18 @@ GoalGetPkgNameFromHandle(
 );
 
 /*
+ * Turn the configured protected names into solver policy, and reject a
+ * request that would erase one. Single caller in this file; kept static
+ * so it adds no exported symbol.
+ */
+static
+uint32_t
+TDNFSolvAddProtectPkgs(
+    PTDNF pTdnf,
+    PTDNF_ID_LIST pQueueJobs
+);
+
+/*
  * The configured protected entry equal to pszName, or NULL. Same contract
  * as TDNFFindProtectedPkg() below; see the definition for why comparing
  * names is what the pool string ids used to stand in for.
@@ -358,7 +370,7 @@ TDNFSolv(
 
     if(nAllowErasing && pTdnf->pConf->ppszProtectedPkgs)
     {
-        dwError = TDNFSolvAddProtectPkgs(pTdnf, pQueueJobs, pTdnf->pSack->pPool);
+        dwError = TDNFSolvAddProtectPkgs(pTdnf, pQueueJobs);
         if (dwError == ERROR_TDNF_PROTECTED)
         {
             /* Nothing has been solved yet, so the plan describes the
@@ -1426,7 +1438,9 @@ TDNFGoalBuildNativeSolverJobs(
            and the NEVRA, which is everything below it needs.
 
            This also subsumes the separate TDNFPkgHandleIsValid() call it
-           replaced, but only because the accessor underneath now performs
+           replaced -- that helper has since been deleted, having no
+           callers left -- but only because the accessor underneath now
+           performs
            that same range check itself: an out-of-range handle is refused
            by PkgHandleToSolvable(), and handle 0 survives to produce an
            empty repository, which the split below rejects. Both outcomes
@@ -2298,7 +2312,8 @@ error:
  * so the two protected-package checks now agree by construction instead of
  * by coincidence.
  *
- * Two things improve as a side effect. TDNFStrIdFromString() passed
+ * Two things improve as a side effect. TDNFStrIdFromString() -- since
+ * deleted, this having been its last caller -- passed
  * create=1, so every configured name was interned into the pool's string
  * table whether or not any package had it; nothing is interned now. And the
  * old code took the matching name from ppszProtectedPkgs[] using a position
@@ -2330,11 +2345,11 @@ GoalFindProtectedName(
     return NULL;
 }
 
+static
 uint32_t
 TDNFSolvAddProtectPkgs(
     PTDNF pTdnf,
-    PTDNF_ID_LIST pQueueJobs,
-    Pool *pPool
+    PTDNF_ID_LIST pQueueJobs
     )
 {
     uint32_t dwError = 0;
@@ -2345,7 +2360,7 @@ TDNFSolvAddProtectPkgs(
     int i, j, k;
     TDNF_ID_LIST qInstalled = {0};
 
-    if(!pTdnf || !pQueueJobs || !pPool || !pTdnf->pConf)
+    if(!pTdnf || !pQueueJobs || !pTdnf->pConf)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);

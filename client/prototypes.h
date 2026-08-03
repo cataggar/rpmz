@@ -559,12 +559,6 @@ TDNFGoalAddHiddenPackages(
     char **ppszExcludes
     );
 
-uint32_t
-TDNFSolvAddProtectPkgs(
-    PTDNF pTdnf,
-    PTDNF_ID_LIST pQueueJobs,
-    Pool *pPool
-    );
 
 TDNF_TRANSACTION_PLAN_REQUEST_TRACE *
 TDNFTransactionPlanRequestTraceCreate(
