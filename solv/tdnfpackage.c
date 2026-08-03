@@ -967,7 +967,7 @@ error:
 }
 
 /*
- * Repo lifecycle and the installed-repo handle.
+ * Repo lifecycle.
  *
  * These are the last libsolv calls that lived outside this file. They
  * are lifecycle rather than package reads, so they do not fit the
@@ -975,33 +975,11 @@ error:
  * passes on. That is deliberate plumbing, not a leak -- the callers
  * never dereference what they receive, and the handle becomes an opaque
  * typedef when Pool and Repo do.
+ *
+ * The installed-repo getter that used to sit here is gone: its one
+ * caller only forwarded the handle to SolvReadInstalledRpms(), so the
+ * two were merged into SolvSackReadInstalledRpms() in tdnfrepo.c.
  */
-uint32_t
-TDNFPoolGetInstalledRepo(
-    Pool *pPool,
-    Repo **ppRepo
-    )
-{
-    uint32_t dwError = 0;
-
-    if(!pPool || !ppRepo)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    /* Unlike the query helpers, an absent installed repo is returned as
-       NULL rather than an error: the one caller passes it straight to
-       SolvReadInstalledRpms, which has its own contract for it. */
-    *ppRepo = pPool->installed;
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
 uint32_t
 TDNFPoolCreateRepo(
     Pool *pPool,

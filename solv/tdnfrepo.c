@@ -447,6 +447,49 @@ error:
     goto cleanup;
 }
 
+/*
+ * Load the installed rpmdb into the sack's installed repo.
+ *
+ * client/ used to do this in two steps: fetch pPool->installed through
+ * TDNFPoolGetInstalledRepo(), then hand the Repo * straight back to
+ * SolvReadInstalledRpms(). The intermediate handle was never
+ * dereferenced there and had no other use, so the pair collapses into
+ * this one call and api.c stops naming Repo. client/ as a whole still
+ * does: TDNFInitRepoFromMetadata() takes one, TDNFInitCmdLineRepo()
+ * holds one, and PTDNF stores pSolvCmdLineRepo. Those belong to repo
+ * creation, not to sack setup, and are retired separately.
+ *
+ * The contract for a sack with no installed repo is unchanged: it
+ * reaches SolvReadInstalledRpms() as a NULL Repo *, which rejects it
+ * with ERROR_TDNF_INVALID_PARAMETER, exactly as before.
+ */
+uint32_t
+SolvSackReadInstalledRpms(
+    PSolvSack pSack,
+    const char *pszCacheFileName,
+    const tdnf_rpm_config *pRpmConfig
+    )
+{
+    uint32_t dwError = 0;
+
+    if(!pSack || !pSack->pPool)
+    {
+        dwError = ERROR_TDNF_INVALID_PARAMETER;
+        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
+    }
+
+    dwError = SolvReadInstalledRpms(
+                  pSack->pPool->installed,
+                  pszCacheFileName,
+                  pRpmConfig);
+    BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
+
+cleanup:
+    return dwError;
+error:
+    goto cleanup;
+}
+
 uint32_t
 SolvReadInstalledRpms(
     Repo* pRepo,

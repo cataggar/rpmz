@@ -195,7 +195,6 @@
       "TDNFPkgsToExclude",
       "TDNFPluginRaiseEvent",
       "TDNFPoolCreateRepo",
-      "TDNFPoolGetInstalledRepo",
       "TDNFPoolGetPkgIds",
       "TDNFPopulatePkgInfosFromRefs",
       "TDNFPopulateTransaction",

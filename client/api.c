@@ -657,13 +657,8 @@ TDNFOpenHandle(
 
     if(!pArgs->nAllDeps)
     {
-        Repo *pInstalledRepo = NULL;
-
-        dwError = TDNFPoolGetInstalledRepo(pSack->pPool, &pInstalledRepo);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        dwError = SolvReadInstalledRpms(
-                      pInstalledRepo,
+        dwError = SolvSackReadInstalledRpms(
+                      pSack,
                       pTdnf->pConf->pszCacheDir,
                       pTdnf->pRpmConfig);
         BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
