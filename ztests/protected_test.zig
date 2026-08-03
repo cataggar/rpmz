@@ -103,6 +103,35 @@ test "autoremove keeps a protected dependency" {
     try std.testing.expect(try root.isInstalled(required));
 }
 
+// The mirror of the test above, and the reason that one is not vacuous.
+// Autoremove classifies every installed package as protected or not and marks
+// the unprotected ones erasable; "the dependency survived" only says something
+// about that classification if there is a case where it goes away. The list
+// here is deliberately non-empty but names an unrelated package, so the
+// classification still runs -- an empty list is skipped entirely -- and has to
+// decide that `required` is not on it.
+test "autoremove drops a dependency absent from a non-empty protected list" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root, leaf);
+    defer eraseBestEffort(&root, required);
+    defer clearProtected(&root);
+
+    try install(&root, leaf);
+    try std.testing.expect(try root.isInstalled(leaf));
+    try std.testing.expect(try root.isInstalled(required));
+    try writeProtected(&root, single);
+    try std.testing.expect(!try root.isInstalled(single));
+
+    var result = try root.run(&.{ "-y", "--nogpgcheck", "autoremove", leaf });
+    defer result.deinit();
+    try result.expectOk();
+    try std.testing.expect(!try root.isInstalled(leaf));
+    try std.testing.expect(!try root.isInstalled(required));
+}
+
 test "an install that would obsolete a protected package is refused" {
     var h = try harness.open(std.testing.allocator);
     defer h.deinit();
