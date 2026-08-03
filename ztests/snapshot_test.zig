@@ -24,7 +24,7 @@ fn eraseBestEffort(root: *harness.Root, name: []const u8) void {
 
 /// Rewrites the root's repository definition with a `snapshot=` line pointing
 /// at `snapshot_body`, written inside the root. An absolute path is taken
-/// verbatim by `TDNFInitRepoFromMetadata`, so no URL handling is involved.
+/// verbatim by the repository loader, so no URL handling is involved.
 fn pinRepository(root: *harness.Root, snapshot_body: []const u8) !void {
     try root.tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "snapshot.txt",

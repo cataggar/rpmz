@@ -731,13 +731,6 @@ TDNFReadConfFilesFromDir(
 //repo.c
 
 uint32_t
-TDNFInitRepoFromMetadata(
-    Repo *pRepo,
-    const char* pszRepoName,
-    PTDNF_REPO_METADATA pRepoMD
-    );
-
-uint32_t
 TDNFInitRepo(
     PTDNF pTdnf,
     PTDNF_REPO_DATA pRepoData,

@@ -9,42 +9,6 @@
 
 #include "includes.h"
 
-uint32_t
-SolvReadYumRepo(
-    Repo *pRepo,
-    const char *pszRepoName,
-    const char *pszRepomd,
-    const char *pszPrimary,
-    const char *pszFilelists,
-    const char *pszUpdateinfo,
-    const char *pszOther
-    )
-{
-    uint32_t dwError = 0;
-
-    if(!pRepo || !pszRepoName || !pszRepomd || !pszPrimary)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-    }
-
-    dwError = SolvReadYumRepoNative(
-                  pRepo,
-                  pszRepomd,
-                  pszPrimary,
-                  pszFilelists,
-                  pszUpdateinfo,
-                  pszOther);
-    BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-
-cleanup:
-
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
 static
 uint32_t
 readRpmsFromDir(
@@ -454,10 +418,13 @@ error:
  * TDNFPoolGetInstalledRepo(), then hand the Repo * straight back to
  * SolvReadInstalledRpms(). The intermediate handle was never
  * dereferenced there and had no other use, so the pair collapses into
- * this one call and api.c stops naming Repo. client/ as a whole still
- * does: TDNFInitRepoFromMetadata() takes one, TDNFInitCmdLineRepo()
- * holds one, and PTDNF stores pSolvCmdLineRepo. Those belong to repo
- * creation, not to sack setup, and are retired separately.
+ * this one call and api.c stops naming Repo. No function defined in a
+ * client/ .c file takes a Repo * any more. What is left of that surface
+ * in client/ is three things: a local in TDNFInitCmdLineRepo(), the
+ * pSolvCmdLineRepo field on PTDNF, and the read_rpms_from_directory
+ * member of the repository-init callback struct in
+ * transaction_plan_capture_abi.inc. Those belong to repo creation, not
+ * to sack setup, and are retired separately.
  *
  * The contract for a sack with no installed repo is unchanged: it
  * reaches SolvReadInstalledRpms() as a NULL Repo *, which rejects it

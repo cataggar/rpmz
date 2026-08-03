@@ -89,27 +89,6 @@ SolvInitSack(
 
 // tdnfrepo.c
 uint32_t
-SolvReadYumRepo(
-    Repo *pRepo,
-    const char *pszRepoName,
-    const char *pszRepomd,
-    const char *pszPrimary,
-    const char *pszFilelists,
-    const char *pszUpdateinfo,
-    const char *pszOther
-    );
-
-uint32_t
-SolvReadYumRepoNative(
-    Repo *pRepo,
-    const char *pszRepomd,
-    const char *pszPrimary,
-    const char *pszFilelists,
-    const char *pszUpdateinfo,
-    const char *pszOther
-    );
-
-uint32_t
 SolvReadRpmsFromDirectory(
     Repo *pRepo,
     const char *pszDir
