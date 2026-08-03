@@ -118,11 +118,19 @@ engines used from `client/rpmtrans_native.c`):
 - **`.rpm` file parser** (T2): `tdnf_rpm_file_*` — opens a
   `.rpm`, parses lead + signature header + main header, walks
   the cpio payload via `std.compress.{flate,zstd,xz}`.
-- **Signature verifier** (T3): `tdnf_rpmzig_verify_pure`, plus a
-  libtdnf-side wrapper `TDNFRpmzigVerify` in
-  `client/gpgcheck_zig.c`. Backed entirely by the pure-Zig
-  OpenPGP verifier in `rpmzig/pgp/*.zig` (see
-  plan-pure-zig-pgp.md, issue #14).
+- **Signature verifier** (T3): two distinct C ABI entry points into
+  the same pure-Zig OpenPGP code in `rpmzig/pgp/*.zig` (see
+  plan-pure-zig-pgp.md, issue #14) — do not confuse them:
+  - `tdnf_rpm_file_verify_signatures_config`
+    (`rpmzig/rpmdb.zig`, → `integrity.verifySignatures`) is
+    **libtdnf's** path. It is reached through the narrow
+    `TDNFRpmzigVerifyFile` bridge in `client/gpgcheck_zig.c`,
+    called from `client/gpgcheck.c`, which hands rpmzig an
+    already-parsed file handle plus the complete key set and owns
+    no files or buffers itself.
+  - `tdnf_rpmzig_verify_pure` (`rpmzig/verify_pure.c`) is used
+    **only** by the standalone `tdnf-rpm-verify` smoke helper
+    (`rpmzig/verify_main.c`). No libtdnf code path calls it.
 - **Composed native transaction executor** (T4, issue #117):
   `client/rpmtrans_native.c` composes the rpmzig install,
   rpmdb-write, file-erase, scriptlet, trigger, and pure-Zig Lua

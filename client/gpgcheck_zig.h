@@ -10,13 +10,6 @@
 extern "C" {
 #endif
 
-int TDNFRpmzigVerify(
-    const char *pszPkgPath,
-    const char *pszKeyPath,
-    const char *pszInstallRoot,
-    int *pnStatus
-);
-
 /*
  * Verify all package-signature candidates on an already parsed native RPM
  * file.  The configured rpmdb trust set and every user-approved fresh key
