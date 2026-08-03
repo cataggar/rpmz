@@ -203,7 +203,7 @@
       "TDNFPopulatePkgInfoArrayFileList",
       "TDNFPopulatePkgInfoForRepoSync",
       "TDNFPopulatePkgInfoQueryFormat",
-      "TDNFPopulatePkgInfos",
+      "TDNFPopulatePkgInfosFromRefs",
       "TDNFPopulateTransaction",
       "TDNFPrepareAllPackages",
       "TDNFPrepareSinglePkg",

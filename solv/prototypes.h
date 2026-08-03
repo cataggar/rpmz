@@ -64,13 +64,6 @@ SolvFreePackageList(
     );
 
 uint32_t
-SolvIdsToPackageList(
-    const int32_t* pIds,
-    uint32_t dwIdCount,
-    PSolvPackageList* ppPkgList
-    );
-
-uint32_t
 SolvGetNevraFromId(
     PSolvSack pSack,
     uint32_t dwPkgId,
