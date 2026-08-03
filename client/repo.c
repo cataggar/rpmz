@@ -41,36 +41,6 @@ TDNFDownloadRepoMDParts(
     int nPrintOnly
     );
 uint32_t
-TDNFInitCmdLineRepo(
-    PTDNF pTdnf,
-    PSolvSack pSack
-    )
-{
-    uint32_t dwError = 0;
-    Repo* pRepo = NULL;
-
-    if(!pTdnf || !pTdnf->pConf || !pSack || !pSack->pPool)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFPoolCreateRepo(pSack->pPool, CMDLINE_REPO_NAME, &pRepo);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    pTdnf->pSolvCmdLineRepo = pRepo;
-
-cleanup:
-    return dwError;
-error:
-    /* Unreachable in practice -- TDNFPoolCreateRepo is the only failure
-       after pRepo is set, and it does not set it on failure. Kept
-       because a future statement between the two would make it live. */
-    TDNFRepoFree(pRepo);
-    goto cleanup;
-}
-
-uint32_t
 TDNFGetGPGKeys(
     PTDNF pTdnf,
     PTDNF_REPO_DATA pRepo,

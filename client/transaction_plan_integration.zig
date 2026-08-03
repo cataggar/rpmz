@@ -940,6 +940,56 @@ fn collectRefreshEntries(
     return entries;
 }
 
+/// Creates the `@cmdline` pseudo-repository in `pool` and publishes it
+/// through `slot`.
+///
+/// Two callers need this and must agree exactly on how that repo is
+/// built: handle open (via the exported entry point below, from
+/// client/api.c) and refreshLiveSack, which replaces the pool wholesale
+/// and so must recreate it. They previously each called repo_create --
+/// one from C through a solv/ helper, one inline here -- which is the
+/// shape that hid a divergence in S10.
+///
+/// Returns null only when repo_create fails, which is allocation
+/// failure. The caller picks the error code, because the two paths have
+/// always reported that failure differently and this is not the place
+/// to change either.
+fn createCommandLineRepository(
+    pool: *c.Pool,
+    slot: *?*anyopaque,
+) ?*c.Repo {
+    const raw = c.repo_create(pool, "@cmdline") orelse return null;
+    const repository: *c.Repo = @ptrCast(raw);
+    repository.appdata = null;
+    slot.* = @ptrCast(repository);
+    return repository;
+}
+
+/// Entry point for client/api.c's TDNFOpenHandle, replacing the former
+/// C function TDNFInitCmdLineRepo. Keeps that function's exact error
+/// contract: ERROR_TDNF_INVALID_PARAMETER for a null sack, a sack with
+/// no pool, or a failed repo_create.
+///
+/// `sack` is a PSolvSack, taken as ?*anyopaque because the C
+/// declaration lives in transaction_plan_capture_abi.inc, which is
+/// C-imported in isolation by abi/repomd_layout.zig and so cannot name
+/// a project type it does not define.
+fn initCommandLineRepository(
+    sack: ?*anyopaque,
+    slot: ?*?*anyopaque,
+) callconv(.c) u32 {
+    const raw = sack orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const value: *SolvSack = @ptrCast(@alignCast(raw));
+    const pool = value.pool orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const destination = slot orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    _ = createCommandLineRepository(pool, destination) orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    return 0;
+}
+
 fn repositoryIsManaged(
     input: *const abi.RepositoryRefreshInput,
     repository: *c.Repo,
@@ -1216,13 +1266,10 @@ fn refreshLiveSack(
     defer if (replacement) |value| SolvFreeSack(value);
     const replacement_value = replacement.?;
     const replacement_pool = replacement_value.pool.?;
-    const raw_command_line = c.repo_create(
+    const command_line = createCommandLineRepository(
         replacement_pool,
-        "@cmdline",
+        command_line_slot,
     ) orelse return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    const command_line: *c.Repo = @ptrCast(raw_command_line);
-    command_line.appdata = null;
-    command_line_slot.* = @ptrCast(command_line);
     var refresh_started = false;
     var committed = false;
     const state = refreshState(input);
@@ -4434,6 +4481,10 @@ comptime {
     });
     @export(&initRepository, .{
         .name = "TDNFTransactionPlanInitRepository",
+        .visibility = .hidden,
+    });
+    @export(&initCommandLineRepository, .{
+        .name = "TDNFTransactionPlanInitCommandLineRepository",
         .visibility = .hidden,
     });
     if (!integration_options.standalone_test) {

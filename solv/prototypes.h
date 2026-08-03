@@ -211,20 +211,3 @@ TDNFPoolGetPkgIds(
     PTDNF_ID_LIST pIdList
     );
 
-/* Repo lifecycle. These hand back a Repo * the caller passes on without
-   dereferencing; that plumbing goes away when Pool/Repo become opaque
-   typedefs. */
-uint32_t
-TDNFPoolCreateRepo(
-    Pool *pPool,
-    const char *pszName,
-    Repo **ppRepo
-    );
-
-/* Frees the repo and its solvables. Null-tolerant. */
-void
-TDNFRepoFree(
-    Repo *pRepo
-    );
-
-

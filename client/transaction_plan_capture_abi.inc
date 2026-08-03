@@ -629,6 +629,27 @@ TDNFTransactionPlanInitRepository(
     void **loaded_repo
     );
 
+/*
+ * Creates the @cmdline pseudo-repository in the sack's pool and stores
+ * it in *command_line_repository_slot. Replaces the former C function
+ * TDNFInitCmdLineRepo, so that the only other place that builds this
+ * repo -- refreshLiveSack(), which must recreate it when it replaces
+ * the pool -- shares one implementation with it rather than a parallel
+ * repo_create() call.
+ *
+ * `sack` is a PSolvSack. It is spelled void * because this header is
+ * C-imported in isolation by abi/repomd_layout.zig and so must not
+ * depend on any project type it does not itself define.
+ *
+ * Returns ERROR_TDNF_INVALID_PARAMETER for a null sack, a sack with no
+ * pool, or a failed allocation, matching the function it replaced.
+ */
+TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
+TDNFTransactionPlanInitCommandLineRepository(
+    void *sack,
+    void **command_line_repository_slot
+    );
+
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
 TDNFTransactionPlanReloadRepository(
     const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT *input,

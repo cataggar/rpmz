@@ -684,7 +684,9 @@ TDNFOpenHandle(
     dwError = TDNFRepoListFinalize(pTdnf);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = TDNFInitCmdLineRepo(pTdnf, pSack);
+    dwError = TDNFTransactionPlanInitCommandLineRepository(
+                  pSack,
+                  (void **)&pTdnf->pSolvCmdLineRepo);
     BAIL_ON_TDNF_ERROR(dwError);
 
     pTdnf->pSack = pSack;
