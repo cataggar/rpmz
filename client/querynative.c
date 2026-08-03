@@ -396,63 +396,6 @@ error:
 }
 
 uint32_t
-TDNFNativeQuerySerializePackageListRefs(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    char ***pppszRefs,
-    uint32_t *pdwCount
-    )
-{
-    uint32_t dwError = 0;
-    uint32_t dwCount = 0;
-    uint32_t i = 0;
-    char **ppszRefs = NULL;
-    TDNF_PKG_ID dwPkgId = 0;
-    TDNF_ID_LIST idList = {0};
-
-    if(!pSack || !pPkgList || !pppszRefs || !pdwCount)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFPkgListGetIds(pPkgList, &idList);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwCount = idList.dwCount;
-
-    dwError = TDNFAllocateMemory(
-                  dwCount + 1,
-                  sizeof(char *),
-                  (void **)&ppszRefs);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    for(i = 0; i < dwCount; i++)
-    {
-        dwPkgId = idList.pnElements[i];
-
-        dwError = TDNFNativeQuerySerializePackageId(
-                      pSack,
-                      dwPkgId,
-                      &ppszRefs[i]);
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    *pppszRefs = ppszRefs;
-    *pdwCount = dwCount;
-
-cleanup:
-    TDNFIdListFree(&idList);
-    return dwError;
-error:
-    if(ppszRefs)
-    {
-        TDNFFreeStringArray(ppszRefs);
-    }
-    goto cleanup;
-}
-
-uint32_t
 TDNFNativeQuerySerializePackageInfoRefs(
     PTDNF_PKG_INFO pPkgInfos,
     uint32_t dwCount,

@@ -108,19 +108,6 @@ PackageUtilsPopulatePkgInfoFromRefs(
     uint32_t *pdwCount
     );
 
-static uint32_t
-PackageUtilsPopulatePkgInfoFromPackageList(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    TDNF_PKG_DETAIL nDetail,
-    int nQueryFormat,
-    uint32_t dwDependencyMask,
-    int nFileList,
-    int nChecksum,
-    PTDNF_PKG_INFO *ppPkgInfo,
-    uint32_t *pdwCount
-    );
-
 static int
 _pkginfo_compare(
     const void *ptr1,
@@ -204,93 +191,6 @@ error:
 }
 
 uint32_t
-TDNFPopulatePkgInfoQueryFormat(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    PTDNF_PKG_INFO* ppPkgInfo,
-    uint32_t* pdwCount
-    )
-{
-    return PackageUtilsPopulatePkgInfoFromPackageList(
-               pSack,
-               pPkgList,
-               DETAIL_LIST,
-               1,
-               0,
-               0,
-               0,
-               ppPkgInfo,
-               pdwCount);
-}
-
-uint32_t
-TDNFPopulatePkgInfoArray(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    TDNF_PKG_DETAIL nDetail,
-    PTDNF_PKG_INFO* ppPkgInfo,
-    uint32_t* pdwCount
-    )
-{
-    return PackageUtilsPopulatePkgInfoFromPackageList(
-               pSack,
-               pPkgList,
-               nDetail,
-               0,
-               0,
-               0,
-               0,
-               ppPkgInfo,
-               pdwCount);
-}
-
-uint32_t
-TDNFPopulatePkgInfoForRepoSync(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    PTDNF_PKG_INFO* ppPkgInfo
-    )
-{
-    uint32_t dwError = 0;
-    uint32_t dwCount = 0;
-    PTDNF_PKG_INFO pPkgInfos = NULL;
-
-    if(!ppPkgInfo || !pSack || !pPkgList)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = PackageUtilsPopulatePkgInfoFromPackageList(
-                  pSack,
-                  pPkgList,
-                  DETAIL_LOCATION,
-                  0,
-                  0,
-                  0,
-                  0,
-                  &pPkgInfos,
-                  &dwCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    *ppPkgInfo = pPkgInfos;
-
-cleanup:
-    return dwError;
-
-error:
-    if(ppPkgInfo)
-    {
-        *ppPkgInfo = NULL;
-    }
-    if(pPkgInfos)
-    {
-        TDNFFreePackageInfoArray(pPkgInfos, dwCount);
-    }
-    goto cleanup;
-}
-
-uint32_t
 TDNFPkgInfoFilterNewest(
     PSolvSack pSack,
     PTDNF_PKG_INFO pPkgInfos
@@ -353,7 +253,6 @@ TDNFPackageGetDowngrade(
     PTDNF pTdnf,
     TDNF_PKG_ID dwInstalled,
     PSolvSack pSack,
-    PSolvPackageList pAvailabePkgList,
     TDNF_PKG_ID* pdwDowngradePkgId
     )
 {
@@ -370,8 +269,6 @@ TDNFPackageGetDowngrade(
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
-
-    (void)pAvailabePkgList;
 
     dwError = TDNFNativeQueryBuildRepoInputs(pTdnf, &pRepos, &dwRepoCount);
     BAIL_ON_TDNF_ERROR(dwError);
@@ -832,7 +729,6 @@ TDNFAddPackagesForDowngrade(
                   pTdnf,
                   dwInstalledId,
                   pSack,
-                  NULL,
                   &dwDownGradeId);
     BAIL_ON_TDNF_ERROR(dwError);
 
@@ -932,11 +828,9 @@ error:
     return dwError;
 }
 
-/* Builds the same DETAIL_LIST package infos as the package-list form this
-   replaced, but from refs directly: the caller already holds ids, and the
-   old path only turned them into a SolvPackageList so that
-   PackageUtilsPopulatePkgInfoFromPackageList could turn them straight back
-   into ids and then refs. */
+/* Builds DETAIL_LIST package infos from refs directly. The caller already
+   holds ids, so there is no package-list round trip: ids are serialized to
+   refs and populated from those. */
 uint32_t
 TDNFPopulatePkgInfosFromRefs(
     PSolvSack pSack,
@@ -1011,111 +905,6 @@ error:
     {
         TDNFFreePackageInfo(pPkgInfo);
     }
-    goto cleanup;
-}
-
-uint32_t
-TDNFPopulatePkgInfoArrayDependencies(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    REPOQUERY_DEP_KEY depKey,
-    PTDNF_PKG_INFO pPkgInfos
-    )
-{
-    uint32_t dwError = 0;
-    uint32_t dwCount = 0;
-    uint32_t dwPkgIndex = 0;
-    uint32_t dwNativeCount = 0;
-    uint32_t dwDependencyMask = 0;
-    PTDNF_PKG_INFO pNativePkgInfos = NULL;
-
-    if(!pPkgInfos || !pSack || !pPkgList)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwDependencyMask = 1u << depKey;
-    dwError = PackageUtilsPopulatePkgInfoFromPackageList(
-                  pSack,
-                  pPkgList,
-                  DETAIL_LIST,
-                  0,
-                  dwDependencyMask,
-                  0,
-                  0,
-                  &pNativePkgInfos,
-                  &dwNativeCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwCount = dwNativeCount;
-
-    for (dwPkgIndex = 0; dwPkgIndex < dwCount; dwPkgIndex++)
-    {
-        pPkgInfos[dwPkgIndex].pppszDependencies =
-            pNativePkgInfos[dwPkgIndex].pppszDependencies;
-        pNativePkgInfos[dwPkgIndex].pppszDependencies = NULL;
-    }
-
-cleanup:
-    if(pNativePkgInfos)
-    {
-        TDNFFreePackageInfoArray(pNativePkgInfos, dwNativeCount);
-    }
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-uint32_t
-TDNFPopulatePkgInfoArrayFileList(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    PTDNF_PKG_INFO pPkgInfos
-    )
-{
-    uint32_t dwError = 0;
-    uint32_t dwCount = 0;
-    uint32_t dwPkgIndex = 0;
-    uint32_t dwNativeCount = 0;
-    PTDNF_PKG_INFO pNativePkgInfos = NULL;
-
-    if(!pPkgInfos || !pSack || !pPkgList)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = PackageUtilsPopulatePkgInfoFromPackageList(
-                  pSack,
-                  pPkgList,
-                  DETAIL_LIST,
-                  0,
-                  0,
-                  1,
-                  0,
-                  &pNativePkgInfos,
-                  &dwNativeCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwCount = dwNativeCount;
-
-    for (dwPkgIndex = 0; dwPkgIndex < dwCount; dwPkgIndex++)
-    {
-        pPkgInfos[dwPkgIndex].ppszFileList =
-            pNativePkgInfos[dwPkgIndex].ppszFileList;
-        pNativePkgInfos[dwPkgIndex].ppszFileList = NULL;
-    }
-
-cleanup:
-    if(pNativePkgInfos)
-    {
-        TDNFFreePackageInfoArray(pNativePkgInfos, dwNativeCount);
-    }
-    return dwError;
-
-error:
     goto cleanup;
 }
 
@@ -1765,65 +1554,6 @@ error:
     if(pPkgInfo)
     {
         TDNFFreePackageInfoArray(pPkgInfo, dwCount);
-    }
-    goto cleanup;
-}
-
-static uint32_t
-PackageUtilsPopulatePkgInfoFromPackageList(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    TDNF_PKG_DETAIL nDetail,
-    int nQueryFormat,
-    uint32_t dwDependencyMask,
-    int nFileList,
-    int nChecksum,
-    PTDNF_PKG_INFO *ppPkgInfo,
-    uint32_t *pdwCount
-    )
-{
-    uint32_t dwError = 0;
-    uint32_t dwCount = 0;
-    char **ppszPackageRefs = NULL;
-
-    if(!pSack || !pPkgList || !ppPkgInfo || !pdwCount)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFNativeQuerySerializePackageListRefs(
-                  pSack,
-                  pPkgList,
-                  &ppszPackageRefs,
-                  &dwCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = PackageUtilsPopulatePkgInfoFromRefs(
-                  pSack,
-                  ppszPackageRefs,
-                  dwCount,
-                  nDetail,
-                  nQueryFormat,
-                  dwDependencyMask,
-                  nFileList,
-                  nChecksum,
-                  ppPkgInfo,
-                  pdwCount);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-cleanup:
-    TDNFFreeStringArray(ppszPackageRefs);
-    return dwError;
-
-error:
-    if(ppPkgInfo)
-    {
-        *ppPkgInfo = NULL;
-    }
-    if(pdwCount)
-    {
-        *pdwCount = 0;
     }
     goto cleanup;
 }

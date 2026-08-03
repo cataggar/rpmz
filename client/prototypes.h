@@ -80,14 +80,6 @@ TDNFNativeQuerySerializeQueuePackageRefs(
     );
 
 uint32_t
-TDNFNativeQuerySerializePackageListRefs(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    char ***pppszRefs,
-    uint32_t *pdwCount
-    );
-
-uint32_t
 TDNFNativeQuerySerializePackageInfoRefs(
     PTDNF_PKG_INFO pPkgInfos,
     uint32_t dwCount,
@@ -371,41 +363,16 @@ TDNFPopulatePkgInfosFromRefs(
     );
 
 uint32_t
-TDNFPopulatePkgInfoForRepoSync(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    PTDNF_PKG_INFO* ppPkgInfo
-    );
-
-uint32_t
 TDNFPkgInfoFilterNewest(
     PSolvSack pSack,
     PTDNF_PKG_INFO pPkgInfos
 );
 
 uint32_t
-TDNFPopulatePkgInfoQueryFormat(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    PTDNF_PKG_INFO* ppPkgInfo,
-    uint32_t* pdwCount
-    );
-
-uint32_t
-TDNFPopulatePkgInfoArray(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    TDNF_PKG_DETAIL nDetail,
-    PTDNF_PKG_INFO* ppPkgInfo,
-    uint32_t* pdwCount
-    );
-
-uint32_t
 TDNFPackageGetDowngrade(
     PTDNF pTdnf,
     TDNF_PKG_ID dwInstalled,
     PSolvSack pSack,
-    PSolvPackageList pAvailabePkgList,
     TDNF_PKG_ID* pdwDowngradePkgId
     );
 
@@ -487,21 +454,6 @@ TDNFCheckDownloadCacheBytes(
     uint64_t qwAvailCacheBytes
     );
 
-
-uint32_t
-TDNFPopulatePkgInfoArrayDependencies(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    REPOQUERY_DEP_KEY depKey,
-    PTDNF_PKG_INFO pPkgInfos
-    );
-
-uint32_t
-TDNFPopulatePkgInfoArrayFileList(
-    PSolvSack pSack,
-    PSolvPackageList pPkgList,
-    PTDNF_PKG_INFO pPkgInfos
-    );
 
 //goal.c
 uint32_t

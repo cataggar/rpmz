@@ -31,8 +31,9 @@ typedef struct _SolvSack
 } SolvSack, *PSolvSack;
 
 /* Opaque to every consumer except solv/, which alone can see the libsolv
-   Queue the list carries. client/ reaches the contents through
-   TDNFPkgListGetIds(). The definition is in solv/includes.h. */
+   Queue the list carries. No client/ code reaches the contents any more --
+   package selections cross that boundary as refs. The definition is in
+   solv/includes.h. */
 typedef struct _SolvPackageList SolvPackageList, *PSolvPackageList;
 
 typedef struct _SOLV_REPO_INFO_INTERNAL_
@@ -328,12 +329,3 @@ TDNFPkgHandleIsValid(
     int *pnValid
     );
 
-/* The package handles held by a SolvPackageList, in list order. The
-   list carries them in an embedded libsolv Queue, so this is the one
-   accessor whose libsolv dereference is not spelled with any libsolv
-   identifier at the call site. */
-uint32_t
-TDNFPkgListGetIds(
-    PSolvPackageList pPkgList,
-    PTDNF_ID_LIST pIdList
-    );
