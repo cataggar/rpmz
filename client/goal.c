@@ -999,7 +999,9 @@ cleanup:
         TDNFFreeStringArrayWithCount(ppszCmdLinePaths, (int)dwJobCount);
         ppszCmdLinePaths = NULL;
     }
-    TDNF_SAFE_FREE_MEMORY(ppszUserInstalledPkgs);
+    /* Owns its elements: the names come from split refs. The array is
+       allocated with a spare zeroed slot, so it is NULL-terminated. */
+    TDNFFreeStringArray(ppszUserInstalledPkgs);
     TDNF_SAFE_FREE_MEMORY(ppszInstallOnlyPkgs);
     TDNFGoalFreeNativeSolverHiddenAvailable(pHiddenAvailable, dwHiddenAvailableCount);
     TDNFGoalFreeNativeSolverJobs(pJobs, dwJobCount + dwEraseJobCount);
@@ -1144,6 +1146,17 @@ TDNFGoalBuildNativeSolverJobs(
     char **ppszInstallOnlyPkgs = NULL;
     char **ppszUserInstalledPkgs = NULL;
     Pool *pPool = NULL;
+    /* Job identity is read back from a native ref, so these hold the split
+       fields for the pair being translated. They are function-scoped rather
+       than loop-scoped so every exit frees whatever the current iteration
+       had not yet handed to a job. */
+    char *pszJobRef = NULL;
+    char *pszJobRepo = NULL;
+    char *pszJobName = NULL;
+    char *pszJobVersion = NULL;
+    char *pszJobRelease = NULL;
+    char *pszJobArch = NULL;
+    uint32_t dwJobEpoch = 0;
     int nUpdateAll = 0;
     int nDistSyncAll = 0;
     uint32_t dwGlobalQueuePair = 0;
@@ -1220,9 +1233,7 @@ TDNFGoalBuildNativeSolverJobs(
            handle for the rest, and an ignored zero for the ALL jobs. */
         int32_t nRawWhat = pQueueJobs->pnElements[dwIndex * 2 + 1];
         TDNF_PKG_ID dwPkgId = nRawWhat;
-        const char *pszJobRepo = NULL;
         int nIsInstalled = 0;
-        int nPkgIdValid = 0;
         PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB pJob = NULL;
         int nInstall = how == (TDNF_JOB_SOLVABLE | TDNF_JOB_INSTALL),
             nErase = nStamped && how == (TDNF_JOB_SOLVABLE | TDNF_JOB_ERASE),
@@ -1268,30 +1279,45 @@ TDNFGoalBuildNativeSolverJobs(
             ppszInstallOnlyPkgs[dwInstallOnlyCount++] = (char *)pszName;
             continue;
         }
-        dwError = TDNFPkgHandleIsValid(pPool, dwPkgId, &nPkgIdValid);
-        if(dwError)
+        if(!nInstall && !nErase && !nUserInstalled && !nAllowUninstall)
         {
             dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
             BAIL_ON_TDNF_ERROR(dwError);
         }
-        if((!nInstall && !nErase && !nUserInstalled && !nAllowUninstall) ||
-           !nPkgIdValid)
+        /* The operand's package identity is read back as a native ref
+           rather than re-queried from the pool: the ref carries the repo
+           and the NEVRA, which is everything below it needs.
+
+           This also subsumes the separate TDNFPkgHandleIsValid() call it
+           replaced, but only because the accessor underneath now performs
+           that same range check itself: an out-of-range handle is refused
+           by PkgHandleToSolvable(), and handle 0 survives to produce an
+           empty repository, which the split below rejects. Both outcomes
+           reach ERROR_TDNF_CALL_NOT_SUPPORTED, which is what the explicit
+           check reported. */
+        TDNF_SAFE_FREE_MEMORY(pszJobRef);
+        if(TDNFNativeQuerySerializePackageId(pTdnf->pSack, dwPkgId, &pszJobRef))
         {
             dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
             BAIL_ON_TDNF_ERROR(dwError);
         }
-        dwError = TDNFPkgHandleGetRepoName(pPool, dwPkgId, &pszJobRepo);
-        if(dwError)
+        TDNF_SAFE_FREE_MEMORY(pszJobRepo);
+        TDNF_SAFE_FREE_MEMORY(pszJobName);
+        TDNF_SAFE_FREE_MEMORY(pszJobVersion);
+        TDNF_SAFE_FREE_MEMORY(pszJobRelease);
+        TDNF_SAFE_FREE_MEMORY(pszJobArch);
+        if(TDNFNativeQuerySplitPackageRef(pszJobRef, &pszJobRepo, &dwJobEpoch,
+               &pszJobName, &pszJobVersion, &pszJobRelease, &pszJobArch))
         {
             dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
             BAIL_ON_TDNF_ERROR(dwError);
         }
-        dwError = TDNFPkgHandleIsInstalled(pPool, dwPkgId, &nIsInstalled);
-        if(dwError)
-        {
-            dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
-            BAIL_ON_TDNF_ERROR(dwError);
-        }
+        /* solv/tdnfpool.c creates exactly one repo named SYSTEM_REPO_NAME
+           and immediately makes it the pool's installed repo, so the name
+           test is equivalent to the repo-pointer test it replaced. This is
+           the same reasoning the CMDLINE_REPO_NAME test below already
+           relies on. */
+        nIsInstalled = !strcmp(pszJobRepo, SYSTEM_REPO_NAME);
         /* An install job must name something not yet installed, and an
            erase job must name something that is. */
         if(nInstall ? nIsInstalled : !nIsInstalled)
@@ -1301,16 +1327,12 @@ TDNFGoalBuildNativeSolverJobs(
         }
         if(nUserInstalled || nAllowUninstall)
         {
-            const char *pszName = NULL;
-
-            if(TDNFPkgHandleGetName(pPool, dwPkgId, &pszName))
-            {
-                dwError = ERROR_TDNF_CALL_NOT_SUPPORTED;
-                BAIL_ON_TDNF_ERROR(dwError);
-            }
             if(nUserInstalled)
             {
-                ppszUserInstalledPkgs[dwUserInstalledCount++] = (char *)pszName;
+                /* Handed over, not borrowed: the name came from the split
+                   ref, so the array owns it and is freed element-wise. */
+                ppszUserInstalledPkgs[dwUserInstalledCount++] = pszJobName;
+                pszJobName = NULL;
             }
             continue;
         }
@@ -1321,35 +1343,40 @@ TDNFGoalBuildNativeSolverJobs(
            translation into the native job list. */
         pJob->dwQueuePair = dwIndex;
         pJob->nHasQueuePair = 1;
+        /* Cleared at the point of transfer, not at the end of the loop
+           body: a bail between here and there would otherwise let both the
+           job list and the cleanup label free the same string. */
         pJob->pszRepository = pszJobRepo;
+        pszJobRepo = NULL;
         /* A command-line solvable has no downloadable metadata, so the native
            solver rebuilds it from the .rpm that libsolv itself read.
            Testing the repo name alone is equivalent to also comparing against
            pTdnf->pSolvCmdLineRepo: every writer of that slot creates the repo
            as CMDLINE_REPO_NAME, so pointer equality implies name equality. */
-        if(!strcmp(pszJobRepo, CMDLINE_REPO_NAME))
+        if(!strcmp(pJob->pszRepository, CMDLINE_REPO_NAME))
         {
             /* Allocated, not borrowed: the underlying location lives in a
                16-slot pool ring buffer and this array outlives the loop.
-               Unlike the accessor calls above, this error is deliberately
-               NOT remapped to ERROR_TDNF_CALL_NOT_SUPPORTED. Its validation
-               failures are already excluded by the dwPkgId range check
+               This error is deliberately NOT remapped to
+               ERROR_TDNF_CALL_NOT_SUPPORTED. A handle that names no
+               package has already been rejected by the serialization
                above, so the only reachable failure is an allocation one,
                which this call site has always propagated unchanged. */
             dwError = TDNFPkgHandleGetLocation(
                           pPool, dwPkgId, &ppszCmdLinePaths[dwInstallCount - 1]);
             BAIL_ON_TDNF_ERROR(dwError);
         }
-        dwError = SolvGetNevraFromId(
-                      pTdnf->pSack,
-                      dwPkgId,
-                      &pJob->dwEpoch,
-                      (char **)&pJob->pszName,
-                      (char **)&pJob->pszVersion,
-                      (char **)&pJob->pszRelease,
-                      (char **)&pJob->pszArch,
-                      NULL);
-        BAIL_ON_TDNF_ERROR(dwError);
+        /* Ownership moves into the job; the loop's locals are cleared so
+           the next iteration does not free strings the job now holds. */
+        pJob->dwEpoch = dwJobEpoch;
+        pJob->pszName = pszJobName;
+        pJob->pszVersion = pszJobVersion;
+        pJob->pszRelease = pszJobRelease;
+        pJob->pszArch = pszJobArch;
+        pszJobName = NULL;
+        pszJobVersion = NULL;
+        pszJobRelease = NULL;
+        pszJobArch = NULL;
     }
     if((nUpdateAll || nDistSyncAll) &&
        dwCount != dwLockedCount + dwInstallOnlyCount + dwUserInstalledCount + 1)
@@ -1375,6 +1402,12 @@ TDNFGoalBuildNativeSolverJobs(
     *pdwGlobalQueuePair = dwGlobalQueuePair;
     *pnHasGlobalQueuePair = nHasGlobalQueuePair;
 cleanup:
+    TDNF_SAFE_FREE_MEMORY(pszJobRef);
+    TDNF_SAFE_FREE_MEMORY(pszJobRepo);
+    TDNF_SAFE_FREE_MEMORY(pszJobName);
+    TDNF_SAFE_FREE_MEMORY(pszJobVersion);
+    TDNF_SAFE_FREE_MEMORY(pszJobRelease);
+    TDNF_SAFE_FREE_MEMORY(pszJobArch);
     return dwError;
 error:
     TDNF_SAFE_FREE_MEMORY(ppszLockedPkgs);
@@ -1384,7 +1417,9 @@ error:
         TDNFFreeStringArrayWithCount(ppszCmdLinePaths, (int)dwCount);
         ppszCmdLinePaths = NULL;
     }
-    TDNF_SAFE_FREE_MEMORY(ppszUserInstalledPkgs);
+    /* Owns its elements: the names come from split refs. The array is
+       allocated with a spare zeroed slot, so it is NULL-terminated. */
+    TDNFFreeStringArray(ppszUserInstalledPkgs);
     TDNF_SAFE_FREE_MEMORY(ppszInstallOnlyPkgs);
     TDNFGoalFreeNativeSolverJobs(pJobs, dwCount);
     goto cleanup;
@@ -1409,22 +1444,25 @@ TDNFGoalFreeNativeSolverJobs(
         char *pszVersion = (char *)pJobs[dwIndex].pszVersion;
         char *pszRelease = (char *)pJobs[dwIndex].pszRelease;
         char *pszArch = (char *)pJobs[dwIndex].pszArch;
+        char *pszRepository = (char *)pJobs[dwIndex].pszRepository;
         TDNF_SAFE_FREE_MEMORY(pszName);
         TDNF_SAFE_FREE_MEMORY(pszVersion);
         TDNF_SAFE_FREE_MEMORY(pszRelease);
         TDNF_SAFE_FREE_MEMORY(pszArch);
+        TDNF_SAFE_FREE_MEMORY(pszRepository);
         pJobs[dwIndex].pszName = NULL;
         pJobs[dwIndex].pszVersion = NULL;
         pJobs[dwIndex].pszRelease = NULL;
         pJobs[dwIndex].pszArch = NULL;
+        pJobs[dwIndex].pszRepository = NULL;
     }
     TDNF_SAFE_FREE_MEMORY(pJobs);
 }
 
 /*
- * Hidden-available entries are built from native ref strings, so unlike the
- * job list -- whose pszRepository borrows a libsolv repo name -- they own
- * their repository string too.
+ * Both job lists are now built from native ref strings and so own every
+ * string they carry, including the repository. This kept its own name only
+ * because the two used to differ.
  */
 static
 void
@@ -1433,18 +1471,6 @@ TDNFGoalFreeNativeSolverHiddenAvailable(
     uint32_t dwJobCount
     )
 {
-    uint32_t dwIndex = 0;
-
-    if(!pJobs)
-    {
-        return;
-    }
-    for(dwIndex = 0; dwIndex < dwJobCount; dwIndex++)
-    {
-        char *pszRepository = (char *)pJobs[dwIndex].pszRepository;
-        TDNF_SAFE_FREE_MEMORY(pszRepository);
-        pJobs[dwIndex].pszRepository = NULL;
-    }
     TDNFGoalFreeNativeSolverJobs(pJobs, dwJobCount);
 }
 
