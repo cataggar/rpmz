@@ -415,11 +415,6 @@ pub const RepositoryInitCallbacks = extern struct {
         ?*anyopaque,
         ?*anyopaque,
     ) callconv(.c) u32 = null,
-    init_from_metadata: ?*const fn (
-        ?*anyopaque,
-        ?[*:0]const u8,
-        ?*anyopaque,
-    ) callconv(.c) u32 = null,
     read_rpms_from_directory: ?*const fn (
         ?*anyopaque,
         ?[*:0]const u8,

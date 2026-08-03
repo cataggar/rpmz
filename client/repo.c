@@ -10,35 +10,6 @@
 
 
 uint32_t
-TDNFInitRepoFromMetadata(
-    Repo *pRepo,
-    const char* pszRepoName,
-    PTDNF_REPO_METADATA pRepoMD
-    )
-{
-    uint32_t dwError = 0;
-
-    if(!pRepo || !pRepoMD || IsNullOrEmptyString(pszRepoName))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = SolvReadYumRepo(pRepo,
-                  pszRepoName,
-                  pRepoMD->pszRepoMD,
-                  pRepoMD->pszPrimary,
-                  pRepoMD->pszFileLists,
-                  pRepoMD->pszUpdateInfo,
-                  pRepoMD->pszOther);
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-uint32_t
 TDNFInitCmdLineRepo(
     PTDNF pTdnf,
     PSolvSack pSack

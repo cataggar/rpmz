@@ -428,10 +428,6 @@ typedef struct
     uint32_t (*create_metadata_cache)(
         struct _SolvSack *,
         struct _SOLV_REPO_INFO_INTERNAL_ *);
-    uint32_t (*init_from_metadata)(
-        Repo *,
-        const char *,
-        struct _TDNF_REPO_METADATA *);
     uint32_t (*read_rpms_from_directory)(Repo *, const char *);
 } TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS;
 
@@ -503,7 +499,6 @@ typedef struct
         .calculate_cookie = TDNFRepoMdCalculateCookieForFile,           \
         .use_metadata_cache = SolvUseMetaDataCache,                     \
         .create_metadata_cache = SolvCreateMetaDataCache,               \
-        .init_from_metadata = TDNFInitRepoFromMetadata,                 \
         .read_rpms_from_directory = SolvReadRpmsFromDirectory,          \
     }
 

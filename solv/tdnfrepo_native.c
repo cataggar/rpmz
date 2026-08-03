@@ -1,25 +1,6 @@
 #include "includes.h"
 
 uint32_t
-SolvReadYumRepoNative(
-    Repo *pRepo,
-    const char *pszRepomd,
-    const char *pszPrimary,
-    const char *pszFilelists,
-    const char *pszUpdateinfo,
-    const char *pszOther
-    )
-{
-    return TDNFRepoMdNativeLoadSolvRepo(
-               pRepo,
-               pszRepomd,
-               pszPrimary,
-               pszFilelists,
-               pszUpdateinfo,
-               pszOther);
-}
-
-uint32_t
 SolvReadInstalledRpmsNative(
     Repo* pRepo,
     const char *pszRootDir,

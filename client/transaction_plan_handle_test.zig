@@ -292,10 +292,13 @@ extern fn history_get_delta_range(
 extern fn history_free_delta(delta: ?*HistoryDelta) void;
 extern fn TDNFTransactionPlanRequestTraceTestFailNextCreate() void;
 extern fn TDNFTransactionPlanRequestTraceTestFailNextRecord() void;
-extern fn TDNFInitRepoFromMetadata(
+extern fn TDNFRepoMdNativeLoadSolvRepo(
     repository: ?*anyopaque,
-    repository_name: ?[*:0]const u8,
-    metadata: ?*anyopaque,
+    repomd_path: ?[*:0]const u8,
+    primary_path: ?[*:0]const u8,
+    filelists_path: ?[*:0]const u8,
+    updateinfo_path: ?[*:0]const u8,
+    other_path: ?[*:0]const u8,
 ) u32;
 extern fn chmod(path: ?[*:0]const u8, mode: c_uint) c_int;
 
@@ -1916,9 +1919,14 @@ test "filtered update-all is capture-only unsupported before refresh" {
 }
 
 test "private handle capture follows production resolve lifecycle" {
+    // The refresh path's repository loader rejects a null repo with
+    // ERROR_TDNF_INVALID_PARAMETER. It used to be reached through
+    // TDNFInitRepoFromMetadata(), a client/ wrapper that re-checked the
+    // same arguments; the wrapper is gone and this pins the check on the
+    // function that now performs it.
     try std.testing.expectEqual(
         @as(u32, 1622),
-        TDNFInitRepoFromMetadata(null, null, null),
+        TDNFRepoMdNativeLoadSolvRepo(null, null, null, null, null, null),
     );
     var fixture = try Fixture.create();
     defer fixture.destroy();

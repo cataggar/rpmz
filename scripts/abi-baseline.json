@@ -133,7 +133,6 @@
       "TDNFInit",
       "TDNFInitCmdLineRepo",
       "TDNFInitRepo",
-      "TDNFInitRepoFromMetadata",
       "TDNFInstalledGetPkgIds",
       "TDNFIsDir",
       "TDNFIsFileOrSymlink",

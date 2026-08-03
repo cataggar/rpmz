@@ -58,6 +58,25 @@ const SolvRepoInfo = extern struct {
 };
 
 extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
+// The repository loader the refresh path uses when transaction-plan
+// capture is off. Both this and TDNFTransactionPlanLoadSolvRepo below
+// reach loadSolvRepo() in repomd/solvbridge.zig, but they are NOT
+// interchangeable: the cookie argument is also the loader selector.
+// A null cookie -- this entry point -- selects
+// loadLegacyModelWithRepomd(), which reads each metadata file under a
+// size budget and parses it with NO repomd checksum, open-checksum or
+// advertised-size verification. A non-null cookie selects
+// loadModelWithRepomd(), which routes every file through
+// readVerifiedMetadataFile(). Do not "unify" the two calls below: doing
+// so would silently add or remove metadata integrity checking.
+extern fn TDNFRepoMdNativeLoadSolvRepo(
+    repository: ?*c.Repo,
+    repomd_path: ?[*:0]const u8,
+    primary_path: ?[*:0]const u8,
+    filelists_path: ?[*:0]const u8,
+    updateinfo_path: ?[*:0]const u8,
+    other_path: ?[*:0]const u8,
+) u32;
 extern fn TDNFTransactionPlanLoadSolvRepo(
     repository: ?*c.Repo,
     repomd_path: ?[*:0]const u8,
@@ -406,7 +425,6 @@ fn initRepository(
         callbacks.calculate_cookie == null or
         callbacks.use_metadata_cache == null or
         callbacks.create_metadata_cache == null or
-        callbacks.init_from_metadata == null or
         callbacks.read_rpms_from_directory == null)
     {
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
@@ -591,10 +609,13 @@ fn loadRepository(
                 if (result != 0) return result;
                 repo_info.cookie = plan_cookie;
             } else {
-                result = callbacks.init_from_metadata.?(
-                    @ptrCast(repository),
-                    input.repository_id,
-                    @ptrCast(repo_metadata),
+                result = TDNFRepoMdNativeLoadSolvRepo(
+                    repository,
+                    repo_metadata.repomd,
+                    repo_metadata.primary,
+                    repo_metadata.filelists,
+                    repo_metadata.updateinfo,
+                    repo_metadata.other,
                 );
                 if (result != 0) return result;
             }
@@ -2599,7 +2620,7 @@ fn isHiddenPackage(
 ///
 /// The pool this used to read is not an independent source: every available
 /// repository is loaded by `repomd/solvbridge.zig` **from this same model**
-/// (`SolvReadYumRepo` -> `TDNFRepoMdNativeLoadSolvRepo` ->
+/// (`TDNFRepoMdNativeLoadSolvRepo` -> `loadSolvRepo` ->
 /// `buildRepositoryIntoRepo`), so each hashed field is reproducible here. It is
 /// not reproducible *naively*, though: libsolv normalizes three of them on the
 /// way in, and the snapshot id must keep hashing the normalized bytes.
