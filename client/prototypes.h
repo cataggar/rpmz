@@ -151,11 +151,6 @@ ReadGPGKeyFile(
     int* pnSize
    );
 
-uint32_t
-TDNFImportGPGKeyFile(
-    void *pLegacyTransaction,
-    const char* pszFile
-    );
 
 uint32_t
 TDNFImportGPGKeyData(
@@ -164,13 +159,6 @@ TDNFImportGPGKeyData(
     size_t nKeyDataSize
     );
 
-uint32_t
-TDNFGPGCheckPackage(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo,
-    const char* pszFilePath,
-    tdnf_rpm_file **ppRpmFile
-    );
 
 uint32_t
 TDNFGPGCheckPackageEx(
@@ -382,13 +370,6 @@ TDNFPackageGetDowngrade(
     TDNF_PKG_ID* pdwDowngradePkgId
     );
 
-uint32_t
-TDNFGetGlobPackages(
-    PSolvSack pSack,
-    char* pszPkgGlob,
-    int nIsInstalled,
-    PTDNF_ID_LIST pQueueGlob
-    );
 
 uint32_t
 TDNFFilterPackages(
@@ -712,11 +693,6 @@ TDNFTransactionPlanRequestTraceCaptureFactsDestroy(
     TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER *owner
     );
 
-//config.c
-int
-TDNFConfGetRpmVerbosity(
-    PTDNF pTdnf
-    );
 
 uint32_t
 TDNFReadConfig(
@@ -790,12 +766,6 @@ TDNFGetCachePath(
     char **ppszPath
 );
 
-uint32_t
-TDNFGetRepoById(
-    PTDNF pTdnf,
-    const char* pszName,
-    PTDNF_REPO_DATA* ppRepo
-    );
 
 uint32_t
 TDNFGetRepoMD(
@@ -937,15 +907,6 @@ TDNFRpmExecHistoryTransaction(
     PTDNF_HISTORY_ARGS pHistoryArgs
     );
 
-void*
-TDNFRpmCB(
-    const void *pArg,
-    int nWhat,
-    int64_t llAmount,
-    int64_t llTotal,
-    const void *pKey,
-    void *pData
-    );
 
 uint32_t
 TDNFPopulateTransaction(

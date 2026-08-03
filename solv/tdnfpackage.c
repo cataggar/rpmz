@@ -451,10 +451,10 @@ _Static_assert(TDNF_REPO_REUSE_REPODATA == REPO_REUSE_REPODATA,
  * also exports, for want of a version script) are outside it and are
  * not recorded.
  *
- * Field strings returned by TDNFPkgHandleGetFields and
- * TDNFPkgHandleGetName are borrowed from the sack and stay valid for as
- * long as it does; callers must not free them. The NEVRA is different
- * and is documented at TDNFPkgHandleGetRepoNevra.
+ * Field strings returned by TDNFPkgHandleGetFields are borrowed from
+ * the sack and stay valid for as long as it does; callers must not
+ * free them. The NEVRA is different and is documented at
+ * TDNFPkgHandleGetRepoNevra.
  */
 
 uint32_t
@@ -504,45 +504,6 @@ error:
     goto cleanup;
 }
 
-uint32_t
-TDNFPkgHandleGetName(
-    Pool *pPool,
-    TDNF_PKG_ID dwPkgId,
-    const char **ppszName
-    )
-{
-    uint32_t dwError = 0;
-    Solvable *pSolv = NULL;
-    const char *pszName = NULL;
-
-    if(!pPool || !ppszName)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
-    if(!pSolv)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pszName = pool_id2str(pPool, pSolv->name);
-    if(IsNullOrEmptyString(pszName))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    *ppszName = pszName;
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
 
 /*
  * Unlike the other accessors this one returns an ALLOCATED NEVRA that
@@ -609,82 +570,7 @@ error:
     goto cleanup;
 }
 
-/*
- * Repo name of a package handle, with exactly the validation the job
- * builder needs: the handle must resolve, belong to a repo, and that
- * repo must be named. Deliberately stricter than
- * TDNFPkgHandleGetRepoNevra, which tolerates an unnamed repo because it
- * is only building a display string.
- */
-uint32_t
-TDNFPkgHandleGetRepoName(
-    Pool *pPool,
-    TDNF_PKG_ID dwPkgId,
-    const char **ppszRepo
-    )
-{
-    uint32_t dwError = 0;
-    Solvable *pSolv = NULL;
 
-    if(!pPool || !ppszRepo)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
-    if(!pSolv || !pSolv->repo || IsNullOrEmptyString(pSolv->repo->name))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    *ppszRepo = pSolv->repo->name;
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-/*
- * Whether the handle names an already-installed package. This is repo
- * *identity*, not a repo name, so it cannot be answered by comparing
- * strings -- the installed repo is whichever one the pool has adopted
- * as such.
- */
-uint32_t
-TDNFPkgHandleIsInstalled(
-    Pool *pPool,
-    TDNF_PKG_ID dwPkgId,
-    int *pnIsInstalled
-    )
-{
-    uint32_t dwError = 0;
-    Solvable *pSolv = NULL;
-
-    if(!pPool || !pnIsInstalled)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
-    if(!pSolv || !pSolv->repo)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    *pnIsInstalled = (pSolv->repo == pPool->installed);
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
 
 /*
  * On-disk location of a package handle, ALLOCATED for the caller to

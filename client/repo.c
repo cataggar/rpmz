@@ -114,54 +114,6 @@ error:
     goto cleanup;
 }
 
-uint32_t
-TDNFGetRepoById(
-    PTDNF pTdnf,
-    const char* pszId,
-    PTDNF_REPO_DATA* ppRepo
-    )
-{
-    uint32_t dwError = 0;
-    PTDNF_REPO_DATA pRepo = NULL;
-    PTDNF_REPO_DATA pRepos = NULL;
-
-    if(!pTdnf || IsNullOrEmptyString(pszId) || !ppRepo)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    if(!pTdnf->pRepos)
-    {
-        dwError = ERROR_TDNF_NO_DATA;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pRepos = pTdnf->pRepos;
-
-    while(pRepos)
-    {
-        if(!strcmp(pszId, pRepos->pszId))
-        {
-            pRepo = pRepos;
-            break;
-        }
-        pRepos = pRepos->pNext;
-    }
-
-    if(!pRepo)
-    {
-        dwError = ERROR_TDNF_NO_DATA;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    *ppRepo = pRepo;
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
 
 static uint32_t
 TDNFEventRepoMDDownloadStart(
