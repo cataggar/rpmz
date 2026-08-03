@@ -22,7 +22,6 @@
  * The bound is [0, nsolvables), which is exactly the allocated extent of
  * the solvables array -- pool_create() allocates the block and sets
  * nsolvables together, and every grow and truncate keeps them in step.
- * TDNFPkgHandleIsValid() reports the same range minus handle 0.
  *
  * Handle 0 is deliberately admitted. It is libsolv's reserved "no
  * solvable" slot: allocated, zeroed, and therefore safe to read. This
@@ -429,11 +428,8 @@ _Static_assert(TDNF_JOB_JOBMASK == SOLVER_JOBMASK, "job mask value changed");
 _Static_assert(TDNF_JOB_CLEANDEPS == SOLVER_CLEANDEPS, "job flag value changed");
 _Static_assert(TDNF_JOB_FORCEBEST == SOLVER_FORCEBEST, "job flag value changed");
 _Static_assert(sizeof(TDNF_PKG_ID) == sizeof(Id), "package handle width changed");
-_Static_assert(sizeof(TDNF_STR_ID) == sizeof(Id), "string handle width changed");
 _Static_assert(((Id)-1 < 0) == ((TDNF_PKG_ID)-1 < 0),
                "package handle signedness diverged from libsolv");
-_Static_assert(((Id)-1 < 0) == ((TDNF_STR_ID)-1 < 0),
-               "string handle signedness diverged from libsolv");
 _Static_assert(TDNF_REPO_REUSE_REPODATA == REPO_REUSE_REPODATA,
                "repo flag value changed");
 
@@ -742,48 +738,6 @@ error:
 }
 
 /*
- * Name handle of a package handle.
- *
- * Returns the interned name id rather than a string so that callers
- * comparing a package's name against a set of names do not have to
- * strcmp: pool_str2id() interns once up front and the comparison is
- * then integer equality, which is what the job builders already do.
- * TDNFPkgHandleGetName is the accessor to reach for when a string is
- * actually wanted.
- */
-uint32_t
-TDNFPkgHandleGetNameId(
-    Pool *pPool,
-    TDNF_PKG_ID dwPkgId,
-    TDNF_STR_ID *pIdName
-    )
-{
-    uint32_t dwError = 0;
-    Solvable *pSolv = NULL;
-
-    if(!pPool || !pIdName)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    pSolv = PkgHandleToSolvable(pPool, dwPkgId);
-    if(!pSolv)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    *pIdName = pSolv->name;
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-/*
  * Every installed package, as handles.
  *
  * The list is materialised rather than exposed as a cursor because the
@@ -873,91 +827,6 @@ TDNFPoolGetPkgIds(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-/*
- * The string-handle space.
- *
- * A5-2b deliberately keeps these apart from the package-handle
- * accessors above. Both spaces are int32_t and both are called "Id" by
- * libsolv, so nothing but naming stops a caller passing one where the
- * other is meant -- and a package handle used as a string handle
- * silently reads whatever name happens to sit at that index rather
- * than failing. Folding them into one family of accessors would remove
- * the only distinction there is.
- */
-
-/*
- * Intern a string, returning its handle.
- *
- * The create flag is 1, matching every call site this replaces: the
- * names come from configuration and may legitimately not be in the
- * pool yet, and a handle is wanted for the name either way.
- *
- * Returns 0 only for a NULL string -- the empty string interns to
- * STRID_EMPTY, which is 1. Callers that guard on a zero result are
- * therefore guarding against a NULL entry in their own array, not
- * against "not found", and two arrays walked with a shared index
- * cannot get out of step here.
- */
-uint32_t
-TDNFStrIdFromString(
-    Pool *pPool,
-    const char *pszStr,
-    TDNF_STR_ID *pIdStr
-    )
-{
-    uint32_t dwError = 0;
-
-    if(!pPool || !pIdStr)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    *pIdStr = pool_str2id(pPool, pszStr, 1);
-
-cleanup:
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
-
-/*
- * Is this package handle one the pool could resolve?
- *
- * A range check, not an existence check: handles below nsolvables may
- * still refer to a freed or never-populated slot. It answers the
- * question the job builder actually asks -- "can I hand this to an
- * accessor without libsolv indexing out of its array" -- and is
- * reported through pnValid rather than as an error because an
- * out-of-range handle is an expected input there, mapped by the caller
- * to its own error code.
- */
-uint32_t
-TDNFPkgHandleIsValid(
-    Pool *pPool,
-    TDNF_PKG_ID dwPkgId,
-    int *pnValid
-    )
-{
-    uint32_t dwError = 0;
-
-    if(!pPool || !pnValid)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    *pnValid = (dwPkgId > 0 && dwPkgId < pPool->nsolvables);
 
 cleanup:
     return dwError;

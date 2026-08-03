@@ -42,24 +42,28 @@
 #define TDNF_JOB_CLEANDEPS          0x040000
 #define TDNF_JOB_FORCEBEST          0x100000
 
-/* Package and string handles.
+/* Package handles.
 
-   libsolv's `Id` is `typedef int` and is used for two unrelated things that
-   share the job list: a solvable (package) handle, and an interned string
-   id from pool_str2id(). The job list itself is tdnf's own TDNF_ID_LIST,
-   which has always stored plain int32_t, so these spellings are local to
-   client/ and cost nothing to own.
+   libsolv's `Id` is `typedef int`. The job list is tdnf's own
+   TDNF_ID_LIST, which has always stored plain int32_t, so this spelling
+   is local to client/ and costs nothing to own.
 
-   The two are given distinct names because mixing them is a live hazard:
-   TDNFGoalBuildNativeSolverJobs() discriminates the two spaces purely by
-   the job's `how` word (TDNF_JOB_SOLVABLE_NAME selects the string space),
-   and nothing in the type system stops a string id being read as a package
-   id. A job's operand slot is deliberately polymorphic and stays int32_t.
+   There used to be a companion TDNF_STR_ID for libsolv's other use of
+   `Id`, an interned string from pool_str2id(). Nothing interns any more:
+   a TDNF_JOB_SOLVABLE_NAME job's operand is now an index into the
+   configured name array it came from (ppszPkgLocks / ppszInstallOnlyPkgs
+   in TDNFSolvAddPkgLocks and TDNFSolvAddInstallOnlyPkgs), read back the
+   same way in TDNFGoalBuildNativeSolverJobs. The type went with its last
+   user.
 
-   solv/tdnfpackage.c static-asserts these against libsolv's Id while it
+   The operand slot stays deliberately polymorphic int32_t, so the `how`
+   word is still the only thing saying which space a given operand is in.
+   That matters when adding a job kind: an index read as a package handle
+   resolves to an unrelated package rather than failing.
+
+   solv/tdnfpackage.c static-asserts this against libsolv's Id while it
    is vendored. */
 typedef int32_t TDNF_PKG_ID;
-typedef int32_t TDNF_STR_ID;
 
 /* The identifying fields behind a package handle. All strings are
    borrowed from the sack; see the accessors in solv/tdnfpackage.c. */
