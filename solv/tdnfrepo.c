@@ -420,11 +420,10 @@ error:
  * dereferenced there and had no other use, so the pair collapses into
  * this one call and api.c stops naming Repo. No function defined in a
  * client/ .c file takes a Repo * any more. What is left of that surface
- * in client/ is three things: a local in TDNFInitCmdLineRepo(), the
- * pSolvCmdLineRepo field on PTDNF, and the read_rpms_from_directory
- * member of the repository-init callback struct in
- * transaction_plan_capture_abi.inc. Those belong to repo creation, not
- * to sack setup, and are retired separately.
+ * in client/ is two things: the pSolvCmdLineRepo field on PTDNF and the
+ * read_rpms_from_directory member of the repository-init callback
+ * struct in transaction_plan_capture_abi.inc. Those belong to repo
+ * creation, not to sack setup, and are retired separately.
  *
  * The contract for a sack with no installed repo is unchanged: it
  * reaches SolvReadInstalledRpms() as a NULL Repo *, which rejects it

@@ -669,12 +669,6 @@ TDNFInitRepo(
     );
 
 uint32_t
-TDNFInitCmdLineRepo(
-    PTDNF pTdnf,
-    PSolvSack pSack
-    );
-
-uint32_t
 TDNFGetGPGKeys(
     PTDNF pTdnf,
     PTDNF_REPO_DATA pRepo,
