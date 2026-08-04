@@ -115,7 +115,6 @@ fn splitCommaList(pszValue: [*c]const u8, ppOut: *allowzero [*c][*c]u8) u32 {
         return c.ERROR_TDNF_OUT_OF_MEMORY;
     };
     const ppszValues: [*c][*c]u8 = @ptrCast(@alignCast(pAllocated));
-    errdefer freeStringArray(ppszValues);
 
     var i: usize = 0;
     var p: usize = 0;
@@ -130,6 +129,8 @@ fn splitCommaList(pszValue: [*c]const u8, ppOut: *allowzero [*c][*c]u8) u32 {
 
         const dwError = duplicateBytes(value[nStart..p], &ppszValues[i]);
         if (dwError != 0) {
+            freeStringArray(ppszValues);
+            ppOut.* = null;
             return dwError;
         }
         i += 1;
@@ -279,10 +280,10 @@ pub export fn TDNFCliParseRepoQueryArgs(
     const pAllocated = c.calloc(1, @sizeOf(c.TDNF_REPOQUERY_ARGS)) orelse
         return c.ERROR_TDNF_OUT_OF_MEMORY;
     const pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS = @ptrCast(@alignCast(pAllocated));
-    errdefer TDNFCliFreeRepoQueryArgs(pRepoqueryArgs);
 
     var dwError = ensureWhatKeyArray(pRepoqueryArgs);
     if (dwError != 0) {
+        TDNFCliFreeRepoQueryArgs(pRepoqueryArgs);
         return dwError;
     }
 
@@ -290,17 +291,20 @@ pub export fn TDNFCliParseRepoQueryArgs(
     while (pNode != null) : (pNode = pNode[0].next) {
         dwError = parseSetOpt(pRepoqueryArgs, pNode);
         if (dwError != 0) {
+            TDNFCliFreeRepoQueryArgs(pRepoqueryArgs);
             return dwError;
         }
     }
 
     if (cmd_args.nCmdCount > 2) {
+        TDNFCliFreeRepoQueryArgs(pRepoqueryArgs);
         return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     if (cmd_args.nCmdCount > 1) {
         dwError = replaceString(&pRepoqueryArgs.pszSpec, cmd_args.ppszCmds[1]);
         if (dwError != 0) {
+            TDNFCliFreeRepoQueryArgs(pRepoqueryArgs);
             return dwError;
         }
     }

@@ -271,6 +271,15 @@ pub fn build(b: *Build) void {
     );
     run_migration_audit.setCwd(b.path("."));
     migration_audit_step.dependOn(&run_migration_audit.step);
+    const dead_errdefer_audit_step = b.step(
+        "dead-errdefer-audit",
+        "Reject errdefer in functions that cannot return an error",
+    );
+    const run_dead_errdefer_audit = b.addSystemCommand(
+        &.{ "python3", "scripts/dead-errdefer-audit.py" },
+    );
+    run_dead_errdefer_audit.setCwd(b.path("."));
+    dead_errdefer_audit_step.dependOn(&run_dead_errdefer_audit.step);
     const native_dependency_audit_step = b.step(
         "native-dependency-audit",
         "Reject system RPM source and ELF dependencies",

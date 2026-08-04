@@ -60,11 +60,11 @@ fn duplicateCmdArgs(
         return c.ERROR_TDNF_OUT_OF_MEMORY;
     }
     var i: usize = 0;
-    errdefer freeStringArray(ppszDuped);
 
     while (i < count) : (i += 1) {
         const dwError = duplicateString(ppszCmds[start_index + i], &ppszDuped[i]);
         if (dwError != 0) {
+            freeStringArray(ppszDuped);
             return dwError;
         }
     }
@@ -91,7 +91,6 @@ pub export fn TDNFCliParseUpdateInfoArgs(
     const pAllocated = c.calloc(1, @sizeOf(c.TDNF_UPDATEINFO_ARGS)) orelse
         return c.ERROR_TDNF_OUT_OF_MEMORY;
     const pUpdateInfoArgs: *c.TDNF_UPDATEINFO_ARGS = @ptrCast(@alignCast(pAllocated));
-    errdefer freeUpdateInfoArgs(pUpdateInfoArgs);
 
     pUpdateInfoArgs.nMode = c.OUTPUT_SUMMARY;
     pUpdateInfoArgs.nScope = c.SCOPE_AVAILABLE;
@@ -106,6 +105,7 @@ pub export fn TDNFCliParseUpdateInfoArgs(
             dwError = 0;
         }
         if (dwError != 0) {
+            freeUpdateInfoArgs(pUpdateInfoArgs);
             return dwError;
         }
 
@@ -114,6 +114,7 @@ pub export fn TDNFCliParseUpdateInfoArgs(
             continue;
         }
         if (dwError != 0) {
+            freeUpdateInfoArgs(pUpdateInfoArgs);
             return dwError;
         }
     }
@@ -126,6 +127,7 @@ pub export fn TDNFCliParseUpdateInfoArgs(
             nStartIndex -= 1;
         }
         if (dwError != 0) {
+            freeUpdateInfoArgs(pUpdateInfoArgs);
             return dwError;
         }
         nStartIndex += 1;
@@ -138,6 +140,7 @@ pub export fn TDNFCliParseUpdateInfoArgs(
             nStartIndex -= 1;
         }
         if (dwError != 0) {
+            freeUpdateInfoArgs(pUpdateInfoArgs);
             return dwError;
         }
         nStartIndex += 1;
@@ -146,6 +149,7 @@ pub export fn TDNFCliParseUpdateInfoArgs(
     const nPackageCount = cmd_args.nCmdCount - nStartIndex;
     const dwError = duplicateCmdArgs(cmd_args.ppszCmds, nStartIndex, nPackageCount, &pUpdateInfoArgs.ppszPackageNameSpecs);
     if (dwError != 0) {
+        freeUpdateInfoArgs(pUpdateInfoArgs);
         return dwError;
     }
 
