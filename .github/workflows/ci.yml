@@ -78,6 +78,7 @@ jobs:
         run: |
           zig build -Doptimize=ReleaseSafe abi-audit --prefix ./out
           zig build migration-audit --prefix ./out
+          zig build dead-errdefer-audit --prefix ./out
 
       - name: Native dependency and public API audits
         run: |
@@ -144,6 +145,7 @@ jobs:
       - name: Audit ABI, migration, dependencies, and public API
         run: |
           zig build migration-audit --prefix ./out
+          zig build dead-errdefer-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe abi-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out

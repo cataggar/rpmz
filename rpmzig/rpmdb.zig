@@ -1865,23 +1865,26 @@ export fn tdnf_rpmdb_find_label_matches_config(
             setError("out of memory copying package name", .{});
             return -1;
         };
-        errdefer std.heap.c_allocator.free(name_copy);
         const evr_copy = std.heap.c_allocator.dupeZ(u8, actual_evr) catch {
+            std.heap.c_allocator.free(name_copy);
             setError("out of memory copying package EVR", .{});
             return -1;
         };
-        errdefer std.heap.c_allocator.free(evr_copy);
         const arch_copy = std.heap.c_allocator.dupeZ(u8, actual_arch) catch {
+            std.heap.c_allocator.free(evr_copy);
+            std.heap.c_allocator.free(name_copy);
             setError("out of memory copying package arch", .{});
             return -1;
         };
-        errdefer std.heap.c_allocator.free(arch_copy);
         matches.append(std.heap.c_allocator, .{
             .hnum = row.hnum,
             .name = name_copy,
             .evr = evr_copy,
             .arch = arch_copy,
         }) catch {
+            std.heap.c_allocator.free(arch_copy);
+            std.heap.c_allocator.free(evr_copy);
+            std.heap.c_allocator.free(name_copy);
             setError("out of memory appending label match", .{});
             return -1;
         };
@@ -2144,7 +2147,6 @@ export fn tdnf_rpmdb_pubkeys_open_config(
         setError("pinned rpmdb open failed: {t}", .{err});
         return null;
     };
-    errdefer pinned.deinit();
     if (!pinned.exists) {
         pinned.deinit();
         return allocEmptyPubkeyIter();

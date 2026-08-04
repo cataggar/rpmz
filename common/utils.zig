@@ -294,9 +294,9 @@ export fn TDNFFileReadAllText(
         }
         pszText = @ptrCast(raw.?);
     }
-    errdefer freeCString(pszText);
 
     if (c.fseek(fp, 0, c.SEEK_SET) != 0) {
+        freeCString(pszText);
         setNullOut(?[*:0]u8, ppszText);
         if (pnLength) |pLen| {
             pLen.* = 0;
@@ -306,6 +306,7 @@ export fn TDNFFileReadAllText(
 
     const nBytesRead = c.fread(@ptrCast(pszText.?), 1, @as(usize, @intCast(nLength)), fp);
     if (nBytesRead != @as(usize, @intCast(nLength))) {
+        freeCString(pszText);
         setNullOut(?[*:0]u8, ppszText);
         if (pnLength) |pLen| {
             pLen.* = 0;
@@ -394,10 +395,9 @@ export fn TDNFUtilsFormatSize(unSize: u64, ppszFormattedSize: ?*?[*:0]u8) u32 {
             return dwError;
         }
     }
-    errdefer freeCString(pszFormattedSize);
-
     const nWritten = c.snprintf(@ptrCast(pszFormattedSize.?), nMaxSize, "%6.2f%c", dSize, pszSizes[nIndex]);
     if (nWritten < 0 or @as(usize, @intCast(nWritten)) >= nMaxSize) {
+        freeCString(pszFormattedSize);
         ppszFormattedSize.?.* = null;
         return c.ERROR_TDNF_OUT_OF_MEMORY;
     }
@@ -557,13 +557,12 @@ export fn TDNFFreeCmdArgs(pCmdArgs: c.PTDNF_CMD_ARGS) void {
         return;
     }
 
-    var nIndex: usize = 0;
-    while (nIndex < @as(usize, @intCast(pCmdArgs[0].nCmdCount))) : (nIndex += 1) {
-        freeCString(pCmdArgs[0].ppszCmds[nIndex]);
-    }
-
     freeCString(pCmdArgs[0].pszArch);
     if (pCmdArgs[0].ppszCmds != null) {
+        var nIndex: usize = 0;
+        while (nIndex < @as(usize, @intCast(pCmdArgs[0].nCmdCount))) : (nIndex += 1) {
+            freeCString(pCmdArgs[0].ppszCmds[nIndex]);
+        }
         TDNFFreeMemory(@ptrCast(pCmdArgs[0].ppszCmds));
         pCmdArgs[0].ppszCmds = null;
     }
@@ -711,6 +710,25 @@ export fn TDNFPathFromUri(pszKeyUrlOpt: ?[*:0]const u8, ppszPath: ?*?[*:0]u8) u3
     return 0;
 }
 
+/// Release everything `TDNFNormalizePath` owns and report `dwError`.
+///
+/// `TDNFNormalizePath` returns a `u32` status rather than a Zig error union,
+/// so `errdefer` there would compile but never run. Every failing path calls
+/// this instead.
+fn normalizePathFail(
+    pszNormalPath: ?[*:0]u8,
+    pszRealPath: [*c]u8,
+    ppszNormalPath: ?*?[*:0]u8,
+    dwError: u32,
+) u32 {
+    freeCString(pszNormalPath);
+    if (pszRealPath != null) {
+        TDNFFreeMemory(pszRealPath);
+    }
+    setNullOut(?[*:0]u8, ppszNormalPath);
+    return dwError;
+}
+
 export fn TDNFNormalizePath(pszPathOpt: ?[*:0]const u8, ppszNormalPath: ?*?[*:0]u8) u32 {
     var pszNormalPath: ?[*:0]u8 = null;
     var pszRealPath: [*c]u8 = null;
@@ -733,13 +751,6 @@ export fn TDNFNormalizePath(pszPathOpt: ?[*:0]const u8, ppszNormalPath: ?*?[*:0]
             return dwError;
         }
     }
-    errdefer {
-        freeCString(pszNormalPath);
-        if (pszRealPath != null) {
-            TDNFFreeMemory(pszRealPath);
-        }
-        setNullOut(?[*:0]u8, ppszNormalPath);
-    }
 
     var p: usize = 0;
     var q: usize = 0;
@@ -756,8 +767,12 @@ export fn TDNFNormalizePath(pszPathOpt: ?[*:0]const u8, ppszNormalPath: ?*?[*:0]
         }
         if (pszPath[p] == '/' and pszPath[p + 1] == '.' and pszPath[p + 2] == '.' and (pszPath[p + 3] == '/' or pszPath[p + 3] == 0)) {
             if (q == 0) {
-                setNullOut(?[*:0]u8, ppszNormalPath);
-                return c.ERROR_TDNF_INVALID_PARAMETER;
+                return normalizePathFail(
+                    pszNormalPath,
+                    pszRealPath,
+                    ppszNormalPath,
+                    c.ERROR_TDNF_INVALID_PARAMETER,
+                );
             }
             p += 3;
             const bytes: [*]u8 = @ptrCast(pszNormalPath.?);
@@ -777,8 +792,12 @@ export fn TDNFNormalizePath(pszPathOpt: ?[*:0]const u8, ppszNormalPath: ?*?[*:0]
 
                     const dwError = allocateCStringCapacity(rlen + (path_len - p) + 1, &pszNormalPath);
                     if (dwError != 0) {
-                        setNullOut(?[*:0]u8, ppszNormalPath);
-                        return dwError;
+                        return normalizePathFail(
+                            pszNormalPath,
+                            pszRealPath,
+                            ppszNormalPath,
+                            dwError,
+                        );
                     }
 
                     const newBytes: [*]u8 = @ptrCast(pszNormalPath.?);
@@ -790,8 +809,12 @@ export fn TDNFNormalizePath(pszPathOpt: ?[*:0]const u8, ppszNormalPath: ?*?[*:0]
                 TDNFFreeMemory(pszRealPath);
                 pszRealPath = null;
             } else if (getErrno() != c.ENOENT) {
-                setNullOut(?[*:0]u8, ppszNormalPath);
-                return systemError(getErrno());
+                return normalizePathFail(
+                    pszNormalPath,
+                    pszRealPath,
+                    ppszNormalPath,
+                    systemError(getErrno()),
+                );
             }
             if (pszPath[p + 1] == 0) {
                 p += 1;
@@ -815,8 +838,12 @@ export fn TDNFNormalizePath(pszPathOpt: ?[*:0]const u8, ppszNormalPath: ?*?[*:0]
         pszNormalPath = @ptrCast(pszRealPath);
         pszRealPath = null;
     } else if (getErrno() != c.ENOENT) {
-        setNullOut(?[*:0]u8, ppszNormalPath);
-        return systemError(getErrno());
+        return normalizePathFail(
+            pszNormalPath,
+            pszRealPath,
+            ppszNormalPath,
+            systemError(getErrno()),
+        );
     }
 
     ppszNormalPath.?.* = pszNormalPath;
@@ -896,7 +923,6 @@ export fn TDNFJoinPathFromArray(ppszPath: ?*?[*:0]u8, ppszNodes: [*c]?[*:0]u8, n
             return dwError;
         }
     }
-    errdefer freeCString(pszResult);
 
     const bytes: [*]u8 = @ptrCast(pszResult.?);
     var write_index: usize = 0;
@@ -1237,4 +1263,17 @@ test "TDNFGetDigestForFile and TDNFCheckHash use the checksum ABI" {
     } else {
         try expectFileDigest(filename, c.TDNF_HASH_MD5, "900150983cd24fb0d6963f7d28e17f72");
     }
+}
+
+test "TDNFFreeCmdArgs tolerates a command count with no command vector" {
+    // `TDNFCliParseArgs` publishes `nCmdCount` only after `ppszCmds` exists,
+    // but this is exported public API: a C caller can hand us the half-filled
+    // struct an out-of-memory unwind leaves behind. Walking the vector before
+    // testing it for null would fault.
+    const pAllocated = c.calloc(1, @sizeOf(c.TDNF_CMD_ARGS)) orelse
+        return error.OutOfMemory;
+    const pCmdArgs: c.PTDNF_CMD_ARGS = @ptrCast(@alignCast(pAllocated));
+    pCmdArgs[0].nCmdCount = 3;
+    pCmdArgs[0].ppszCmds = null;
+    TDNFFreeCmdArgs(pCmdArgs);
 }

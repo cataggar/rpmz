@@ -55,11 +55,11 @@ fn duplicateCmdArgs(
         return c.ERROR_TDNF_OUT_OF_MEMORY;
     }
     var i: usize = 0;
-    errdefer freeStringArray(ppszDuped);
 
     while (i < count) : (i += 1) {
         const dwError = duplicateString(ppszCmds[start_index + i], &ppszDuped[i]);
         if (dwError != 0) {
+            freeStringArray(ppszDuped);
             return dwError;
         }
     }
@@ -120,7 +120,6 @@ pub export fn TDNFCliParseListArgs(
     const pAllocated = c.calloc(1, @sizeOf(c.TDNF_LIST_ARGS)) orelse
         return c.ERROR_TDNF_OUT_OF_MEMORY;
     const pListArgs: *c.TDNF_LIST_ARGS = @ptrCast(@alignCast(pAllocated));
-    errdefer freeListArgs(pListArgs);
 
     pListArgs.nScope = c.SCOPE_ALL;
 
@@ -131,6 +130,7 @@ pub export fn TDNFCliParseListArgs(
             continue;
         }
         if (dwError != 0) {
+            freeListArgs(pListArgs);
             return dwError;
         }
     }
@@ -142,6 +142,7 @@ pub export fn TDNFCliParseListArgs(
         if (dwError == c.ERROR_TDNF_CLI_NO_MATCH) {
             nStartIndex = 1;
         } else if (dwError != 0) {
+            freeListArgs(pListArgs);
             return dwError;
         }
     }
@@ -149,6 +150,7 @@ pub export fn TDNFCliParseListArgs(
     const nPackageCount = cmd_args.nCmdCount - nStartIndex;
     const dwError = duplicateCmdArgs(cmd_args.ppszCmds, nStartIndex, nPackageCount, &pListArgs.ppszPackageNameSpecs);
     if (dwError != 0) {
+        freeListArgs(pListArgs);
         return dwError;
     }
 

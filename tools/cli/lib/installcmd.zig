@@ -392,7 +392,8 @@ fn JDPkgList(
     if (jd_list == null) {
         return c.ERROR_TDNF_JSONDUMP;
     }
-    errdefer destroyJsonDump(&jd_list);
+    var transfer_complete = false;
+    defer if (!transfer_complete) destroyJsonDump(&jd_list);
 
     var dwError = checkJsonResult(c.jd_list_start(jd_list));
     if (dwError != 0) {
@@ -453,6 +454,7 @@ fn JDPkgList(
     }
 
     ppJDList.?.* = jd_list;
+    transfer_complete = true;
     return 0;
 }
 

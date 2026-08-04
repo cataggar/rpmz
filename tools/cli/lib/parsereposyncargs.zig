@@ -81,13 +81,13 @@ pub export fn TDNFCliParseRepoSyncArgs(
     const pAllocated = c.calloc(1, @sizeOf(c.TDNF_REPOSYNC_ARGS)) orelse
         return c.ERROR_TDNF_OUT_OF_MEMORY;
     const pReposyncArgs: *c.TDNF_REPOSYNC_ARGS = @ptrCast(@alignCast(pAllocated));
-    errdefer TDNFCliFreeRepoSyncArgs(pReposyncArgs);
 
     var pNode: [*c]c.struct_cnfnode = if (cmd_args.cn_setopts != null) cmd_args.cn_setopts[0].first_child else null;
     while (pNode != null) : (pNode = pNode[0].next) {
         if (equalsIgnoreCase(pNode[0].name, "arch")) {
             const dwError = appendArch(pReposyncArgs, pNode[0].value);
             if (dwError != 0) {
+                TDNFCliFreeRepoSyncArgs(pReposyncArgs);
                 return dwError;
             }
         } else if (equalsIgnoreCase(pNode[0].name, "delete")) {
@@ -109,6 +109,7 @@ pub export fn TDNFCliParseRepoSyncArgs(
             pReposyncArgs.pszDownloadPath = null;
             const dwError = duplicateString(pNode[0].value, &pReposyncArgs.pszDownloadPath);
             if (dwError != 0) {
+                TDNFCliFreeRepoSyncArgs(pReposyncArgs);
                 return dwError;
             }
         } else if (equalsIgnoreCase(pNode[0].name, "metadata-path")) {
@@ -116,6 +117,7 @@ pub export fn TDNFCliParseRepoSyncArgs(
             pReposyncArgs.pszMetaDataPath = null;
             const dwError = duplicateString(pNode[0].value, &pReposyncArgs.pszMetaDataPath);
             if (dwError != 0) {
+                TDNFCliFreeRepoSyncArgs(pReposyncArgs);
                 return dwError;
             }
         }

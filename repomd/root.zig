@@ -1013,11 +1013,11 @@ fn nativeSolverLiveSolve(
             else
                 c.ERROR_TDNF_CALL_NOT_SUPPORTED;
         };
-        errdefer refutation.deinit();
         const job_origins = refutedJobOrigins(
             &prepared,
             refutation.jobs,
         ) catch |err| {
+            refutation.deinit();
             prepared.deinit();
             setError("native live refute job origins unavailable: {t}", .{err});
             return if (err == error.OutOfMemory)
@@ -1026,6 +1026,7 @@ fn nativeSolverLiveSolve(
                 c.ERROR_TDNF_CALL_NOT_SUPPORTED;
         };
         const owned = allocator.create(RetainedSolve) catch {
+            refutation.deinit();
             prepared.deinit();
             setError("out of memory retaining the native live refutation", .{});
             return c.ERROR_TDNF_OUT_OF_MEMORY;
@@ -1061,10 +1062,6 @@ fn nativeSolverLiveSolve(
     // A caller asking for the handle snapshots the solve after this returns,
     // so it outlives the call and moves to the heap.
     var retained: ?*RetainedSolve = null;
-    errdefer if (retained) |owned| {
-        owned.deinit();
-        allocator.destroy(owned);
-    } else solve.deinit();
     if (handle != null) {
         const owned = allocator.create(RetainedSolve) catch {
             solve.deinit();
@@ -1074,7 +1071,12 @@ fn nativeSolverLiveSolve(
         owned.* = .{ .solved = solve };
         retained = owned;
     }
-    defer if (retained == null) solve.deinit();
+    // `solve` is moved into `retained` bit for bit, so exactly one of the two
+    // copies may be torn down. This flag records that the retained copy owns
+    // the models now; the stack copy keeps stale arena pointers and must not
+    // be deinit'd once the retained one has been released.
+    const solve_owned_elsewhere = retained != null;
+    defer if (!solve_owned_elsewhere) solve.deinit();
     const active = if (retained) |owned| &owned.solved else &solve;
 
     const native = active.buildOwnedC() catch |err| {

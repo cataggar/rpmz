@@ -299,7 +299,13 @@ pub export fn TDNFCliParseArgs(
 
     const pAllocated = c.calloc(1, @sizeOf(c.TDNF_CMD_ARGS)) orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
     pCmdArgs = @ptrCast(@alignCast(pAllocated));
-    errdefer if (pCmdArgs != null) c.TDNFFreeCmdArgs(pCmdArgs);
+    // This function reports failure with a `u32` status rather than a Zig
+    // error union, so `errdefer` would never run. Release on every failing
+    // path with a `defer` gated on reaching the success return instead.
+    var transfer_complete = false;
+    defer if (!transfer_complete) {
+        if (pCmdArgs != null) c.TDNFFreeCmdArgs(pCmdArgs);
+    };
 
     pCmdArgs.?.cn_setopts = c.create_cnfnode("(setopts)") orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
     pCmdArgs.?.cn_repoopts = c.create_cnfnode("(repoopts)") orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
@@ -392,11 +398,15 @@ pub export fn TDNFCliParseArgs(
 
     var nArgIndex = argparse.TDNFCliArgParseOptInd();
     if (nArgIndex < argc) {
-        pCmdArgs.?.nCmdCount = argc - nArgIndex;
-        dwError = duplicateArgVector(&pCmdArgs.?.ppszCmds, @intCast(pCmdArgs.?.nCmdCount));
+        // Publish `nCmdCount` only once the vector exists: `TDNFFreeCmdArgs`
+        // walks `ppszCmds` for `nCmdCount` entries, so a non-zero count over a
+        // null vector would fault during cleanup.
+        const nCmdCount = argc - nArgIndex;
+        dwError = duplicateArgVector(&pCmdArgs.?.ppszCmds, @intCast(nCmdCount));
         if (dwError != 0) {
             return dwError;
         }
+        pCmdArgs.?.nCmdCount = nCmdCount;
 
         var nIndex: usize = 0;
         while (nArgIndex < argc) : (nArgIndex += 1) {
@@ -426,6 +436,7 @@ pub export fn TDNFCliParseArgs(
     }
 
     ppCmdArgs.?.* = pCmdArgs;
+    transfer_complete = true;
     return 0;
 }
 
