@@ -20,6 +20,14 @@ metalink_file_path = 'photon-test/metalink'
 repomd_file_path = 'photon-test/repodata/repomd.xml'
 
 
+# tdnf writes progress notices to stderr alongside errors, so the error we
+# care about is not necessarily the first line. Match any line instead of
+# pinning to stderr[0], which breaks whenever a notice is added or removed.
+def assert_stderr_has(ret, prefix):
+    assert any(line.startswith(prefix) for line in ret['stderr']), \
+        'no stderr line starts with {}: {}'.format(prefix, ret['stderr'])
+
+
 @pytest.fixture(scope='module', autouse=True)
 def setup_test(utils):
     enable_plugin(utils)
@@ -245,8 +253,7 @@ def test_without_url_and_metalink(utils):
     set_sha1(utils, False)
     set_md5(utils, False)
     ret = utils.run(['tdnf', 'makecache'])
-    print(ret['stderr'][0])
-    assert ret['stderr'][0].startswith('Error: Cannot find a valid base URL for repo')
+    assert_stderr_has(ret, 'Error: Cannot find a valid base URL for repo')
 
 
 def test_md5_digest(utils):
@@ -310,7 +317,8 @@ def test_invalid_md5_digest(utils):
     set_sha512(utils, False)
     set_invalid_md5(utils)
     ret = utils.run(['tdnf', 'makecache'])
-    assert ret['stderr'][0].startswith('Error: Validating Checksum')
+    assert ret['retval'] == 2501
+    assert_stderr_has(ret, 'Error: Validating Checksum')
     cache_dir = utils.tdnf_config.get('main', 'cachedir')
     tmp_dir = os.path.join(cache_dir, 'photon-test/tmp')
     assert not os.path.isdir(tmp_dir)
@@ -325,7 +333,8 @@ def test_invalid_sha1_digest(utils):
     set_sha512(utils, False)
     set_invalid_sha1(utils)
     ret = utils.run(['tdnf', 'makecache'])
-    assert ret['stderr'][0].startswith('Error: Validating Checksum')
+    assert ret['retval'] == 2501
+    assert_stderr_has(ret, 'Error: Validating Checksum')
     cache_dir = utils.tdnf_config.get('main', 'cachedir')
     tmp_dir = os.path.join(cache_dir, 'photon-test/tmp')
     assert not os.path.isdir(tmp_dir)
@@ -340,7 +349,8 @@ def test_invalid_sha256_digest(utils):
     set_sha512(utils, False)
     set_invalid_sha256(utils)
     ret = utils.run(['tdnf', 'makecache'])
-    assert ret['stderr'][0].startswith('Error: Validating Checksum')
+    assert ret['retval'] == 2501
+    assert_stderr_has(ret, 'Error: Validating Checksum')
     cache_dir = utils.tdnf_config.get('main', 'cachedir')
     tmp_dir = os.path.join(cache_dir, 'photon-test/tmp')
     assert not os.path.isdir(tmp_dir)
