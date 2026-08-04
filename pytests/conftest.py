@@ -19,6 +19,7 @@ import pytest
 import atexit
 import platform
 import requests
+import stat
 import subprocess
 import configparser
 import uuid
@@ -61,6 +62,25 @@ def _rewrite_session_repo_paths(repo_path):
             config.write(stream, space_around_delimiters=False)
 
 
+def _ignore_sockets(directory, names):
+    """Names in `directory` that `shutil.copytree` cannot reproduce.
+
+    A gpg-agent left running against the seed's GNUPGHOME keeps unix sockets
+    there. `copytree` opens each entry and aborts the whole session with
+    "No such device or address" when it reaches one. Sockets are never repo
+    content, so skipping them is always correct.
+    """
+    ignored = set()
+    for name in names:
+        try:
+            mode = os.lstat(os.path.join(directory, name)).st_mode
+        except OSError:
+            continue
+        if stat.S_ISSOCK(mode) or stat.S_ISFIFO(mode):
+            ignored.add(name)
+    return ignored
+
+
 def _prepare_session_repo(config):
     seed_path = os.path.abspath(config['repo_path'])
     existing = _SESSION_REPOS.get(seed_path)
@@ -93,7 +113,7 @@ def _prepare_session_repo(config):
             '{}-{}'.format(os.getpid(), uuid.uuid4().hex),
         )
         repo_path = os.path.join(session_root, 'repo')
-        shutil.copytree(seed_path, repo_path)
+        shutil.copytree(seed_path, repo_path, ignore=_ignore_sockets)
 
     _rewrite_session_repo_paths(repo_path)
     _SESSION_REPOS[seed_path] = repo_path

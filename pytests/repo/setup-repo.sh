@@ -34,6 +34,15 @@ function verify_caller_rpmmacros() {
 }
 trap verify_caller_rpmmacros EXIT
 
+function shutdown_gpg_agent() {
+  # Generating and using the signing key starts a gpg-agent daemon that keeps
+  # running against ${GNUPGHOME} after this script exits, leaving live sockets
+  # in the seed directory. The seed is copied per session with `shutil.copytree`
+  # (pytests/conftest.py), which cannot copy a socket and aborts the whole run.
+  # Shut the agent down so the seed contains only regular files.
+  gpgconf --kill all >/dev/null 2>&1 || true
+}
+
 function fix_dir_perms() {
   chmod 755 ${TEST_REPO_DIR}
   find ${TEST_REPO_DIR} -type d -exec chmod 0755 {} \;
@@ -247,4 +256,5 @@ cat "${METALINK_FIXTURE}" > "${PUBLISH_PATH}/metalink"
 check_err "Failed to install metalink fixture."
 
 save_mutable_baseline
+shutdown_gpg_agent
 fix_dir_perms
