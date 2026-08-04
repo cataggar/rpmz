@@ -5139,7 +5139,9 @@ const TestNativeSolve = struct {
         const retained = try allocator.create(repository_metadata.RetainedSolve);
         errdefer allocator.destroy(retained);
 
-        var arena_state = std.heap.ArenaAllocator.init(allocator);
+        const arena_state = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena_state);
+        arena_state.* = std.heap.ArenaAllocator.init(allocator);
         errdefer arena_state.deinit();
         const arena = arena_state.allocator();
 

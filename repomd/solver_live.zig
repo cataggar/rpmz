@@ -106,7 +106,13 @@ pub const ProduceError =
 
 /// Move-only owner for every model used by a native live solve.
 pub const OwnedSolve = struct {
-    arena_state: std.heap.ArenaAllocator,
+    /// Heap-allocated so the arena keeps one address for its whole life.
+    /// `universe` is built from this arena and `solver_model.Universe`
+    /// retains the `std.mem.Allocator` it was given, whose `.ptr` is the
+    /// arena itself. This owner is returned by value and moved again by
+    /// `produce`, so an inline arena would strand that retained pointer in
+    /// a dead stack frame.
+    arena_state: *std.heap.ArenaAllocator,
     universe: *solver_model.Universe,
     solved: solver_native.OwnedSolveResult,
     /// The jobs the solve ran, in the order they were queued. Callers that
@@ -123,7 +129,9 @@ pub const OwnedSolve = struct {
     pub fn deinit(self: *OwnedSolve) void {
         self.solved.deinit();
         // Universe arrays share the enclosing arena and are released below.
+        const child_allocator = self.arena_state.child_allocator;
         self.arena_state.deinit();
+        child_allocator.destroy(self.arena_state);
         self.* = undefined;
     }
 
@@ -138,7 +146,10 @@ pub const OwnedSolve = struct {
 /// The capture layer needs one of these to describe a request that failed
 /// before, or instead of, a solve.
 pub const Prepared = struct {
-    arena_state: std.heap.ArenaAllocator,
+    /// Heap-allocated for the same reason as `OwnedSolve.arena_state`: the
+    /// retained `universe.allocator` points at the arena, and this owner is
+    /// returned by value and then moved into an `OwnedSolve`.
+    arena_state: *std.heap.ArenaAllocator,
     universe: *solver_model.Universe,
     /// The jobs the request translated to, in the order they would be queued.
     jobs: []const solver_model.Job,
@@ -156,7 +167,9 @@ pub const Prepared = struct {
     pub fn deinit(self: *Prepared) void {
         self.visibility.deinit();
         // Universe arrays share the enclosing arena and are released below.
+        const child_allocator = self.arena_state.child_allocator;
         self.arena_state.deinit();
+        child_allocator.destroy(self.arena_state);
         self.* = undefined;
     }
 };
@@ -207,7 +220,9 @@ pub fn prepare(
         return error.InvalidInput;
     }
 
-    var arena_state = std.heap.ArenaAllocator.init(parent_allocator);
+    const arena_state = try parent_allocator.create(std.heap.ArenaAllocator);
+    errdefer parent_allocator.destroy(arena_state);
+    arena_state.* = std.heap.ArenaAllocator.init(parent_allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
     const cmdline_paths = try collectCmdlineRpmPaths(arena, input);
@@ -461,7 +476,9 @@ pub fn prepareDirectoryCheck(
         return error.InvalidInput;
     }
 
-    var arena_state = std.heap.ArenaAllocator.init(parent_allocator);
+    const arena_state = try parent_allocator.create(std.heap.ArenaAllocator);
+    errdefer parent_allocator.destroy(arena_state);
+    arena_state.* = std.heap.ArenaAllocator.init(parent_allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1230,6 +1247,42 @@ test "preparing a request builds the universe and jobs without solving" {
     // input.
     try std.testing.expectEqualStrings("x86_64", prepared.native_arch);
     try std.testing.expect(prepared.native_arch.ptr != input.native_arch.ptr);
+}
+
+test "a prepared universe retains an allocator that survives the move" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalled(51, "leaf");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    input.jobs = jobs[0..];
+
+    var prepared = try prepare(std.testing.allocator, input);
+    defer prepared.deinit();
+
+    // `solver_model.Universe` retains the allocator it was built with, and
+    // `Prepared` is returned by value and moved again by `produce`. The
+    // retained `.ptr` therefore has to be the heap arena rather than a slot
+    // in `prepare`'s frame, or freeing through it would touch a dead frame
+    // -- a ReleaseSafe-only crash that a Debug build cannot see.
+    try std.testing.expectEqual(
+        @as(*anyopaque, @ptrCast(prepared.arena_state)),
+        prepared.universe.allocator.ptr,
+    );
+
+    // `Universe.deinit` is public, so freeing through the retained allocator
+    // after the move has to stay safe. The arena still owns the memory, so
+    // the enclosing `prepared.deinit()` remains correct afterwards.
+    prepared.universe.deinit();
 }
 
 test "a prepared request matches what the producer would solve" {
