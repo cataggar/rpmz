@@ -2192,9 +2192,13 @@ test "special file metadata stays on pinned created object" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd_ptr = c.getcwd(&cwd_buf, cwd_buf.len) orelse
+    switch (std.os.linux.errno(std.os.linux.getcwd(cwd_buf[0..].ptr, cwd_buf.len))) {
+        .SUCCESS => {},
+        else => return error.TestUnexpectedResult,
+    }
+    const cwd_len = std.mem.findScalar(u8, &cwd_buf, 0) orelse
         return error.TestUnexpectedResult;
-    const cwd = std.mem.span(@as([*:0]const u8, @ptrCast(cwd_ptr)));
+    const cwd = cwd_buf[0..cwd_len];
     const root_path = try std.fmt.allocPrint(
         allocator,
         "{s}/.zig-cache/tmp/{s}",
@@ -2304,9 +2308,13 @@ test "fd rooted mutations survive intermediate symlink swaps" {
     defer tmp.cleanup();
 
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd_ptr = c.getcwd(&cwd_buf, cwd_buf.len) orelse
+    switch (std.os.linux.errno(std.os.linux.getcwd(cwd_buf[0..].ptr, cwd_buf.len))) {
+        .SUCCESS => {},
+        else => return error.TestUnexpectedResult,
+    }
+    const cwd_len = std.mem.findScalar(u8, &cwd_buf, 0) orelse
         return error.TestUnexpectedResult;
-    const cwd = std.mem.span(@as([*:0]const u8, @ptrCast(cwd_ptr)));
+    const cwd = cwd_buf[0..cwd_len];
     const root_path = try std.fmt.allocPrint(
         allocator,
         "{s}/.zig-cache/tmp/{s}",
@@ -2583,9 +2591,13 @@ test "canonical directory symlinks stay beneath installroot" {
     defer tmp.cleanup();
 
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd_ptr = c.getcwd(&cwd_buf, cwd_buf.len) orelse
+    switch (std.os.linux.errno(std.os.linux.getcwd(cwd_buf[0..].ptr, cwd_buf.len))) {
+        .SUCCESS => {},
+        else => return error.TestUnexpectedResult,
+    }
+    const cwd_len = std.mem.findScalar(u8, &cwd_buf, 0) orelse
         return error.TestUnexpectedResult;
-    const cwd = std.mem.span(@as([*:0]const u8, @ptrCast(cwd_ptr)));
+    const cwd = cwd_buf[0..cwd_len];
     const root = try std.fmt.allocPrint(
         allocator,
         "{s}/.zig-cache/tmp/{s}",
@@ -2801,9 +2813,13 @@ test "source write helper rejects symlink escapes and hardlinked targets" {
     defer tmp.cleanup();
 
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd_ptr = c.getcwd(&cwd_buf, cwd_buf.len) orelse
+    switch (std.os.linux.errno(std.os.linux.getcwd(cwd_buf[0..].ptr, cwd_buf.len))) {
+        .SUCCESS => {},
+        else => return error.TestUnexpectedResult,
+    }
+    const cwd_len = std.mem.findScalar(u8, &cwd_buf, 0) orelse
         return error.TestUnexpectedResult;
-    const cwd = std.mem.span(@as([*:0]const u8, @ptrCast(cwd_ptr)));
+    const cwd = cwd_buf[0..cwd_len];
     const root = try std.fmt.allocPrint(
         allocator,
         "{s}/.zig-cache/tmp/{s}",

@@ -1355,26 +1355,26 @@ fn testPackage(
     };
 }
 
+/// `Universe` stores the allocator it was built with and frees through it in
+/// `deinit`, so that allocator must not point at anything this function owns:
+/// an `ArenaAllocator` held by value here would be copied into the returned
+/// `Harness`, leaving `universe.allocator.ptr` aimed at the dead stack frame.
+/// `Universe` allocates exactly what it frees, so hand it the test allocator
+/// directly -- that removes the escape and gets leak checking on `deinit`.
 const Harness = struct {
-    arena_state: std.heap.ArenaAllocator,
     universe: solver_model.Universe,
 
     fn deinit(self: *Harness) void {
         self.universe.deinit();
-        self.arena_state.deinit();
     }
 };
 
 fn buildUniverse(
     inputs: []const solver_model.RepositoryInput,
 ) !Harness {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    errdefer arena_state.deinit();
-    const universe = try solver_model.Universe.init(
-        arena_state.allocator(),
-        inputs,
-    );
-    return .{ .arena_state = arena_state, .universe = universe };
+    return .{
+        .universe = try solver_model.Universe.init(testing.allocator, inputs),
+    };
 }
 
 fn emptyTrace() abi.RequestTraceView {
