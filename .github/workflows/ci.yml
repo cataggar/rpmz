@@ -56,6 +56,13 @@ jobs:
         run: |
           zig build test --prefix ./out
           zig build libsolv-oracle-test --prefix ./out
+          # Also run them optimized. Debug masks whole classes of bug:
+          # dangling stack pointers stay readable and the safety
+          # allocator hides use-after-free. A segfault in
+          # transaction_plan_native passed Debug CI for exactly this
+          # reason. The ReleaseSafe build below starts with `rm -rf out`,
+          # so this step cannot disturb the measured artifact.
+          zig build -Doptimize=ReleaseSafe test --prefix ./out
 
       - name: Build (ReleaseSafe)
         run: |
@@ -130,6 +137,7 @@ jobs:
         run: |
           zig build -Doptimize=ReleaseSafe install --prefix ./out
           zig build test --prefix ./out
+          zig build -Doptimize=ReleaseSafe test --prefix ./out
           zig build lint --prefix ./out
           zig build -Doptimize=ReleaseSafe install --prefix ./out
 
