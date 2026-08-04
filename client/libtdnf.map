@@ -1,0 +1,147 @@
+/*
+ * Export control for libtdnf.so.
+ *
+ * WHY THIS FILE EXISTS
+ *
+ * libtdnf statically links two large vendored third-party libraries --
+ * libsolv and SQLite -- and, before this file, re-exported every one of
+ * their symbols from its own dynamic symbol table: 355 from libsolv and
+ * 277 from SQLite, 632 in total, none of which any consumer in this
+ * repository references.
+ *
+ * That is not merely untidy. ELF symbol resolution is global and
+ * first-wins, so a process that loads libtdnf.so alongside a real
+ * libsolv.so or libsqlite3.so gets silent interposition in whichever
+ * direction the load order happens to pick: tdnf's vendored libsolv
+ * 0.7.39 can be replaced by the host's copy, or an unrelated
+ * application's sqlite3_* calls can be captured by tdnf's. Both
+ * libraries have ABI-sensitive structs, so the failure mode is memory
+ * corruption rather than a clean error.
+ *
+ * DEFAULT-DENY, NOT A BLOCK LIST
+ *
+ * The script ends with `local: *`, so anything not named here is hidden.
+ * That direction is deliberate: a block list of the 632 names known to
+ * leak today would silently stop covering a vendored library that gains
+ * a symbol, or a third one that gets linked in tomorrow. With a keep
+ * list the failure mode of forgetting to update this file is a link
+ * error in this same build -- loud, deterministic, and caught by CI --
+ * rather than a new leak nobody notices.
+ *
+ * The version tag is anonymous on purpose. A named tag would emit
+ * versioned symbols (`TDNFOpenHandle@@LIBTDNF_4`), which is itself an
+ * ABI break for anything already linked against the unversioned ones.
+ * An anonymous tag controls visibility and nothing else.
+ *
+ * MAINTENANCE
+ *
+ * The wildcards below cover every symbol prefix tdnf itself authors, so
+ * new TDNF, tdnf_, Solv or pr_ functions need no change here. The
+ * explicit list is the residue: llconf's ini parser, common/'s string
+ * and logging helpers, and a handful of one-off names. Those components
+ * are stable, so the list should rarely move. scripts/abi-audit.py
+ * checks the result -- see the vendored-leakage assertion there.
+ */
+{
+    global:
+        /* tdnf's own public and cross-component surface. */
+        TDNF*;
+        tdnf_*;
+        tdnfLock*;
+        Solv*;
+        Global*;
+        pr_*;
+        jd_*;
+        history_*;
+
+        /* llconf, common/ and history/ symbols that carry no shared
+           prefix. Consumers reached by tools/cli and the plugins. */
+        ReadGPGKeyFile;
+        TdnfGetReleaseVersionConfig;
+        append_confline;
+        append_node;
+        clone_cnfmodule;
+        clone_cnfmodule_ini;
+        clone_cnfnode;
+        clone_cnftree;
+        cnf_add_branch;
+        cnf_del_branch;
+        cnf_find_entry;
+        cnf_get_entry;
+        cnf_get_node;
+        cnf_set_entry;
+        cnfmodule_parse;
+        cnfmodule_parse_file;
+        cnfmodule_register_plugin;
+        cnfmodule_setopts;
+        cnfmodule_unparse;
+        cnfmodule_unparse_file;
+        cnfmodules;
+        cnfnode_getname;
+        cnfnode_getval;
+        cnfnode_setname;
+        cnfnode_setname_n;
+        cnfnode_setval;
+        compare_cnfnode;
+        compare_cnftree;
+        compare_cnftree_children;
+        cp_quoted;
+        cp_quoted_ifquoted;
+        cp_spaces;
+        cp_word;
+        create_cnfnode;
+        create_cnfnode_keyval;
+        create_cnfresult;
+        create_confline;
+        create_history_ctx;
+        destroy_cnfmodule;
+        destroy_cnfnode;
+        destroy_cnfresult;
+        destroy_cnfresult_list;
+        destroy_cnftree;
+        destroy_confline;
+        destroy_confline_list;
+        destroy_history_ctx;
+        dump_nodes;
+        dup_line_until;
+        dup_line_until_b;
+        dup_next_line;
+        dup_next_line_b;
+        dup_next_quoted;
+        dup_next_quoted_b;
+        dup_next_word;
+        dup_next_word_b;
+        dup_quote_string;
+        dup_unquote_string;
+        dup_unquote_string_ifquoted;
+        find_cnfmodule;
+        find_node;
+        gEuid;
+        hashType;
+        hash_ops;
+        insert_node_before;
+        isTrue;
+        log_console;
+        parse_ini;
+        parse_options;
+        parse_varsdirs;
+        read_conflines;
+        register_cnfmodule;
+        register_ini;
+        replace_vars;
+        rpmtransflags_map;
+        rpmzig_verify_detached;
+        skip_quoted;
+        skip_quoted_ifquoted;
+        skip_spaces;
+        skip_word;
+        strip_cnftree;
+        strjoin;
+        strtoi;
+        unlink_node;
+        unparse_ini;
+        unregister_all;
+
+    local:
+        *;
+};

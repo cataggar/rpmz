@@ -1406,6 +1406,12 @@ pub fn build(b: *Build) void {
     });
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureCreate");
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureDestroy");
+    // Stop re-exporting statically linked libsolv and SQLite. See
+    // client/libtdnf.map for why this is a correctness fix and not
+    // housekeeping: without it libtdnf.so exports 632 third-party
+    // symbols that can interpose on, or be interposed by, a real
+    // libsolv.so or libsqlite3.so in the same process.
+    libtdnf.setVersionScript(b.path("client/libtdnf.map"));
     b.installArtifact(libtdnf);
 
     // Compiler-enforced libsolv confinement (issue #39). Build every C

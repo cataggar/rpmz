@@ -66,6 +66,37 @@ def public_symbols(path):
     return sorted(symbols)
 
 
+def all_dynamic_symbols(path):
+    result = subprocess.run(
+        ["nm", "-D", "--defined-only", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    symbols = set()
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        symbols.add(fields[-1].split("@", 1)[0])
+    return symbols
+
+
+# libsolv and SQLite are linked statically into libtdnf. Nothing in this
+# repository references them through libtdnf, and exporting them is a
+# correctness problem rather than untidiness: ELF symbol resolution is
+# global and first-wins, so libtdnf.so can interpose on a real
+# libsolv.so/libsqlite3.so loaded into the same process, or be
+# interposed by one. Both have ABI-sensitive structs, so the failure
+# mode is memory corruption, not a clean error.
+#
+# The guard is the "exported_symbols_libtdnf" baseline above rather than
+# a pattern: a prefix rule has to guess at third-party naming, and the
+# first attempt at one here matched a tdnf symbol (common/'s hash_ops)
+# while missing 49 libsolv symbols. An exact snapshot cannot do either.
+# client/libtdnf.map is what actually enforces the hiding.
+
+
 def dynamic_soname(path):
     result = subprocess.run(
         ["readelf", "-d", "--", str(path)],
@@ -151,6 +182,16 @@ def collect_snapshot(prefix, headers_dir):
             name: public_symbols(path)
             for name, path in artifacts.items()
         },
+        # Every dynamic symbol libtdnf exports, not just the TDNF*-named
+        # ones "public_symbols" tracks. libtdnf statically links vendored
+        # libsolv and SQLite, and used to re-export all 632 of their
+        # symbols; client/libtdnf.map now hides them. Snapshotting the
+        # whole table is what makes that enforceable -- a prefix-matching
+        # rule has to guess at third-party naming, and guessing left 49
+        # libsolv symbols uncovered when this was first written.
+        "exported_symbols_libtdnf": sorted(
+            all_dynamic_symbols(artifacts["libtdnf"])
+        ),
     }
 
 
@@ -161,6 +202,7 @@ def load_snapshot(path):
         "compatibility_headers_sha256",
         "public_headers_sha256",
         "public_symbols",
+        "exported_symbols_libtdnf",
     }:
         raise ValueError(f"{path}: invalid ABI baseline keys")
     return snapshot
@@ -205,6 +247,19 @@ def compare_snapshots(expected, actual):
             errors.append(f"{artifact}: removed symbol {symbol}")
         for symbol in sorted(actual_set - expected_set):
             errors.append(f"{artifact}: added symbol {symbol}")
+    # The full libtdnf export table. Catches a vendored libsolv/SQLite
+    # symbol reappearing in the dynamic table, which the TDNF*-only
+    # "public_symbols" comparison above is blind to by construction.
+    expected_exports = set(expected["exported_symbols_libtdnf"])
+    actual_exports = set(actual["exported_symbols_libtdnf"])
+    for symbol in sorted(expected_exports - actual_exports):
+        errors.append(f"libtdnf: no longer exports {symbol}")
+    for symbol in sorted(actual_exports - expected_exports):
+        errors.append(
+            f"libtdnf: newly exports {symbol} -- if this is a vendored "
+            "libsolv or SQLite symbol it must be hidden, see "
+            "client/libtdnf.map"
+        )
     return errors
 
 
