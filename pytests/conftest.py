@@ -137,12 +137,14 @@ def AssertRepoPortIsFree(port=8080):
     unrelated tests fail while the suite still reports a plausible-looking
     total.
 
-    Checking before the child starts is deterministic. HTTPServer sets
-    SO_REUSEADDR, which permits binding over TIME_WAIT but never over a
-    live listening socket, so this bind fails exactly when a real server
-    holds the port.
+    Checking before the child starts is deterministic. The probe sets
+    SO_REUSEADDR because HTTPServer does: that permits binding over the
+    TIME_WAIT sockets a previous run leaves behind, but never over a live
+    listening socket, so this bind fails exactly when a real server holds
+    the port and the child would have failed to bind too.
     """
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         probe.bind(('', port))
     except OSError as err:
