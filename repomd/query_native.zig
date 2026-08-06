@@ -453,14 +453,53 @@ pub export fn TDNFRepoMdNativeBestPackageRefConfig(
     defer std.heap.c_allocator.free(refs);
     if (refs.len == 0) return c.ERROR_TDNF_NO_MATCH;
 
+    const selected = selectBestPackageRef(
+        &ctx,
+        refs,
+        spec,
+        source_only != 0,
+        highest != 0,
+        scopePrefersObsoleting(scope_int, source_only != 0, highest != 0),
+    ) orelse return c.ERROR_TDNF_NO_MATCH;
+    const line = packageMatchLine(&ctx, selected) catch |err| {
+        return mapQueryError(err);
+    };
+    defer std.heap.c_allocator.free(line);
+
+    line_out.* = dupCString(line) catch |err| {
+        return mapQueryError(err);
+    };
+    return 0;
+}
+
+/// libsolv resolved a best-package spec through two different helpers, and the
+/// difference matters. `SolvFindHighestAvailable` only consulted obsoletes for
+/// a non-source *available* lookup, where it delegated to
+/// `SolvFindBestAvailable`; the installed and source lookups picked purely on
+/// EVR. Applying the obsoletes step everywhere would let an unrelated
+/// obsoleting package hijack an installed-package lookup.
+fn scopePrefersObsoleting(scope: c_int, source_only: bool, highest: bool) bool {
+    return scope == c.SCOPE_AVAILABLE and !source_only and highest;
+}
+
+/// Replicates `SolvFindBestAvailable`: pick the best exact-name match, then let
+/// a package that obsoletes it take its place.
+fn selectBestPackageRef(
+    ctx: *NativeContext,
+    refs: []const PackageRef,
+    spec: []const u8,
+    source_only: bool,
+    highest: bool,
+    prefer_obsoleting: bool,
+) ?PackageRef {
     var exact_best: ?PackageRef = null;
     for (refs) |ref| {
         const pkg = ctx.package(ref);
-        if (source_only != 0 and !isSourceArch(pkg.nevra.arch)) continue;
+        if (source_only and !isSourceArch(pkg.nevra.arch)) continue;
         if (!std.mem.eql(u8, pkg.nevra.name, spec)) continue;
         if (exact_best) |best_ref| {
             const cmp = query_index.comparePackageVersions(pkg, ctx.package(best_ref));
-            if ((highest != 0 and cmp > 0) or (highest == 0 and cmp < 0)) {
+            if ((highest and cmp > 0) or (!highest and cmp < 0)) {
                 exact_best = ref;
             }
         } else {
@@ -471,31 +510,46 @@ pub export fn TDNFRepoMdNativeBestPackageRefConfig(
     var best: ?PackageRef = null;
     for (refs) |ref| {
         const pkg = ctx.package(ref);
-        if (source_only != 0 and !isSourceArch(pkg.nevra.arch)) continue;
+        if (source_only and !isSourceArch(pkg.nevra.arch)) continue;
         if (exact_best) |best_exact| {
             if (!std.mem.eql(u8, pkg.nevra.name, spec) and
-                !packageObsoletesPackage(&ctx, ref, best_exact)) continue;
+                !(prefer_obsoleting and packageObsoletesPackage(ctx, ref, best_exact))) continue;
         }
-        if (best) |best_ref| {
-            const cmp = query_index.comparePackageVersions(pkg, ctx.package(best_ref));
-            if ((highest != 0 and cmp > 0) or (highest == 0 and cmp < 0)) {
-                best = ref;
+        const best_ref = best orelse {
+            best = ref;
+            continue;
+        };
+        if (prefer_obsoleting) {
+            const preference = comparePackagesByObsoletes(ctx, ref, best_ref);
+            if (preference != 0) {
+                if (preference > 0) best = ref;
+                continue;
             }
-        } else {
+        }
+        const cmp = query_index.comparePackageVersions(pkg, ctx.package(best_ref));
+        if ((highest and cmp > 0) or (!highest and cmp < 0)) {
             best = ref;
         }
     }
 
-    const selected = best orelse return c.ERROR_TDNF_NO_MATCH;
-    const line = packageMatchLine(&ctx, selected) catch |err| {
-        return mapQueryError(err);
-    };
-    defer std.heap.c_allocator.free(line);
+    return best;
+}
 
-    line_out.* = dupCString(line) catch |err| {
-        return mapQueryError(err);
-    };
-    return 0;
+/// libsolv's `prune_obsoleted` drops a candidate as soon as another candidate
+/// with a *different* name obsoletes it, without ever comparing versions --
+/// which is why an obsoleter must win an EVR tie against the package it
+/// replaces. Mutual obsoletion prunes nothing, and same-name pairs never reach
+/// this step because `prune_to_best_version` has already reduced them to one
+/// entry per name.
+///
+/// Returns a positive value when `a` should displace `b`, a negative value when
+/// `b` should displace `a`, and zero when obsoletes says nothing.
+fn comparePackagesByObsoletes(ctx: *NativeContext, a: PackageRef, b: PackageRef) i32 {
+    if (std.mem.eql(u8, ctx.package(a).nevra.name, ctx.package(b).nevra.name)) return 0;
+    const a_obsoletes_b = packageObsoletesPackage(ctx, a, b);
+    const b_obsoletes_a = packageObsoletesPackage(ctx, b, a);
+    if (a_obsoletes_b == b_obsoletes_a) return 0;
+    return if (a_obsoletes_b) 1 else -1;
 }
 
 fn packageObsoletesPackage(ctx: *NativeContext, candidate_ref: PackageRef, target_ref: PackageRef) bool {
@@ -4342,4 +4396,79 @@ test "exclude line order does not depend on the order the patterns are given" {
         try testing.expectEqualStrings(a, b);
     }
     try testing.expectEqualStrings("repo\x1falpha-1-1.noarch", forward_lines[0]);
+}
+
+// PR #255 replaced libsolv's `SolvFindBestAvailable` with a native lookup that
+// selected on EVR alone. Real repositories give the obsoleting package the same
+// EVR as the package it replaces, so the tie fell to iteration order and
+// `tdnf install <obsoleted>` pulled in the obsoleted package instead of its
+// replacement.
+test "an obsoleting package wins an EVR tie against the package it obsoletes" {
+    const testing = std.testing;
+
+    const Fixture = struct {
+        fn build(ctx: *NativeContext, alloc: std.mem.Allocator, obsoleter_first: bool) !void {
+            var arena_state = std.heap.ArenaAllocator.init(alloc);
+            errdefer arena_state.deinit();
+            const arena = arena_state.allocator();
+
+            const relations = try arena.dupe(model.Relation, &[_]model.Relation{
+                .{ .name = "obsoleted" },
+            });
+            const obsoleter = model.Package{
+                .pkg_id = "obsoleting",
+                .nevra = .{ .name = "obsoleting", .version = "0.1", .release = "1", .arch = "noarch" },
+                .checksum = .{ .kind = "sha256", .value = "11" },
+                .location = .{},
+                .obsoletes = .{ .start = 0, .len = 1 },
+            };
+            const obsoleted = model.Package{
+                .pkg_id = "obsoleted",
+                .nevra = .{ .name = "obsoleted", .version = "0.1", .release = "1", .arch = "noarch" },
+                .checksum = .{ .kind = "sha256", .value = "22" },
+                .location = .{},
+            };
+            const packages = try arena.dupe(model.Package, if (obsoleter_first)
+                &[_]model.Package{ obsoleter, obsoleted }
+            else
+                &[_]model.Package{ obsoleted, obsoleter });
+
+            try ctx.datasets.append(.{
+                .kind = .available,
+                .repo_id = "repo",
+                .arena_state = arena_state,
+                .repository = .{ .packages = packages, .relations = relations },
+            });
+        }
+    };
+
+    // Either iteration order must reach the same answer; before the fix the
+    // winner was whichever package the loop happened to see first.
+    for ([_]bool{ true, false }) |obsoleter_first| {
+        var ctx = NativeContext.init(testing.allocator);
+        defer ctx.deinit();
+        try Fixture.build(&ctx, testing.allocator, obsoleter_first);
+
+        const refs = [_]PackageRef{
+            .{ .dataset_index = 0, .package_index = 0 },
+            .{ .dataset_index = 0, .package_index = 1 },
+        };
+
+        const available = selectBestPackageRef(&ctx, &refs, "obsoleted", false, true, true).?;
+        try testing.expectEqualStrings("obsoleting", ctx.package(available).nevra.name);
+
+        // The installed and source lookups never consulted obsoletes, so they
+        // must still resolve the spec to the package that carries the name.
+        const installed = selectBestPackageRef(&ctx, &refs, "obsoleted", false, true, false).?;
+        try testing.expectEqualStrings("obsoleted", ctx.package(installed).nevra.name);
+    }
+}
+
+test "obsoletes preference only applies to non-source available lookups" {
+    const testing = std.testing;
+
+    try testing.expect(scopePrefersObsoleting(c.SCOPE_AVAILABLE, false, true));
+    try testing.expect(!scopePrefersObsoleting(c.SCOPE_AVAILABLE, true, true));
+    try testing.expect(!scopePrefersObsoleting(c.SCOPE_AVAILABLE, false, false));
+    try testing.expect(!scopePrefersObsoleting(c.SCOPE_INSTALLED, false, true));
 }
