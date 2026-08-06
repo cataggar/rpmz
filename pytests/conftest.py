@@ -121,6 +121,40 @@ def _prepare_session_repo(config):
     return repo_path
 
 
+def AssertRepoPortIsFree(port=8080):
+    """Fail loudly if something already serves the repo port.
+
+    The readiness probe below cannot tell our own server apart from a
+    stranger's: `connect_ex` succeeds either way. Its `server.is_alive()`
+    guard is meant to catch that, but it races -- a child whose `bind`
+    raised EADDRINUSE is still "alive" for the moment it takes to unwind
+    and exit, so a pre-existing listener is routinely mistaken for a
+    healthy server.
+
+    The tests then run happily against the stranger's tree instead of the
+    per-session repo, and the results are quietly wrong rather than
+    absent: mutations a test makes to its own repo are invisible, so
+    unrelated tests fail while the suite still reports a plausible-looking
+    total.
+
+    Checking before the child starts is deterministic. HTTPServer sets
+    SO_REUSEADDR, which permits binding over TIME_WAIT but never over a
+    live listening socket, so this bind fails exactly when a real server
+    holds the port.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(('', port))
+    except OSError as err:
+        pytest.exit(
+            'Port {} is already in use ({}). Another repo server -- most '
+            'likely one left behind by an earlier run -- would silently '
+            'serve these tests. Stop it and re-run.'.format(port, err)
+        )
+    finally:
+        probe.close()
+
+
 def StopTestRepoServer(server):
     if server.is_alive():
         server.terminate()
@@ -536,6 +570,8 @@ ui_repoid_vars=basearch
 @pytest.fixture(scope='session')
 def utils():
     test_utils = TestUtils()
+
+    AssertRepoPortIsFree()
 
     server = Process(target=TestRepoServer,
                      args=(test_utils.config['repo_path'],))
