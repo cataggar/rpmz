@@ -222,7 +222,50 @@ def compare_maps(label, expected, actual):
     return errors
 
 
+# Symbol families that libtdnf.map never lists as global. A couple of
+# these leaking would be a real regression worth naming individually; a
+# whole family leaking at once means the export filter was not applied
+# to the link at all, and listing every symbol buries that fact under
+# hundreds of lines that each blame the wrong thing.
+FILTER_DROP_MARKERS = (
+    ("sqlite3_", "SQLite"),
+    ("__ubsan_handle_", "UBSan runtime"),
+)
+
+FILTER_DROP_THRESHOLD = 10
+
+
+def export_filter_dropped(exports):
+    """Name the symbol families proving the export filter never ran.
+
+    Returns [] when the filter is in force, so a genuine one-off leak
+    still gets its own per-symbol diagnostic below.
+    """
+    dropped = []
+    for prefix, description in FILTER_DROP_MARKERS:
+        count = sum(1 for symbol in exports if symbol.startswith(prefix))
+        if count > FILTER_DROP_THRESHOLD:
+            dropped.append(f"{count} {description} symbols ({prefix}*)")
+    return dropped
+
+
 def compare_snapshots(expected, actual):
+    # A missing export filter invalidates every libtdnf comparison below,
+    # producing hundreds of errors that each blame the wrong thing. Say
+    # why once, first, and stop.
+    dropped = export_filter_dropped(
+        set(actual["exported_symbols_libtdnf"])
+    )
+    if dropped:
+        return [
+            "libtdnf exports " + ", ".join(dropped) + ". The whole export "
+            "filter is missing, so client/libtdnf.map is not at fault -- "
+            "the linker never received it. zig passes --version-script to "
+            "`zig build-lib` but does not forward it to `zig ld`, its "
+            "self-hosted ELF linker, which it selects for this library in "
+            "Debug builds. Rebuild with -Doptimize=ReleaseSafe, which is "
+            "what CI uses and what links libtdnf through LLD."
+        ]
     errors = compare_maps(
         "compatibility header",
         expected["compatibility_headers_sha256"],
