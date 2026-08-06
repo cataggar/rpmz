@@ -9,7 +9,6 @@ const txn_config = @import("txn_config.zig");
 const c = sqlite.c;
 const sysc = @cImport({
     @cInclude("errno.h");
-    @cInclude("sqlite3.h");
     @cInclude("stdint.h");
     @cInclude("stdlib.h");
     @cInclude("string.h");
