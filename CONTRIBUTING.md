@@ -42,11 +42,17 @@ cd pytests && LD_LIBRARY_PATH=../out/lib pytest -v
 The C-to-Zig migration and public ABI baselines are enforced separately:
 
 ```
-zig build migration-audit --prefix ./out
-zig build abi-audit --prefix ./out
-zig build native-dependency-audit --prefix ./out
-zig build public-api-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe migration-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe abi-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out
 ```
+
+Pass `-Doptimize=ReleaseSafe`, as CI does. These steps read the installed
+prefix, so running them bare rebuilds it as Debug and `abi-audit` fails:
+zig links `libtdnf.so` with its self-hosted ELF linker in Debug builds
+and never forwards `--version-script` to it, so the export filter in
+`client/libtdnf.map` is skipped.
 
 The integration tests need an rpm-aware host (`rpm`, `rpmbuild`,
 `createrepo_c`, plus the python `pytest` / `requests` / `pyOpenSSL`

@@ -242,10 +242,17 @@ they are defined; defined at the bottom of the file.
 - Version defaults to `default_project_version = "4.0.0"` in `build.zig`
   and also appears in `build.zig.zon`. There is no `VERSION` file
   anymore. Bumping requires both edits.
-- `zig build native-dependency-audit --prefix ./out` scans source,
-  dynamic dependencies, and undefined symbols. `zig build
-  public-api-audit --prefix ./out` compiles each installed header and
-  links a consumer with isolated package metadata.
+- `zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix
+  ./out` scans source, dynamic dependencies, and undefined symbols.
+  `zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out`
+  compiles each installed header and links a consumer with isolated
+  package metadata. Always pass `-Doptimize=ReleaseSafe` to the audits,
+  as CI does: they inspect the installed prefix, so running them bare
+  rebuilds it as Debug and clobbers a ReleaseSafe install. `abi-audit`
+  then reports the whole vendored symbol table as newly exported,
+  because zig links `libtdnf.so` with its self-hosted ELF linker in
+  Debug builds and does not forward `--version-script` to it, silently
+  dropping `client/libtdnf.map`.
 - Plugins are off by default — set `plugins=1` in `tdnf.conf` to load
   them, and CLI flags `--enableplugin=<glob>` /
   `--disableplugin=<glob>` override per-plugin config
