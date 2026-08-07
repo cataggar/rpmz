@@ -48,6 +48,8 @@ const Parser = struct {
     files: std.array_list.Managed(model.FileEntry),
     package_index: std.StringHashMap(usize),
     seen_packages: []bool = &[_]bool{},
+    primary_files: []const model.FileEntry = &[_]model.FileEntry{},
+    primary_ranges: []model.FileRange = &[_]model.FileRange{},
     current_package: PackageState = .{},
     in_package: bool = false,
     declared_package_count: ?u64 = null,
@@ -67,6 +69,9 @@ const Parser = struct {
     fn deinit(self: *Parser) void {
         if (self.seen_packages.len != 0) {
             self.allocator.free(self.seen_packages);
+        }
+        if (self.primary_ranges.len != 0) {
+            self.allocator.free(self.primary_ranges);
         }
         self.package_index.deinit();
         self.files.deinit();
@@ -106,7 +111,25 @@ const Parser = struct {
             }
         }
 
+        try self.carryOverUnseenPackages();
         self.parsed_primary.files = try self.files.toOwnedSlice();
+    }
+
+    // `primary.xml` already gave every package its filtered file list, so the
+    // ranges stored on `parsed_primary.packages` point into the array this
+    // parser is about to replace. `filelists.xml` is a superset and its
+    // entries win, but a package the extension omits would otherwise be left
+    // pointing at freed indices, so carry its `primary.xml` entries across.
+    fn carryOverUnseenPackages(self: *Parser) Error!void {
+        for (self.parsed_primary.packages, 0..) |*pkg, index| {
+            if (self.seen_packages[index]) continue;
+
+            const original = self.primary_ranges[index];
+            const start = self.files.items.len;
+            self.files.appendSlice(original.slice(self.primary_files)) catch
+                return error.OutOfMemory;
+            pkg.files = .{ .start = start, .len = original.len };
+        }
     }
 
     fn buildPackageIndex(self: *Parser) Error!void {
@@ -114,6 +137,13 @@ const Parser = struct {
         self.seen_packages = self.allocator.alloc(bool, self.parsed_primary.packages.len) catch
             return error.OutOfMemory;
         @memset(self.seen_packages, false);
+
+        self.primary_files = self.parsed_primary.files;
+        self.primary_ranges = self.allocator.alloc(model.FileRange, self.parsed_primary.packages.len) catch
+            return error.OutOfMemory;
+        for (self.parsed_primary.packages, 0..) |pkg, index| {
+            self.primary_ranges[index] = pkg.files;
+        }
 
         for (self.parsed_primary.packages, 0..) |pkg, index| {
             const gop = self.package_index.getOrPut(pkg.pkg_id) catch return error.OutOfMemory;
@@ -391,6 +421,68 @@ test "parses filelists entries and tolerates zero and partial coverage" {
 
     try testing.expectEqual(@as(usize, 0), parsed.packages[1].fileEntries(parsed.files).len);
     try testing.expectEqual(@as(usize, 0), parsed.packages[2].fileEntries(parsed.files).len);
+}
+
+test "carries primary.xml file entries across packages filelists.xml omits" {
+    const testing = std.testing;
+    const primary = @import("primary.zig");
+    const primary_xml =
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common" packages="2">
+        \\  <package type="rpm">
+        \\    <name>pkg-one</name>
+        \\    <arch>aarch64</arch>
+        \\    <version ver="1.0" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">pkgid-one</checksum>
+        \\    <location href="pkg-one.rpm"/>
+        \\    <format>
+        \\      <file>/usr/bin/pkg-one</file>
+        \\    </format>
+        \\  </package>
+        \\  <package type="rpm">
+        \\    <name>pkg-two</name>
+        \\    <arch>aarch64</arch>
+        \\    <version ver="2.0" rel="3"/>
+        \\    <checksum type="sha256" pkgid="YES">pkgid-two</checksum>
+        \\    <location href="pkg-two.rpm"/>
+        \\    <format>
+        \\      <file>/usr/sbin/pkg-two</file>
+        \\      <file type="dir">/etc/pkg-two</file>
+        \\    </format>
+        \\  </package>
+        \\</metadata>
+    ;
+    const filelists_xml =
+        \\<filelists xmlns="http://linux.duke.edu/metadata/filelists" packages="1">
+        \\  <package pkgid="pkgid-one" name="pkg-one" arch="aarch64">
+        \\    <version ver="1.0" rel="1"/>
+        \\    <file>/usr/bin/pkg-one</file>
+        \\    <file>/usr/share/doc/pkg-one/README</file>
+        \\  </package>
+        \\</filelists>
+    ;
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var parsed = try primary.parse(arena_state.allocator(), primary_xml);
+    try testing.expectEqual(@as(usize, 3), parsed.files.len);
+
+    try parseAndApply(arena_state.allocator(), filelists_xml, &parsed);
+
+    // pkg-one appears in filelists.xml, so the extension's complete list wins.
+    const first_files = parsed.packages[0].fileEntries(parsed.files);
+    try testing.expectEqual(@as(usize, 2), first_files.len);
+    try testing.expectEqualStrings("/usr/bin/pkg-one", first_files[0].path);
+    try testing.expectEqualStrings("/usr/share/doc/pkg-one/README", first_files[1].path);
+
+    // pkg-two does not, so it keeps the entries primary.xml gave it rather
+    // than pointing into the replaced array.
+    const second_files = parsed.packages[1].fileEntries(parsed.files);
+    try testing.expectEqual(@as(usize, 2), second_files.len);
+    try testing.expectEqualStrings("/usr/sbin/pkg-two", second_files[0].path);
+    try testing.expectEqual(model.FileKind.plain, second_files[0].kind);
+    try testing.expectEqualStrings("/etc/pkg-two", second_files[1].path);
+    try testing.expectEqual(model.FileKind.dir, second_files[1].kind);
 }
 
 test "rejects malformed or incomplete filelists metadata" {

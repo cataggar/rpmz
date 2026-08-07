@@ -19,7 +19,11 @@ const c = if (builtin.is_test) @cImport({
 }) else struct {};
 
 pub const cookie_len = 32;
-pub const format_version: u16 = 1;
+// Bumped to 2 when `primary.xml` `<file>` entries started reaching the model:
+// a version-1 cache of a repository that publishes no `filelists.xml` holds no
+// file data at all, and nothing in the payload distinguishes that from a
+// package that genuinely has no files.
+pub const format_version: u16 = 2;
 
 pub const SectionKind = enum(u32) {
     strings = 1,
