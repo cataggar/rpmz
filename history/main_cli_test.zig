@@ -7,6 +7,35 @@
 const std = @import("std");
 const testing = std.testing;
 
+const IsolatedDb = struct {
+    tmp: std.testing.TmpDir,
+    path: []u8,
+
+    fn init() !IsolatedDb {
+        var tmp = testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const root_len = try tmp.dir.realPath(testing.io, &path_buffer);
+        return .{
+            .tmp = tmp,
+            .path = try std.fs.path.join(
+                testing.allocator,
+                &.{ path_buffer[0..root_len], "history.db" },
+            ),
+        };
+    }
+
+    fn deinit(self: *IsolatedDb) void {
+        testing.allocator.free(self.path);
+        self.tmp.cleanup();
+    }
+
+    fn expectCreated(self: *IsolatedDb) !void {
+        try self.tmp.dir.access(testing.io, "history.db", .{});
+    }
+};
+
 fn historyUtilPath(allocator: std.mem.Allocator) ![]u8 {
     return testing.environ.getAlloc(allocator, "TDNF_HISTORY_UTIL_TEST_BINARY");
 }
@@ -52,14 +81,17 @@ test "missing command preserves usage, diagnostic, and exit code" {
     defer testing.allocator.free(binary);
     const usage = try expectedUsage(testing.allocator, binary);
     defer testing.allocator.free(usage);
+    var db = try IsolatedDb.init();
+    defer db.deinit();
 
-    const result = try run(binary, &.{});
+    const result = try run(binary, &.{ "-f", db.path });
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
 
     try expectExit(result, 1);
     try testing.expectEqualStrings(usage, result.stdout);
     try testing.expectEqualStrings("command expected\n", result.stderr);
+    try db.expectCreated();
 }
 
 test "unknown mark subcommand preserves output and exit code" {
@@ -67,8 +99,10 @@ test "unknown mark subcommand preserves output and exit code" {
     defer testing.allocator.free(binary);
     const usage = try expectedUsage(testing.allocator, binary);
     defer testing.allocator.free(usage);
+    var db = try IsolatedDb.init();
+    defer db.deinit();
 
-    const result = try run(binary, &.{ "mark", "invalid" });
+    const result = try run(binary, &.{ "-f", db.path, "mark", "invalid" });
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
 
@@ -78,28 +112,21 @@ test "unknown mark subcommand preserves output and exit code" {
         "unknown sub command 'invalid'\n",
         result.stderr,
     );
+    try db.expectCreated();
 }
 
 test "file option initializes the requested history database" {
     const binary = try historyUtilPath(testing.allocator);
     defer testing.allocator.free(binary);
+    var db = try IsolatedDb.init();
+    defer db.deinit();
 
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_len = try tmp.dir.realPath(testing.io, &path_buffer);
-    const db_path = try std.fs.path.join(
-        testing.allocator,
-        &.{ path_buffer[0..root_len], "history.db" },
-    );
-    defer testing.allocator.free(db_path);
-
-    const result = try run(binary, &.{ "-f", db_path, "mark", "install" });
+    const result = try run(binary, &.{ "-f", db.path, "mark", "install" });
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
 
     try expectExit(result, 0);
     try testing.expectEqualStrings("", result.stdout);
     try testing.expectEqualStrings("", result.stderr);
-    try tmp.dir.access(testing.io, "history.db", .{});
+    try db.expectCreated();
 }
