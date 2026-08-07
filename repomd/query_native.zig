@@ -1836,7 +1836,11 @@ fn loadDirectoryDataset(
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const repository = directory_repository.loadModel(arena, directory) catch |err| {
+    // `.read`, not `.sorted`: the transaction-plan path loads the same
+    // `--repofromdir` directory through libsolv's `readRpmsFromDir`, which
+    // walks in readdir order. Package order decides which solver problem is
+    // reported, so the two must agree (#266).
+    const repository = directory_repository.loadModelOrdered(arena, directory, .read) catch |err| {
         setError(
             "failed to load repo '{s}' from directory '{s}': {t}",
             .{ repo_id, directory, err },
