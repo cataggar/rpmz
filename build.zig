@@ -42,7 +42,6 @@ const client_libsolv_free_srcs = [_][]const u8{
     "plugins.c",         "repo.c",       "repoutils.c",
     "remoterepo.c",      "repolist.c",   "resolve.c", "rpmtrans.c",
     "rpmtrans_native.c", "updateinfo.c", "utils.c",   "history.c",
-    "varsdir.c",
     // The C-side entry point into the rpmzig verifier. An ordinary
     // client/ translation unit: it includes client/includes.h and is
     // audited like the rest.
@@ -956,6 +955,19 @@ pub fn build(b: *Build) void {
         test_mod.linkLibrary(jsondump_lib);
         test_mod.linkLibrary(llconf_lib);
         test_mod.linkLibrary(rpmzig_lib);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/varsdir.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.linkLibrary(llconf_lib);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);
