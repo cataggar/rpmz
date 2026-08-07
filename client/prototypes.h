@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 extern uid_t gEuid;
+struct cnfnode;
 
 uint32_t
 tdnf_repomd_native_verified_transaction_solve_config(
@@ -895,36 +896,58 @@ TDNFLoadPlugins(
     PTDNF pTdnf
     );
 
-uint32_t
-TDNFPluginRaiseEvent(
-    PTDNF pTdnf,
-    PTDNF_EVENT_CONTEXT pContext
-    );
-
 void
 TDNFFreePlugins(
     PTDNF_PLUGIN pPlugins
     );
 
-/* eventdata.c */
-
 uint32_t
-TDNFAddEventDataString(
-    PTDNF_EVENT_CONTEXT pContext,
-    const char *pcszName,
-    const char *pcszStr
+BuiltinPluginsRepoConfig(
+    PTDNF pTdnf,
+    const struct cnfnode *pSection
     );
 
 uint32_t
-TDNFAddEventDataPtr(
-    PTDNF_EVENT_CONTEXT pContext,
-    const char *pcszName,
-    const void *pPtr
+BuiltinPluginsRepoMDDownloadStart(
+    PTDNF pTdnf,
+    const char *pszRepoId,
+    const char *pszRepoDataDir
     );
 
-void
-TDNFFreeEventData(
-    PTDNF_EVENT_DATA pData
+uint32_t
+BuiltinPluginsRepoMDDownloadEnd(
+    PTDNF pTdnf,
+    const char *pszRepoId,
+    const char *pszRepoMDFile
+    );
+
+uint32_t BuiltinMetalinkCreate(PTDNF pTdnf, void **ppHandle);
+void BuiltinMetalinkDestroy(void *pHandle);
+uint32_t BuiltinMetalinkRepoConfig(
+    void *pHandle,
+    const struct cnfnode *pSection
+    );
+uint32_t BuiltinMetalinkRepoMDDownloadStart(
+    void *pHandle,
+    const char *pszRepoId,
+    const char *pszRepoDataDir
+    );
+uint32_t BuiltinMetalinkRepoMDDownloadEnd(
+    void *pHandle,
+    const char *pszRepoId,
+    const char *pszRepoMDFile
+    );
+
+uint32_t BuiltinRepoGPGCheckCreate(PTDNF pTdnf, void **ppHandle);
+void BuiltinRepoGPGCheckDestroy(void *pHandle);
+uint32_t BuiltinRepoGPGCheckRepoConfig(
+    void *pHandle,
+    const struct cnfnode *pSection
+    );
+uint32_t BuiltinRepoGPGCheckRepoMDDownloadEnd(
+    void *pHandle,
+    const char *pszRepoId,
+    const char *pszRepoMDFile
     );
 
 /* api.c */

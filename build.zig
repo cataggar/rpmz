@@ -4,7 +4,7 @@
 //!   * static libs: common, tdnfsolv, tdnfllconf, jsondump, tdnfhistory
 //!   * shared libs: libtdnf.so (SOVERSION=4), libtdnfcli.so (SOVERSION=4)
 //!   * executables: tdnf, tdnf-config, tdnf-history-util, jsondumptest
-//!   * plugins:     libtdnfmetalink.so, libtdnfrepogpgcheck.so
+//!   * built-ins:   metalink and repository-signature verification
 //!
 //! All compilation goes through `zig cc` (clang from Zig's bundled LLVM).
 //! GCC-only warnings from the former cmake/CFlags.cmake were removed; the
@@ -36,7 +36,7 @@ const vendored_libsolv_version_patch = "39";
 /// packageutils.c was the last one. client/transaction_plan_integration.zig
 /// is not covered: it still uses libsolv via repomd (Part B of issue #39).
 const client_libsolv_free_srcs = [_][]const u8{
-    "api.c",             "client.c",     "config.c",  "eventdata.c",
+    "api.c",             "client.c",     "config.c",
     "goal.c",            "gpgcheck.c",   "init.c",    "packageutils.c",
     "querynative.c",
     "plugins.c",         "repo.c",       "repoutils.c",
@@ -217,15 +217,6 @@ pub fn build(b: *Build) void {
     writeTemplate(b, "history/config.h.in", "history/config.h", &.{
         .{ .key = "HISTORY_DB_DIR", .value = history_db_dir },
     });
-    writeTemplate(b, "plugins/metalink/config.h.in", "plugins/metalink/config.h", &.{
-        .{ .key = "PROJECT_NAME", .value = "tdnfmetalink" },
-        .{ .key = "PROJECT_VERSION", .value = project_version },
-    });
-    writeTemplate(b, "plugins/repogpgcheck/config.h.in", "plugins/repogpgcheck/config.h", &.{
-        .{ .key = "PROJECT_NAME", .value = "tdnfrepogpgcheck" },
-        .{ .key = "PROJECT_VERSION", .value = project_version },
-    });
-
     // pytests/mount-small-cache is referenced by tests/test_cache.py; ship a
     // ready-to-run copy in the source tree (gitignored) so `pytest -v` works
     // without an extra configure step.
@@ -496,6 +487,14 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    const metalink_xml_mod = b.createModule(.{
+        .root_source_file = b.path("plugins/metalink/xml.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
+    });
+    metalink_xml_mod.addImport("xml", xml_mod);
     const repository_metadata_mod = b.createModule(.{
         .root_source_file = b.path(
             "repomd/transaction_plan_repository_dependencies.zig",
@@ -1506,6 +1505,20 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_cli_tests.step);
     }
 
+    const builtin_plugins_mod = b.createModule(.{
+        .root_source_file = b.path("plugins/builtin.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
+    });
+    builtin_plugins_mod.addImport("metalink_xml", metalink_xml_mod);
+    builtin_plugins_mod.addIncludePath(b.path("include"));
+    builtin_plugins_mod.addIncludePath(b.path("client"));
+    builtin_plugins_mod.addIncludePath(b.path("llconf"));
+    builtin_plugins_mod.addIncludePath(b.path("rpmzig"));
+    builtin_plugins_mod.addCMacro("TDNF_CLIENT_LIBSOLV_IN_SCOPE", "1");
+
     // ----- libtdnf (shared) ----- //
 
     const tdnf_so_mod = b.createModule(.{
@@ -1524,6 +1537,7 @@ pub fn build(b: *Build) void {
         transaction_plan_integration_mod,
     );
     tdnf_so_mod.addImport("repomd_client_exports", repomd_mod);
+    tdnf_so_mod.addImport("builtin_plugins", builtin_plugins_mod);
     tdnf_so_mod.addIncludePath(b.path("include"));
     tdnf_so_mod.addIncludePath(b.path("client"));
     tdnf_so_mod.addIncludePath(b.path("rpmzig"));
@@ -2034,78 +2048,6 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
-    // ----- plugins ----- //
-
-    const metalink_xml_mod = b.createModule(.{
-        .root_source_file = b.path("plugins/metalink/xml.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .pic = true,
-    });
-    metalink_xml_mod.addImport("xml", xml_mod);
-    const metalink_xml_lib = b.addLibrary(.{
-        .name = "tdnfmetalinkxml",
-        .linkage = .static,
-        .root_module = metalink_xml_mod,
-    });
-
-    const metalink_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .pic = true,
-    });
-    metalink_mod.addIncludePath(b.path("include"));
-    metalink_mod.addIncludePath(b.path("plugins/metalink"));
-    // Only because this plugin includes client/includes.h; it uses no
-    // libsolv itself. See the stance check there.
-    metalink_mod.addCMacro("TDNF_CLIENT_LIBSOLV_IN_SCOPE", "1");
-    metalink_mod.addCSourceFiles(.{
-        .root = b.path("plugins/metalink"),
-        .files = &.{ "api.c", "metalink.c", "utils.c", "list.c" },
-        .flags = &tdnf_cflags,
-    });
-    metalink_mod.linkLibrary(libtdnf);
-    metalink_mod.linkLibrary(metalink_xml_lib);
-    const metalink_plugin = b.addLibrary(.{
-        .name = "tdnfmetalink",
-        .linkage = .dynamic,
-        .root_module = metalink_mod,
-    });
-    const install_metalink = b.addInstallArtifact(metalink_plugin, .{
-        .dest_dir = .{ .override = .{ .custom = plugin_dir_rel } },
-    });
-    b.getInstallStep().dependOn(&install_metalink.step);
-
-    const repogpgcheck_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .pic = true,
-    });
-    repogpgcheck_mod.addIncludePath(b.path("include"));
-    repogpgcheck_mod.addIncludePath(b.path("plugins/repogpgcheck"));
-    // Only because this plugin includes client/includes.h; it uses no
-    // libsolv itself. See the stance check there.
-    repogpgcheck_mod.addCMacro("TDNF_CLIENT_LIBSOLV_IN_SCOPE", "1");
-    repogpgcheck_mod.addCSourceFiles(.{
-        .root = b.path("plugins/repogpgcheck"),
-        .files = &.{ "api.c", "repogpgcheck.c" },
-        .flags = &tdnf_cflags,
-    });
-    repogpgcheck_mod.linkLibrary(libtdnf);
-    linkSystem(repogpgcheck_mod, &.{"gpgme"});
-    const repogpgcheck_plugin = b.addLibrary(.{
-        .name = "tdnfrepogpgcheck",
-        .linkage = .dynamic,
-        .root_module = repogpgcheck_mod,
-    });
-    const install_repogpgcheck = b.addInstallArtifact(repogpgcheck_plugin, .{
-        .dest_dir = .{ .override = .{ .custom = plugin_dir_rel } },
-    });
-    b.getInstallStep().dependOn(&install_repogpgcheck.step);
-
     // ----- generated text file installs ----- //
 
     const pkgconfig_dir: Build.InstallDir = .{ .custom = b.fmt("{s}/pkgconfig", .{libdir}) };
@@ -2267,14 +2209,12 @@ pub fn build(b: *Build) void {
         run_ztests.step.dependOn(&ztest_install_libtdnf.step);
         run_ztests.step.dependOn(&ztest_install_libtdnfcli.step);
         run_ztests.step.dependOn(&ztest_install_tdnf.step);
-        run_ztests.step.dependOn(&install_metalink.step);
-        run_ztests.step.dependOn(&install_repogpgcheck.step);
         run_ztests.has_side_effects = true;
         ztest_step.dependOn(&run_ztests.step);
 
         const plugin_ztest_step = b.step(
             "plugin-ztest",
-            "Run focused loadable-plugin Zig integration tests",
+            "Run focused built-in plugin Zig integration tests",
         );
         const plugin_ztest_mod = b.createModule(.{
             .root_source_file = b.path("ztests/plugin_test.zig"),
@@ -2297,8 +2237,6 @@ pub fn build(b: *Build) void {
         run_plugin_ztests.step.dependOn(&ztest_install_libtdnf.step);
         run_plugin_ztests.step.dependOn(&ztest_install_libtdnfcli.step);
         run_plugin_ztests.step.dependOn(&ztest_install_tdnf.step);
-        run_plugin_ztests.step.dependOn(&install_metalink.step);
-        run_plugin_ztests.step.dependOn(&install_repogpgcheck.step);
         run_plugin_ztests.has_side_effects = true;
         plugin_ztest_step.dependOn(&run_plugin_ztests.step);
     }

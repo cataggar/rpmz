@@ -12,12 +12,14 @@ typedef struct _TDNF_PLUGIN_
 {
     char *pszName;
     int nEnabled;
-    void *pModule;
-    PTDNF_PLUGIN_HANDLE pHandle;
-    TDNF_PLUGIN_EVENT RegisterdEvts;
-    TDNF_PLUGIN_INTERFACE stInterface;
+    enum
+    {
+        TDNF_BUILTIN_PLUGIN_METALINK,
+        TDNF_BUILTIN_PLUGIN_REPOGPGCHECK
+    } nKind;
+    void *pHandle;
     struct _TDNF_PLUGIN_ *pNext;
-} TDNF_PLUGIN;
+} TDNF_PLUGIN, *PTDNF_PLUGIN;
 
 typedef struct _TDNF_
 {
@@ -110,22 +112,8 @@ typedef struct _TDNF_REPO_METADATA
     char *pszOther;
 } TDNF_REPO_METADATA,*PTDNF_REPO_METADATA;
 
-typedef struct _TDNF_EVENT_DATA_
-{
-    union
-    {
-        int nInt;
-        const char *pcszStr;
-        const void *pPtr;
-    };
-    TDNF_EVENT_ITEM_TYPE nType;
-    const char *pcszName;
-    struct _TDNF_EVENT_DATA_ *pNext;
-} TDNF_EVENT_DATA;
-
 typedef struct progress_cb_data {
     time_t cur_time;
     time_t prev_time;
     char pszData[64];
 } pcb_data;
-

@@ -31,7 +31,6 @@ jobs:
             createrepo-c \
             gcc \
             gnupg \
-            libgpgme-dev \
             pkg-config \
             rpm
 
@@ -109,7 +108,6 @@ jobs:
             binutils \
             flake8 \
             gcc \
-            libgpgme-dev \
             pkg-config
           legacy_dev="lib$(printf 'r%sm' 'p')-dev"
           if dpkg-query -W -f='${Status}' "${legacy_dev}" 2>/dev/null |

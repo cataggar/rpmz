@@ -1,34 +1,22 @@
-# tdnf plugins
+# Built-in tdnf plugins
 
-plugins are a way to extend tdnf functionality.
+tdnf includes two plugins in `libtdnf`; no plugin shared objects are loaded:
 
-tdnf plugins follow the same config and command line conventions as yum.
+- `tdnfmetalink` downloads metalink metadata, selects mirrors by preference,
+  and validates `repomd.xml` with the strongest supported metalink checksum.
+- `tdnfrepogpgcheck` verifies detached `repomd.xml.asc` signatures with the
+  pure-Zig OpenPGP verifier. As before, keys come from the ambient GnuPG home
+  (`GNUPGHOME`, or `$HOME/.gnupg`), not from the repository's `gpgkey=`.
 
-Plugins link to the public `libtdnf` ABI and must not include or link
-system RPM development interfaces. The metalink plugin has no additional
-system dependency; the repository-signature plugin uses GPGME, so
-building it requires the GPGME development headers.
+The existing yum-compatible controls still select these built-ins:
 
-## enable plugins
-tdnf will install with plugins deactivated by default. This is because the primary switch
-to turn on plugins is in tdnf conf file (/etc/tdnf/tdnf.conf by default).
-To enable plugins, the config file should have
+- `plugins=1` in `tdnf.conf` enables plugin processing globally.
+- `/etc/tdnf/pluginconf.d/tdnfmetalink.conf` and
+  `tdnfrepogpgcheck.conf` each use `[main] enabled=0|1`.
+- `--enableplugin=<name-or-glob>` and `--disableplugin=<name-or-glob>` apply
+  sequentially, so later options override earlier matching options.
+- `--noplugins` disables both built-ins.
 
-```plugins=1```
-
-## plugin discovery
-tdnf will look in ```/etc/tdnf/pluginconf.d``` by default for plugin configurations.
-For all config files with ```enabled=1``` set, tdnf will look for a corresponding
-shared library in ```<libdir>/tdnf-plugins/<plugin>/lib<plugin>.so```.
-```pluginpath``` and ```pluginconfpath``` are config settings to change default paths.
-
-## overriding plugin load
-tdnf allows command line overrides with ```--enableplugin=<plugin>``` to enable a plugin
-that is deactivated in the corresponding plugin config file.
-Similarly, ```--disableplugin=<plugin>``` can be used to deactivate a plugin which is
-otherwise enabled in it's corresponding config file.
-
-For eg: ```tdnf --disableplugin=* --enableplugin=myplugin``` will deactivate all plugins
-but ```myplugin``` that is subsequently enabled. The deactivate and enable overrides are
-sequential, cumulative and support globs.
-Therefore, it does matter where you place the deactivate option.
+`pluginconfpath=` may relocate the two configuration files. `pluginpath=` is
+accepted for configuration compatibility but is not used because there are no
+loadable plugin libraries or third-party plugin ABI.

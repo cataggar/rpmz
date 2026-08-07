@@ -306,7 +306,7 @@ const Parser = struct {
     }
 };
 
-export fn TDNFMetalinkXmlParseBuffer(
+pub fn parseBuffer(
     buf: ?[*]const u8,
     len: usize,
     cbs: ?*const TDNF_METALINK_XML_CALLBACKS,
@@ -499,7 +499,7 @@ fn parseWithRecorder(xml: []const u8, recorder: *Recorder) u32 {
         .pfnHash = testOnHash,
         .pfnUrl = testOnUrl,
     };
-    return TDNFMetalinkXmlParseBuffer(xml.ptr, xml.len, &callbacks, @ptrCast(recorder));
+    return parseBuffer(xml.ptr, xml.len, &callbacks, @ptrCast(recorder));
 }
 
 fn parseWithNullCallbacks(xml: []const u8) u32 {
@@ -509,7 +509,7 @@ fn parseWithNullCallbacks(xml: []const u8) u32 {
         .pfnHash = null,
         .pfnUrl = null,
     };
-    return TDNFMetalinkXmlParseBuffer(xml.ptr, xml.len, &callbacks, null);
+    return parseBuffer(xml.ptr, xml.len, &callbacks, null);
 }
 
 fn validateHashContent(
@@ -570,7 +570,7 @@ fn parseWithValidationCallbacks(xml: []const u8) u32 {
         .pfnHash = validateHashContent,
         .pfnUrl = validateUrlContentAndRanking,
     };
-    return TDNFMetalinkXmlParseBuffer(xml.ptr, xml.len, &callbacks, null);
+    return parseBuffer(xml.ptr, xml.len, &callbacks, null);
 }
 
 fn expectOptionalString(expected: ?[]const u8, actual: ?[]const u8) !void {

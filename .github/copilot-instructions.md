@@ -9,8 +9,7 @@ dependency on system RPM libraries, headers, or development metadata.
 ## Build, test, lint
 
 The build is driven by **Zig 0.16+** (no CMake — migrated to `build.zig`).
-The host needs `libgpgme-dev` on Debian/Ubuntu (the equivalent
-development package on other distributions). SQLite, libsolv, and the
+SQLite, libsolv, and the
 pure-Zig Lua scriptlet runtime are vendored dependencies. Lua scriptlet
 support is unconditional because real base packages use `<lua>`-tagged
 scriptlets; no system Lua headers or libraries are required.
@@ -72,14 +71,12 @@ its own CMake component — the source layout is unchanged):
 | `client/` | `libtdnf.so` | the public library — implements every `TDNF*` API in `include/tdnf.h` |
 | `tools/cli/` | `tdnf` + `libtdnfcli.so` | argument parsing, output formatting, subcommand dispatch |
 | `tools/config/` | `tdnf-config` | read/edit `tdnf.conf` |
-| `plugins/` | `tdnfmetalink.so`, `tdnfrepogpgcheck.so` | loadable `.so`s; see `plugins/README.md` |
+| `plugins/` | built into `libtdnf` | metalink and repository-signature modules; see `plugins/README.md` |
 | `bin/` | `tdnf-automatic` | systemd-driven auto-update script (generated from `.in` template) |
 | `pytests/` | (test only) | pytest-based integration tests |
 
 Dependency direction is one-way: `tools/cli` → `client` (libtdnf) →
-`solv` → `common`. Plugins link against `libtdnf` and receive events
-through the event-type/state machine declared in `include/tdnfplugin.h`
-and `include/tdnfplugineventmap.h`.
+`solv` → `common`. The two built-in plugins are called directly from the repository lifecycle.
 
 Public headers live in `include/`. A component must **never** include a
 header from another component's source folder — only headers under
@@ -118,9 +115,9 @@ install/erase/scriptlet/trigger engines used from
 - **`.rpm` file parser** (T2): `tdnf_rpm_file_*` — opens a
   `.rpm`, parses lead + signature header + main header, walks
   the cpio payload via `std.compress.{flate,zstd,xz}`.
-- **Signature verifier** (T3): two distinct C ABI entry points into
-  the same pure-Zig OpenPGP code in `rpmzig/pgp/*.zig` (see
-  plan-pure-zig-pgp.md, issue #14) — do not confuse them:
+- **Signature verifier** (T3): distinct consumers share the same
+  pure-Zig OpenPGP code in `rpmzig/pgp/*.zig` (see
+  plan-pure-zig-pgp.md, issue #14) — do not confuse their policies:
   - `tdnf_rpm_file_verify_signatures_config`
     (`rpmzig/rpmdb.zig`, → `integrity.verifySignatures`) is
     **libtdnf's** path. It is reached through the narrow
@@ -128,9 +125,11 @@ install/erase/scriptlet/trigger engines used from
     called from `client/gpgcheck.c`, which hands rpmzig an
     already-parsed file handle plus the complete key set and owns
     no files or buffers itself.
-  - The typed helper in `rpmzig/verify.zig` is used **only** by the
-    standalone `tdnf-rpm-verify` smoke helper
-    (`rpmzig/verify_main.zig`). No libtdnf code path calls it.
+  - The typed helper in `rpmzig/verify.zig` serves the standalone
+    `tdnf-rpm-verify` smoke helper (`rpmzig/verify_main.zig`) and the
+    built-in repository-metadata verifier. The latter reaches it through
+    the narrow internal `rpmzig_verify_detached_armored` bridge in
+    `rpmzig/rpmdb.zig`; no package-install path calls this helper.
 - **Composed native transaction executor** (T4, issue #117):
   `client/rpmtrans_native.c` composes the rpmzig install,
   rpmdb-write, file-erase, scriptlet, trigger, and pure-Zig Lua
@@ -145,8 +144,8 @@ install/erase/scriptlet/trigger engines used from
 
 libtdnf uses the pure-Zig OpenPGP verifier unconditionally on the
 package-install path. Package headers and imported keys are handled by
-rpmzig. The GPGME dependency is isolated to the optional repository
-metadata signature plugin.
+rpmzig. Repository metadata signatures use the same pure-Zig OpenPGP
+implementation with keys loaded from the ambient GnuPG keyring.
 
 The crosscheck-only scaffolding flags used during T4 development
 (`-Drpmzig-file-install-crosscheck`, `-Drpmzig-file-erase-crosscheck`,
@@ -173,11 +172,7 @@ version probes, and link declarations are forbidden by
 `TDNFInit`/`TDNFUninit` and the legacy verbosity option remain
 ABI-compatible no-ops.
 
-**Adding gpgme-using Zig code:** don't put
-`mod.linkSystemLibrary("gpgme", …)` on a static-library module —
-that embeds `libgpgme.so` inside the resulting `.a` and
-tdnf-side consumers fail to link. Vendored
-`cataggar/zig-sqlite` is safe to import from static libraries;
+Vendored `cataggar/zig-sqlite` is safe to import from static libraries;
 `history_lib` and `rpmzig_lib` now compile SQLite in-tree and do
 not rely on a system `-lsqlite3` link.
 

@@ -56,7 +56,7 @@ def set_repo_flag_repo_gpgcheck(utils, flag):
     utils.edit_config({'repo_gpgcheck': flag, 'skip_if_unavailable': 'False'}, repo='photon-test')
 
 
-# make sure libtdnfrepogpgcheck.so is loaded without issues
+# make sure the tdnfrepogpgcheck built-in is enabled without issues
 def test_tdnfrepogpgcheck_plugin_load(utils):
     enable_plugins(utils)
     ret = utils.run(['tdnf', 'repolist'])
@@ -66,7 +66,7 @@ def test_tdnfrepogpgcheck_plugin_load(utils):
     assert ret['retval'] == 0  # nosec
 
 
-# make sure libtdnfrepogpgcheck.so is used to validate repo signature
+# make sure the tdnfrepogpgcheck built-in validates repository signatures
 def test_tdnfrepogpgcheck_plugin_validatesignature(utils):
     set_repo_flag_repo_gpgcheck(utils, "1")
     ret = utils.run(['tdnf', 'repolist', '--refresh'])
