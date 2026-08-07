@@ -18,8 +18,6 @@ const obsoleting = "tdnf-test-dummy-obsoleting";
 
 /// `ERROR_TDNF_PROTECTED`, as the shell sees it.
 const protected_code: u8 = 1030 % 256;
-/// `ERROR_TDNF_SOLV`, as the shell sees it.
-const solv_code: u8 = 1301 % 256;
 
 fn eraseBestEffort(root: *harness.Root, name: []const u8) void {
     var result = root.run(&.{ "erase", "-y", name }) catch return;
@@ -76,8 +74,14 @@ test "removing a dependency is refused when it would erase a protected dependent
 
     var result = try root.run(&.{ "-y", "--nogpgcheck", "remove", required });
     defer result.deinit();
-    try result.expectCode(solv_code);
-    try result.expectStderrContains("requires " ++ required);
+    // The request never names the protected package: keeping it installed is
+    // what makes erasing its dependency unsatisfiable. The solve therefore
+    // fails as an ordinary dependency problem, and tdnf re-solves with the
+    // protected names dropped to find out whether protection was the cause.
+    try result.expectCode(protected_code);
+    try result.expectStderrContains(
+        "package " ++ leaf ++ " would be removed but it is protected",
+    );
     try std.testing.expect(try root.isInstalled(leaf));
     try std.testing.expect(try root.isInstalled(required));
 }

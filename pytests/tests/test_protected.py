@@ -69,7 +69,7 @@ def test_protected_required(utils):
 
     # would erase pkgname:
     ret = utils.run(['tdnf', '-y', '--nogpgcheck', 'remove', pkgname_req])
-    assert ret['retval'] != 0
+    assert ret['retval'] == 1030
     assert utils.check_package(pkgname)
     assert utils.check_package(pkgname_req)
 

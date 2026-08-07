@@ -433,7 +433,8 @@ TDNFSolv(
                                       pTdnf->pTransactionPlanState)
                                       ? &pNativeSolve : NULL);
     if(dwError == ERROR_TDNF_PROTECTED ||
-       (dwError == ERROR_TDNF_CALL_NOT_SUPPORTED &&
+       ((dwError == ERROR_TDNF_CALL_NOT_SUPPORTED ||
+         dwError == ERROR_TDNF_SOLV_FAILED) &&
         pTdnf->pConf->ppszProtectedPkgs))
     {
         /* The second case is the native solver refusing a policy combination
@@ -443,7 +444,17 @@ TDNFSolv(
            TDNFSolvCheckProtectPkgsInTrans rejected it afterwards. Asking the
            same question here keeps that answer: if the transaction the
            request would have had removes a protected package, that is what
-           the user is told. If it does not, the refusal stands untouched. */
+           the user is told. If it does not, the refusal stands untouched.
+
+           The third case is a protected package the request never names:
+           protection is a solve policy, so keeping a protected dependent
+           installed makes erasing what it requires unsatisfiable, and the
+           solve fails as an ordinary dependency problem with no mention of
+           protection. Asking the same question sorts the two apart, because
+           the probe re-solves with the protected names dropped and only
+           names a package when that made the request solvable. A request
+           that is unsatisfiable for its own reasons fails the probe too and
+           keeps its solver error. */
         const char *pszProtected = NULL;
         const char *pszAction = NULL;
         uint32_t dwFind = 0;
