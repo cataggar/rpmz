@@ -107,9 +107,9 @@ installed.
 `rpmzig/` is a Zig static library that owns package parsing, rpmdb
 access, OpenPGP verification, configuration, pubkey import, and the
 composed transaction executor.
-Today it exposes (via the C ABI in `rpmzig/rpmdb.h`,
-`rpmzig/verify.h`, and the install/erase/scriptlet/trigger
-engines used from `client/rpmtrans_native.c`):
+Today it exposes (via the C ABI in `rpmzig/rpmdb.h` and the
+install/erase/scriptlet/trigger engines used from
+`client/rpmtrans_native.c`):
 
 - **rpmdb reader** (T1): `tdnf_rpmdb_count_packages`,
   `tdnf_rpmdb_iter_*`, `tdnf_rpmdb_cookie`,
@@ -128,9 +128,9 @@ engines used from `client/rpmtrans_native.c`):
     called from `client/gpgcheck.c`, which hands rpmzig an
     already-parsed file handle plus the complete key set and owns
     no files or buffers itself.
-  - `tdnf_rpmzig_verify_pure` (`rpmzig/verify_pure.c`) is used
-    **only** by the standalone `tdnf-rpm-verify` smoke helper
-    (`rpmzig/verify_main.c`). No libtdnf code path calls it.
+  - The typed helper in `rpmzig/verify.zig` is used **only** by the
+    standalone `tdnf-rpm-verify` smoke helper
+    (`rpmzig/verify_main.zig`). No libtdnf code path calls it.
 - **Composed native transaction executor** (T4, issue #117):
   `client/rpmtrans_native.c` composes the rpmzig install,
   rpmdb-write, file-erase, scriptlet, trigger, and pure-Zig Lua

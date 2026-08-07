@@ -28,6 +28,7 @@ pub const txn_config = @import("txn_config.zig");
 const source_engine = @import("source.zig");
 const scriptlet_engine = @import("scriptlet.zig");
 const trigger_engine = @import("trigger.zig");
+pub const standalone_verifier = @import("verify.zig");
 const c = sqlite.c;
 const libc = std.c;
 const pubkey_c = @cImport({
@@ -2636,13 +2637,7 @@ fn defaultEraseKeepPath(ctx: ?*anyopaque, path: []const u8) i32 {
     return if (owned) 1 else 0;
 }
 
-// PR #5 of plan-pure-zig-pgp.md: pull the pure-Zig PGP verifier into
-// the rpmzig static library so its `export fn rpmzig_verify_detached`
-// is reachable from C. A bare `_ = @import(...)` in a `comptime`
-// block forces the compiler to evaluate the module at non-test
-// build time, which in turn instantiates any `export fn` it declares.
 comptime {
-    _ = @import("pgp/verify.zig");
     _ = @import("checksum.zig");
 }
 
