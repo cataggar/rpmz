@@ -54,6 +54,23 @@ PKG_CONFIG_PATH=./out/lib/pkgconfig \
     pkg-config --cflags --libs tdnf)
 ```
 
+Zig consumers use the public `tdnf` module registered by this package's
+`build.zig`. Its initial stable surface is the canonical transaction-plan
+model from issue #186:
+
+```zig
+const tdnf_dep = b.dependency("tdnf", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("tdnf", tdnf_dep.module("tdnf"));
+```
+
+Application source can then use
+`@import("tdnf").transaction_plan.Plan`, the versioned
+`transaction_plan.schema`, and the associated public plan model types.
+Consumers should not import files from `client/` directly.
+
 ## Configuration
 
 Create `tdnf.conf` under `/etc/tdnf/`:
@@ -117,6 +134,7 @@ Dependency, public-consumer, migration, and ABI gates are available as:
 ```sh
 zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
 zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
 zig build -Doptimize=ReleaseSafe migration-audit --prefix ./out
 zig build -Doptimize=ReleaseSafe abi-audit --prefix ./out
 ```
