@@ -99,6 +99,8 @@ pub const Walker = struct {
         if (self.buf[name_end - 1] != 0) return error.BadName;
         // Strip the trailing NUL from `namesize` for the returned slice.
         const name_slice = self.buf[name_start .. name_end - 1];
+        if (std.mem.indexOfScalar(u8, name_slice, 0) != null)
+            return error.BadName;
 
         // Advance past name + pad-to-4 boundary measured from header start.
         const after_name_relative = roundUp4Checked(name_end - self.pos) orelse
@@ -183,7 +185,7 @@ test "roundUp4" {
     try std.testing.expectEqual(@as(usize, 8), roundUp4(5));
 }
 
-test "walker rejects zero namesize and missing name terminator" {
+test "walker rejects malformed names" {
     var buf: [124]u8 = undefined;
     @memset(&buf, 0);
     @memcpy(buf[0..6], MAGIC);
@@ -198,6 +200,11 @@ test "walker rejects zero namesize and missing name terminator" {
     buf[111] = 'y';
     var unterminated = Walker.init(&buf);
     try std.testing.expectError(error.BadName, unterminated.next());
+
+    @memcpy(buf[94..102], "00000004");
+    @memcpy(buf[110..114], "x\x00y\x00");
+    var embedded_nul = Walker.init(&buf);
+    try std.testing.expectError(error.BadName, embedded_nul.next());
 }
 
 test "walker — TRAILER only" {
