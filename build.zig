@@ -97,6 +97,23 @@ const tdnf_cflags = [_][]const u8{
 pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const transaction_plan_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const public_tdnf_mod = b.addModule("tdnf", .{
+        .root_source_file = b.path("tdnf.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    public_tdnf_mod.addImport("transaction_plan", transaction_plan_mod);
+
+    // Zig 0.16 documents an empty Build.pkg_hash as the root package. A
+    // dependency only needs the modules registered above; returning here keeps
+    // private dependencies, generated source templates, and product artifacts
+    // out of the consumer's build graph.
+    if (b.pkg_hash.len != 0) return;
 
     // -Dversion overrides the version baked into the artifacts (libtdnf.so
     // SOVERSION, tdnf --version output, generated config.h). Used by the
@@ -153,22 +170,33 @@ pub fn build(b: *Build) void {
         b.pathJoin(&.{ b.build_root.path.?, prefix });
     const full_libdir = b.fmt("{s}/{s}", .{ abs_prefix, libdir });
     // Vendored sqlite backs the Zig-side history and rpmdb code paths.
-    const sqlite_dep = b.dependency("sqlite", .{});
-    const tls_dep = b.dependency("tls", .{});
-    const zlua_mod = b.dependency("zlua", .{
+    const sqlite_dep_optional = b.lazyDependency("sqlite", .{});
+    const tls_dep_optional = b.lazyDependency("tls", .{});
+    const zlua_dep_optional = b.lazyDependency("zlua", .{
         .target = target,
         .optimize = optimize,
-    }).module("zlua");
+    });
     // libsolv's C sources intentionally rely on wraparound in a few internal
     // hash paths; build them without Zig's safe-mode C traps to match the
     // behaviour of the system libsolv packages we are replacing.
     const libsolv_optimize: OptimizeMode = .ReleaseFast;
-    const libsolv_dep = b.dependency("libsolv", .{
+    const libsolv_dep_optional = b.lazyDependency("libsolv", .{
         .target = target,
         .optimize = libsolv_optimize,
         .ext = true,
         .zlib = false,
     });
+    if (sqlite_dep_optional == null or
+        tls_dep_optional == null or
+        zlua_dep_optional == null or
+        libsolv_dep_optional == null)
+    {
+        return;
+    }
+    const sqlite_dep = sqlite_dep_optional.?;
+    const tls_dep = tls_dep_optional.?;
+    const zlua_mod = zlua_dep_optional.?.module("zlua");
+    const libsolv_dep = libsolv_dep_optional.?;
     const libsolv = libsolv_dep.artifact("solv");
     const libsolvext = libsolv_dep.artifact("solvext");
     // Bundled and derived, not three loose LazyPaths: they are the same
@@ -315,13 +343,15 @@ pub fn build(b: *Build) void {
     );
     const run_public_zig_api_audit = b.addSystemCommand(
         &.{
+            "python3",
+            "scripts/public-zig-api-audit.py",
+            "--zig",
             b.graph.zig_exe,
-            "build",
-            "check",
-            b.fmt("-Doptimize={s}", .{@tagName(optimize)}),
+            "--optimize",
+            @tagName(optimize),
         },
     );
-    run_public_zig_api_audit.setCwd(b.path("tests/public-zig-consumer"));
+    run_public_zig_api_audit.setCwd(b.path("."));
     public_zig_api_audit_step.dependOn(&run_public_zig_api_audit.step);
     const abi_audit_step = b.step(
         "abi-audit",
@@ -350,17 +380,6 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
-    const transaction_plan_mod = b.createModule(.{
-        .root_source_file = b.path("client/transaction_plan.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const public_tdnf_mod = b.addModule("tdnf", .{
-        .root_source_file = b.path("tdnf.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    public_tdnf_mod.addImport("transaction_plan", transaction_plan_mod);
     {
         const tests = b.addTest(.{ .root_module = public_tdnf_mod });
         const run_tests = b.addRunArtifact(tests);
