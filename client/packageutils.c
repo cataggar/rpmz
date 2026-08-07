@@ -919,8 +919,7 @@ PackageUtilsBuildNativeRepoInputsFromSack(
         dwRepoDataIndex++)
     {
         pRepoData = ppRepoData[dwRepoDataIndex];
-        if(pRepoData && pRepoData->nEnabled && pRepoData->nHasMetaData &&
-           !IsNullOrEmptyString(pRepoData->pszId))
+        if(pRepoData && TDNF_REPO_IS_QUERYABLE(pRepoData))
         {
             dwCount++;
         }
@@ -929,12 +928,6 @@ PackageUtilsBuildNativeRepoInputsFromSack(
     if(!dwCount)
     {
         goto cleanup;
-    }
-
-    if(IsNullOrEmptyString(pSack->pszCacheDir))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
     }
 
     dwError = TDNFAllocateMemory(
@@ -950,20 +943,33 @@ PackageUtilsBuildNativeRepoInputsFromSack(
         const char *pszCacheName = NULL;
 
         pRepoData = ppRepoData[dwRepoDataIndex];
-        if(!pRepoData || !pRepoData->nEnabled || !pRepoData->nHasMetaData ||
-           IsNullOrEmptyString(pRepoData->pszId))
+        if(!pRepoData || !TDNF_REPO_IS_QUERYABLE(pRepoData))
         {
             continue;
         }
 
-        pszCacheName = pRepoData->pszCacheName ?
-                       pRepoData->pszCacheName : pRepoData->pszId;
-        dwError = TDNFJoinPath(
-                      (char **)&pRepos[dwIndex].pszCacheDir,
-                      pSack->pszCacheDir,
-                      pszCacheName,
-                      NULL);
-        BAIL_ON_TDNF_ERROR(dwError);
+        /* A --repofromdir repository has no metadata to cache: its packages
+           are the .rpm files under its base URL. Only the metadata-backed
+           repositories need a cache directory, so the sack's cache path is
+           required only when there is one of those. */
+        pRepos[dwIndex].pszDirectory = TDNF_REPO_RPM_DIRECTORY(pRepoData);
+        if(!pRepos[dwIndex].pszDirectory)
+        {
+            if(IsNullOrEmptyString(pSack->pszCacheDir))
+            {
+                dwError = ERROR_TDNF_INVALID_PARAMETER;
+                BAIL_ON_TDNF_ERROR(dwError);
+            }
+
+            pszCacheName = pRepoData->pszCacheName ?
+                           pRepoData->pszCacheName : pRepoData->pszId;
+            dwError = TDNFJoinPath(
+                          (char **)&pRepos[dwIndex].pszCacheDir,
+                          pSack->pszCacheDir,
+                          pszCacheName,
+                          NULL);
+            BAIL_ON_TDNF_ERROR(dwError);
+        }
 
         pRepos[dwIndex].pszId = pRepoData->pszId;
         pRepos[dwIndex].pszSnapshotFile = pRepoData->pszSnapshotFile;
