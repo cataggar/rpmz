@@ -547,6 +547,12 @@ pub fn build(b: *Build) void {
     });
     rpmzig_pkgfile_mod.addImport("rpm_header", rpmzig_header_mod);
 
+    const rpmzig_cpio_mod = b.createModule(.{
+        .root_source_file = b.path("rpmzig/cpio.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const rpmzig_rpmdb_test_mod = b.createModule(.{
         .root_source_file = b.path("rpmzig/rpmdb.zig"),
         .target = target,
@@ -1089,21 +1095,18 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
-    // tdnf-rpmdb-count: smoke-test exe for the rpmzig C ABI.
+    var read_tool_install_steps: [4]*std.Build.Step = undefined;
+
+    // tdnf-rpmdb-count: smoke-test exe for the native rpmdb reader.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/count_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"count_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpmdb-count",
             .root_module = mod,
@@ -1113,23 +1116,19 @@ pub fn build(b: *Build) void {
             .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
         });
         b.getInstallStep().dependOn(&install.step);
+        read_tool_install_steps[0] = &install.step;
     }
 
     // tdnf-rpmdb-list: smoke-test exe for the rpmzig iterator.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/list_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"list_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpmdb-list",
             .root_module = mod,
@@ -1139,23 +1138,19 @@ pub fn build(b: *Build) void {
             .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
         });
         b.getInstallStep().dependOn(&install.step);
+        read_tool_install_steps[1] = &install.step;
     }
 
     // tdnf-rpm-info: smoke-test exe for the rpmzig `.rpm` file parser.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/info_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"info_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpm-info",
             .root_module = mod,
@@ -1165,6 +1160,7 @@ pub fn build(b: *Build) void {
             .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
         });
         b.getInstallStep().dependOn(&install.step);
+        read_tool_install_steps[2] = &install.step;
     }
 
     // tdnf-rpmdb-pubkeys: smoke-test exe for the rpmdb gpg-pubkey
@@ -1252,18 +1248,14 @@ pub fn build(b: *Build) void {
     // decompressor.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/files_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"files_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpm_cpio", rpmzig_cpio_mod);
+        mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpm-files",
             .root_module = mod,
@@ -1273,6 +1265,50 @@ pub fn build(b: *Build) void {
             .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
         });
         b.getInstallStep().dependOn(&install.step);
+        read_tool_install_steps[3] = &install.step;
+    }
+
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/read_tools_cli_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        test_mod.addImport("rpm_header", rpmzig_header_mod);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        const cpio_tests = b.addTest(.{ .root_module = rpmzig_cpio_mod });
+        const run_cpio_tests = b.addRunArtifact(cpio_tests);
+        inline for (
+            .{
+                "tdnf-rpmdb-count",
+                "tdnf-rpmdb-list",
+                "tdnf-rpm-info",
+                "tdnf-rpm-files",
+            },
+            .{
+                "TDNF_RPMDB_COUNT_TEST_BINARY",
+                "TDNF_RPMDB_LIST_TEST_BINARY",
+                "TDNF_RPM_INFO_TEST_BINARY",
+                "TDNF_RPM_FILES_TEST_BINARY",
+            },
+        ) |binary, environment_name| {
+            run_tests.setEnvironmentVariable(
+                environment_name,
+                b.getInstallPath(.{ .custom = "libexec/tdnf" }, binary),
+            );
+        }
+        for (&read_tool_install_steps) |install_step| {
+            run_tests.step.dependOn(install_step);
+        }
+        const read_tools_test_step = b.step(
+            "rpmzig-read-tools-test",
+            "Run rpmzig read-tool CLI tests",
+        );
+        read_tools_test_step.dependOn(&run_tests.step);
+        read_tools_test_step.dependOn(&run_cpio_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_cpio_tests.step);
     }
 
     // tdnf-rpm-install: smoke-test exe for the native file-install

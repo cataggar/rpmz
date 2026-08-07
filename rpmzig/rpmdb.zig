@@ -161,18 +161,35 @@ const PinnedReadDb = struct {
     }
 };
 
+pub const CountPackagesError = error{
+    PathBuildFailed,
+    OutOfMemory,
+    OpenFailed,
+    SqliteOpenFailed,
+    SqlitePrepareFailed,
+    SqliteStepFailed,
+};
+
+/// Count rows in the rpmdb's Packages table.
+pub fn countPackages(root: []const u8) CountPackagesError!i64 {
+    clearError();
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const db_path = buildDbPath(&buf, root) catch |err| {
+        setError("path build failed: {t}", .{err});
+        return error.PathBuildFailed;
+    };
+    return countPackagesAtPath(db_path);
+}
+
+pub fn lastErrorMessage() []const u8 {
+    return last_error_buf[0..last_error_len];
+}
+
 /// Count rows in the rpmdb's Packages table.
 /// See rpmdb.h for the full contract.
 export fn tdnf_rpmdb_count_packages(root: ?[*:0]const u8) i64 {
-    clearError();
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
     const root_slice: []const u8 = if (root) |p| std.mem.span(p) else "";
-
-    const db_path = buildDbPath(&buf, root_slice) catch |err| {
-        setError("path build failed: {t}", .{err});
-        return -1;
-    };
-    return countPackagesAtPath(db_path);
+    return countPackages(root_slice) catch -1;
 }
 
 export fn tdnf_rpmdb_count_packages_config(config: ?*const TxnConfig) i64 {
@@ -187,13 +204,13 @@ export fn tdnf_rpmdb_count_packages_config(config: ?*const TxnConfig) i64 {
     };
     defer pinned.deinit();
     if (!pinned.exists) return 0;
-    return countPackagesAtPath(pinned.path.?);
+    return countPackagesAtPath(pinned.path.?) catch -1;
 }
 
-fn countPackagesAtPath(db_path: []const u8) i64 {
+fn countPackagesAtPath(db_path: []const u8) CountPackagesError!i64 {
     const path_z = std.heap.c_allocator.dupeZ(u8, db_path) catch {
         setError("out of memory", .{});
-        return -1;
+        return error.OutOfMemory;
     };
     defer std.heap.c_allocator.free(path_z);
     const probe_fd = std.c.open(path_z.ptr, .{
@@ -204,7 +221,7 @@ fn countPackagesAtPath(db_path: []const u8) i64 {
     if (probe_fd < 0) {
         if (std.posix.errno(probe_fd) == .NOENT) return 0;
         setError("unable to open rpmdb path", .{});
-        return -1;
+        return error.OpenFailed;
     }
     _ = std.c.close(probe_fd);
     var db: ?*c.sqlite3 = null;
@@ -222,7 +239,7 @@ fn countPackagesAtPath(db_path: []const u8) i64 {
             db_path,
             std.mem.span(@as([*:0]const u8, c.sqlite3_errmsg(db))),
         });
-        return -1;
+        return error.SqliteOpenFailed;
     }
 
     var stmt: ?*c.sqlite3_stmt = null;
@@ -242,13 +259,13 @@ fn countPackagesAtPath(db_path: []const u8) i64 {
             sql,
             std.mem.span(@as([*:0]const u8, c.sqlite3_errmsg(db))),
         });
-        return -1;
+        return error.SqlitePrepareFailed;
     }
 
     const step_rc = c.sqlite3_step(stmt);
     if (step_rc != c.SQLITE_ROW) {
         setError("sqlite3_step returned {d}, expected SQLITE_ROW", .{step_rc});
-        return -1;
+        return error.SqliteStepFailed;
     }
     return c.sqlite3_column_int64(stmt, 0);
 }
