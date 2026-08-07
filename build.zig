@@ -309,6 +309,20 @@ pub fn build(b: *Build) void {
     run_public_api_audit.setCwd(b.path("."));
     run_public_api_audit.step.dependOn(b.getInstallStep());
     public_api_audit_step.dependOn(&run_public_api_audit.step);
+    const public_zig_api_audit_step = b.step(
+        "public-zig-api-audit",
+        "Build and run an external consumer of the public Zig module",
+    );
+    const run_public_zig_api_audit = b.addSystemCommand(
+        &.{
+            b.graph.zig_exe,
+            "build",
+            "check",
+            b.fmt("-Doptimize={s}", .{@tagName(optimize)}),
+        },
+    );
+    run_public_zig_api_audit.setCwd(b.path("tests/public-zig-consumer"));
+    public_zig_api_audit_step.dependOn(&run_public_zig_api_audit.step);
     const abi_audit_step = b.step(
         "abi-audit",
         "Build and compare the public C ABI with its baseline",
@@ -341,6 +355,17 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const public_tdnf_mod = b.addModule("tdnf", .{
+        .root_source_file = b.path("tdnf.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    public_tdnf_mod.addImport("transaction_plan", transaction_plan_mod);
+    {
+        const tests = b.addTest(.{ .root_module = public_tdnf_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
     {
         const tests = b.addTest(.{ .root_module = transaction_plan_mod });
         const run_tests = b.addRunArtifact(tests);

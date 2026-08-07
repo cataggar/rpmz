@@ -1,0 +1,14 @@
+.{
+    .name = .tdnf_public_zig_consumer,
+    .version = "0.0.0",
+    .fingerprint = 0x37a22f2202b98ba0,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .tdnf = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.zig",
+    },
+}
