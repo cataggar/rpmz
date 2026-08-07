@@ -30,6 +30,18 @@ pub const Error = error{
 /// pins it the same way for the same reason.
 pub const releasever = "4.0";
 
+/// The rpm architecture the fixture packages were built for.
+///
+/// `pytests/repo/setup-repo.sh` runs `rpmbuild` on the host, so the corpus is
+/// native: `x86_64` on an x64 runner and `aarch64` on an arm64 one. A test
+/// that hard-codes `x86_64` in an expected NEVRA passes on one CI leg and
+/// fails on the other.
+pub const basearch = switch (@import("builtin").cpu.arch) {
+    .x86_64 => "x86_64",
+    .aarch64 => "aarch64",
+    else => @compileError("add this architecture's rpm name to harness.basearch"),
+};
+
 /// Where the built binaries and the generated repository seed live. `zig build`
 /// writes the same values into `pytests/config.json`, but the harness resolves
 /// them from the environment so a run never depends on that file.
@@ -155,7 +167,143 @@ pub const Result = struct {
         );
         return error.TestUnexpectedResult;
     }
+
+    /// Asserts the command produced no results at all.
+    ///
+    /// `expectStdoutContains` cannot express "and nothing else", so a command
+    /// that is supposed to find nothing has to be checked this way. Both false
+    /// passes #253 records were commands that printed nothing useful while an
+    /// assertion looked only for a substring that happened to be present.
+    pub fn expectStdoutEmpty(self: *const Result) !void {
+        if (std.mem.trim(u8, self.stdout, " \t\r\n").len == 0) return;
+        std.debug.print(
+            "expected no output\nstdout:\n{s}\nstderr:\n{s}\n",
+            .{ self.stdout, self.stderr },
+        );
+        return error.TestUnexpectedResult;
+    }
+
+    /// One row of `tdnf list` output: `<name>.<arch>  <evr>  <repo>`.
+    pub const PackageLine = struct {
+        name: []const u8,
+        arch: []const u8,
+        evr: []const u8,
+        repo: []const u8,
+
+        /// `<name>-<evr>.<arch>`, the form `expectPackageSet` takes.
+        pub fn nevra(self: PackageLine, allocator: std.mem.Allocator) ![]u8 {
+            return std.fmt.allocPrint(allocator, "{s}-{s}.{s}", .{
+                self.name,
+                self.evr,
+                self.arch,
+            });
+        }
+    };
+
+    /// Parses `tdnf list`'s three-column output.
+    ///
+    /// The returned strings borrow `stdout`, so they live as long as the
+    /// `Result`. A line that does not have exactly three columns, or whose
+    /// first column carries no `.<arch>` suffix, is a parse failure rather
+    /// than a skipped row: silently ignoring it is how an assertion ends up
+    /// agreeing with output it never understood.
+    pub fn packageLines(
+        self: *const Result,
+        allocator: std.mem.Allocator,
+    ) !std.ArrayList(PackageLine) {
+        var out: std.ArrayList(PackageLine) = .empty;
+        errdefer out.deinit(allocator);
+
+        var lines = std.mem.tokenizeScalar(u8, self.stdout, '\n');
+        while (lines.next()) |raw| {
+            const line = std.mem.trim(u8, raw, " \t\r");
+            if (line.len == 0) continue;
+
+            var columns = std.mem.tokenizeAny(u8, line, " \t");
+            const qualified = columns.next() orelse return error.TestUnexpectedResult;
+            const evr = columns.next() orelse {
+                std.debug.print("list row has fewer than three columns: \"{s}\"\n", .{line});
+                return error.TestUnexpectedResult;
+            };
+            const repo = columns.next() orelse {
+                std.debug.print("list row has fewer than three columns: \"{s}\"\n", .{line});
+                return error.TestUnexpectedResult;
+            };
+            if (columns.next() != null) {
+                std.debug.print("list row has more than three columns: \"{s}\"\n", .{line});
+                return error.TestUnexpectedResult;
+            }
+
+            const dot = std.mem.lastIndexOfScalar(u8, qualified, '.') orelse {
+                std.debug.print("list row has no arch suffix: \"{s}\"\n", .{line});
+                return error.TestUnexpectedResult;
+            };
+
+            try out.append(allocator, .{
+                .name = qualified[0..dot],
+                .arch = qualified[dot + 1 ..],
+                .evr = evr,
+                .repo = repo,
+            });
+        }
+
+        return out;
+    }
+
+    /// Asserts stdout lists exactly `expected`, as `<name>-<evr>.<arch>`
+    /// entries, in any order and with no extras.
+    ///
+    /// This is the assertion `expectStdoutContains` cannot make. `list
+    /// available 'pkg>=1.0.1'` legitimately returns *both* versions of a
+    /// two-version package, so asserting that the higher one appears passes
+    /// just as well when the `>=` filter is ignored entirely and everything is
+    /// returned -- the weak-assertion pattern #253 tracks.
+    pub fn expectPackageSet(
+        self: *const Result,
+        allocator: std.mem.Allocator,
+        expected: []const []const u8,
+    ) !void {
+        var parsed = try self.packageLines(allocator);
+        defer parsed.deinit(allocator);
+
+        var actual: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (actual.items) |item| allocator.free(item);
+            actual.deinit(allocator);
+        }
+        for (parsed.items) |line| {
+            try actual.append(allocator, try line.nevra(allocator));
+        }
+
+        const wanted = try allocator.dupe([]const u8, expected);
+        defer allocator.free(wanted);
+
+        std.mem.sort([]const u8, actual.items, {}, lessThanString);
+        std.mem.sort([]const u8, wanted, {}, lessThanString);
+
+        var same = actual.items.len == wanted.len;
+        if (same) {
+            for (actual.items, wanted) |got, want| {
+                if (!std.mem.eql(u8, got, want)) {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        if (same) return;
+
+        std.debug.print("expected exactly these packages:\n", .{});
+        for (wanted) |want| std.debug.print("  {s}\n", .{want});
+        std.debug.print("but the command listed:\n", .{});
+        for (actual.items) |got| std.debug.print("  {s}\n", .{got});
+        std.debug.print("stdout:\n{s}\nstderr:\n{s}\n", .{ self.stdout, self.stderr });
+        return error.TestUnexpectedResult;
+    }
 };
+
+fn lessThanString(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.order(u8, a, b) == .lt;
+}
 
 /// One test's private install root: a throwaway directory holding its own
 /// `tdnf.conf`, repo definition, cache and rpmdb.
@@ -383,4 +531,70 @@ test "the harness reaches the repository seed it was pointed at" {
 
     try result.expectOk();
     try result.expectStdoutContains("photon-test");
+}
+
+/// Builds a `Result` over literal output, so the parsing helpers can be tested
+/// without spawning `tdnf`.
+fn resultFromStdout(allocator: std.mem.Allocator, stdout: []const u8) !Result {
+    return .{
+        .allocator = allocator,
+        .code = 0,
+        .stdout = try allocator.dupe(u8, stdout),
+        .stderr = try allocator.dupe(u8, ""),
+    };
+}
+
+test "expectPackageSet accepts the exact set and rejects a superset" {
+    const allocator = std.testing.allocator;
+    var result = try resultFromStdout(allocator,
+        \\tdnf-test-multiversion.x86_64                1.0.1-1               photon-test
+        \\tdnf-test-multiversion.x86_64                1.0.2-1               photon-test
+        \\
+    );
+    defer result.deinit();
+
+    try result.expectPackageSet(allocator, &.{
+        "tdnf-test-multiversion-1.0.2-1.x86_64",
+        "tdnf-test-multiversion-1.0.1-1.x86_64",
+    });
+
+    // The assertion this whole helper exists for: a substring check for the
+    // higher version passes here even though the lower one is present too.
+    try std.testing.expectError(error.TestUnexpectedResult, result.expectPackageSet(
+        allocator,
+        &.{"tdnf-test-multiversion-1.0.2-1.x86_64"},
+    ));
+    try std.testing.expectError(error.TestUnexpectedResult, result.expectPackageSet(
+        allocator,
+        &.{ "tdnf-test-multiversion-1.0.1-1.x86_64", "tdnf-test-multiversion-1.0.2-1.x86_64", "tdnf-test-one-1.0.1-2.x86_64" },
+    ));
+}
+
+test "packageLines rejects rows it does not understand" {
+    const allocator = std.testing.allocator;
+
+    for ([_][]const u8{
+        "tdnf-test-one.x86_64  1.0.1-2\n",
+        "tdnf-test-one.x86_64  1.0.1-2  photon-test  extra\n",
+        "tdnf-test-one  1.0.1-2  photon-test\n",
+    }) |stdout| {
+        var result = try resultFromStdout(allocator, stdout);
+        defer result.deinit();
+        try std.testing.expectError(
+            error.TestUnexpectedResult,
+            result.expectPackageSet(allocator, &.{}),
+        );
+    }
+}
+
+test "expectStdoutEmpty tolerates trailing whitespace but not rows" {
+    const allocator = std.testing.allocator;
+
+    var blank = try resultFromStdout(allocator, "  \n\n");
+    defer blank.deinit();
+    try blank.expectStdoutEmpty();
+
+    var listed = try resultFromStdout(allocator, "tdnf-test-one.x86_64 1.0.1-2 photon-test\n");
+    defer listed.deinit();
+    try std.testing.expectError(error.TestUnexpectedResult, listed.expectStdoutEmpty());
 }
