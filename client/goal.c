@@ -1092,6 +1092,7 @@ TDNFGoalSolveNative(
     const char *pszNativeArch = NULL;
     char *pszNativeArchOwned = NULL;
     PTDNF_SOLVED_PKG_INFO pInfo = NULL;
+    int nSkipBrokenSolve = 0;
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
        !pTdnf->pSack->pPool || !pTdnf->pRpmConfig || !pQueueJobs ||
        (!nPrepareOnly && !nRefuteUnsat && !ppInfo) ||
@@ -1144,10 +1145,33 @@ TDNFGoalSolveNative(
     dwError = TDNFGoalBuildNativeSolverHiddenAvailable(
                   pTdnf, &pHiddenAvailable, &dwHiddenAvailableCount);
     BAIL_ON_TDNF_ERROR(dwError);
+
+    /* --skip-broken means two different things, and `check` wants the other
+       one. For an alter command it selects a solve that drops the individual
+       jobs it cannot satisfy and installs the rest. For `check` there are no
+       jobs the user asked for -- TDNFCheckPackages resolves `install *`, so
+       every package in the universe is a job -- and dropping the broken ones
+       is not a question anyone asked. What --skip-broken means there is the
+       reporting filter SKIPPROBLEM_BROKEN, which hides dependency problems
+       from the report TDNFSolv prints when the solve fails.
+
+       Requesting the solve as well is not merely redundant: it is quadratic
+       in the number of jobs, so the native solver refuses job lists longer
+       than max_skip_broken_jobs (64) rather than run it. `check` always
+       exceeds that, and the refusal surfaced as
+       "Error(1638) : Function not implemented". */
+    nSkipBrokenSolve = pTdnf->pArgs->nSkipBroken;
+    if(pTdnf->pArgs->nCmdCount > 0 && pTdnf->pArgs->ppszCmds &&
+       pTdnf->pArgs->ppszCmds[0] &&
+       strcmp(pTdnf->pArgs->ppszCmds[0], "check") == 0)
+    {
+        nSkipBrokenSolve = 0;
+    }
+
     dwError = TDNFRepoMdNativeSolverLiveSolve(
                   pRepos, dwRepoCount, pJobs, dwJobCount,
                   pEraseJobs, dwEraseJobCount, pHiddenAvailable, dwHiddenAvailableCount,
-                  pTdnf->pArgs->nAllDeps, pTdnf->pArgs->nBest, nAutoErase, pTdnf->pArgs->nSkipBroken, nAllowErasing,
+                  pTdnf->pArgs->nAllDeps, pTdnf->pArgs->nBest, nAutoErase, nSkipBrokenSolve, nAllowErasing,
                   nUpdateAll, nDistSyncAll,
                   (const char *const *)ppszLockedPkgs,
                   pdwLockedQueuePairs,
