@@ -32,5 +32,6 @@ comptime {
     _ = @import("solverdiag_test.zig");
     _ = @import("update_test.zig");
     _ = @import("urls_test.zig");
+    _ = @import("walkorder_test.zig");
     _ = @import("whatprovides_test.zig");
 }

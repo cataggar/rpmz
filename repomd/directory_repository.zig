@@ -54,19 +54,16 @@ pub fn lastStatPath() ?[]const u8 {
 ///
 /// The walk mirrors libsolv's: it descends into subdirectories, skips any
 /// entry whose name starts with `.`, and takes every remaining file ending in
-/// `.rpm`. Unlike libsolv it visits the paths in sorted order, so the model's
-/// package order -- and therefore every tie broken by package order -- does
-/// not depend on the filesystem's readdir order.
-pub fn loadModel(
-    allocator: std.mem.Allocator,
-    directory: []const u8,
-) LoadError!model.RepositoryModel {
-    return loadModelOrdered(allocator, directory, .sorted);
-}
-
-/// `loadModel` with an explicit package order. `.read` reproduces the order
-/// libsolv's directory walk produced, which `tdnf check-local` reports its
-/// problems in.
+/// `.rpm`.
+///
+/// There is deliberately no default `order`. Package order decides every tie
+/// the solver breaks by package order -- including which rule a problem is
+/// reported against -- so a caller that walks a directory in one order while
+/// another walks it in a second produces two different answers for the same
+/// repository. That is exactly what issue #266 was: `--repofromdir` reached
+/// this module sorted on the solve and query paths while the transaction-plan
+/// path went through libsolv's readdir walk. Making the order an explicit
+/// argument keeps the two from drifting apart silently again.
 pub fn loadModelOrdered(
     allocator: std.mem.Allocator,
     directory: []const u8,
@@ -218,7 +215,7 @@ test "builds a repository from a directory of rpm files" {
         .{&tmp.sub_path},
     );
 
-    const repository = try loadModel(arena, root);
+    const repository = try loadModelOrdered(arena, root, .sorted);
     try testing.expectEqual(@as(usize, 2), repository.packages.len);
     try testing.expect(repository.has_filelists);
     // Ordered by full path -- "b-tool.rpm" before "nested/a-lib.rpm" -- and
@@ -233,7 +230,7 @@ test "missing directory is reported" {
     defer arena_state.deinit();
     try testing.expectError(
         error.DirectoryOpenFailed,
-        loadModel(arena_state.allocator(), "/nonexistent/repofromdir"),
+        loadModelOrdered(arena_state.allocator(), "/nonexistent/repofromdir", .read),
     );
     try testing.expectEqual(
         @intFromEnum(std.posix.E.NOENT),
@@ -261,7 +258,7 @@ test "a path that is a file reports ENOTDIR" {
 
     try testing.expectError(
         error.DirectoryOpenFailed,
-        loadModel(arena, path),
+        loadModelOrdered(arena, path, .read),
     );
     try testing.expectEqual(
         @intFromEnum(std.posix.E.NOTDIR),
@@ -306,7 +303,7 @@ test "a symlinked subdirectory is walked like libsolv's stat-based walk did" {
     );
 
     const root = try std.fs.path.join(arena, &.{ base, "root" });
-    const repository = try loadModel(arena, root);
+    const repository = try loadModelOrdered(arena, root, .read);
     try testing.expectEqual(@as(usize, 1), repository.packages.len);
     try testing.expectEqualStrings(
         "linked-tool",

@@ -289,7 +289,11 @@ pub fn prepare(
             return error.UnsupportedInput;
         }
         loaded.* = if (repository.rpm_directory) |directory|
-            try directory_repository.loadModel(arena, directory)
+            // `.read` matches libsolv's `readRpmsFromDir`, which the
+            // transaction-plan path still uses for the same directory.
+            // Package order decides which problem the solver reports, so a
+            // sorted walk here answered differently than the plan did (#266).
+            try directory_repository.loadModelOrdered(arena, directory, .read)
         else
             try available_loader.loadCacheModel(
                 arena,
