@@ -148,6 +148,7 @@ def main() -> None:
         (global_cache / "tmp").mkdir(parents=True)
         system_packages = audit_root / "system-packages"
         system_packages.mkdir()
+        make_read_only(system_packages)
         environment = os.environ.copy()
         environment["ZIG_GLOBAL_CACHE_DIR"] = str(global_cache)
         environment.pop("ZIG_LOCAL_CACHE_DIR", None)
