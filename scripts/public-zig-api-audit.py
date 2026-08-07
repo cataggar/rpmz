@@ -146,15 +146,22 @@ def main() -> None:
 
         global_cache = audit_root / "global-cache"
         (global_cache / "tmp").mkdir(parents=True)
+        system_packages = audit_root / "system-packages"
+        system_packages.mkdir()
         environment = os.environ.copy()
         environment["ZIG_GLOBAL_CACHE_DIR"] = str(global_cache)
         environment.pop("ZIG_LOCAL_CACHE_DIR", None)
+        # Zig 0.16's --system disables fetching. Keeping this directory empty
+        # makes the build itself failure-sensitive: requesting any private
+        # package aborts before its build logic can execute.
         subprocess.run(
             [
                 args.zig,
                 "build",
                 "check",
                 f"-Doptimize={args.optimize}",
+                "--system",
+                str(system_packages),
                 "--summary",
                 "all",
             ],
@@ -162,6 +169,9 @@ def main() -> None:
             env=environment,
             check=True,
         )
+
+        if any(system_packages.iterdir()):
+            raise RuntimeError("Zig modified the empty system package directory")
 
         after = source_snapshot(package_root)
         if after != before:
