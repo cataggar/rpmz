@@ -387,3 +387,49 @@ test "skipped problems are excluded from the count and the rest renumbered" {
     // is numbered `1..N` with no gap where a skipped problem used to sit.
     try std.testing.expect(remaining.reported < everything.reported);
 }
+
+/// `ERROR_TDNF_CALL_NOT_SUPPORTED`, which `check --skip-broken` used to return
+/// because it asked the native solver for a skip-broken *solve* over a job list
+/// with one job per package in the universe. See issue #258.
+const not_supported_code: u8 = 1638 % 256;
+
+// `--skip-broken` on `check` is a reporting filter, not a solve strategy:
+// `check` has no user-chosen jobs to drop, so the only sensible reading is
+// "hide the dependency problems from the report". This asserts that reading is
+// what happens, and in particular that the request is not refused outright.
+test "check --skip-broken filters the report instead of refusing the request" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+
+    var all = try root.run(&.{"check"});
+    defer all.deinit();
+    try all.expectCode(solv_code);
+
+    var everything = try parse(std.testing.allocator, &all);
+    defer everything.deinit();
+    try std.testing.expect(everything.reported > 0);
+
+    var skipped = try root.run(&.{ "check", "--skip-broken" });
+    defer skipped.deinit();
+
+    if (skipped.code == not_supported_code) {
+        std.debug.print(
+            "check --skip-broken was refused rather than filtered\nstdout:\n{s}\nstderr:\n{s}\n",
+            .{ skipped.stdout, skipped.stderr },
+        );
+        return error.TestUnexpectedResult;
+    }
+    try skipped.expectCode(solv_code);
+    try std.testing.expect(!skipped.stderrContains("Function not implemented"));
+
+    // Every problem the seed repository produces is a dependency problem, so
+    // the filter removes all of them. With nothing left to print there is no
+    // numbered block and no summary line, only the "all hidden" notice.
+    try std.testing.expect(skipped.stderrContains(
+        "Every problem found was hidden by a skip option",
+    ));
+    try std.testing.expect(!skipped.stderrContains(summary_prefix));
+    try std.testing.expect(!skipped.stderrContains("nothing provides"));
+}
