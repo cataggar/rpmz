@@ -5,9 +5,7 @@ const install_engine = @import("install.zig");
 const query_format = @import("queryformat.zig");
 const scriptlet_engine = @import("scriptlet.zig");
 const txn_config = @import("txn_config.zig");
-const rpmtrans = @cImport({
-    @cInclude("tdnfrpmtrans.h");
-});
+const rpmtrans = @import("trans_flags.zig");
 
 const Allocator = std.mem.Allocator;
 const c = sqlite.c;

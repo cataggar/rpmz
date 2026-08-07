@@ -56,6 +56,33 @@ do
     test -x "${LIBEXEC}/${binary}"
 done
 
+expect_cli_error() {
+    local expected_status="$1"
+    local expected_stderr="$2"
+    shift 2
+    local stdout_file="${WORK_DIR}/cli.stdout"
+    local stderr_file="${WORK_DIR}/cli.stderr"
+    local status=0
+
+    set +e
+    "$@" > "${stdout_file}" 2> "${stderr_file}"
+    status=$?
+    set -e
+
+    [[ "${status}" -eq "${expected_status}" ]]
+    test ! -s "${stdout_file}"
+    [[ "$(cat "${stderr_file}")" == "${expected_stderr}" ]]
+}
+
+expect_cli_error 2 'unsupported --tsflag value: invalid' \
+    "${LIBEXEC}/tdnf-rpm-install" --tsflag invalid
+expect_cli_error 2 'invalid hnum: invalid' \
+    "${LIBEXEC}/tdnf-rpm-erase" --root "${DB_ROOT}" invalid
+expect_cli_error 2 'invalid --arg1 value: invalid' \
+    "${LIBEXEC}/tdnf-rpm-scriptlet" --arg1 invalid
+expect_cli_error 2 'unsupported --phase value: invalid' \
+    "${LIBEXEC}/tdnf-rpm-trigger" --phase invalid
+
 rpmbuild \
     --define "_topdir ${TOP_DIR}" \
     --define "_tmppath ${RPM_TMP}" \
@@ -135,6 +162,10 @@ run_as_root() {
 }
 
 run_as_root "${LIBEXEC}/tdnf-rpm-install" \
+    --root "${DB_ROOT}" --tsflag justdb "${OWNER_RPM}"
+test ! -e "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/payload"
+
+run_as_root "${LIBEXEC}/tdnf-rpm-install" \
     --root "${DB_ROOT}" "${OWNER_RPM}"
 grep -Fxq 'payload' \
     "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/payload"
@@ -151,11 +182,29 @@ grep -Fxq 'tdnf-rpmzig-smoke-1.0.0-1.noarch' <<< "${LIST_OUTPUT}"
 run_as_root "${LIBEXEC}/tdnf-rpm-scriptlet" \
     --root "${DB_ROOT}" \
     --phase pre \
+    --tsflag nopre \
+    --arg1 1 \
+    --rpmdefine "_tmppath /var/lib/tdnf-rpmzig-smoke" \
+    "${OWNER_RPM}"
+test ! -e "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/scriptlet"
+
+run_as_root "${LIBEXEC}/tdnf-rpm-scriptlet" \
+    --root "${DB_ROOT}" \
+    --phase pre \
     --arg1 1 \
     --rpmdefine "_tmppath /var/lib/tdnf-rpmzig-smoke" \
     "${OWNER_RPM}"
 grep -Fxq 'pre:1' \
     "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/scriptlet"
+
+run_as_root "${LIBEXEC}/tdnf-rpm-trigger" \
+    --root "${DB_ROOT}" \
+    --phase in \
+    --tsflag notriggerin \
+    --arg2 1 \
+    --rpmdefine "_tmppath /var/lib/tdnf-rpmzig-smoke" \
+    "${TARGET_RPM}"
+test ! -e "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/trigger"
 
 run_as_root "${LIBEXEC}/tdnf-rpm-trigger" \
     --db-root "${DB_ROOT}" \

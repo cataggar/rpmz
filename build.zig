@@ -1315,19 +1315,14 @@ pub fn build(b: *Build) void {
     // engine.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/install_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("include"));
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"install_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpm_header", rpmzig_header_mod);
+        mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpm-install",
             .root_module = mod,
@@ -1343,19 +1338,15 @@ pub fn build(b: *Build) void {
     // scriptlet executor.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/scriptlet_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("include"));
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"scriptlet_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpm_header", rpmzig_header_mod);
+        mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+        configureLuaScriptletSupport(b, mod, zlua_mod);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpm-scriptlet",
             .root_module = mod,
@@ -1371,19 +1362,18 @@ pub fn build(b: *Build) void {
     // executor.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/trigger_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
+            .imports = &.{
+                .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+            },
         });
-        mod.addIncludePath(b.path("include"));
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"trigger_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpm_header", rpmzig_header_mod);
+        mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+        configureLuaScriptletSupport(b, mod, zlua_mod);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpm-trigger",
             .root_module = mod,
@@ -1399,19 +1389,17 @@ pub fn build(b: *Build) void {
     // engine.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/erase_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
+            .imports = &.{
+                .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+            },
         });
-        mod.addIncludePath(b.path("include"));
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"erase_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpm_header", rpmzig_header_mod);
+        mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpm-erase",
             .root_module = mod,
