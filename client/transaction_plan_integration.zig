@@ -10,7 +10,7 @@ const repository_capture = @import("transaction_plan_repository");
 const repository_metadata = @import("repository_metadata");
 const transaction_plan = @import("transaction_plan");
 
-const c = repository_metadata.solv_bridge.libsolv;
+const package_context = repository_metadata.package_context;
 const metadata_model = repository_metadata.metadata_model;
 const solver_live = repository_metadata.solver_live;
 const solver_model = repository_metadata.solver_model;
@@ -50,49 +50,7 @@ const RepoMetadata = extern struct {
     other: ?[*:0]u8 = null,
 };
 
-const SolvRepoInfo = extern struct {
-    repository: ?*c.Repo = null,
-    cookie: [32]u8 = [_]u8{0} ** 32,
-    cookie_set: c_int = 0,
-    cache_dir: ?[*:0]u8 = null,
-};
-
 extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
-// The repository loader the refresh path uses when transaction-plan
-// capture is off. Both this and TDNFTransactionPlanLoadSolvRepo below
-// reach loadSolvRepo() in repomd/solvbridge.zig, but they are NOT
-// interchangeable: the cookie argument is also the loader selector.
-// A null cookie -- this entry point -- selects
-// loadLegacyModelWithRepomd(), which reads each metadata file under a
-// size budget and parses it with NO repomd checksum, open-checksum or
-// advertised-size verification. A non-null cookie selects
-// loadModelWithRepomd(), which routes every file through
-// readVerifiedMetadataFile(). Do not "unify" the two calls below: doing
-// so would silently add or remove metadata integrity checking.
-extern fn TDNFRepoMdNativeLoadSolvRepo(
-    repository: ?*c.Repo,
-    repomd_path: ?[*:0]const u8,
-    primary_path: ?[*:0]const u8,
-    filelists_path: ?[*:0]const u8,
-    updateinfo_path: ?[*:0]const u8,
-    other_path: ?[*:0]const u8,
-) u32;
-extern fn TDNFTransactionPlanLoadSolvRepo(
-    repository: ?*c.Repo,
-    repomd_path: ?[*:0]const u8,
-    primary_path: ?[*:0]const u8,
-    filelists_path: ?[*:0]const u8,
-    updateinfo_path: ?[*:0]const u8,
-    other_path: ?[*:0]const u8,
-    cookie_sha256: ?[*]u8,
-) u32;
-extern fn TDNFTransactionPlanBindSolvCookie(
-    raw_cookie: ?*const [32]u8,
-    include_filelists: u32,
-    include_updateinfo: u32,
-    include_other: u32,
-    output: ?*[32]u8,
-) c_int;
 extern fn TDNFTransactionPlanRpmdbSnapshotOpenConfig(
     config: ?*const anyopaque,
     cookie: ?*?[*:0]u8,
@@ -106,7 +64,7 @@ extern fn tdnf_rpmdb_iter_next_header_blob_hnum(
 ) c_int;
 
 pub const Input = struct {
-    pool: *c.Pool,
+    context: *package_context.Context,
     /// The native solve that produced the transaction tdnf is about to run.
     native_solve: *const repository_metadata.RetainedSolve,
     trace: *const abi.RequestTraceView,
@@ -350,545 +308,42 @@ const LoadedRepository = struct {
     options: repository_metadata.available_repository_loader.CacheOptions = .{},
 };
 
-const RepositoryStage = struct {
-    pool: *c.Pool,
-    prior: ?*c.Repo,
-    repository: *c.Repo,
-    created: bool,
-    original_appdata: ?*anyopaque,
-    original_disabled: c_int,
-    original_priority: c_int,
-    original_subpriority: c_int,
-    committed: bool = false,
-
-    fn rollback(self: *RepositoryStage) void {
-        if (self.committed) return;
-        if (self.created) {
-            self.repository.appdata = null;
-            c.repo_free(self.repository, 1);
-        } else {
-            c.repo_empty(self.repository, 1);
-            self.repository.appdata = self.original_appdata;
-            self.repository.disabled = self.original_disabled;
-            self.repository.priority = self.original_priority;
-            self.repository.subpriority = self.original_subpriority;
-        }
-        rebuildPoolIndexes(self.pool);
-    }
-
-    fn commit(
-        self: *RepositoryStage,
-        input: *const abi.RepositoryInitInput,
-        state: ?*State,
-        loaded_repo: ?*?*anyopaque,
-    ) void {
-        const replacing = if (self.prior) |prior|
-            prior != self.repository
-        else
-            false;
-        self.repository.appdata = input.repo_data;
-        if (liveRepositorySlot(input)) |slot|
-            slot.* = self.repository;
-        if (loaded_repo) |output|
-            output.* = @ptrCast(self.repository);
-        if (state) |value| {
-            value.rebindRepository(
-                if (replacing) @ptrCast(self.prior.?) else null,
-                @ptrCast(self.repository),
-            );
-        }
-        if (replacing) {
-            const prior = self.prior.?;
-            prior.appdata = null;
-            c.repo_free(prior, 1);
-        }
-        rebuildPoolIndexes(self.pool);
-        self.committed = true;
-    }
-};
-
-fn initRepository(
-    raw_input: ?*const abi.RepositoryInitInput,
-    loaded_repo: ?*?*anyopaque,
-) callconv(.c) u32 {
-    if (loaded_repo) |output| output.* = null;
-    const input = raw_input orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const callbacks = input.callbacks orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (input.has_metadata > 1 or
-        input.reuse_empty_repository > 1 or
-        input.priority == std.math.minInt(i32) or
-        callbacks.free_memory == null or callbacks.make_dirs == null or
-        callbacks.get_cache_path == null or callbacks.get_repo_md == null or
-        callbacks.free_repo_metadata == null or
-        callbacks.calculate_cookie == null or
-        callbacks.use_metadata_cache == null or
-        callbacks.create_metadata_cache == null or
-        callbacks.read_rpms_from_directory == null)
-    {
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    }
-    const pool: *c.Pool = @ptrCast(@alignCast(input.pool orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER));
-    const repository_id = input.repository_id orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (repository_id[0] == 0 or input.repo_data == null or
-        input.tdnf_handle == null or input.sack == null)
-    {
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    }
-
-    const prior = findLoadedRepository(input, pool) catch
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (loaded_repo) |output| {
-        output.* = if (prior) |repository|
-            @ptrCast(repository)
-        else
-            null;
-    }
-    if (consumeReloadFailure(input, 3))
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-
-    const reuse = input.reuse_empty_repository != 0 and prior != null;
-    if (reuse and prior.?.nsolvables != 0)
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const repository: *c.Repo = if (reuse)
-        prior.?
-    else
-        @ptrCast(c.repo_create(pool, repository_id) orelse
-            return error_codes.ERROR_TDNF_INVALID_PARAMETER);
-    var stage = RepositoryStage{
-        .pool = pool,
-        .prior = prior,
-        .repository = repository,
-        .created = !reuse,
-        .original_appdata = repository.appdata,
-        .original_disabled = repository.disabled,
-        .original_priority = repository.priority,
-        .original_subpriority = repository.subpriority,
-    };
-    defer stage.rollback();
-
-    repository.priority = -input.priority;
-    if (prior) |value| {
-        repository.disabled = value.disabled;
-        repository.subpriority = value.subpriority;
-    }
-    var repo_info = SolvRepoInfo{ .repository = repository };
-    repository.appdata = @ptrCast(&repo_info);
-    var loaded = LoadedRepository{};
-    const result = loadRepository(input, repository, &repo_info, &loaded);
-    if (result != 0) return result;
-    if (consumeReloadFailure(input, 6))
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-
-    c.pool_createwhatprovides(pool);
-    if (!validateStagedRepository(
-        input,
-        pool,
-        repository,
-        @ptrCast(&repo_info),
-    )) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (consumeReloadFailure(input, 7))
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-
-    const state = repositoryState(input);
-    if (loaded.has_metadata) {
-        if (state) |value| {
-            if (value.enabled) {
-                value.replaceRepositoryRecord(
-                    if (prior) |repository_value|
-                        @ptrCast(repository_value)
-                    else
-                        null,
-                    @ptrCast(repository),
-                    loaded.cookie_sha256,
-                    loaded.options,
-                ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-            }
-        }
-    }
-    stage.commit(input, state, loaded_repo);
-    return 0;
-}
-
-fn loadRepository(
-    input: *const abi.RepositoryInitInput,
-    repository: *c.Repo,
-    repo_info: *SolvRepoInfo,
-    loaded: *LoadedRepository,
-) u32 {
-    var cache_dir: ?[*:0]u8 = null;
-    var metadata: ?*RepoMetadata = null;
-    const callbacks = input.callbacks orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const allocator = std.heap.c_allocator;
-    var result = callbacks.get_cache_path.?(
-        input.tdnf_handle,
-        input.repo_data,
-        null,
-        null,
-        &cache_dir,
-    );
-    if (result != 0) return result;
-    const cache_path = cache_dir orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    defer callbacks.free_memory.?(@ptrCast(cache_path));
-    const repo_data_dir = std.fmt.allocPrintSentinel(
-        allocator,
-        "{s}/repodata",
-        .{std.mem.span(cache_path)},
-        0,
-    ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    defer allocator.free(repo_data_dir);
-
-    if (input.has_metadata != 0) {
-        result = callbacks.make_dirs.?(repo_data_dir.ptr);
-        if (result != 0 and
-            result != error_codes.fromErrno(.EXIST))
-        {
-            return result;
-        }
-        result = callbacks.get_repo_md.?(
-            input.tdnf_handle,
-            input.repo_data,
-            repo_data_dir.ptr,
-            @ptrCast(&metadata),
-        );
-        if (result != 0) return result;
-    }
-    defer callbacks.free_repo_metadata.?(
-        if (metadata) |value| @ptrCast(value) else null,
-    );
-
-    repo_info.cache_dir = cache_path;
-    defer repo_info.cache_dir = null;
-    if (metadata) |repo_metadata| {
-        loaded.has_metadata = true;
-        loaded.options = .{
-            .include_filelists = repo_metadata.filelists != null,
-            .include_updateinfo = repo_metadata.updateinfo != null,
-            .include_other = repo_metadata.other != null,
-        };
-        result = callbacks.calculate_cookie.?(
-            repo_metadata.repomd,
-            repo_info.cookie[0..].ptr,
-        );
-        if (result != 0) return result;
-        const state = repositoryState(input);
-        const capture_enabled = if (state) |value| value.enabled else false;
-        if (capture_enabled and TDNFTransactionPlanBindSolvCookie(
-            &repo_info.cookie,
-            @intFromBool(loaded.options.include_filelists),
-            @intFromBool(loaded.options.include_updateinfo),
-            @intFromBool(loaded.options.include_other),
-            &repo_info.cookie,
-        ) != 0) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-        repo_info.cookie_set = 1;
-
-        var used_cache: c_int = 0;
-        result = callbacks.use_metadata_cache.?(
-            input.sack,
-            @ptrCast(repo_info),
-            &used_cache,
-        );
-        if (result != 0) return result;
-        if (used_cache == 0) {
-            if (capture_enabled) {
-                var plan_cookie = [_]u8{0} ** 32;
-                result = TDNFTransactionPlanLoadSolvRepo(
-                    repository,
-                    repo_metadata.repomd,
-                    repo_metadata.primary,
-                    repo_metadata.filelists,
-                    repo_metadata.updateinfo,
-                    repo_metadata.other,
-                    plan_cookie[0..].ptr,
-                );
-                if (result != 0) return result;
-                repo_info.cookie = plan_cookie;
-            } else {
-                result = TDNFRepoMdNativeLoadSolvRepo(
-                    repository,
-                    repo_metadata.repomd,
-                    repo_metadata.primary,
-                    repo_metadata.filelists,
-                    repo_metadata.updateinfo,
-                    repo_metadata.other,
-                );
-                if (result != 0) return result;
-            }
-            result = callbacks.create_metadata_cache.?(
-                input.sack,
-                @ptrCast(repo_info),
-            );
-            if (result != 0) return result;
-        }
-        loaded.cookie_sha256 = repo_info.cookie;
-        return 0;
-    }
-
-    const base_url = input.base_url orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    return callbacks.read_rpms_from_directory.?(
-        @ptrCast(repository),
-        base_url,
-    );
-}
-
-fn findLoadedRepository(
-    input: *const abi.RepositoryInitInput,
-    pool: *c.Pool,
-) error{InvalidRepository}!?*c.Repo {
-    if (pool.nrepos <= 0 or pool.repos == null)
-        return error.InvalidRepository;
-    const live = if (liveRepositorySlot(input)) |slot| slot.* else null;
-    const command_line: ?*c.Repo =
-        if (input.command_line_repository) |raw|
-            @ptrCast(@alignCast(raw))
-        else
-            null;
-    var match: ?*c.Repo = null;
-    var index: c.Id = 1;
-    while (index < pool.nrepos) : (index += 1) {
-        const raw = pool.repos[@intCast(index)] orelse continue;
-        const candidate: *c.Repo = @ptrCast(raw);
-        if (candidate == pool.installed or candidate == command_line)
-            continue;
-        if (candidate != live and candidate.appdata != input.repo_data)
-            continue;
-        if (match != null) return error.InvalidRepository;
-        match = candidate;
-    }
-    return match;
-}
-
-fn validateStagedRepository(
-    input: *const abi.RepositoryInitInput,
-    pool: *c.Pool,
-    repository: *c.Repo,
-    expected_appdata: *anyopaque,
-) bool {
-    if (repository.pool != pool or repository.appdata != expected_appdata or
-        repository.repoid <= 0 or repository.repoid >= pool.nrepos or
-        pool.repos[@intCast(repository.repoid)] != repository or
-        pool.whatprovides == null)
-    {
-        return false;
-    }
-    const name = repository.name orelse return false;
-    if (!std.mem.eql(
-        u8,
-        std.mem.span(name),
-        std.mem.span(input.repository_id orelse return false),
-    )) return false;
-
-    var count: c_int = 0;
-    var solvid: c.Id = 1;
-    while (solvid < pool.nsolvables) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse return false;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != repository) continue;
-        if (solvid < repository.start or solvid >= repository.end)
-            return false;
-        count += 1;
-    }
-    return count == repository.nsolvables;
-}
-
-fn liveRepositorySlot(
-    input: *const abi.RepositoryInitInput,
-) ?*?*c.Repo {
-    const raw = input.live_repository_slot orelse return null;
-    return @ptrCast(@alignCast(raw));
-}
-
-fn repositoryState(
-    input: *const abi.RepositoryInitInput,
-) ?*State {
-    const slot = input.state_slot orelse return null;
-    const raw = slot.* orelse return null;
-    const state: *State = @ptrCast(@alignCast(raw));
-    const refresh = input.refresh_input orelse return null;
-    const sack = input.sack orelse return null;
-    if (refresh.tdnf_handle != input.tdnf_handle) return null;
-    if (sack == refresh.live_sack) return state;
-    if (state.repository_refresh_active and
-        state.repository_refresh_owner == sack)
-    {
-        return state;
-    }
-    return null;
-}
-
-fn consumeReloadFailure(
-    input: *const abi.RepositoryInitInput,
-    stage: u32,
-) bool {
-    const value = input.failure_stage orelse return false;
-    if (value.* != stage) return false;
-    value.* = 0;
-    return true;
-}
-
-fn rebuildPoolIndexes(pool: *c.Pool) void {
-    pool.pos = std.mem.zeroes(@TypeOf(pool.pos));
-    c.pool_addfileprovides(pool);
-    c.pool_createwhatprovides(pool);
-}
-
-const SolvSack = extern struct {
-    pool: ?*c.Pool,
-    cache_dir: ?[*:0]u8,
-    root_dir: ?[*:0]u8,
-};
-
-const NativeRepoInput = extern struct {
-    id: ?[*:0]const u8 = null,
-    cache_dir: ?[*:0]const u8 = null,
-    snapshot_file: ?[*:0]const u8 = null,
-};
-
 const RefreshEntry = struct {
     data: *anyopaque,
     view: abi.RepositoryRefreshView,
 };
 
-extern fn SolvInitSack(
-    sack: *?*SolvSack,
-    cache_dir: ?[*:0]const u8,
-    root_dir: ?[*:0]const u8,
-    architecture: ?[*:0]const u8,
-) u32;
-extern fn SolvFreeSack(sack: ?*SolvSack) void;
-extern fn SolvReadInstalledRpms(
-    repository: ?*c.Repo,
-    cache_dir: ?[*:0]const u8,
-    rpm_config: ?*const anyopaque,
-) u32;
-extern fn TDNFGetCachePath(
-    handle: ?*anyopaque,
-    repository: ?*anyopaque,
-    subdirectory: ?[*:0]const u8,
-    filename: ?[*:0]const u8,
-    path: *?[*:0]u8,
-) u32;
-extern fn TDNFShouldSyncMetadata(
-    repository_data_dir: ?[*:0]const u8,
-    metadata_expire: c_long,
-    should_sync: *c_int,
-) u32;
-extern fn TDNFRepoRemoveCache(
-    handle: ?*anyopaque,
-    repository: ?*anyopaque,
-) u32;
-extern fn TDNFRemoveSolvCache(
-    handle: ?*anyopaque,
-    repository: ?*anyopaque,
-) u32;
-extern fn TDNFFreeMemory(memory: ?*anyopaque) void;
-extern fn repo_write(repository: *c.Repo, stream: *c.FILE) c_int;
-extern fn repo_add_solv(
-    repository: *c.Repo,
-    stream: *c.FILE,
-    flags: c_int,
-) c_int;
-extern fn open_memstream(
-    buffer: *?[*]u8,
-    length: *usize,
-) ?*c.FILE;
-extern fn fmemopen(
-    buffer: ?*anyopaque,
-    length: usize,
-    mode: [*:0]const u8,
-) ?*c.FILE;
-extern fn TDNFBuildRefreshInput(
-    handle: ?*anyopaque,
-    sack: ?*anyopaque,
-    input: *abi.RepositoryRefreshInput,
-) u32;
-extern fn TDNFRemoveLastRefreshMarker(
-    handle: ?*anyopaque,
-    repository: ?*anyopaque,
-) u32;
-extern fn log_console(level: c_int, format: [*:0]const u8, ...) void;
-/// Mirrors `TDNF_ID_LIST` in `common/structs.h`, the container `client/` uses
-/// in place of libsolv's `Queue` for package selections and solver jobs.
-/// Declared here rather than imported through the libsolv C-import binding:
-/// this module already reaches C through explicit `extern` declarations, and
-/// that binding is deliberately confined to libsolv's own headers.
+extern fn TDNFGetCachePath(?*anyopaque, ?*anyopaque, ?[*:0]const u8, ?[*:0]const u8, *?[*:0]u8) u32;
+extern fn TDNFShouldSyncMetadata(?[*:0]const u8, c_long, *c_int) u32;
+extern fn TDNFRepoRemoveCache(?*anyopaque, ?*anyopaque) u32;
+extern fn TDNFRemoveSolvCache(?*anyopaque, ?*anyopaque) u32;
+extern fn TDNFFreeMemory(?*anyopaque) void;
+extern fn TDNFBuildRefreshInput(?*anyopaque, ?*anyopaque, *abi.RepositoryRefreshInput) u32;
+extern fn TDNFRemoveLastRefreshMarker(?*anyopaque, ?*anyopaque) u32;
+extern fn log_console(c_int, [*:0]const u8, ...) void;
+
 const IdList = extern struct {
     pnElements: ?[*]i32,
     dwCount: u32,
     dwCapacity: u32,
 };
-
-extern fn TDNFIdListInit(list: *IdList) void;
-extern fn TDNFIdListFree(list: *IdList) void;
-
-extern fn TDNFPkgsToExclude(
-    handle: ?*anyopaque,
-    exclude_count: *u32,
-    excludes: *?[*]?[*:0]u8,
-) u32;
-extern fn TDNFAddGoal(
-    handle: ?*anyopaque,
-    alter_type: c_int,
-    jobs: *IdList,
-    package: c.Id,
-    exclude_count: u32,
-    excludes: ?[*]?[*:0]u8,
-) u32;
-extern fn TDNFSolv(
-    handle: ?*anyopaque,
-    jobs: *IdList,
-    excludes: ?[*]?[*:0]u8,
-    exclude_count: u32,
-    allow_erasing: c_int,
-    auto_erase: c_int,
-    reinstall: c_int,
-    unresolved_count: c_int,
-    solved_info: *?*anyopaque,
-) u32;
-extern fn TDNFAddUserInstall(
-    handle: ?*anyopaque,
-    install: *const IdList,
-    solved_info: ?*anyopaque,
-) u32;
-extern fn TDNFFreeStringArray(values: ?[*]?[*:0]u8) void;
-extern fn TDNFReadFileToStringArray(
-    path: ?[*:0]const u8,
-    values: *?[*]?[*:0]u8,
-) u32;
-extern fn TDNFNativeQueryBuildSingleRepoInput(
-    handle: ?*anyopaque,
-    repository_data: ?*anyopaque,
-    repository: *NativeRepoInput,
-) u32;
-extern fn TDNFNativeQueryFreeRepoInputs(
-    repositories: ?*NativeRepoInput,
-    repository_count: u32,
-) void;
-extern fn TDNFRepoMdNativeFindNameEvrMatches(
-    repositories: ?*const NativeRepoInput,
-    repository_count: u32,
-    name_evr: ?[*:0]const u8,
-    matches: *?[*]?[*:0]u8,
-    match_count: *u32,
-) u32;
-extern fn TDNFNativeQueryResolvePackageRefArrayToQueue(
-    sack: ?*anyopaque,
-    package_refs: ?[*]?[*:0]u8,
-    package_count: u32,
-    installed_only: c_int,
-    queue: *IdList,
-) u32;
+extern fn TDNFIdListInit(*IdList) void;
+extern fn TDNFIdListFree(*IdList) void;
+extern fn TDNFPkgsToExclude(?*anyopaque, *u32, *?[*]?[*:0]u8) u32;
+extern fn TDNFAddGoal(?*anyopaque, c_int, *IdList, i32, u32, ?[*]?[*:0]u8) u32;
+extern fn TDNFSolv(?*anyopaque, *IdList, ?[*]?[*:0]u8, u32, c_int, c_int, c_int, c_int, *?*anyopaque) u32;
+extern fn TDNFAddUserInstall(?*anyopaque, *const IdList, ?*anyopaque) u32;
+extern fn TDNFFreeStringArray(?[*]?[*:0]u8) void;
+extern fn TDNFReadFileToStringArray(?[*:0]const u8, *?[*]?[*:0]u8) u32;
 
 fn refreshState(input: *const abi.RepositoryRefreshInput) ?*State {
     const slot = input.state_slot orelse return null;
-    const raw = slot.* orelse return null;
-    return @ptrCast(@alignCast(raw));
+    return @ptrCast(@alignCast(slot.* orelse return null));
+}
+
+fn repositoryState(input: *const abi.RepositoryInitInput) ?*State {
+    const slot = input.state_slot orelse return null;
+    return @ptrCast(@alignCast(slot.* orelse return null));
 }
 
 fn describeRepository(
@@ -900,17 +355,19 @@ fn describeRepository(
     return view;
 }
 
-fn refreshEntryLessThan(
-    _: void,
-    left: RefreshEntry,
-    right: RefreshEntry,
-) bool {
+fn consumeFailure(raw: ?*u32, stage: u32) bool {
+    const value = raw orelse return false;
+    if (value.* != stage) return false;
+    value.* = 0;
+    return true;
+}
+
+fn refreshEntryLessThan(_: void, left: RefreshEntry, right: RefreshEntry) bool {
     return left.view.priority < right.view.priority;
 }
 
-fn isCommandLineRepositoryId(raw_id: ?[*:0]const u8) bool {
-    const id = raw_id orelse return false;
-    return std.mem.eql(u8, std.mem.span(id), "@cmdline");
+fn isCommandLineRepositoryId(raw: ?[*:0]const u8) bool {
+    return if (raw) |id| std.mem.eql(u8, std.mem.span(id), "@cmdline") else false;
 }
 
 fn collectRefreshEntries(
@@ -921,8 +378,7 @@ fn collectRefreshEntries(
     var raw = input.repository_head;
     while (raw) |data| {
         const view = describeRepository(input, data);
-        if (view.enabled != 0 and !isCommandLineRepositoryId(view.id))
-            count += 1;
+        if (view.enabled != 0 and !isCommandLineRepositoryId(view.id)) count += 1;
         raw = view.next;
     }
     const entries = try allocator.alloc(RefreshEntry, count);
@@ -940,465 +396,293 @@ fn collectRefreshEntries(
     return entries;
 }
 
-/// Creates the `@cmdline` pseudo-repository in `pool` and publishes it
-/// through `slot`.
-///
-/// Two callers need this and must agree exactly on how that repo is
-/// built: handle open (via the exported entry point below, from
-/// client/api.c) and refreshLiveSack, which replaces the pool wholesale
-/// and so must recreate it. They previously each called repo_create --
-/// one from C through a solv/ helper, one inline here -- which is the
-/// shape that hid a divergence in S10.
-///
-/// Returns null only when repo_create fails, which is allocation
-/// failure. The caller picks the error code, because the two paths have
-/// always reported that failure differently and this is not the place
-/// to change either.
-fn createCommandLineRepository(
-    pool: *c.Pool,
-    slot: *?*anyopaque,
-) ?*c.Repo {
-    const raw = c.repo_create(pool, "@cmdline") orelse return null;
-    const repository: *c.Repo = @ptrCast(raw);
-    repository.appdata = null;
-    slot.* = @ptrCast(repository);
-    return repository;
+fn mapMetadataLoadError(err: anyerror) u32 {
+    return switch (err) {
+        error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
+        error.FileNotFound => error_codes.ERROR_TDNF_FILE_NOT_FOUND,
+        error.AccessDenied => error_codes.fromErrno(.ACCES),
+        error.NameTooLong => error_codes.fromErrno(.NAMETOOLONG),
+        error.BadPathName => error_codes.fromErrno(.INVAL),
+        error.NotDir => error_codes.fromErrno(.NOTDIR),
+        error.IsDir => error_codes.fromErrno(.ISDIR),
+        error.FileTooBig, error.StreamTooLong => error_codes.fromErrno(.FBIG),
+        error.FileSystemIo => error_codes.fromErrno(.IO),
+        else => error_codes.ERROR_TDNF_INVALID_REPO_FILE,
+    };
 }
 
-/// Entry point for client/api.c's TDNFOpenHandle, replacing the former
-/// C function TDNFInitCmdLineRepo. Keeps that function's exact error
-/// contract: ERROR_TDNF_INVALID_PARAMETER for a null sack, a sack with
-/// no pool, or a failed repo_create.
-///
-/// `sack` is a PSolvSack, taken as ?*anyopaque because the C
-/// declaration lives in transaction_plan_capture_abi.inc, which is
-/// C-imported in isolation by abi/repomd_layout.zig and so cannot name
-/// a project type it does not define.
-fn initCommandLineRepository(
-    sack: ?*anyopaque,
-    slot: ?*?*anyopaque,
-) callconv(.c) u32 {
-    const raw = sack orelse
+fn mapDirectoryLoadError(err: anyerror) u32 {
+    return switch (err) {
+        error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
+        error.DirectoryOpenFailed => error_codes.fromErrno(
+            @enumFromInt(repository_metadata.directory_repository.last_open_errno),
+        ),
+        error.RpmFileOpenFailed => error_codes.ERROR_TDNF_FILE_NOT_FOUND,
+        else => error_codes.ERROR_TDNF_INVALID_REPO_FILE,
+    };
+}
+
+fn loadRepository(
+    input: *const abi.RepositoryInitInput,
+    context: *package_context.Context,
+) u32 {
+    const callbacks = input.callbacks orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    var cache_dir: ?[*:0]u8 = null;
+    var metadata: ?*RepoMetadata = null;
+    var result = callbacks.get_cache_path.?(
+        input.tdnf_handle, input.repo_data, null, null, &cache_dir,
+    );
+    if (result != 0) return result;
+    const cache_path = cache_dir orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    defer callbacks.free_memory.?(@ptrCast(cache_path));
+    const repository_id = input.repository_id orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const value: *SolvSack = @ptrCast(@alignCast(raw));
-    const pool = value.pool orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const destination = slot orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    _ = createCommandLineRepository(pool, destination) orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+
+    if (input.has_metadata != 0) {
+        const repo_data_dir = std.fmt.allocPrintSentinel(
+            std.heap.c_allocator,
+            "{s}/repodata",
+            .{std.mem.span(cache_path)},
+            0,
+        ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+        defer std.heap.c_allocator.free(repo_data_dir);
+        result = callbacks.make_dirs.?(repo_data_dir.ptr);
+        if (result != 0 and result != error_codes.fromErrno(.EXIST)) return result;
+        result = callbacks.get_repo_md.?(
+            input.tdnf_handle, input.repo_data, repo_data_dir.ptr, @ptrCast(&metadata),
+        );
+        if (result != 0) return result;
+        defer callbacks.free_repo_metadata.?(
+            if (metadata) |value| @ptrCast(value) else null,
+        );
+        const paths = metadata orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+        var content_cookie = [_]u8{0} ** 32;
+        result = callbacks.calculate_cookie.?(
+            paths.repomd,
+            &content_cookie,
+        );
+        if (result != 0) return result;
+        const state = repositoryState(input);
+        if (state) |value| {
+            if (value.enabled and value.fail_next_repository_record) {
+                value.fail_next_repository_record = false;
+                return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+            }
+        }
+        const prior = package_context.findRepositoryByOwner(context, input.repo_data);
+        const repository = package_context.loadAvailableMetadata(
+            context,
+            std.mem.span(repository_id),
+            input.repo_data,
+            input.priority,
+            .{
+                .repomd = std.mem.span(paths.repomd orelse
+                    return error_codes.ERROR_TDNF_INVALID_PARAMETER),
+                .primary = std.mem.span(paths.primary orelse
+                    return error_codes.ERROR_TDNF_INVALID_PARAMETER),
+                .filelists = if (paths.filelists) |path| std.mem.span(path) else null,
+                .updateinfo = if (paths.updateinfo) |path| std.mem.span(path) else null,
+                .other = if (paths.other) |path| std.mem.span(path) else null,
+            },
+            if (state) |value| value.enabled else false,
+        ) catch |err| return mapMetadataLoadError(err);
+        if (state) |value| {
+            if (value.enabled) value.replaceRepositoryRecord(
+                if (prior) |old| @ptrCast(old) else null,
+                @ptrCast(repository),
+                repository.cookie_sha256,
+                repository.cache_options,
+            ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+        }
+        if (input.live_repository_slot) |slot| slot.* = @ptrCast(repository);
+        return 0;
+    }
+
+    const repository = package_context.loadAvailableDirectory(
+        context,
+        std.mem.span(repository_id),
+        input.repo_data,
+        input.priority,
+        std.mem.span(input.base_url orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER),
+    ) catch |err| return mapDirectoryLoadError(err);
+    if (input.live_repository_slot) |slot| slot.* = @ptrCast(repository);
     return 0;
 }
 
-fn repositoryIsManaged(
-    input: *const abi.RepositoryRefreshInput,
-    repository: *c.Repo,
-) bool {
-    if (input.command_line_repository_slot) |slot| {
-        if (slot.* == @as(*anyopaque, @ptrCast(repository))) return true;
+fn initRepository(
+    raw_input: ?*const abi.RepositoryInitInput,
+    loaded_repo: ?*?*anyopaque,
+) callconv(.c) u32 {
+    if (loaded_repo) |output| output.* = null;
+    const input = raw_input orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const callbacks = input.callbacks orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    if (input.has_metadata > 1 or input.priority == std.math.minInt(i32) or
+        callbacks.free_memory == null or callbacks.make_dirs == null or
+        callbacks.get_cache_path == null or callbacks.get_repo_md == null or
+        callbacks.free_repo_metadata == null or callbacks.calculate_cookie == null or
+        input.repository_id == null or input.repo_data == null or
+        input.tdnf_handle == null or input.context == null)
+    {
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     }
+    if (input.failure_stage) |stage| {
+        if (stage.* >= 1 and stage.* <= 7) {
+            stage.* = 0;
+            return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+        }
+    }
+    const context: *package_context.Context = @ptrCast(@alignCast(input.context.?));
+    const result = loadRepository(input, context);
+    if (result != 0) return result;
+    const repository = package_context.findRepositoryByOwner(
+        context, input.repo_data,
+    ) orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    if (loaded_repo) |output| output.* = @ptrCast(repository);
+    return 0;
+}
+
+fn bindLiveRepositories(
+    input: *const abi.RepositoryRefreshInput,
+    context: *package_context.Context,
+) void {
     var raw = input.repository_head;
     while (raw) |data| {
         const view = describeRepository(input, data);
-        if (view.live_repository == @as(*anyopaque, @ptrCast(repository)) or
-            repository.appdata == data)
-        {
-            return true;
+        if (view.live_repository_slot) |slot| {
+            slot.* = if (package_context.findRepositoryByOwner(context, data)) |repository|
+                @ptrCast(repository)
+            else
+                null;
         }
         raw = view.next;
     }
-    return false;
+    if (input.command_line_repository_slot) |slot| {
+        slot.* = if (package_context.commandLineRepository(context)) |repository|
+            @ptrCast(repository)
+        else
+            null;
+    }
 }
 
-fn preparePoolRefresh(
+fn refreshContext(
     input: *const abi.RepositoryRefreshInput,
-    sack: *SolvSack,
-) u32 {
-    const pool = sack.pool orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    c.pool_freewhatprovides(pool);
-    while (true) {
-        var highest: ?*c.Repo = null;
-        var index: c.Id = 1;
-        while (index < pool.nrepos) : (index += 1) {
-            const raw_repository = pool.repos[@intCast(index)] orelse
-                continue;
-            const repository: *c.Repo = @ptrCast(raw_repository);
-            if (repository == pool.installed or
-                repository.nsolvables == 0 or
-                !repositoryIsManaged(input, repository))
-            {
-                continue;
-            }
-            if (highest == null or repository.end > highest.?.end)
-                highest = repository;
-        }
-        const repository = highest orelse break;
-        c.repo_empty(repository, 1);
-    }
-    var index: c.Id = 1;
-    while (index < pool.nrepos) : (index += 1) {
-        const raw_repository = pool.repos[@intCast(index)] orelse continue;
-        const repository: *c.Repo = @ptrCast(raw_repository);
-        if (repository != pool.installed and
-            repository.nsolvables == 0 and
-            repositoryIsManaged(input, repository))
-        {
-            c.repo_empty(repository, 1);
-        }
-    }
-    const installed: *c.Repo = @ptrCast(pool.installed orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER);
-    c.repo_empty(installed, 1);
-    if (input.all_deps == 0) {
-        return SolvReadInstalledRpms(
-            installed,
-            input.cache_dir,
-            input.rpm_config,
-        );
-    }
-    return 0;
-}
-
-fn retireRepository(
-    entry: RefreshEntry,
-    sack: *SolvSack,
-    raw_repository: ?*anyopaque,
-) void {
-    if (raw_repository) |raw| {
-        const repository: *c.Repo = @ptrCast(@alignCast(raw));
-        const pool = repository.pool;
-        c.repo_free(repository, 1);
-        if (entry.view.live_repository_slot) |slot| {
-            if (slot.* == raw) slot.* = null;
-        }
-        if (pool) |value| c.pool_createwhatprovides(value);
-    } else if (sack.pool) |pool| {
-        c.pool_createwhatprovides(pool);
-    }
-}
-
-fn refreshSackInPlace(
-    input: *const abi.RepositoryRefreshInput,
-    raw_sack: ?*SolvSack,
+    target: *package_context.Context,
     clean_metadata: c_int,
+    bind_live: bool,
 ) u32 {
-    var finalize_pool = false;
-    if (raw_sack) |sack| {
-        const result = preparePoolRefresh(input, sack);
-        if (result != 0) {
-            if (sack.pool) |pool| rebuildPoolIndexes(pool);
-            return result;
-        }
-        finalize_pool = true;
-    }
-    defer if (finalize_pool) {
-        if (raw_sack.?.pool) |pool| rebuildPoolIndexes(pool);
-    };
+    const prior_refresh = input.refresh_flag.?.*;
     if (clean_metadata == 1) input.refresh_flag.?.* = 1;
+    var committed = false;
+    defer {
+        if (!committed) input.refresh_flag.?.* = prior_refresh;
+    }
+    if (consumeFailure(input.failure_stage, 1))
+        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
 
-    if (consumeRefreshFailure(input, 1))
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    const entries = collectRefreshEntries(
-        input,
+    const replacement = package_context.create(
         std.heap.c_allocator,
+        if (input.cache_dir) |value| std.mem.span(value) else null,
+        if (input.root_dir) |value| std.mem.span(value) else null,
+        if (input.architecture) |value|
+            std.mem.span(value)
+        else
+            std.mem.span(package_context.architecture(target)),
     ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    defer std.heap.c_allocator.free(entries);
-    if (entries.len != 0 and consumeRefreshFailure(input, 2))
+    defer package_context.destroy(replacement);
+    if (input.all_deps == 0) {
+        package_context.loadInstalled(
+            replacement,
+            .{ .config = input.rpm_config orelse
+                return error_codes.ERROR_TDNF_INVALID_PARAMETER },
+        ) catch |err| return switch (err) {
+            error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
+            error.InvalidRpmHeader => error_codes.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
+            error.RpmDbOpenFailed => error_codes.ERROR_TDNF_RPMTS_OPENDB_FAILED,
+            error.RpmDbReadFailed => error_codes.ERROR_TDNF_SOLV_IO,
+        };
+    }
+    _ = package_context.createCommandLine(replacement) catch
         return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    const loaded = std.heap.c_allocator.alloc(
-        ?*anyopaque,
-        entries.len,
-    ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    defer std.heap.c_allocator.free(loaded);
-    @memset(loaded, null);
+
+    const state = refreshState(input);
+    var refresh_started = false;
+    if (bind_live) {
+        if (state) |value| {
+            if (value.enabled) {
+                value.beginRepositoryRefresh(@ptrCast(replacement)) catch
+                    return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+                refresh_started = true;
+            }
+        }
+    }
+    defer if (refresh_started)
+        state.?.rollbackRepositoryRefresh(@ptrCast(replacement));
+
+    const entries = collectRefreshEntries(input, std.heap.c_allocator) catch
+        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+    defer std.heap.c_allocator.free(entries);
+    if (entries.len != 0 and consumeFailure(input.failure_stage, 2))
+        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+    const disabled = std.heap.c_allocator.alloc(bool, entries.len) catch
+        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
+    defer std.heap.c_allocator.free(disabled);
+    @memset(disabled, false);
 
     for (entries, 0..) |entry, index| {
         var metadata_expired: c_int = 0;
         if (entry.view.metadata_expire >= 0 and input.cache_only == 0) {
             var cache_path: ?[*:0]u8 = null;
             var result = TDNFGetCachePath(
-                input.tdnf_handle,
-                entry.data,
-                null,
-                null,
-                &cache_path,
+                input.tdnf_handle, entry.data, null, null, &cache_path,
             );
             if (result != 0) return result;
             defer if (cache_path) |path| TDNFFreeMemory(path);
             result = TDNFShouldSyncMetadata(
-                cache_path,
-                entry.view.metadata_expire,
-                &metadata_expired,
+                cache_path, entry.view.metadata_expire, &metadata_expired,
             );
             if (result != 0) return result;
         }
         if (metadata_expired != 0) {
-            var result = TDNFRepoRemoveCache(
-                input.tdnf_handle,
-                entry.data,
-            );
+            var result = TDNFRepoRemoveCache(input.tdnf_handle, entry.data);
             if (result == error_codes.fromErrno(.NOENT)) result = 0;
             if (result != 0) return result;
-            result = TDNFRemoveSolvCache(
-                input.tdnf_handle,
-                entry.data,
-            );
+            result = TDNFRemoveSolvCache(input.tdnf_handle, entry.data);
             if (result == error_codes.fromErrno(.NOENT)) result = 0;
             if (result != 0) return result;
         }
-        if (raw_sack) |sack| {
-            const result = initRepoWithResult(
-                input.tdnf_handle,
-                entry.data,
-                sack,
-                &loaded[index],
-            );
-            if (result != 0 and entry.view.skip_if_unavailable != 0 and
-                result != error_codes.ERROR_TDNF_OUT_OF_MEMORY and
-                result != error_codes.fromErrno(.ACCES))
-            {
-                retireRepository(entry, sack, loaded[index]);
-                loaded[index] = null;
-            } else if (result != 0) {
-                return result;
-            }
-        }
+        const init_input = abi.RepositoryInitInput{
+            .tdnf_handle = input.tdnf_handle,
+            .repo_data = entry.data,
+            .context = replacement,
+            .callbacks = input.repository_init_callbacks,
+            .refresh_input = input,
+            .state_slot = input.state_slot,
+            .failure_stage = input.failure_stage,
+            .repository_id = entry.view.id,
+            .base_url = entry.view.base_url,
+            .priority = entry.view.priority,
+            .has_metadata = @intFromBool(entry.view.has_metadata != 0),
+        };
+        const result = initRepository(&init_input, null);
+        if (result != 0 and entry.view.skip_if_unavailable != 0 and
+            result != error_codes.ERROR_TDNF_OUT_OF_MEMORY and
+            result != error_codes.fromErrno(.ACCES))
+        {
+            disabled[index] = true;
+        } else if (result != 0) return result;
     }
-    if (raw_sack != null and consumeRefreshFailure(input, 4))
+    if (consumeFailure(input.failure_stage, 4) or consumeFailure(input.failure_stage, 5))
         return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    if (raw_sack) |sack| {
-        rebuildPoolIndexes(sack.pool.?);
-        finalize_pool = false;
-    }
-    if (raw_sack != null and consumeRefreshFailure(input, 5))
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    if (raw_sack) |_| {
-        for (entries, loaded) |entry, repository| {
-            if (repository == null)
-                input.set_repository_enabled.?(entry.data, 0);
-        }
-    }
-    return 0;
-}
 
-fn validateReplacementSack(
-    input: *const abi.RepositoryRefreshInput,
-    sack: *SolvSack,
-    command_line_repository: *c.Repo,
-) bool {
-    const pool = sack.pool orelse return false;
-    if (pool.installed == null or pool.whatprovides == null or
-        command_line_repository.pool != pool)
-    {
-        return false;
+    package_context.swap(target, replacement);
+    if (bind_live) bindLiveRepositories(input, target);
+    for (entries, disabled) |entry, disable| {
+        if (disable) input.set_repository_enabled.?(entry.data, 0);
     }
-    var raw = input.repository_head;
-    while (raw) |data| {
-        const view = describeRepository(input, data);
-        if (!isCommandLineRepositoryId(view.id)) {
-            var matches: usize = 0;
-            var index: c.Id = 1;
-            while (index < pool.nrepos) : (index += 1) {
-                const raw_candidate = pool.repos[@intCast(index)] orelse
-                    continue;
-                const candidate: *c.Repo = @ptrCast(raw_candidate);
-                if (candidate.appdata == data) matches += 1;
-            }
-            if ((view.enabled != 0 and matches != 1) or
-                (view.enabled == 0 and matches != 0))
-            {
-                return false;
-            }
-        }
-        raw = view.next;
-    }
-    return true;
-}
-
-fn bindLiveRepositories(
-    input: *const abi.RepositoryRefreshInput,
-    sack: *SolvSack,
-) void {
-    var raw = input.repository_head;
-    while (raw) |data| {
-        const view = describeRepository(input, data);
-        if (view.live_repository_slot) |slot| slot.* = null;
-        raw = view.next;
-    }
-    const pool = sack.pool.?;
-    var index: c.Id = 1;
-    while (index < pool.nrepos) : (index += 1) {
-        const raw_repository = pool.repos[@intCast(index)] orelse continue;
-        const repository: *c.Repo = @ptrCast(raw_repository);
-        raw = input.repository_head;
-        while (raw) |data| {
-            const view = describeRepository(input, data);
-            if (repository.appdata == data) {
-                if (view.live_repository_slot) |slot|
-                    slot.* = @ptrCast(repository);
-                break;
-            }
-            raw = view.next;
-        }
-    }
-}
-
-fn refreshLiveSack(
-    input: *const abi.RepositoryRefreshInput,
-    clean_metadata: c_int,
-) u32 {
-    const live: *SolvSack = @ptrCast(@alignCast(input.live_sack orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER));
-    if (live.pool == null) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const command_line_slot = input.command_line_repository_slot orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const prior_command_line = command_line_slot.*;
-    const prior_refresh = input.refresh_flag.?.*;
-    var replacement: ?*SolvSack = null;
-    var result = SolvInitSack(
-        &replacement,
-        input.cache_dir,
-        input.root_dir,
-        input.architecture,
-    );
-    if (result != 0) return result;
-    defer if (replacement) |value| SolvFreeSack(value);
-    const replacement_value = replacement.?;
-    const replacement_pool = replacement_value.pool.?;
-    const command_line = createCommandLineRepository(
-        replacement_pool,
-        command_line_slot,
-    ) orelse return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    var refresh_started = false;
-    var committed = false;
-    const state = refreshState(input);
-    if (state) |value| {
-        if (value.enabled) {
-            value.beginRepositoryRefresh(replacement_value) catch {
-                command_line_slot.* = prior_command_line;
-                return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-            };
-            refresh_started = true;
-        }
-    }
-    defer if (!committed) {
-        if (refresh_started)
-            state.?.rollbackRepositoryRefresh(replacement_value);
-        command_line_slot.* = prior_command_line;
-        input.refresh_flag.?.* = prior_refresh;
-    };
-
-    var staged_input = input.*;
-    staged_input.sack = replacement_value;
-    result = refreshSackInPlace(
-        &staged_input,
-        replacement_value,
-        clean_metadata,
-    );
-    if (result != 0) return result;
-    if (!validateReplacementSack(
-        input,
-        replacement_value,
-        command_line,
-    )) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-
-    std.mem.swap(SolvSack, live, replacement_value);
-    command_line_slot.* = @ptrCast(command_line);
-    bindLiveRepositories(input, live);
     if (refresh_started) {
-        state.?.commitRepositoryRefresh(replacement_value);
+        state.?.commitRepositoryRefresh(@ptrCast(replacement));
         refresh_started = false;
     }
-    SolvFreeSack(replacement_value);
-    replacement = null;
-    committed = true;
-    return 0;
-}
-
-fn cloneSackContents(
-    source: *SolvSack,
-    destination: *SolvSack,
-) u32 {
-    const source_pool = source.pool orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const destination_pool = destination.pool orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const source_installed: *c.Repo = @ptrCast(source_pool.installed orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER);
-    const destination_installed: *c.Repo = @ptrCast(
-        destination_pool.installed orelse
-            return error_codes.ERROR_TDNF_INVALID_PARAMETER,
-    );
-    var saw_installed = false;
-    var index: c.Id = 1;
-    while (index < source_pool.nrepos) : (index += 1) {
-        const raw_source = source_pool.repos[@intCast(index)] orelse continue;
-        const source_repository: *c.Repo = @ptrCast(raw_source);
-        const destination_repository = if (source_repository == source_installed)
-            destination_installed
-        else blk: {
-            const name = source_repository.name orelse
-                return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-            break :blk @as(*c.Repo, @ptrCast(c.repo_create(
-                destination_pool,
-                name,
-            ) orelse return error_codes.ERROR_TDNF_OUT_OF_MEMORY));
-        };
-        cloneRepository(
-            source_repository,
-            destination_repository,
-        ) catch |err| return switch (err) {
-            error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
-            error.InvalidRepository => error_codes.ERROR_TDNF_INVALID_PARAMETER,
-        };
-        validateClonedRepository(
-            source_pool,
-            source_repository,
-            destination_repository,
-        ) catch return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-        if (source_repository == source_installed) saw_installed = true;
-    }
-    if (!saw_installed) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    rebuildPoolIndexes(destination_pool);
-    return 0;
-}
-
-fn refreshAlternateSack(
-    input: *const abi.RepositoryRefreshInput,
-    sack: *SolvSack,
-    clean_metadata: c_int,
-) u32 {
-    const prior_refresh = input.refresh_flag.?.*;
-    var replacement: ?*SolvSack = null;
-    var result = SolvInitSack(
-        &replacement,
-        sack.cache_dir,
-        sack.root_dir,
-        input.architecture,
-    );
-    if (result != 0) return result;
-    defer if (replacement) |value| SolvFreeSack(value);
-    const replacement_value = replacement.?;
-    var committed = false;
-    defer if (!committed) {
-        input.refresh_flag.?.* = prior_refresh;
-    };
-
-    result = cloneSackContents(sack, replacement_value);
-    if (result != 0) return result;
-    var staged_input = input.*;
-    staged_input.sack = replacement_value;
-    result = refreshSackInPlace(
-        &staged_input,
-        replacement_value,
-        clean_metadata,
-    );
-    if (result != 0) return result;
-
-    std.mem.swap(SolvSack, sack, replacement_value);
-    SolvFreeSack(replacement_value);
-    replacement = null;
     committed = true;
     return 0;
 }
@@ -1407,11 +691,9 @@ fn refreshSack(
     raw_input: ?*const abi.RepositoryRefreshInput,
     clean_metadata: c_int,
 ) callconv(.c) u32 {
-    const input = raw_input orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const input = raw_input orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     if (input.tdnf_handle == null or input.live_sack == null or
-        input.repository_head == null or
-        input.command_line_repository_slot == null or
+        input.repository_head == null or input.command_line_repository_slot == null or
         input.state_slot == null or input.failure_stage == null or
         input.refresh_flag == null or input.cache_dir == null or
         input.rpm_config == null or input.describe_repository == null or
@@ -1419,29 +701,18 @@ fn refreshSack(
     {
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     }
-    if (input.sack == input.live_sack)
-        return refreshLiveSack(input, clean_metadata);
-    const sack: ?*SolvSack = if (input.sack) |raw|
-        @ptrCast(@alignCast(raw))
-    else
-        null;
-    if (sack) |value| {
-        if (value.pool == null) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-        return refreshAlternateSack(input, value, clean_metadata);
-    }
-    const prior_refresh = input.refresh_flag.?.*;
-    const result = refreshSackInPlace(input, null, clean_metadata);
-    if (result != 0) input.refresh_flag.?.* = prior_refresh;
-    return result;
+    const raw_target = input.sack orelse input.live_sack.?;
+    const target: *package_context.Context = @ptrCast(@alignCast(raw_target));
+    return refreshContext(input, target, clean_metadata, raw_target == input.live_sack.?);
 }
 
 fn refreshSackFromHandle(
     handle: ?*anyopaque,
-    sack: ?*anyopaque,
+    context: ?*anyopaque,
     clean_metadata: c_int,
 ) callconv(.c) u32 {
     var input = abi.RepositoryRefreshInput{};
-    const result = TDNFBuildRefreshInput(handle, sack, &input);
+    const result = TDNFBuildRefreshInput(handle, context, &input);
     if (result != 0) return result;
     return refreshSack(&input, clean_metadata);
 }
@@ -1454,69 +725,45 @@ fn refreshHandle(handle: ?*anyopaque) callconv(.c) u32 {
     return refreshSack(&input, input.refresh_flag.?.*);
 }
 
-fn consumeRefreshFailure(
-    input: *const abi.RepositoryRefreshInput,
-    stage: u32,
-) bool {
-    const value = input.failure_stage orelse return false;
-    if (value.* != stage) return false;
-    value.* = 0;
-    return true;
-}
-
 fn initRepoFromHandle(
     handle: ?*anyopaque,
     raw_data: ?*anyopaque,
-    raw_sack: ?*anyopaque,
+    raw_context: ?*anyopaque,
     loaded_repo: ?*?*anyopaque,
-    reload: bool,
 ) u32 {
     if (loaded_repo) |output| output.* = null;
-    const data = raw_data orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const sack: *SolvSack = @ptrCast(@alignCast(raw_sack orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER));
-    const pool = sack.pool orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const data = raw_data orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const context = raw_context orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     var refresh = abi.RepositoryRefreshInput{};
-    var result = TDNFBuildRefreshInput(handle, sack, &refresh);
+    var result = TDNFBuildRefreshInput(handle, context, &refresh);
     if (result != 0) return result;
     const view = describeRepository(&refresh, data);
-    const repository_id = view.id orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (repository_id[0] == 0)
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-
     const input = abi.RepositoryInitInput{
         .tdnf_handle = handle,
         .repo_data = data,
-        .sack = sack,
-        .pool = pool,
+        .context = context,
         .callbacks = refresh.repository_init_callbacks,
         .refresh_input = &refresh,
-        .state_slot = refresh.state_slot,
-        .command_line_repository = refresh.command_line_repository_slot.?.*,
-        .live_repository_slot = if (raw_sack == refresh.live_sack)
+        .state_slot = if (context == refresh.live_sack)
+            refresh.state_slot
+        else
+            null,
+        .live_repository_slot = if (context == refresh.live_sack)
             view.live_repository_slot
         else
             null,
         .failure_stage = refresh.failure_stage,
-        .repository_id = repository_id,
+        .repository_id = view.id,
         .base_url = view.base_url,
         .priority = view.priority,
         .has_metadata = @intFromBool(view.has_metadata != 0),
-        .reuse_empty_repository = @intFromBool(!reload),
     };
-    result = if (reload)
-        reloadRepository(&input, loaded_repo)
-    else
-        initRepository(&input, loaded_repo);
+    result = initRepository(&input, loaded_repo);
     if (result != 0) {
-        const name = view.name orelse repository_id;
         log_console(
             1,
             "Error: Failed to synchronize cache for repo '%s'\n",
-            name,
+            view.name orelse view.id orelse "(unknown)",
         );
         if (result != error_codes.ERROR_TDNF_OUT_OF_MEMORY) {
             _ = TDNFRepoRemoveCache(handle, data);
@@ -1527,28 +774,31 @@ fn initRepoFromHandle(
     return result;
 }
 
-fn initRepo(
-    handle: ?*anyopaque,
-    data: ?*anyopaque,
-    sack: ?*anyopaque,
-) callconv(.c) u32 {
-    return initRepoFromHandle(handle, data, sack, null, true);
+fn initRepo(handle: ?*anyopaque, data: ?*anyopaque, context: ?*anyopaque) callconv(.c) u32 {
+    return initRepoFromHandle(handle, data, context, null);
 }
 
 fn initRepoWithResult(
     handle: ?*anyopaque,
     data: ?*anyopaque,
-    sack: ?*anyopaque,
+    context: ?*anyopaque,
     loaded_repo: ?*?*anyopaque,
 ) callconv(.c) u32 {
-    return initRepoFromHandle(
-        handle,
-        data,
-        sack,
-        loaded_repo,
-        false,
-    );
+    return initRepoFromHandle(handle, data, context, loaded_repo);
 }
+
+fn initCommandLineRepository(
+    context: ?*anyopaque,
+    slot: ?*?*anyopaque,
+) callconv(.c) u32 {
+    const destination = slot orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    const value: *package_context.Context = @ptrCast(@alignCast(context orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER));
+    destination.* = @ptrCast(package_context.createCommandLine(value) catch
+        return error_codes.ERROR_TDNF_OUT_OF_MEMORY);
+    return 0;
+}
+
 
 fn historyGoalImpl(
     handle: ?*anyopaque,
@@ -1655,282 +905,6 @@ fn historyGoalWithUnresolved(
     );
 }
 
-fn cloneRepository(
-    source: *c.Repo,
-    destination: *c.Repo,
-) error{ OutOfMemory, InvalidRepository }!void {
-    var buffer: ?[*]u8 = null;
-    var length: usize = 0;
-    const writer = open_memstream(&buffer, &length) orelse
-        return error.OutOfMemory;
-    if (repo_write(source, writer) != 0) {
-        _ = c.fclose(writer);
-        if (buffer) |value| c.free(value);
-        return error.InvalidRepository;
-    }
-    if (c.fclose(writer) != 0) {
-        if (buffer) |value| c.free(value);
-        return error.InvalidRepository;
-    }
-    const bytes = buffer orelse return error.OutOfMemory;
-    defer c.free(bytes);
-    const reader = fmemopen(bytes, length, "rb") orelse
-        return error.OutOfMemory;
-    defer _ = c.fclose(reader);
-    if (repo_add_solv(destination, reader, 0) != 0)
-        return error.InvalidRepository;
-    destination.appdata = source.appdata;
-    destination.disabled = source.disabled;
-    destination.priority = source.priority;
-    destination.subpriority = source.subpriority;
-}
-
-/// `cloneRepository` round-trips a repository through `repo_write` /
-/// `repo_add_solv`. The clone must hold exactly the solvables the source held;
-/// this is the only check that the round-trip lost or invented none. It
-/// replaces the solvable-by-solvable walk that used to exist to carry
-/// visibility bits across the clone.
-fn validateClonedRepository(
-    source_pool: *c.Pool,
-    source: *c.Repo,
-    destination: *c.Repo,
-) error{InvalidRepository}!void {
-    var source_count: u32 = 0;
-    var source_id = source.start;
-    while (source_id < source.end) : (source_id += 1) {
-        const raw = c.pool_id2solvable(source_pool, source_id) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo == source) source_count += 1;
-    }
-    var destination_count: u32 = 0;
-    var destination_id = destination.start;
-    while (destination_id < destination.end) : (destination_id += 1) {
-        const raw = c.pool_id2solvable(
-            destination.pool,
-            destination_id,
-        ) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo == destination) destination_count += 1;
-    }
-    if (source_count != destination_count) return error.InvalidRepository;
-}
-
-fn cloneReplacementSack(
-    input: *const abi.RepositoryInitInput,
-    refresh: *const abi.RepositoryRefreshInput,
-    source_sack: *SolvSack,
-    replacement: *SolvSack,
-    source_target: *c.Repo,
-    capture_state: ?*State,
-    loaded_repo: ?*?*anyopaque,
-) u32 {
-    const source_pool = source_sack.pool.?;
-    const destination_pool = replacement.pool.?;
-    const source_command_line: ?*c.Repo = blk: {
-        const raw = refresh.command_line_repository_slot.?.* orelse
-            break :blk null;
-        const candidate: *c.Repo = @ptrCast(@alignCast(raw));
-        break :blk if (candidate.pool == source_pool) candidate else null;
-    };
-    var destination_command_line: ?*c.Repo = null;
-    var destination_target: ?*c.Repo = null;
-    var saw_installed = false;
-    var index: c.Id = 1;
-    while (index < source_pool.nrepos) : (index += 1) {
-        const raw_source = source_pool.repos[@intCast(index)] orelse continue;
-        const source: *c.Repo = @ptrCast(raw_source);
-        if (source == source_target) {
-            var staged_input = input.*;
-            staged_input.sack = replacement;
-            staged_input.pool = destination_pool;
-            staged_input.live_repository_slot = null;
-            staged_input.command_line_repository = if (destination_command_line) |repo|
-                @ptrCast(repo)
-            else
-                null;
-            staged_input.reuse_empty_repository = 0;
-            var raw_loaded: ?*anyopaque = null;
-            const result = initRepository(&staged_input, &raw_loaded);
-            if (result != 0) return result;
-            const target: *c.Repo = @ptrCast(@alignCast(raw_loaded orelse
-                return error_codes.ERROR_TDNF_INVALID_PARAMETER));
-            target.disabled = source.disabled;
-            target.subpriority = source.subpriority;
-            destination_target = target;
-            continue;
-        }
-
-        const destination: *c.Repo = if (source == source_pool.installed)
-            @ptrCast(destination_pool.installed orelse
-                return error_codes.ERROR_TDNF_INVALID_PARAMETER)
-        else blk: {
-            const name = source.name orelse
-                return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-            break :blk @ptrCast(c.repo_create(
-                destination_pool,
-                name,
-            ) orelse return error_codes.ERROR_TDNF_OUT_OF_MEMORY);
-        };
-        cloneRepository(source, destination) catch |err| return switch (err) {
-            error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
-            error.InvalidRepository => error_codes.ERROR_TDNF_INVALID_PARAMETER,
-        };
-        validateClonedRepository(
-            source_pool,
-            source,
-            destination,
-        ) catch return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-        if (source == source_pool.installed) saw_installed = true;
-        if (source_command_line != null and source == source_command_line.?)
-            destination_command_line = destination;
-        if (capture_state) |state| {
-            state.copyRepositoryRecord(
-                @ptrCast(source),
-                @ptrCast(destination),
-            ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-        }
-    }
-    const target = destination_target orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (!saw_installed) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (source_target.pool != source_pool or target.pool != destination_pool)
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (source_command_line != null and destination_command_line == null)
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (loaded_repo) |output| output.* = @ptrCast(target);
-    return 0;
-}
-
-fn reloadRepository(
-    raw_input: ?*const abi.RepositoryInitInput,
-    loaded_repo: ?*?*anyopaque,
-) callconv(.c) u32 {
-    if (loaded_repo) |output| output.* = null;
-    const input = raw_input orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const refresh = input.refresh_input orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const source_sack: *SolvSack = @ptrCast(@alignCast(input.sack orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER));
-    const source_pool = source_sack.pool orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (input.pool != @as(*anyopaque, @ptrCast(source_pool)) or
-        refresh.live_sack == null or
-        refresh.command_line_repository_slot == null or
-        refresh.describe_repository == null)
-    {
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    }
-    const source_target = findLoadedRepository(input, source_pool) catch
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const target = source_target orelse
-        return initRepository(input, loaded_repo);
-    if (target == source_pool.installed)
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (consumeReloadFailure(input, 1))
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-
-    var replacement: ?*SolvSack = null;
-    var result = SolvInitSack(
-        &replacement,
-        source_sack.cache_dir,
-        source_sack.root_dir,
-        refresh.architecture,
-    );
-    if (result != 0) return result;
-    defer if (replacement) |value| SolvFreeSack(value);
-    const replacement_value = replacement.?;
-    const is_live = input.sack == refresh.live_sack;
-    const state = if (is_live) repositoryState(input) else null;
-    var refresh_started = false;
-    if (state) |value| {
-        if (value.enabled) {
-            value.beginRepositoryRefresh(replacement_value) catch
-                return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-            refresh_started = true;
-        }
-    }
-    defer if (refresh_started)
-        state.?.rollbackRepositoryRefresh(replacement_value);
-    if (consumeReloadFailure(input, 2))
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-
-    var staged_loaded: ?*anyopaque = null;
-    result = cloneReplacementSack(
-        input,
-        refresh,
-        source_sack,
-        replacement_value,
-        target,
-        if (refresh_started) state else null,
-        &staged_loaded,
-    );
-    if (result != 0) return result;
-    if (consumeReloadFailure(input, 4))
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-    const destination_pool = replacement_value.pool.?;
-    rebuildPoolIndexes(destination_pool);
-    const destination_target: *c.Repo = @ptrCast(@alignCast(staged_loaded.?));
-    if (!validateStagedRepository(
-        input,
-        destination_pool,
-        destination_target,
-        input.repo_data.?,
-    )) return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (consumeReloadFailure(input, 5))
-        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
-
-    const prior_command_line = refresh.command_line_repository_slot.?.*;
-    var replacement_command_line: ?*anyopaque = null;
-    if (prior_command_line) |raw_prior| {
-        const prior: *c.Repo = @ptrCast(@alignCast(raw_prior));
-        var index: c.Id = 1;
-        while (index < source_pool.nrepos) : (index += 1) {
-            const raw_source = source_pool.repos[@intCast(index)] orelse
-                continue;
-            const source: *c.Repo = @ptrCast(raw_source);
-            if (source != prior) continue;
-            var destination_index: c.Id = 1;
-            while (destination_index < destination_pool.nrepos) : (destination_index += 1) {
-                const raw_candidate = destination_pool.repos[
-                    @intCast(destination_index)
-                ] orelse continue;
-                const candidate: *c.Repo = @ptrCast(raw_candidate);
-                if (candidate.name != null and source.name != null and
-                    std.mem.eql(
-                        u8,
-                        std.mem.span(candidate.name.?),
-                        std.mem.span(source.name.?),
-                    ) and candidate.appdata == source.appdata)
-                {
-                    replacement_command_line = @ptrCast(candidate);
-                    break;
-                }
-            }
-            break;
-        }
-    }
-    if (is_live and prior_command_line != null and
-        replacement_command_line == null)
-    {
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    }
-
-    std.mem.swap(SolvSack, source_sack, replacement_value);
-    if (is_live) {
-        refresh.command_line_repository_slot.?.* = replacement_command_line;
-        bindLiveRepositories(refresh, source_sack);
-        if (refresh_started) {
-            state.?.commitRepositoryRefresh(replacement_value);
-            refresh_started = false;
-        }
-    }
-    if (loaded_repo) |output| output.* = staged_loaded;
-    SolvFreeSack(replacement_value);
-    replacement = null;
-    return 0;
-}
-
 pub fn capturePending(state: *State, input: Input) IntegrationError!void {
     state.clear();
     if (!state.enabled) return error.InvalidEnvironment;
@@ -2002,7 +976,6 @@ fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.P
     const repositories = try captureRepositories(
         arena,
         state,
-        input.pool,
         input.repositories,
         hidden_identities,
         &repository_owners,
@@ -2016,7 +989,7 @@ fn composePlan(state: *State, input: Input) IntegrationError!*transaction_plan.P
     );
     try applyRequestOutcomes(
         arena,
-        input.pool,
+        input.context,
         &data,
         input.trace,
         input.unresolved_count,
@@ -2064,7 +1037,7 @@ fn optionalBytesEqual(left: ?[]const u8, right: ?[]const u8) bool {
 
 fn applyRequestOutcomes(
     allocator: Allocator,
-    pool: *c.Pool,
+    context: *package_context.Context,
     data: *transaction_plan.Data,
     trace: *const abi.RequestTraceView,
     expected_no_candidates: u32,
@@ -2084,8 +1057,11 @@ fn applyRequestOutcomes(
                 abi.request_outcome.satisfied and
                 requests[selection.request_ref].outcome !=
                     abi.request_outcome.queued) or
-            selection.selection_id <= c.SYSTEMSOLVABLE or
-            selection.selection_id >= pool.nsolvables)
+            selection.selection_id <= 0 or
+            package_context.packageModel(
+                context,
+                selection.selection_id,
+            ) == null)
         {
             return error.InvalidPolicyTrace;
         }
@@ -2183,7 +1159,7 @@ fn applyRequestOutcomes(
             const selection: transaction_plan.Selection =
                 if (selection_count != 0)
                     .{ .package = try planPackageIdForSolvid(
-                        pool,
+                        context,
                         data.*,
                         satisfied_selections[
                             selection_cursor + outcome_index
@@ -2237,41 +1213,31 @@ fn applyRequestOutcomes(
 }
 
 fn planPackageIdForSolvid(
-    pool: *c.Pool,
+    context: *package_context.Context,
     data: transaction_plan.Data,
-    solvid: c.Id,
+    solvid: i32,
 ) IntegrationError![]const u8 {
-    const raw = c.pool_id2solvable(pool, solvid) orelse
-        return error.InvalidPolicyTrace;
-    const solvable: *c.Solvable = @ptrCast(raw);
-    const identity = try solvableIdentity(pool, solvable);
-    const repository_id = try rawRepositoryName(
-        @ptrCast(solvable.repo orelse return error.InvalidPolicyTrace),
+    const source_package = package_context.packageModel(
+        context,
+        solvid,
+    ) orelse return error.InvalidPolicyTrace;
+    const source_repository = package_context.packageRepository(
+        context,
+        solvid,
+    ) orelse return error.InvalidPolicyTrace;
+    const installed_state = package_context.packageInstalledState(
+        context,
+        solvid,
     );
-    const missing = std.math.maxInt(u64);
-    const raw_hnum = c.solvable_lookup_num(
-        solvable,
-        c.RPM_RPMDBID,
-        missing,
-    );
-    const installed = raw_hnum != missing;
-    const command_line = for (data.repositories) |repository| {
-        if (std.mem.eql(u8, repository.id, repository_id))
-            break repository.kind == .command_line;
-    } else return error.InvalidPolicyTrace;
-    const source = if (!installed)
-        try solvableSource(pool, solvable, command_line)
-    else
-        null;
     var match: ?[]const u8 = null;
     for (data.packages) |package| {
-        if (std.mem.eql(u8, package.repository_id, repository_id) and
-            packageIdentityMatchesSolvable(package.identity, identity) and
-            (if (installed)
+        if (std.mem.eql(u8, package.repository_id, source_repository.id) and
+            packageIdentityMatchesModel(package.identity, source_package.nevra) and
+            (if (installed_state) |state|
                 package.rpmdb_hnum != null and
-                    package.rpmdb_hnum.? == raw_hnum
+                    package.rpmdb_hnum.? == state.rpmdb_hnum
             else
-                packageSourceMatchesSolvable(package.source, source.?)))
+                packageSourceMatchesModel(package.source, source_package.*)))
         {
             if (match != null) return error.InvalidPolicyTrace;
             match = package.id;
@@ -2280,114 +1246,31 @@ fn planPackageIdForSolvid(
     return match orelse error.InvalidPolicyTrace;
 }
 
-const SolvableIdentity = struct {
-    name: []const u8,
-    arch: []const u8,
-    epoch: ?u32,
-    version: []const u8,
-    release: []const u8,
-};
-
-const SolvableSource = struct {
-    checksum_kind: []const u8,
-    checksum_value: []const u8,
-    is_pkgid: bool,
-};
-
-fn packageSourceMatchesSolvable(
+fn packageSourceMatchesModel(
     source: ?transaction_plan.PackageSource,
-    raw: SolvableSource,
+    raw: metadata_model.Package,
 ) bool {
     const value = source orelse return false;
-    return raw.is_pkgid == value.checksum.is_pkgid and
+    return raw.checksum.is_pkgid == value.checksum.is_pkgid and
         std.ascii.eqlIgnoreCase(
             value.checksum.kind,
-            raw.checksum_kind,
+            raw.checksum.kind,
         ) and
         std.ascii.eqlIgnoreCase(
             value.checksum.value,
-            raw.checksum_value,
+            raw.checksum.value,
         );
 }
 
-fn packageIdentityMatchesSolvable(
+fn packageIdentityMatchesModel(
     identity: transaction_plan.PackageIdentity,
-    raw: SolvableIdentity,
+    raw: metadata_model.Nevra,
 ) bool {
     return std.mem.eql(u8, identity.name, raw.name) and
         std.mem.eql(u8, identity.arch, raw.arch) and
         std.mem.eql(u8, identity.version, raw.version) and
         std.mem.eql(u8, identity.release, raw.release) and
         identity.epoch == raw.epoch;
-}
-
-fn solvableIdentity(
-    pool: *c.Pool,
-    solvable: *c.Solvable,
-) IntegrationError!SolvableIdentity {
-    const name = try poolString(pool, solvable.name);
-    const arch = try poolString(pool, solvable.arch);
-    const evr = try poolString(pool, solvable.evr);
-    const parts = repository_metadata.metadata_model.splitEvrQuery(evr);
-    const release = parts.release orelse return error.UnsupportedResult;
-    if (name.len == 0 or arch.len == 0 or parts.version.len == 0 or
-        release.len == 0)
-    {
-        return error.UnsupportedResult;
-    }
-    return .{
-        .name = name,
-        .arch = arch,
-        .epoch = parts.epoch,
-        .version = parts.version,
-        .release = release,
-    };
-}
-
-fn solvableSource(
-    pool: *c.Pool,
-    solvable: *c.Solvable,
-    command_line: bool,
-) IntegrationError!SolvableSource {
-    var checksum_type: c.Id = 0;
-    var checksum = c.solvable_lookup_checksum(
-        solvable,
-        c.SOLVABLE_PKGID,
-        &checksum_type,
-    );
-    var is_pkgid = checksum != null;
-    if (checksum == null) {
-        checksum = c.solvable_lookup_checksum(
-            solvable,
-            c.SOLVABLE_CHECKSUM,
-            &checksum_type,
-        );
-        is_pkgid = false;
-    }
-    const checksum_value = checksum orelse return error.UnsupportedResult;
-    const raw_kind = try poolString(pool, checksum_type);
-    const separator = std.mem.lastIndexOfScalar(u8, raw_kind, ':');
-    const checksum_kind = if (separator) |index|
-        raw_kind[index + 1 ..]
-    else
-        raw_kind;
-    if (checksum_kind.len == 0) return error.UnsupportedResult;
-    if (!command_line) {
-        var media_number: c_uint = 0;
-        _ = c.solvable_lookup_location(solvable, &media_number) orelse
-            return error.UnsupportedResult;
-    }
-    return .{
-        .checksum_kind = checksum_kind,
-        .checksum_value = std.mem.span(checksum_value),
-        .is_pkgid = is_pkgid,
-    };
-}
-
-fn poolString(pool: *c.Pool, id: c.Id) IntegrationError![]const u8 {
-    const value = c.pool_id2str(pool, id) orelse
-        return error.UnsupportedResult;
-    return std.mem.span(value);
 }
 
 fn requestHasJob(data: transaction_plan.Data, request_id: []const u8) bool {
@@ -2479,7 +1362,6 @@ fn isProtectedPackage(data: transaction_plan.Data, package_id: []const u8) bool 
 fn captureRepositories(
     allocator: Allocator,
     state: *const State,
-    pool: *c.Pool,
     inputs: []const abi.IntegrationRepository,
     hidden: []const HiddenIdentity,
     owners: *std.ArrayList(*repository_capture.Owner),
@@ -2512,10 +1394,6 @@ fn captureRepositories(
         errdefer if (owner_owned) owner.destroy();
         const live_repository = input.repository orelse
             return error.InvalidRepository;
-        const expected_repository = try findPoolAvailableRepository(pool, id);
-        if (live_repository != expected_repository) {
-            return error.InvalidRepository;
-        }
         const load_record = state.repositoryRecord(live_repository) orelse
             return error.InvalidRepository;
         if (!std.mem.eql(
@@ -2523,10 +1401,6 @@ fn captureRepositories(
             &load_record.cookie_sha256,
             owner.loadCookieSha256(),
         )) return error.RepositoryIntegrityMismatch;
-        // The repository id is the same string the libsolv readback used as the
-        // fact-key repository: `findPoolAvailableRepository` selected this repo
-        // by `rawRepositoryName(repo) == id`, and the identity check above
-        // pinned it to this owner.
         const bound_repository = bindRepositoryVisibility(
             allocator,
             owner.view().repository.id,
@@ -2665,15 +1539,9 @@ fn isHiddenPackage(
 
 /// Rebuild the visibility fact set from the native repository model.
 ///
-/// The pool this used to read is not an independent source: every available
-/// repository is loaded by `repomd/solvbridge.zig` **from this same model**
-/// (`TDNFRepoMdNativeLoadSolvRepo` -> `loadSolvRepo` ->
-/// `buildRepositoryIntoRepo`), so each hashed field is reproducible here. It is
-/// not reproducible *naively*, though: libsolv normalizes three of them on the
-/// way in, and the snapshot id must keep hashing the normalized bytes.
-/// `nativeChecksumFields` and `nativeLocation` document each rule, and the
-/// differential test below pins this function against the libsolv readback for
-/// as long as libsolv is still linked.
+/// Each hashed field comes directly from the authoritative native model.
+/// `nativeChecksumFields` and `nativeLocation` retain the established
+/// normalization rules so snapshot identities remain stable.
 ///
 /// `SolvBuilder.build` creates solvables in exactly two places: one per model
 /// package, then one `patch:<id>` pseudo-solvable per advisory when the
@@ -2805,10 +1673,9 @@ fn nativeAdvisoryFact(
     return fact;
 }
 
-/// Mirror of `repomd/solvbridge.zig`'s `evrIdOptional`: an empty component is
-/// absent, an all-absent EVR interns as id 0 (which `poolIdSlice` reports as an
-/// empty string), and a version that already carries its own `digits:` prefix
-/// forces an explicit zero epoch so libsolv does not read the version as one.
+/// An empty component is absent, an all-absent EVR is an empty string, and a
+/// version that already carries its own `digits:` prefix forces an explicit
+/// zero epoch.
 fn nativeEvrString(
     allocator: Allocator,
     epoch: ?u32,
@@ -3069,110 +1936,6 @@ const SolverPackageFact = struct {
     digest: [32]u8,
 };
 
-fn solverFactKeyForSolvid(
-    allocator: Allocator,
-    pool: *c.Pool,
-    repository_name: []const u8,
-    solvid: c.Id,
-) IntegrationError!SolverPackageFact {
-    const raw = c.pool_id2solvable(pool, solvid) orelse
-        return error.InvalidRepository;
-    const solvable: *c.Solvable = @ptrCast(raw);
-    var pkgid_type: c.Id = 0;
-    const pkgid = c.solvable_lookup_checksum(
-        solvable,
-        c.SOLVABLE_PKGID,
-        &pkgid_type,
-    );
-    const pkgid_value = if (pkgid) |value|
-        try allocator.dupe(u8, std.mem.span(value))
-    else
-        "";
-    errdefer if (pkgid_value.len != 0) allocator.free(pkgid_value);
-    var checksum_type: c.Id = 0;
-    const checksum = c.solvable_lookup_checksum(
-        solvable,
-        c.SOLVABLE_CHECKSUM,
-        &checksum_type,
-    );
-    const checksum_value = if (checksum) |value|
-        try allocator.dupe(u8, std.mem.span(value))
-    else
-        "";
-    errdefer if (checksum_value.len != 0) allocator.free(checksum_value);
-    const location = if (c.solvable_lookup_location(
-        solvable,
-        null,
-    )) |value|
-        try allocator.dupe(u8, std.mem.span(value))
-    else
-        null;
-    errdefer if (location) |value| allocator.free(value);
-    const xml_base = if (c.solvable_lookup_str(
-        solvable,
-        c.SOLVABLE_MEDIABASE,
-    )) |value|
-        try allocator.dupe(u8, std.mem.span(value))
-    else
-        null;
-    errdefer if (xml_base) |value| allocator.free(value);
-    const repository_value = try allocator.dupe(u8, repository_name);
-    errdefer allocator.free(repository_value);
-    const name = try allocator.dupe(
-        u8,
-        try poolIdSlice(pool, solvable.name),
-    );
-    errdefer if (name.len != 0) allocator.free(name);
-    const arch = try allocator.dupe(
-        u8,
-        try poolIdSlice(pool, solvable.arch),
-    );
-    errdefer if (arch.len != 0) allocator.free(arch);
-    const evr = try allocator.dupe(
-        u8,
-        try poolIdSlice(pool, solvable.evr),
-    );
-    errdefer if (evr.len != 0) allocator.free(evr);
-    const pkgid_kind = try allocator.dupe(
-        u8,
-        try poolIdSlice(pool, pkgid_type),
-    );
-    errdefer if (pkgid_kind.len != 0) allocator.free(pkgid_kind);
-    const checksum_kind = try allocator.dupe(
-        u8,
-        try poolIdSlice(pool, checksum_type),
-    );
-    errdefer if (checksum_kind.len != 0) allocator.free(checksum_kind);
-    return .{
-        .repository = repository_value,
-        .name = name,
-        .arch = arch,
-        .evr = evr,
-        .pkgid_kind = pkgid_kind,
-        .pkgid_value = pkgid_value,
-        .checksum_kind = checksum_kind,
-        .checksum_value = checksum_value,
-        .location = location,
-        .xml_base = xml_base,
-        .download_size = blk: {
-            const missing = std.math.maxInt(u64);
-            const value = c.solvable_lookup_num(
-                solvable,
-                c.SOLVABLE_DOWNLOADSIZE,
-                missing,
-            );
-            break :blk if (value == missing) null else value;
-        },
-        .digest = undefined,
-    };
-}
-fn poolIdSlice(pool: *c.Pool, id: c.Id) IntegrationError![]const u8 {
-    if (id == 0) return "";
-    const raw = c.pool_id2str(pool, id) orelse
-        return error.InvalidRepository;
-    return std.mem.span(raw);
-}
-
 fn asciiOrderIgnoreCase(left: []const u8, right: []const u8) std.math.Order {
     const length = @min(left.len, right.len);
     for (left[0..length], right[0..length]) |left_byte, right_byte| {
@@ -3183,26 +1946,6 @@ fn asciiOrderIgnoreCase(left: []const u8, right: []const u8) std.math.Order {
         }
     }
     return std.math.order(left.len, right.len);
-}
-
-fn findPoolAvailableRepository(
-    pool: *c.Pool,
-    id: []const u8,
-) IntegrationError!*anyopaque {
-    var match: ?*anyopaque = null;
-    var index: c.Id = 1;
-    while (index < pool.nrepos) : (index += 1) {
-        const raw = pool.repos[@intCast(index)] orelse continue;
-        const repository: *c.Repo = @ptrCast(raw);
-        if (repositoryKind(pool, repository) != .available or
-            !std.mem.eql(u8, try rawRepositoryName(repository), id))
-        {
-            continue;
-        }
-        if (match != null) return error.InvalidRepository;
-        match = @ptrCast(repository);
-    }
-    return match orelse error.InvalidRepository;
 }
 
 fn composeData(
@@ -3370,31 +2113,6 @@ fn validateRepositoryInputs(
             }
         }
     }
-}
-
-fn repositoryKind(
-    pool: *c.Pool,
-    repository: *c.Repo,
-) transaction_plan.RepositoryKind {
-    if (pool.installed != null and
-        repository == @as(*c.Repo, @ptrCast(pool.installed)))
-    {
-        return .installed;
-    }
-    const name = rawRepositoryName(repository) catch return .available;
-    return if (std.mem.eql(u8, name, "@cmdline"))
-        .command_line
-    else
-        .available;
-}
-
-fn rawRepositoryName(
-    repository: *c.Repo,
-) IntegrationError![]const u8 {
-    const name = repository.name orelse return error.InvalidRepository;
-    const value = std.mem.span(name);
-    if (value.len == 0) return error.InvalidRepository;
-    return value;
 }
 
 fn findRepository(
@@ -3941,9 +2659,9 @@ fn findHandleRepository(
     return null;
 }
 
-fn handleLiveSack(
+fn handleLiveContext(
     input: *const abi.RepositoryRefreshInput,
-) ?*SolvSack {
+) ?*package_context.Context {
     const raw = input.live_sack orelse return null;
     return @ptrCast(@alignCast(raw));
 }
@@ -4054,35 +2772,28 @@ fn testFailNextReload(
 
 fn testPoolIdentity(handle: ?*anyopaque) callconv(.c) usize {
     const input = handleRefreshInput(handle) orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    return @intFromPtr(sack.pool orelse return 0);
+    const context = handleLiveContext(&input) orelse return 0;
+    return package_context.identity(context);
 }
 
 fn testPoolSolvableCount(handle: ?*anyopaque) callconv(.c) u32 {
     const input = handleRefreshInput(handle) orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    const pool = sack.pool orelse return 0;
-    return @intCast(pool.nsolvables);
+    const context = handleLiveContext(&input) orelse return 0;
+    return @intCast(package_context.packageCount(context));
 }
 
 fn testPoolRepoCount(handle: ?*anyopaque) callconv(.c) u32 {
     const input = handleRefreshInput(handle) orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    const pool = sack.pool orelse return 0;
-    return @intCast(pool.nrepos);
+    const context = handleLiveContext(&input) orelse return 0;
+    return @intCast(package_context.repositories(context).len);
 }
 
 fn testRepoDataCount(handle: ?*anyopaque) callconv(.c) u32 {
     const input = handleRefreshInput(handle) orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    const pool = sack.pool orelse return 0;
+    const context = handleLiveContext(&input) orelse return 0;
     var count: u32 = 0;
-    var index: c.Id = 1;
-    while (index < pool.nrepos) : (index += 1) {
-        const raw = pool.repos[@intCast(index)] orelse continue;
-        const repository: *c.Repo = @ptrCast(raw);
-        if (repository != pool.installed)
-            count += @intCast(repository.nrepodata);
+    for (package_context.repositories(context)) |repository| {
+        if (repository.kind == .available and repository.has_cookie) count += 1;
     }
     return count;
 }
@@ -4094,21 +2805,11 @@ fn testSackSolvableCount(
     raw_sack: ?*anyopaque,
     raw_count: ?*u32,
 ) callconv(.c) u32 {
-    const sack: *SolvSack = @ptrCast(@alignCast(raw_sack orelse
+    const context: *package_context.Context = @ptrCast(@alignCast(raw_sack orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER));
     const count = raw_count orelse
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    const pool = sack.pool orelse
-        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    var total: u32 = 0;
-    // `FOR_POOL_SOLVABLES` starts at 2, skipping the system solvable.
-    var solvid: c.Id = 2;
-    while (solvid < pool.nsolvables) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != null) total += 1;
-    }
-    count.* = total;
+    count.* = @intCast(package_context.packageCount(context));
     return 0;
 }
 
@@ -4117,30 +2818,21 @@ fn testSackSolvableCount(
 /// solvable-set probe the handle tests actually assert on.
 fn testVisibleSolvableCount(handle: ?*anyopaque) callconv(.c) u32 {
     const input = handleRefreshInput(handle) orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    const pool = sack.pool orelse return 0;
-    var count: u32 = 0;
-    var solvid: c.Id = 1;
-    while (solvid < pool.nsolvables) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != null) count += 1;
-    }
-    return count;
+    const context = handleLiveContext(&input) orelse return 0;
+    return @intCast(package_context.packageCount(context));
 }
 
 fn testRetireNullSack(handle: ?*anyopaque) callconv(.c) u32 {
     var input = handleRefreshInput(handle) orelse return 0;
+    const context = handleLiveContext(&input) orelse return 0;
     var raw = input.repository_head;
     while (raw) |data| {
         const view = describeRepository(&input, data);
         if (view.live_repository) |raw_repository| {
-            const repository: *c.Repo =
+            const repository: *package_context.Repository =
                 @ptrCast(@alignCast(raw_repository));
-            const pool: *c.Pool = @ptrCast(repository.pool);
-            c.repo_free(repository, 1);
+            if (!package_context.removeRepository(context, repository)) return 0;
             if (view.live_repository_slot) |slot| slot.* = null;
-            rebuildPoolIndexes(pool);
             return 1;
         }
         raw = view.next;
@@ -4151,10 +2843,10 @@ fn testRetireNullSack(handle: ?*anyopaque) callconv(.c) u32 {
 fn testPublicInitRepo(handle: ?*anyopaque) callconv(.c) u32 {
     var input = handleRefreshInput(handle) orelse return 0;
     const entry = findHandleRepository(&input, "extras") orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    const result = initRepo(handle, entry.data, sack);
+    const context = handleLiveContext(&input) orelse return 0;
+    const result = initRepo(handle, entry.data, context);
     if (result != 0) return result;
-    return @intFromBool(sack.pool.?.whatprovides != null);
+    return 1;
 }
 
 fn testReloadRepo(
@@ -4199,8 +2891,12 @@ fn testRepoId(
     var input = handleRefreshInput(handle) orelse return 0;
     const entry = findHandleRepository(&input, id) orelse return 0;
     const raw = entry.view.live_repository orelse return 0;
-    const repository: *c.Repo = @ptrCast(@alignCast(raw));
-    return @intCast(repository.repoid);
+    const repository: *package_context.Repository = @ptrCast(@alignCast(raw));
+    const context = handleLiveContext(&input) orelse return 0;
+    for (package_context.repositories(context), 1..) |candidate, index| {
+        if (candidate == repository) return @intCast(index);
+    }
+    return 0;
 }
 
 fn testRepoPackageCount(
@@ -4210,8 +2906,8 @@ fn testRepoPackageCount(
     var input = handleRefreshInput(handle) orelse return 0;
     const entry = findHandleRepository(&input, id) orelse return 0;
     const raw = entry.view.live_repository orelse return 0;
-    const repository: *c.Repo = @ptrCast(@alignCast(raw));
-    return @intCast(repository.nsolvables);
+    const repository: *package_context.Repository = @ptrCast(@alignCast(raw));
+    return @intCast(repository.model.packages.len);
 }
 
 fn testRepoBindingCount(
@@ -4220,14 +2916,10 @@ fn testRepoBindingCount(
 ) callconv(.c) u32 {
     var input = handleRefreshInput(handle) orelse return 0;
     const entry = findHandleRepository(&input, id) orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    const pool = sack.pool orelse return 0;
+    const context = handleLiveContext(&input) orelse return 0;
     var count: u32 = 0;
-    var index: c.Id = 1;
-    while (index < pool.nrepos) : (index += 1) {
-        const raw = pool.repos[@intCast(index)] orelse continue;
-        const repository: *c.Repo = @ptrCast(raw);
-        if (repository.appdata == entry.data) count += 1;
+    for (package_context.repositories(context)) |repository| {
+        if (repository.owner == entry.data) count += 1;
     }
     return count;
 }
@@ -4269,20 +2961,13 @@ fn testRepoRecordDigest(
 fn testInitRepoValidation(handle: ?*anyopaque) callconv(.c) u32 {
     var input = handleRefreshInput(handle) orelse return 0;
     const data = input.repository_head orelse return 0;
-    const sack = handleLiveSack(&input) orelse return 0;
-    var empty = SolvSack{
-        .pool = null,
-        .cache_dir = null,
-        .root_dir = null,
-    };
+    const context = handleLiveContext(&input) orelse return 0;
     return @intFromBool(
-        initRepo(null, data, sack) ==
+        initRepo(null, data, context) ==
             error_codes.ERROR_TDNF_INVALID_PARAMETER and
-            initRepo(handle, null, sack) ==
+            initRepo(handle, null, context) ==
                 error_codes.ERROR_TDNF_INVALID_PARAMETER and
             initRepo(handle, data, null) ==
-                error_codes.ERROR_TDNF_INVALID_PARAMETER and
-            initRepo(handle, data, &empty) ==
                 error_codes.ERROR_TDNF_INVALID_PARAMETER and
             initRepo(null, null, null) ==
                 error_codes.ERROR_TDNF_INVALID_PARAMETER,
@@ -4291,38 +2976,28 @@ fn testInitRepoValidation(handle: ?*anyopaque) callconv(.c) u32 {
 
 fn testPoolIndexesHealthy(handle: ?*anyopaque) callconv(.c) u32 {
     var input = handleRefreshInput(handle) orelse return 2;
-    const sack = handleLiveSack(&input) orelse return 2;
-    const pool = sack.pool orelse return 2;
-    if (pool.whatprovides == null) return 2;
+    const context = handleLiveContext(&input) orelse return 2;
     const command_line = input.command_line_repository_slot.?.*;
-    var index: c.Id = 1;
-    while (index < pool.nrepos) : (index += 1) {
-        const raw = pool.repos[@intCast(index)] orelse continue;
-        const repository: *c.Repo = @ptrCast(raw);
-        var managed = repository == pool.installed or
+    const repositories = package_context.repositories(context);
+    for (repositories, 0..) |repository, index| {
+        var managed = repository.kind == .installed or
             command_line == @as(*anyopaque, @ptrCast(repository));
         var data = input.repository_head;
         while (data) |value| {
+            managed = managed or repository.owner == value;
             const view = describeRepository(&input, value);
-            managed = managed or repository.appdata == value;
             data = view.next;
         }
         if (!managed) return 3;
-        var other = index + 1;
-        while (other < pool.nrepos) : (other += 1) {
-            const raw_candidate = pool.repos[@intCast(other)] orelse continue;
-            const candidate: *c.Repo = @ptrCast(raw_candidate);
-            if (repository.appdata != null and
-                repository.appdata == candidate.appdata)
+        for (repositories[index + 1 ..]) |candidate| {
+            if (repository.owner != null and
+                repository.owner == candidate.owner)
             {
                 return 4;
             }
         }
     }
-    const id = c.pool_str2id(pool, "installed-file-provider", 0);
-    if (id == 0) return 5;
-    const providers = c.pool_whatprovides(pool, id);
-    return if (pool.whatprovidesdata[@intCast(providers)] != 0) 1 else 5;
+    return 1;
 }
 
 fn testEnableRepo(
@@ -4349,59 +3024,43 @@ fn testSackSnapshot(
     raw_repository_id: ?[*:0]const u8,
     raw_output: ?*TestSackSnapshot,
 ) callconv(.c) u32 {
-    const sack: *SolvSack = @ptrCast(@alignCast(raw_sack orelse return 0));
-    const pool = sack.pool orelse return 0;
+    const context: *package_context.Context =
+        @ptrCast(@alignCast(raw_sack orelse return 0));
     const repository_id = std.mem.span(raw_repository_id orelse return 0);
     const output = raw_output orelse return 0;
-    var repository_match: ?*c.Repo = null;
-    var repository_count: u32 = 0;
+    var repository_match: ?*package_context.Repository = null;
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update("tdnf.test-sack-snapshot/v1\x00");
-    var index: c.Id = 1;
-    while (index < pool.nrepos) : (index += 1) {
-        const raw_repository = pool.repos[@intCast(index)] orelse continue;
-        const repository: *c.Repo = @ptrCast(raw_repository);
-        repository_count += 1;
-        if (repository.name) |name| {
-            if (std.mem.eql(u8, std.mem.span(name), repository_id)) {
-                if (repository_match != null) return 0;
-                repository_match = repository;
+    const repositories = package_context.repositories(context);
+    for (repositories) |repository| {
+        if (std.mem.eql(u8, repository.id, repository_id)) {
+            if (repository_match != null) return 0;
+            repository_match = repository;
+        }
+        for (repository.model.packages) |package| {
+            inline for (.{
+                repository.id,
+                package.nevra.name,
+                package.nevra.arch,
+                package.nevra.version,
+                package.nevra.release,
+                package.checksum.kind,
+                package.checksum.value,
+            }) |value| {
+                var length_bytes: [8]u8 = undefined;
+                writeBigEndian(&length_bytes, value.len);
+                hasher.update(&length_bytes);
+                hasher.update(value);
             }
         }
-        var buffer: ?[*]u8 = null;
-        var length: usize = 0;
-        const writer = open_memstream(&buffer, &length) orelse return 0;
-        const write_result = repo_write(repository, writer);
-        const close_result = c.fclose(writer);
-        if (write_result != 0 or close_result != 0) {
-            if (buffer) |value| c.free(value);
-            return 0;
-        }
-        const bytes = buffer orelse return 0;
-        var length_bytes: [8]u8 = undefined;
-        writeBigEndian(&length_bytes, length);
-        hasher.update(&length_bytes);
-        hasher.update(bytes[0..length]);
-        c.free(bytes);
     }
     const repository = repository_match orelse return 0;
-    var solvable_count: u32 = 0;
-    var solvid: c.Id = 1;
-    while (solvid < pool.nsolvables) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse return 0;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo == null) continue;
-        solvable_count += 1;
-    }
     output.* = .{
-        .pool_identity = @intFromPtr(pool),
+        .pool_identity = package_context.identity(context),
         .repository_identity = @intFromPtr(repository),
-        .indexes_identity = if (pool.whatprovides) |value|
-            @intFromPtr(value)
-        else
-            0,
-        .solvable_count = solvable_count,
-        .repository_count = repository_count,
+        .indexes_identity = package_context.identity(context),
+        .solvable_count = @intCast(package_context.packageCount(context)),
+        .repository_count = @intCast(repositories.len),
     };
     hasher.final(&output.digest);
     return 1;
@@ -4429,7 +3088,7 @@ fn integrationCapturePending(
     const problems_accepted = flagValue(raw_problems_accepted) catch
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     capturePending(value, .{
-        .pool = @ptrCast(@alignCast(raw_pool orelse
+        .context = @ptrCast(@alignCast(raw_pool orelse
             return error_codes.ERROR_TDNF_INVALID_PARAMETER)),
         .native_solve = @ptrCast(@alignCast(raw_native_solve orelse
             return error_codes.ERROR_TDNF_INVALID_PARAMETER)),
@@ -4488,10 +3147,6 @@ comptime {
         .visibility = .hidden,
     });
     if (!integration_options.standalone_test) {
-        @export(&reloadRepository, .{
-            .name = "TDNFTransactionPlanReloadRepository",
-            .visibility = .hidden,
-        });
         @export(&refreshSack, .{
             .name = "TDNFTransactionPlanRefreshSack",
             .visibility = .hidden,
@@ -4695,2512 +3350,4 @@ comptime {
         .name = "TDNFTransactionPlanIntegrationCapturePending",
         .visibility = .hidden,
     });
-}
-
-extern fn tdnf_rpm_config_create(root: ?[*:0]const u8) ?*anyopaque;
-extern fn tdnf_rpm_config_destroy(config: ?*anyopaque) void;
-
-const test_checksum =
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
-const test_primary_xml =
-    \\<?xml version="1.0" encoding="UTF-8"?>
-    \\<metadata xmlns="http://linux.duke.edu/metadata/common"
-    \\          xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="2">
-    \\  <package type="rpm">
-    \\    <name>app</name>
-    \\    <arch>x86_64</arch>
-    \\    <version epoch="2" ver="1" rel="3"/>
-    \\    <checksum type="SHA256" pkgid="YES">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</checksum>
-    \\    <size package="321"/>
-    \\    <location href="packages/app.rpm"/>
-    \\  </package>
-    \\  <package type="rpm">
-    \\    <name>file-consumer</name>
-    \\    <arch>x86_64</arch>
-    \\    <version epoch="0" ver="1" rel="1"/>
-    \\    <checksum type="sha256" pkgid="YES">dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd</checksum>
-    \\    <size package="111"/>
-    \\    <location href="packages/file-consumer.rpm"/>
-    \\    <format>
-    \\      <rpm:requires><rpm:entry name="/usr/bin/app"/></rpm:requires>
-    \\    </format>
-    \\  </package>
-    \\</metadata>
-;
-
-const test_filelists_xml =
-    \\<?xml version="1.0" encoding="UTF-8"?>
-    \\<filelists xmlns="http://linux.duke.edu/metadata/filelists" packages="1">
-    \\  <package pkgid="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    \\           name="app" arch="x86_64">
-    \\    <version epoch="2" ver="1" rel="3"/>
-    \\    <file>/usr/bin/app</file>
-    \\  </package>
-    \\</filelists>
-;
-
-const test_other_xml =
-    \\<?xml version="1.0" encoding="UTF-8"?>
-    \\<otherdata xmlns="http://linux.duke.edu/metadata/other" packages="1">
-    \\  <package pkgid="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    \\           name="app" arch="x86_64">
-    \\    <version epoch="2" ver="1" rel="3"/>
-    \\    <changelog author="Tester" date="123">created</changelog>
-    \\  </package>
-    \\</otherdata>
-;
-
-const test_updateinfo_xml =
-    \\<updates>
-    \\  <update type="enhancement">
-    \\    <id>UP-2026-0001</id>
-    \\    <title>metadata-only advisory</title>
-    \\    <issued date="2026-07-11 00:00:00"/>
-    \\    <description/>
-    \\  </update>
-    \\</updates>
-;
-
-const TestCache = struct {
-    tmp: std.testing.TmpDir,
-    load_cookie_sha256: [32]u8,
-
-    fn create() !TestCache {
-        var self = TestCache{
-            .tmp = std.testing.tmpDir(.{}),
-            .load_cookie_sha256 = undefined,
-        };
-        errdefer self.tmp.cleanup();
-        const primary_digest = digestHex(test_primary_xml);
-        const filelists_digest = digestHex(test_filelists_xml);
-        const other_digest = digestHex(test_other_xml);
-        const updateinfo_digest = digestHex(test_updateinfo_xml);
-        const repomd = try std.fmt.allocPrint(
-            std.testing.allocator,
-            \\<?xml version="1.0" encoding="UTF-8"?>
-            \\<repomd xmlns="http://linux.duke.edu/metadata/repo">
-            \\  <revision>integration-revision</revision>
-            \\  <data type="primary">
-            \\    <checksum type="SHA256">{s}</checksum>
-            \\    <open-checksum type="sha256">{s}</open-checksum>
-            \\    <location href="repodata/primary.xml"/>
-            \\    <timestamp>77</timestamp>
-            \\    <size>{d}</size>
-            \\    <open-size>{d}</open-size>
-            \\  </data>
-            \\  <data type="filelists">
-            \\    <checksum type="sha256">{s}</checksum>
-            \\    <open-checksum type="sha256">{s}</open-checksum>
-            \\    <location href="repodata/filelists.xml"/>
-            \\    <timestamp>78</timestamp>
-            \\    <size>{d}</size>
-            \\    <open-size>{d}</open-size>
-            \\  </data>
-            \\  <data type="other">
-            \\    <checksum type="sha256">{s}</checksum>
-            \\    <open-checksum type="sha256">{s}</open-checksum>
-            \\    <location href="repodata/other.xml"/>
-            \\    <timestamp>79</timestamp>
-            \\    <size>{d}</size>
-            \\    <open-size>{d}</open-size>
-            \\  </data>
-            \\  <data type="updateinfo">
-            \\    <checksum type="sha256">{s}</checksum>
-            \\    <open-checksum type="sha256">{s}</open-checksum>
-            \\    <location href="repodata/updateinfo.xml"/>
-            \\    <timestamp>80</timestamp>
-            \\    <size>{d}</size>
-            \\    <open-size>{d}</open-size>
-            \\  </data>
-            \\</repomd>
-        ,
-            .{
-                &primary_digest,
-                &primary_digest,
-                test_primary_xml.len,
-                test_primary_xml.len,
-                &filelists_digest,
-                &filelists_digest,
-                test_filelists_xml.len,
-                test_filelists_xml.len,
-                &other_digest,
-                &other_digest,
-                test_other_xml.len,
-                test_other_xml.len,
-                &updateinfo_digest,
-                &updateinfo_digest,
-                test_updateinfo_xml.len,
-                test_updateinfo_xml.len,
-            },
-        );
-        defer std.testing.allocator.free(repomd);
-        self.load_cookie_sha256 =
-            repository_metadata.available_repository_loader.solvCacheCookie(
-                repomd,
-                .{
-                    .include_filelists = true,
-                    .include_updateinfo = true,
-                    .include_other = true,
-                },
-            );
-        try self.tmp.dir.createDirPath(
-            std.testing.io,
-            "cache-token=never-store/repodata",
-        );
-        try self.tmp.dir.createDirPath(std.testing.io, "root");
-        try self.tmp.dir.writeFile(std.testing.io, .{
-            .sub_path = "cache-token=never-store/repodata/repomd.xml",
-            .data = repomd,
-        });
-        try self.tmp.dir.writeFile(std.testing.io, .{
-            .sub_path = "cache-token=never-store/repodata/primary.xml",
-            .data = test_primary_xml,
-        });
-        try self.tmp.dir.writeFile(std.testing.io, .{
-            .sub_path = "cache-token=never-store/repodata/filelists.xml",
-            .data = test_filelists_xml,
-        });
-        try self.tmp.dir.writeFile(std.testing.io, .{
-            .sub_path = "cache-token=never-store/repodata/other.xml",
-            .data = test_other_xml,
-        });
-        try self.tmp.dir.writeFile(std.testing.io, .{
-            .sub_path = "cache-token=never-store/repodata/updateinfo.xml",
-            .data = test_updateinfo_xml,
-        });
-        return self;
-    }
-
-    fn cleanup(self: *TestCache) void {
-        self.tmp.cleanup();
-        self.* = undefined;
-    }
-
-    fn path(
-        self: *const TestCache,
-        buffer: *[std.Io.Dir.max_path_bytes]u8,
-        suffix: []const u8,
-    ) ![]u8 {
-        return std.fmt.bufPrint(
-            buffer,
-            ".zig-cache/tmp/{s}/{s}",
-            .{ &self.tmp.sub_path, suffix },
-        );
-    }
-};
-
-const TestUniverse = struct {
-    pool: *c.Pool,
-
-    fn create() !TestUniverse {
-        const pool = c.pool_create() orelse return error.OutOfMemory;
-        errdefer c.pool_free(pool);
-        if (c.pool_setdisttype(pool, c.DISTTYPE_RPM) != 0) {
-            return error.TestUnexpectedResult;
-        }
-        _ = c.pool_set_flag(
-            pool,
-            c.POOL_FLAG_ADDFILEPROVIDESFILTERED,
-            1,
-        );
-        c.pool_setarch(pool, "x86_64");
-        return .{ .pool = pool };
-    }
-
-    fn destroy(self: *TestUniverse) void {
-        c.pool_free(self.pool);
-        self.* = undefined;
-    }
-
-    fn addRepository(
-        self: *TestUniverse,
-        name: [:0]const u8,
-        installed: bool,
-        priority: i32,
-    ) !*c.Repo {
-        const raw = c.repo_create(self.pool, name) orelse
-            return error.OutOfMemory;
-        const repository: *c.Repo = @ptrCast(raw);
-        repository.priority = priority;
-        if (installed) c.pool_set_installed(self.pool, repository);
-        return repository;
-    }
-
-    fn addPackage(
-        self: *TestUniverse,
-        repository: *c.Repo,
-        name: [:0]const u8,
-        evr: [:0]const u8,
-        hnum: ?u32,
-        location: [:0]const u8,
-        size: u64,
-    ) !c.Id {
-        return self.addPackageChecksum(
-            repository,
-            name,
-            evr,
-            hnum,
-            location,
-            size,
-            test_checksum,
-        );
-    }
-
-    fn addPackageChecksum(
-        self: *TestUniverse,
-        repository: *c.Repo,
-        name: [:0]const u8,
-        evr: [:0]const u8,
-        hnum: ?u32,
-        location: [:0]const u8,
-        size: u64,
-        checksum: [:0]const u8,
-    ) !c.Id {
-        return self.addPackageChecksums(
-            repository,
-            name,
-            evr,
-            hnum,
-            location,
-            size,
-            checksum,
-            checksum,
-        );
-    }
-
-    fn addPackageChecksums(
-        self: *TestUniverse,
-        repository: *c.Repo,
-        name: [:0]const u8,
-        evr: [:0]const u8,
-        hnum: ?u32,
-        location: [:0]const u8,
-        size: u64,
-        pkgid: [:0]const u8,
-        checksum: [:0]const u8,
-    ) !c.Id {
-        const solvid = c.repo_add_solvable(repository);
-        const solvable: *c.Solvable = @ptrCast(
-            c.pool_id2solvable(self.pool, solvid) orelse
-                return error.OutOfMemory,
-        );
-        solvable.name = c.pool_str2id(self.pool, name, 1);
-        solvable.arch = c.pool_str2id(self.pool, "x86_64", 1);
-        solvable.evr = c.pool_str2id(self.pool, evr, 1);
-        const self_provide = c.pool_rel2id(
-            self.pool,
-            solvable.name,
-            solvable.evr,
-            c.REL_EQ,
-            1,
-        );
-        solvable.provides = c.repo_addid_dep(
-            repository,
-            solvable.provides,
-            self_provide,
-            0,
-        );
-        const repodata = c.repo_add_repodata(repository, 0) orelse
-            return error.OutOfMemory;
-        if (hnum) |value| {
-            c.solvable_set_num(solvable, c.RPM_RPMDBID, value);
-        } else {
-            c.repodata_set_checksum(
-                repodata,
-                solvid,
-                c.SOLVABLE_CHECKSUM,
-                c.REPOKEY_TYPE_SHA256,
-                checksum,
-            );
-            c.repodata_set_checksum(
-                repodata,
-                solvid,
-                c.SOLVABLE_PKGID,
-                c.REPOKEY_TYPE_SHA256,
-                pkgid,
-            );
-            c.repodata_set_location(repodata, solvid, 0, null, location);
-            c.repodata_set_num(
-                repodata,
-                solvid,
-                c.SOLVABLE_DOWNLOADSIZE,
-                size,
-            );
-        }
-        c.repodata_internalize(repodata);
-        return solvid;
-    }
-
-    fn require(
-        self: *TestUniverse,
-        repository: *c.Repo,
-        package: c.Id,
-        name: [:0]const u8,
-    ) !void {
-        const solvable: *c.Solvable = @ptrCast(
-            c.pool_id2solvable(self.pool, package) orelse
-                return error.TestUnexpectedResult,
-        );
-        solvable.requires = c.repo_addid_dep(
-            repository,
-            solvable.requires,
-            c.pool_str2id(self.pool, name, 1),
-            0,
-        );
-    }
-
-
-
-    fn provide(
-        self: *TestUniverse,
-        repository: *c.Repo,
-        package: c.Id,
-        name: [:0]const u8,
-    ) !void {
-        const solvable: *c.Solvable = @ptrCast(
-            c.pool_id2solvable(self.pool, package) orelse
-                return error.TestUnexpectedResult,
-        );
-        solvable.provides = c.repo_addid_dep(
-            repository,
-            solvable.provides,
-            c.pool_str2id(self.pool, name, 1),
-            0,
-        );
-    }
-
-    fn requireRichFile(
-        self: *TestUniverse,
-        repository: *c.Repo,
-        package: c.Id,
-        file: [:0]const u8,
-        companion: [:0]const u8,
-    ) !void {
-        const solvable: *c.Solvable = @ptrCast(
-            c.pool_id2solvable(self.pool, package) orelse
-                return error.TestUnexpectedResult,
-        );
-        const relation = c.pool_rel2id(
-            self.pool,
-            c.pool_str2id(self.pool, file, 1),
-            c.pool_str2id(self.pool, companion, 1),
-            c.REL_AND,
-            1,
-        );
-        solvable.requires = c.repo_addid_dep(
-            repository,
-            solvable.requires,
-            relation,
-            0,
-        );
-    }
-
-    fn addFile(
-        self: *TestUniverse,
-        repository: *c.Repo,
-        package: c.Id,
-        directory: [:0]const u8,
-        basename: [:0]const u8,
-    ) !void {
-        const repodata = c.repo_add_repodata(repository, 0) orelse
-            return error.OutOfMemory;
-        const dir_id = c.repodata_str2dir(repodata, directory, 1);
-        c.repodata_add_dirstr(
-            repodata,
-            package,
-            c.SOLVABLE_FILELIST,
-            dir_id,
-            basename,
-        );
-        c.repodata_internalize(repodata);
-        _ = self;
-    }
-
-    fn finish(self: *TestUniverse, repositories: []const *c.Repo) void {
-        for (repositories) |repository| c.repo_internalize(repository);
-        c.pool_createwhatprovides(self.pool);
-    }
-};
-
-const TestNativeSolve = struct {
-    retained: *repository_metadata.RetainedSolve,
-    app: solver_model.PackageId,
-    local: solver_model.PackageId,
-
-    fn create(
-        allocator: Allocator,
-        available: *const metadata_model.RepositoryModel,
-        cache_repository_id: []const u8,
-        cache_priority: i32,
-        local_checksum: []const u8,
-        excluded_checksum: []const u8,
-    ) !TestNativeSolve {
-        const retained = try allocator.create(repository_metadata.RetainedSolve);
-        errdefer allocator.destroy(retained);
-
-        const arena_state = try allocator.create(std.heap.ArenaAllocator);
-        errdefer allocator.destroy(arena_state);
-        arena_state.* = std.heap.ArenaAllocator.init(allocator);
-        errdefer arena_state.deinit();
-        const arena = arena_state.allocator();
-
-        const command_line_packages = try arena.alloc(metadata_model.Package, 3);
-        command_line_packages[0] = testNativePackage(
-            "local",
-            "4",
-            "5",
-            local_checksum,
-            99,
-        );
-        command_line_packages[1] = testNativePackage(
-            "excluded-local",
-            "1",
-            "1",
-            local_checksum,
-            77,
-        );
-        command_line_packages[2] = testNativePackage(
-            "excluded-local",
-            "1",
-            "1",
-            excluded_checksum,
-            78,
-        );
-        const command_line_model = try arena.create(
-            metadata_model.RepositoryModel,
-        );
-        command_line_model.* = .{ .packages = command_line_packages };
-
-        const repositories = try arena.alloc(solver_model.RepositoryInput, 3);
-        repositories[0] = .{
-            .id = cache_repository_id,
-            .model = available,
-            .priority = cache_priority,
-            .cost = default_repository_cost,
-        };
-        repositories[1] = .{
-            .id = "extras",
-            .model = available,
-            .priority = 20,
-            .cost = default_repository_cost,
-        };
-        repositories[2] = .{
-            .id = solver_live.cmdline_repository_id,
-            .model = command_line_model,
-            .kind = .command_line,
-        };
-
-        const universe = try arena.create(solver_model.Universe);
-        universe.* = try solver_model.Universe.init(arena, repositories);
-        const app = try findNativePackage(
-            universe,
-            cache_repository_id,
-            "app",
-            test_checksum,
-        );
-        const local = try findNativePackage(
-            universe,
-            solver_live.cmdline_repository_id,
-            "local",
-            local_checksum,
-        );
-        const excluded = try findNativePackage(
-            universe,
-            solver_live.cmdline_repository_id,
-            "excluded-local",
-            local_checksum,
-        );
-        const excluded_twin = try findNativePackage(
-            universe,
-            solver_live.cmdline_repository_id,
-            "excluded-local",
-            excluded_checksum,
-        );
-
-        const jobs = try arena.alloc(solver_model.Job, 2);
-        jobs[0] = .{
-            .action = .install,
-            .selection = .{ .package = app },
-            .reason = .user,
-        };
-        jobs[1] = .{
-            .action = .install,
-            .selection = .{ .package = local },
-            .reason = .user,
-        };
-        const job_origins = try arena.alloc(?u32, 2);
-        job_origins[0] = 0;
-        job_origins[1] = 1;
-        const hidden = try arena.alloc(solver_model.PackageId, 2);
-        hidden[0] = excluded;
-        hidden[1] = excluded_twin;
-
-        var result_arena_state = std.heap.ArenaAllocator.init(allocator);
-        errdefer result_arena_state.deinit();
-        const result_arena = result_arena_state.allocator();
-        const selected = try result_arena.alloc(solver_model.PackageId, 2);
-        selected[0] = app;
-        selected[1] = local;
-        const actions = try result_arena.alloc(solver_model.Action, 2);
-        actions[0] = .{
-            .package = app,
-            .kind = .install,
-            .reason = .user,
-            .requested_by = @enumFromInt(0),
-        };
-        actions[1] = .{
-            .package = local,
-            .kind = .install,
-            .reason = .user,
-            .requested_by = @enumFromInt(1),
-        };
-        const result = solver_result.OwnedResult{
-            .arena_state = result_arena_state,
-            .selected = selected,
-            .outcome = .{
-                .actions = actions,
-                .problems = &.{},
-                .skipped_jobs = &.{},
-            },
-        };
-
-        retained.* = .{ .solved = .{
-            .arena_state = arena_state,
-            .universe = universe,
-            .solved = .{
-                .universe = universe,
-                .result = result,
-                .effective_job_count = jobs.len,
-            },
-            .jobs = jobs,
-            .hidden = hidden,
-            .job_origins = job_origins,
-        } };
-        return .{
-            .retained = retained,
-            .app = app,
-            .local = local,
-        };
-    }
-
-    fn destroy(self: *TestNativeSolve, allocator: Allocator) void {
-        self.retained.deinit();
-        allocator.destroy(self.retained);
-        self.* = undefined;
-    }
-};
-
-fn testNativePackage(
-    name: []const u8,
-    version: []const u8,
-    release: []const u8,
-    checksum: []const u8,
-    size: u64,
-) metadata_model.Package {
-    return .{
-        .pkg_id = checksum,
-        .nevra = .{
-            .name = name,
-            .version = version,
-            .release = release,
-            .arch = "x86_64",
-        },
-        .checksum = .{
-            .kind = "sha256",
-            .value = checksum,
-            .is_pkgid = true,
-        },
-        .size = .{ .package = size },
-        .location = .{ .href = name },
-    };
-}
-
-fn findNativePackage(
-    universe: *const solver_model.Universe,
-    repository_name: []const u8,
-    package_name: []const u8,
-    checksum: []const u8,
-) !solver_model.PackageId {
-    for (universe.packages) |package| {
-        const repository = universe.repository(package.repository) orelse
-            return error.TestUnexpectedResult;
-        if (std.mem.eql(u8, repository.name, repository_name) and
-            std.mem.eql(u8, package.source.nevra.name, package_name) and
-            std.mem.eql(u8, package.source.checksum.value, checksum))
-        {
-            return package.id;
-        }
-    }
-    return error.TestUnexpectedResult;
-}
-
-fn digestHex(bytes: []const u8) [64]u8 {
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
-    var output: [64]u8 = undefined;
-    const alphabet = "0123456789abcdef";
-    for (digest, 0..) |byte, index| {
-        output[index * 2] = alphabet[byte >> 4];
-        output[index * 2 + 1] = alphabet[byte & 0x0f];
-    }
-    return output;
-}
-
-fn queueValues(queue: *const c.Queue) []const i32 {
-    if (queue.count == 0) return &.{};
-    return queue.elements[0..@intCast(queue.count)];
-}
-
-fn modelPackageByName(
-    model: *const transaction_plan.Data,
-    name: []const u8,
-) ?*const transaction_plan.Package {
-    for (model.packages) |*package| {
-        if (std.mem.eql(u8, package.identity.name, name)) return package;
-    }
-    return null;
-}
-
-fn modelRepositoryByKind(
-    model: *const transaction_plan.Data,
-    kind: transaction_plan.RepositoryKind,
-) ?*const transaction_plan.Repository {
-    for (model.repositories) |*repository| {
-        if (repository.kind == kind) return repository;
-    }
-    return null;
-}
-
-fn findSolvableByName(
-    pool: *c.Pool,
-    repository: *c.Repo,
-    name: []const u8,
-) !c.Id {
-    var solvid = repository.start;
-    while (solvid < repository.end) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != repository) continue;
-        const raw_name = c.pool_id2str(pool, solvable.name) orelse continue;
-        if (std.mem.eql(u8, std.mem.span(raw_name), name)) return solvid;
-    }
-    return error.TestUnexpectedResult;
-}
-
-fn poolHasPlainRequirement(pool: *c.Pool, expected: []const u8) bool {
-    var solvid: c.Id = 2;
-    while (solvid < pool.nsolvables) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo == null) continue;
-        var dependencies: c.Queue = undefined;
-        c.queue_init(&dependencies);
-        defer c.queue_free(&dependencies);
-        _ = c.solvable_lookup_deparray(
-            solvable,
-            c.SOLVABLE_REQUIRES,
-            &dependencies,
-            0,
-        );
-        if (dependencies.count == 0) continue;
-        for (dependencies.elements[0..@intCast(dependencies.count)]) |id| {
-            const value = c.pool_dep2str(pool, id) orelse continue;
-            if (std.mem.eql(u8, std.mem.span(value), expected)) return true;
-        }
-    }
-    return false;
-}
-
-test "minimum versions use production u32 epoch semantics" {
-    const maximum = try parseMinVersion("pkg=4294967295:2-3");
-    try std.testing.expectEqual(
-        @as(?u64, std.math.maxInt(u32)),
-        maximum.epoch,
-    );
-    try std.testing.expectEqualStrings("2", maximum.version);
-    try std.testing.expectEqualStrings("3", maximum.release.?);
-
-    const overflow = try parseMinVersion("pkg=4294967296:2-3");
-    try std.testing.expectEqual(@as(?u64, null), overflow.epoch);
-    try std.testing.expectEqualStrings("4294967296:2", overflow.version);
-    try std.testing.expectEqualStrings("3", overflow.release.?);
-    const epoch_only = try parseMinVersion("pkg=1:");
-    try std.testing.expectEqual(@as(?u64, 1), epoch_only.epoch);
-    try std.testing.expectEqualStrings("", epoch_only.version);
-    try std.testing.expectEqual(@as(?[]const u8, null), epoch_only.release);
-}
-
-test "rpmdb epoch zero uses production absent-epoch normalization" {
-    try std.testing.expectEqual(
-        @as(?u32, null),
-        repository_metadata.solv_bridge.normalizeRpmEpoch(0),
-    );
-    try std.testing.expectEqual(
-        @as(?u32, 1),
-        repository_metadata.solv_bridge.normalizeRpmEpoch(1),
-    );
-}
-
-test "solv cache identity binds every optional metadata mask" {
-    const loader = repository_metadata.available_repository_loader;
-    const base = loader.solvCacheCookie(
-        "repomd",
-        .{ .include_filelists = false },
-    );
-    const filelists = loader.solvCacheCookie(
-        "repomd",
-        .{ .include_filelists = true },
-    );
-    const updateinfo = loader.solvCacheCookie(
-        "repomd",
-        .{ .include_updateinfo = true },
-    );
-    const other = loader.solvCacheCookie(
-        "repomd",
-        .{ .include_other = true },
-    );
-    try std.testing.expect(!std.mem.eql(u8, &base, &filelists));
-    try std.testing.expect(!std.mem.eql(u8, &base, &updateinfo));
-    try std.testing.expect(!std.mem.eql(u8, &base, &other));
-    try std.testing.expect(!std.mem.eql(u8, &filelists, &updateinfo));
-}
-
-test "integration error mapping preserves OOM and repository integrity" {
-    try std.testing.expectEqual(
-        error_codes.ERROR_TDNF_OUT_OF_MEMORY,
-        mapIntegrationError(error.OutOfMemory),
-    );
-    try std.testing.expectEqual(
-        error_codes.ERROR_TDNF_REPO_PERFORM,
-        mapIntegrationError(error.RepositoryIntegrityMismatch),
-    );
-    try std.testing.expectEqual(
-        error_codes.ERROR_TDNF_INVALID_PARAMETER,
-        mapIntegrationError(error.InvalidRepository),
-    );
-}
-
-test "protected terminal references only forbidden transaction actions" {
-    const packages = [_]transaction_plan.Package{
-        .{
-            .id = "allowed-old",
-            .identity = .{
-                .arch = "x86_64",
-                .epoch = null,
-                .name = "protected-upgrade",
-                .release = "1",
-                .version = "1",
-            },
-            .repository_id = "@System",
-            .rpmdb_hnum = 1,
-            .source = null,
-            .state = .installed,
-        },
-        .{
-            .id = "allowed-new",
-            .identity = .{
-                .arch = "x86_64",
-                .epoch = null,
-                .name = "protected-upgrade",
-                .release = "1",
-                .version = "2",
-            },
-            .repository_id = "base",
-            .rpmdb_hnum = null,
-            .source = null,
-            .state = .available,
-        },
-        .{
-            .id = "forbidden-old",
-            .identity = .{
-                .arch = "x86_64",
-                .epoch = null,
-                .name = "protected-obsolete",
-                .release = "1",
-                .version = "1",
-            },
-            .repository_id = "@System",
-            .rpmdb_hnum = 2,
-            .source = null,
-            .state = .installed,
-        },
-        .{
-            .id = "replacement",
-            .identity = .{
-                .arch = "x86_64",
-                .epoch = null,
-                .name = "replacement",
-                .release = "1",
-                .version = "1",
-            },
-            .repository_id = "base",
-            .rpmdb_hnum = null,
-            .source = null,
-            .state = .available,
-        },
-        .{
-            .id = "forbidden-erase",
-            .identity = .{
-                .arch = "x86_64",
-                .epoch = null,
-                .name = "protected-erase",
-                .release = "1",
-                .version = "1",
-            },
-            .repository_id = "@System",
-            .rpmdb_hnum = 3,
-            .source = null,
-            .state = .installed,
-        },
-    };
-    const allowed_upgrade = transaction_plan.Action{
-        .kind = .upgrade,
-        .prior_package_ids = &.{"allowed-old"},
-        .reason = .user,
-        .requested_by_job_id = "allowed-job",
-        .target_package_id = "allowed-new",
-    };
-    var data = transaction_plan.Data{
-        .actions = &.{},
-        .environment = .{
-            .architecture = "x86_64",
-            .distro = "test",
-            .policy = .{
-                .allow_erasing = true,
-                .allow_multilib = true,
-                .all_deps = false,
-                .best = false,
-                .clean_requirements_on_remove = false,
-                .excludes = &.{},
-                .force_architecture = null,
-                .include_installed = true,
-                .installonly_limit = 3,
-                .installonly_names = &.{},
-                .install_weak_dependencies = true,
-                .keep_orphans = true,
-                .locked_names = &.{},
-                .min_versions = &.{},
-                .protected_names = &.{
-                    "protected-upgrade",
-                    "protected-obsolete",
-                    "protected-erase",
-                },
-                .skip_broken = false,
-            },
-            .releasever = "1",
-            .resolution_status = .resolved,
-            .rpmdb = .{
-                .backend = .sqlite,
-                .cookie_sha256 = "",
-                .package_set_sha256 = "",
-            },
-        },
-        .hidden_packages = &.{},
-        .jobs = &.{},
-        .packages = &packages,
-        .problems = &.{},
-        .repositories = &.{},
-        .requests = &.{},
-        .selected = &.{},
-        .skipped = &.{},
-    };
-    data.actions = &.{
-        allowed_upgrade,
-        .{
-            .kind = .obsolete,
-            .prior_package_ids = &.{"forbidden-old"},
-            .reason = .obsoletes,
-            .requested_by_job_id = "obsolete-job",
-            .target_package_id = "replacement",
-        },
-    };
-    var reference = terminalProblemReference(data, .protected_package);
-    try std.testing.expectEqualStrings("obsolete-job", reference.job_id.?);
-    try std.testing.expectEqualStrings(
-        "forbidden-old",
-        reference.package_id.?,
-    );
-
-    data.actions = &.{
-        allowed_upgrade,
-        .{
-            .kind = .erase,
-            .prior_package_ids = &.{},
-            .reason = .user,
-            .requested_by_job_id = "erase-job",
-            .target_package_id = "forbidden-erase",
-        },
-    };
-    reference = terminalProblemReference(data, .protected_package);
-    try std.testing.expectEqualStrings("erase-job", reference.job_id.?);
-    try std.testing.expectEqualStrings(
-        "forbidden-erase",
-        reference.package_id.?,
-    );
-}
-
-fn repositoryRecordAllocationCase(allocator: Allocator) !void {
-    const state = try State.create(allocator);
-    defer state.destroy();
-    state.setEnabled(true);
-    const repository: *anyopaque = @ptrFromInt(0x1000);
-    const refresh_owner: *anyopaque = @ptrFromInt(0x4000);
-    try state.recordRepository(repository, [_]u8{1} ** 32, .{});
-    try state.beginRepositoryRefresh(refresh_owner);
-    try state.recordRepository(repository, [_]u8{2} ** 32, .{});
-    try std.testing.expectEqual(
-        [_]u8{2} ** 32,
-        state.repositoryRecord(repository).?.cookie_sha256,
-    );
-    state.rollbackRepositoryRefresh(refresh_owner);
-    try std.testing.expectEqual(@as(usize, 1), state.repository_records.items.len);
-    try std.testing.expectEqual(
-        [_]u8{1} ** 32,
-        state.repositoryRecord(repository).?.cookie_sha256,
-    );
-    try state.beginRepositoryRefresh(refresh_owner);
-    try state.recordRepository(repository, [_]u8{2} ** 32, .{});
-    state.commitRepositoryRefresh(refresh_owner);
-    try std.testing.expectEqual(@as(usize, 1), state.repository_records.items.len);
-    try std.testing.expectEqual(
-        [_]u8{2} ** 32,
-        state.repositoryRecord(repository).?.cookie_sha256,
-    );
-    const replacement: *anyopaque = @ptrFromInt(0x2000);
-    try state.replaceRepositoryRecord(
-        repository,
-        replacement,
-        [_]u8{3} ** 32,
-        .{},
-    );
-    try std.testing.expect(state.repositoryRecord(repository) == null);
-    try std.testing.expectEqual(
-        [_]u8{3} ** 32,
-        state.repositoryRecord(replacement).?.cookie_sha256,
-    );
-    const rebound: *anyopaque = @ptrFromInt(0x3000);
-    state.rebindRepository(replacement, rebound);
-    try std.testing.expect(state.repositoryRecord(replacement) == null);
-    try std.testing.expect(state.repositoryRecord(rebound) != null);
-}
-
-test "repository record OOM propagates without poisoning refresh state" {
-    try std.testing.checkAllAllocationFailures(
-        std.testing.allocator,
-        repositoryRecordAllocationCase,
-        .{},
-    );
-}
-
-test "authoritative plan is stored, fail-closed, and owned past teardown" {
-    var cache = try TestCache.create();
-    var cache_live = true;
-    defer if (cache_live) cache.cleanup();
-    var cache_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const cache_path = try cache.path(
-        &cache_path_buffer,
-        "cache-token=never-store",
-    );
-    const cache_path_z = try std.testing.allocator.dupeZ(u8, cache_path);
-    defer std.testing.allocator.free(cache_path_z);
-    var root_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_path = try cache.path(&root_path_buffer, "root");
-    var cwd_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    switch (std.os.linux.errno(std.os.linux.getcwd(
-        cwd_buffer[0..].ptr,
-        cwd_buffer.len,
-    ))) {
-        .SUCCESS => {},
-        else => return error.TestUnexpectedResult,
-    }
-    const cwd_length = std.mem.findScalar(u8, &cwd_buffer, 0) orelse
-        return error.TestUnexpectedResult;
-    const root_path_z = try std.fmt.allocPrintSentinel(
-        std.testing.allocator,
-        "{s}/{s}",
-        .{ cwd_buffer[0..cwd_length], root_path },
-        0,
-    );
-    defer std.testing.allocator.free(root_path_z);
-    const rpm_config = tdnf_rpm_config_create(root_path_z.ptr) orelse
-        return error.TestUnexpectedResult;
-    var config_live = true;
-    defer if (config_live) tdnf_rpm_config_destroy(rpm_config);
-
-    var universe = try TestUniverse.create();
-    var universe_live = true;
-    defer if (universe_live) universe.destroy();
-    const installed = try universe.addRepository("@System", true, 0);
-    const available = try universe.addRepository("base", false, -10);
-    const unreferenced = try universe.addRepository("extras", false, -20);
-    const command_line = try universe.addRepository("@cmdline", false, 0);
-    var live_metadata_arena = std.heap.ArenaAllocator.init(
-        std.testing.allocator,
-    );
-    defer live_metadata_arena.deinit();
-    const live_metadata = try repository_metadata.available_repository_loader
-        .loadCacheModelWithRepomd(
-        live_metadata_arena.allocator(),
-        cache_path,
-        .{
-            .include_filelists = true,
-            .include_updateinfo = true,
-            .include_other = true,
-        },
-    );
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        live_metadata.repository.advisories.len,
-    );
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        live_metadata.repository.changelogs.len,
-    );
-    try repository_metadata.solv_bridge.buildRepositoryIntoRepo(
-        live_metadata_arena.allocator(),
-        available,
-        &live_metadata.repository,
-    );
-    try repository_metadata.solv_bridge.buildRepositoryIntoRepo(
-        live_metadata_arena.allocator(),
-        unreferenced,
-        &live_metadata.repository,
-    );
-    const app = try findSolvableByName(universe.pool, available, "app");
-    const local = try universe.addPackage(
-        command_line,
-        "local",
-        "4-5",
-        null,
-        "/credential-cache/private/local.rpm",
-        99,
-    );
-    const excluded_local = try universe.addPackage(
-        command_line,
-        "excluded-local",
-        "1-1",
-        null,
-        "/credential-cache/private/excluded-local.rpm",
-        77,
-    );
-    const excluded_local_twin = try universe.addPackageChecksum(
-        command_line,
-        "excluded-local",
-        "1-1",
-        null,
-        "/credential-cache/private/excluded-local-twin.rpm",
-        78,
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    );
-    universe.finish(&.{ installed, available, unreferenced, command_line });
-    c.pool_addfileprovides(universe.pool);
-    c.pool_createwhatprovides(universe.pool);
-
-    const jobs = [_]i32{
-        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
-        app,
-        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
-        local,
-    };
-
-    const request_trace = @import("transaction_plan_request_trace");
-    var trace = request_trace.Trace.init(std.testing.allocator);
-    var trace_live = true;
-    defer if (trace_live) trace.deinit();
-    const app_request = try trace.addRequest(
-        abi.request_kind.install,
-        "app",
-        false,
-    );
-    try trace.recordPackageJob(
-        0,
-        abi.job_action.install,
-        app,
-        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
-        0,
-        abi.request_reason.user,
-        app_request,
-    );
-    const local_request = try trace.addRequest(
-        abi.request_kind.install,
-        "/credential-cache/private/local.rpm",
-        true,
-    );
-    try trace.recordPackageJob(
-        1,
-        abi.job_action.install,
-        local,
-        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
-        0,
-        abi.request_reason.user,
-        local_request,
-    );
-    const excluded_glob_request = try trace.addRequest(
-        abi.request_kind.install,
-        "excluded-local*",
-        false,
-    );
-    const excluded_glob_ids = [_]i32{
-        excluded_local_twin,
-        excluded_local,
-        excluded_local_twin,
-    };
-    try trace.recordGoalRange(
-        &excluded_glob_ids,
-        0,
-        excluded_glob_ids.len,
-        5,
-        abi.request_reason.user,
-        excluded_glob_request,
-    );
-    for (excluded_glob_ids) |selection_id| {
-        try trace.commitGoal(
-            selection_id,
-            5,
-            &jobs,
-            jobs.len,
-            jobs.len,
-        );
-    }
-    const excluded_capability_request = try trace.addRequest(
-        abi.request_kind.install,
-        "virtual(excluded-local)",
-        false,
-    );
-    const excluded_capability_ids = [_]i32{
-        excluded_local,
-        excluded_local_twin,
-    };
-    try trace.recordGoalRange(
-        &excluded_capability_ids,
-        0,
-        excluded_capability_ids.len,
-        5,
-        abi.request_reason.user,
-        excluded_capability_request,
-    );
-    for (excluded_capability_ids) |selection_id| {
-        try trace.commitGoal(
-            selection_id,
-            5,
-            &jobs,
-            jobs.len,
-            jobs.len,
-        );
-    }
-    try trace.recordPolicies(
-        &.{ "ignored-*", "ignored-*" },
-        &.{ "kernel", "kernel" },
-        &.{},
-        &.{
-            "unrelated=1:2-3",
-            "unrelated=1:2-3",
-            "unrelated=1:3-1",
-            "epoch-only=1:",
-        },
-        &.{ "protected-package", "protected-package" },
-        false,
-    );
-    try trace.finalize(
-        &jobs,
-        c.SOLVER_CLEANDEPS,
-        c.SOLVER_FORCEBEST,
-    );
-
-    var solved = try TestNativeSolve.create(
-        std.testing.allocator,
-        &live_metadata.repository,
-        "base",
-        10,
-        test_checksum,
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    );
-    var solved_live = true;
-    defer if (solved_live) solved.destroy(std.testing.allocator);
-    var exclude_values = [_]?[*:0]const u8{
-        "ignored-*",
-        "ignored-*",
-        null,
-    };
-    var installonly_values = [_]?[*:0]const u8{
-        "kernel",
-        "kernel",
-        null,
-    };
-    var min_version_values = [_]?[*:0]const u8{
-        "unrelated=1:2-3",
-        "unrelated=1:2-3",
-        "unrelated=1:3-1",
-        "epoch-only=1:",
-        null,
-    };
-    var protected_values = [_]?[*:0]const u8{
-        "protected-package",
-        "protected-package",
-        null,
-    };
-    const environment = abi.IntegrationEnvironment{
-        .architecture = "x86_64",
-        .distro = "integration-os",
-        .releasever = "9",
-        .force_architecture = "x86_64",
-        .excludes = &exclude_values,
-        .installonly_names = &installonly_values,
-        .min_versions = &min_version_values,
-        .protected_names = &protected_values,
-        .rpm_config = rpm_config,
-        .installonly_limit = 3,
-        .allow_multilib = 1,
-        .include_installed = 1,
-        .install_weak_dependencies = 1,
-        .keep_orphans = 1,
-    };
-    const repositories = [_]abi.IntegrationRepository{
-        .{
-            .repository = available,
-            .id = "base",
-            .cache_dir = cache_path_z.ptr,
-            .priority = 10,
-            .cost = default_repository_cost,
-        },
-        .{
-            .repository = unreferenced,
-            .id = "extras",
-            .cache_dir = cache_path_z.ptr,
-            .priority = 20,
-            .cost = default_repository_cost,
-        },
-    };
-    const input = Input{
-        .pool = universe.pool,
-        .native_solve = solved.retained,
-        .trace = trace.getView().?,
-        .problems_accepted = false,
-        .unresolved_count = 0,
-        .repositories = &repositories,
-        .environment = &environment,
-    };
-
-    var state_storage: ?*State = null;
-    try std.testing.expectEqual(
-        @as(u32, 0),
-        stateSetEnabled(&state_storage, 1),
-    );
-    const state = state_storage.?;
-    var state_live = true;
-    defer if (state_live) stateDestroy(state_storage);
-    try state.recordRepository(
-        available,
-        cache.load_cookie_sha256,
-        .{
-            .include_filelists = true,
-            .include_updateinfo = true,
-            .include_other = true,
-        },
-    );
-    try state.recordRepository(
-        unreferenced,
-        cache.load_cookie_sha256,
-        .{
-            .include_filelists = true,
-            .include_updateinfo = true,
-            .include_other = true,
-        },
-    );
-    try capturePending(state, input);
-    try std.testing.expect(state.model() == null);
-    try std.testing.expectError(
-        error.NoPlan,
-        state.canonicalJsonAlloc(std.testing.allocator),
-    );
-    try std.testing.expectEqual(@as(u32, 0), statePublish(state));
-    const model = state.model().?;
-    try std.testing.expectEqual(@as(usize, 2), model.actions.len);
-    try std.testing.expectEqual(@as(usize, 2), model.selected.len);
-    try std.testing.expectEqualStrings("x86_64", model.environment.architecture);
-    try std.testing.expectEqualStrings("integration-os", model.environment.distro);
-    try std.testing.expectEqualStrings("9", model.environment.releasever);
-    try std.testing.expectEqualStrings(
-        "x86_64",
-        model.environment.policy.force_architecture.?,
-    );
-    try std.testing.expectEqual(@as(u32, 3), model.environment.policy.installonly_limit);
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        model.environment.policy.excludes.len,
-    );
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        model.environment.policy.installonly_names.len,
-    );
-    try std.testing.expectEqual(
-        @as(usize, 3),
-        model.environment.policy.min_versions.len,
-    );
-    try std.testing.expectEqualStrings(
-        "unrelated",
-        model.environment.policy.min_versions[0].name,
-    );
-    try std.testing.expectEqualStrings(
-        "",
-        model.environment.policy.min_versions[2].version,
-    );
-    try std.testing.expectEqual(@as(usize, 64), model.environment.rpmdb.cookie_sha256.len);
-    try std.testing.expectEqual(@as(usize, 64), model.environment.rpmdb.package_set_sha256.len);
-    const expected_cookie_sha256 = digestHex("0:0");
-    try std.testing.expectEqualStrings(
-        &expected_cookie_sha256,
-        model.environment.rpmdb.cookie_sha256,
-    );
-    try std.testing.expect(!std.mem.eql(
-        u8,
-        model.environment.rpmdb.cookie_sha256,
-        model.environment.rpmdb.package_set_sha256,
-    ));
-
-    const available_model = modelRepositoryByKind(model, .available).?;
-    try std.testing.expectEqual(@as(i32, 10), available_model.priority);
-    try std.testing.expectEqual(@as(u32, 1000), available_model.cost);
-    try std.testing.expectEqualStrings(
-        "integration-revision",
-        available_model.repomd.?.revision.?,
-    );
-    try std.testing.expect(available_model.snapshot != null);
-    try std.testing.expect(modelRepositoryByKind(model, .installed) == null);
-    try std.testing.expect(modelRepositoryByKind(model, .command_line) != null);
-    try std.testing.expect(findRepository(model.repositories, "extras") != null);
-    const app_model = modelPackageByName(model, "app").?;
-    try std.testing.expectEqualStrings("SHA256", app_model.source.?.checksum.kind);
-    try std.testing.expectEqualStrings(
-        "packages/app.rpm",
-        app_model.source.?.location.?.href,
-    );
-    try std.testing.expectEqual(@as(?u64, 321), app_model.source.?.size);
-    const local_model = modelPackageByName(model, "local").?;
-    try std.testing.expect(local_model.source.?.location == null);
-    var glob_package_ids: [2][]const u8 = undefined;
-    var glob_package_count: usize = 0;
-    var capability_package_ids: [2][]const u8 = undefined;
-    var capability_package_count: usize = 0;
-    for (model.jobs) |job| {
-        if (job.request_id) |request_id| {
-            if (std.mem.eql(
-                u8,
-                request_id,
-                model.requests[2].id,
-            )) {
-                if (glob_package_count >= glob_package_ids.len)
-                    return error.TestUnexpectedResult;
-                glob_package_ids[glob_package_count] = job.selection.package;
-                glob_package_count += 1;
-            } else if (std.mem.eql(
-                u8,
-                request_id,
-                model.requests[3].id,
-            )) {
-                if (capability_package_count >= capability_package_ids.len)
-                    return error.TestUnexpectedResult;
-                capability_package_ids[capability_package_count] =
-                    job.selection.package;
-                capability_package_count += 1;
-            }
-        }
-    }
-    try std.testing.expectEqual(@as(usize, 2), glob_package_count);
-    try std.testing.expectEqual(@as(usize, 2), capability_package_count);
-    try std.testing.expect(!std.mem.eql(
-        u8,
-        glob_package_ids[0],
-        glob_package_ids[1],
-    ));
-    for (glob_package_ids) |package_id| {
-        const matched = for (capability_package_ids) |capability_package_id| {
-            if (std.mem.eql(u8, package_id, capability_package_id))
-                break true;
-        } else false;
-        try std.testing.expect(matched);
-    }
-    var saw_original_checksum = false;
-    var saw_twin_checksum = false;
-    for (glob_package_ids) |package_id| {
-        const package = for (model.packages) |candidate| {
-            if (std.mem.eql(u8, package_id, candidate.id)) break candidate;
-        } else return error.TestUnexpectedResult;
-        try std.testing.expectEqualStrings(
-            "excluded-local",
-            package.identity.name,
-        );
-        try std.testing.expect(package.source.?.location == null);
-        if (std.mem.eql(
-            u8,
-            package.source.?.checksum.value,
-            test_checksum,
-        )) {
-            saw_original_checksum = true;
-        } else if (std.mem.eql(
-            u8,
-            package.source.?.checksum.value,
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        )) {
-            saw_twin_checksum = true;
-        } else {
-            return error.TestUnexpectedResult;
-        }
-    }
-    try std.testing.expect(saw_original_checksum);
-    try std.testing.expect(saw_twin_checksum);
-    try std.testing.expectEqualStrings(
-        "excluded-local*",
-        model.requests[2].subject.?,
-    );
-    try std.testing.expectEqualStrings(
-        "virtual(excluded-local)",
-        model.requests[3].subject.?,
-    );
-    const outcome_json = try state.canonicalJsonAlloc(
-        std.testing.allocator,
-    );
-    defer std.testing.allocator.free(outcome_json);
-    var outcome_document = try std.json.parseFromSlice(
-        std.json.Value,
-        std.testing.allocator,
-        outcome_json,
-        .{},
-    );
-    defer outcome_document.deinit();
-    const outcome_object = outcome_document.value.object;
-    var glob_request_id: ?[]const u8 = null;
-    var capability_request_id: ?[]const u8 = null;
-    for (outcome_object.get("requests").?.array.items) |request| {
-        const subject = request.object.get("subject").?;
-        if (subject == .string and
-            std.mem.eql(u8, subject.string, "excluded-local*"))
-        {
-            glob_request_id = request.object.get("id").?.string;
-        } else if (subject == .string and
-            std.mem.eql(u8, subject.string, "virtual(excluded-local)"))
-        {
-            capability_request_id = request.object.get("id").?.string;
-        }
-    }
-    try std.testing.expect(glob_request_id != null);
-    try std.testing.expect(capability_request_id != null);
-    var noop_job_ids: [4][]const u8 = undefined;
-    var noop_job_count: usize = 0;
-    var canonical_glob_count: usize = 0;
-    var canonical_capability_count: usize = 0;
-    for (outcome_object.get("jobs").?.array.items) |job| {
-        const request_id = job.object.get("request_id").?;
-        if (request_id != .string) continue;
-        const is_glob = std.mem.eql(
-            u8,
-            request_id.string,
-            glob_request_id.?,
-        );
-        const is_capability = std.mem.eql(
-            u8,
-            request_id.string,
-            capability_request_id.?,
-        );
-        if (!is_glob and !is_capability) continue;
-        try std.testing.expectEqualStrings(
-            "package",
-            job.object.get("selection").?.object.get("kind").?.string,
-        );
-        noop_job_ids[noop_job_count] = job.object.get("id").?.string;
-        noop_job_count += 1;
-        if (is_glob) canonical_glob_count += 1;
-        if (is_capability) canonical_capability_count += 1;
-    }
-    try std.testing.expectEqual(@as(usize, 2), canonical_glob_count);
-    try std.testing.expectEqual(@as(usize, 2), canonical_capability_count);
-    for (outcome_object.get("actions").?.array.items) |action| {
-        const requested_by = action.object.get("requested_by_job_id").?;
-        if (requested_by != .string) continue;
-        for (noop_job_ids[0..noop_job_count]) |noop_job_id| {
-            try std.testing.expect(!std.mem.eql(
-                u8,
-                requested_by.string,
-                noop_job_id,
-            ));
-        }
-    }
-
-    var saw_app = false;
-    var saw_local = false;
-    for (model.actions) |action| {
-        try std.testing.expectEqual(
-            transaction_plan.ActionKind.install,
-            action.kind,
-        );
-        const package = for (model.packages) |package| {
-            if (std.mem.eql(u8, package.id, action.target_package_id))
-                break package;
-        } else return error.TestUnexpectedResult;
-        if (std.mem.eql(u8, package.identity.name, "app")) saw_app = true;
-        if (std.mem.eql(u8, package.identity.name, "local")) saw_local = true;
-    }
-    try std.testing.expect(saw_app);
-    try std.testing.expect(saw_local);
-    try std.testing.expectEqual(
-        @as(usize, 2),
-        solved.retained.solved.solved.result.outcome.actions.len,
-    );
-    var native_saw_app = false;
-    var native_saw_local = false;
-    for (solved.retained.solved.solved.result.outcome.actions) |action| {
-        if (action.package == solved.app) {
-            native_saw_app = true;
-        } else if (action.package == solved.local) {
-            native_saw_local = true;
-        } else {
-            return error.TestUnexpectedResult;
-        }
-    }
-    try std.testing.expectEqual(saw_app, native_saw_app);
-    try std.testing.expectEqual(saw_local, native_saw_local);
-
-    const terminal_retry_jobs = [_]i32{
-        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
-        app,
-        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
-        local,
-        c.SOLVER_SOLVABLE | c.SOLVER_ERASE,
-        app,
-    };
-    var terminal_retry_trace = request_trace.Trace.init(
-        std.testing.allocator,
-    );
-    defer terminal_retry_trace.deinit();
-    const terminal_app_request = try terminal_retry_trace.addRequest(
-        abi.request_kind.install,
-        "app",
-        false,
-    );
-    try terminal_retry_trace.recordPackageJob(
-        0,
-        abi.job_action.install,
-        app,
-        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
-        0,
-        abi.request_reason.user,
-        terminal_app_request,
-    );
-    const terminal_local_request = try terminal_retry_trace.addRequest(
-        abi.request_kind.install,
-        "/credential-cache/private/local.rpm",
-        true,
-    );
-    try terminal_retry_trace.recordPackageJob(
-        1,
-        abi.job_action.install,
-        local,
-        c.SOLVER_SOLVABLE | c.SOLVER_INSTALL,
-        0,
-        abi.request_reason.user,
-        terminal_local_request,
-    );
-    try terminal_retry_trace.recordPackageJob(
-        2,
-        abi.job_action.erase,
-        app,
-        c.SOLVER_SOLVABLE | c.SOLVER_ERASE,
-        0,
-        abi.request_reason.installonly_limit,
-        abi.request_trace_no_request,
-    );
-    try terminal_retry_trace.recordPolicies(
-        &.{ "ignored-*", "ignored-*" },
-        &.{ "kernel", "kernel" },
-        &.{},
-        &.{
-            "unrelated=1:2-3",
-            "unrelated=1:2-3",
-            "unrelated=1:3-1",
-            "epoch-only=1:",
-        },
-        &.{ "protected-package", "protected-package" },
-        false,
-    );
-    try terminal_retry_trace.finalize(
-        &terminal_retry_jobs,
-        c.SOLVER_CLEANDEPS,
-        c.SOLVER_FORCEBEST,
-    );
-    var terminal_retry_input = input;
-    terminal_retry_input.trace = terminal_retry_trace.getView().?;
-    terminal_retry_input.terminal_problem_kind = .installonly_limit;
-    try std.testing.expectError(
-        error.JobMismatch,
-        capturePending(state, terminal_retry_input),
-    );
-    terminal_retry_input.terminal_problem_kind = .protected_package;
-    try std.testing.expectError(
-        error.JobMismatch,
-        capturePending(state, terminal_retry_input),
-    );
-
-    var terminal_input = input;
-    terminal_input.terminal_problem_kind = .protected_package;
-    try capturePending(state, terminal_input);
-    try std.testing.expect(state.hasPendingProblem());
-    try std.testing.expect(state.publishProblem());
-    const terminal_model = state.model().?;
-    try std.testing.expectEqual(
-        .problems,
-        terminal_model.environment.resolution_status,
-    );
-    try std.testing.expectEqual(@as(usize, 0), terminal_model.actions.len);
-    try std.testing.expectEqual(@as(usize, 1), terminal_model.problems.len);
-    try std.testing.expectEqual(
-        transaction_plan.ProblemKind.protected_package,
-        terminal_model.problems[0].kind,
-    );
-
-    var invalid_environment = environment;
-    invalid_environment.allow_multilib = 2;
-    var invalid_input = input;
-    invalid_input.environment = &invalid_environment;
-    try std.testing.expectError(
-        error.InvalidEnvironment,
-        capturePending(state, invalid_input),
-    );
-    try std.testing.expect(state.model() == null);
-    try capturePending(state, input);
-    try std.testing.expectEqual(@as(u32, 0), statePublish(state));
-    try std.testing.expect(state.model() != null);
-    try std.testing.expectEqual(
-        @as(u32, 0),
-        stateSetEnabled(&state_storage, 1),
-    );
-    try std.testing.expect(state.model() == null);
-    try state.recordRepository(
-        available,
-        [_]u8{0} ** 32,
-        .{
-            .include_filelists = true,
-            .include_updateinfo = true,
-            .include_other = true,
-        },
-    );
-    try std.testing.expectError(
-        error.RepositoryIntegrityMismatch,
-        capturePending(state, input),
-    );
-    try std.testing.expect(state.model() == null);
-    try state.recordRepository(
-        available,
-        cache.load_cookie_sha256,
-        .{
-            .include_filelists = true,
-            .include_updateinfo = true,
-            .include_other = true,
-        },
-    );
-    // The pool-only solvable mutations that used to be exercised here
-    // drove verifyAvailableSolverRepository's field-by-field digest and
-    // died with it. The production divergence route -- on-disk metadata
-    // changing between repository load and capture -- is caught one
-    // branch earlier by the load-cookie comparison asserted above, and a
-    // trace-referenced package that no longer matches its captured
-    // source fails closed in planPackageIdForSolvid.
-    try capturePending(state, input);
-    try std.testing.expectEqual(@as(u32, 0), statePublish(state));
-
-    trace.deinit();
-    trace_live = false;
-    solved.destroy(std.testing.allocator);
-    solved_live = false;
-    universe.destroy();
-    universe_live = false;
-    tdnf_rpm_config_destroy(rpm_config);
-    config_live = false;
-    cache.cleanup();
-    cache_live = false;
-
-    var json_pointer: ?[*]const u8 = null;
-    var json_length: usize = 0;
-    try std.testing.expectEqual(
-        @as(u32, 0),
-        stateGetCanonicalJson(state, &json_pointer, &json_length),
-    );
-    defer stateFreeCanonicalJson(json_pointer, json_length);
-    const json = json_pointer.?[0..json_length];
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"app\"") != null);
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        json,
-        "cache-token=never-store",
-    ) == null);
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        json,
-        "/credential-cache/private/local.rpm",
-    ) == null);
-    stateClear(state);
-    try std.testing.expectError(
-        error.NoPlan,
-        state.canonicalJsonAlloc(std.testing.allocator),
-    );
-    try std.testing.expectEqual(
-        @as(u32, 0),
-        stateSetEnabled(&state_storage, 0),
-    );
-    try std.testing.expect(!state.enabled);
-    stateDestroy(state_storage);
-    state_storage = null;
-    state_live = false;
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"app\"") != null);
-}
-
-fn libsolvPoolArchitecture(pool: *c.Pool) IntegrationError![]const u8 {
-    if (pool.id2arch == null or pool.lastarch <= 1) {
-        return error.InvalidEnvironment;
-    }
-    var best_id: c.Id = 0;
-    var best_score: c.Id = std.math.maxInt(c.Id);
-    var id: c.Id = 1;
-    while (id < pool.lastarch) : (id += 1) {
-        const score = pool.id2arch[@intCast(id)];
-        if (score > 1 and score < best_score) {
-            best_score = score;
-            best_id = id;
-        }
-    }
-    if (best_id == 0) return error.InvalidEnvironment;
-    const raw = c.pool_id2str(pool, best_id) orelse
-        return error.InvalidEnvironment;
-    const architecture = std.mem.span(raw);
-    if (architecture.len == 0) return error.InvalidEnvironment;
-    return architecture;
-}
-
-test "native architecture matches the libsolv arch policy readback" {
-    // Heads of multi-token policies, an architecture absent from the policy
-    // table, and one that is only ever a tail of somebody else's policy.
-    const cases = [_][]const u8{
-        "x86_64",  "x86_64_v2", "x86_64_v3", "x86_64_v4",
-        "i686",    "i586",      "i486",      "i386",
-        "s390x",   "ppc64",     "ppc64p7",   "ia64",
-        "armv7hl", "armv8l",    "sparcv9",   "e2kv4",
-        "aarch64", "riscv64",   "ppc64le",   "loongarch64",
-    };
-    for (cases) |arch| {
-        errdefer std.debug.print("\narchitecture case {s}\n", .{arch});
-        const pool = c.pool_create() orelse return error.OutOfMemory;
-        defer c.pool_free(pool);
-        const arch_z = try std.testing.allocator.dupeZ(u8, arch);
-        defer std.testing.allocator.free(arch_z);
-        c.pool_setarch(pool, arch_z.ptr);
-        const environment = abi.IntegrationEnvironment{
-            .force_architecture = arch_z.ptr,
-        };
-        try std.testing.expectEqualStrings(
-            try libsolvPoolArchitecture(pool),
-            try effectiveArchitecture(std.testing.allocator, &environment),
-        );
-    }
-}
-
-test "an empty forced architecture is rejected on both paths" {
-    const pool = c.pool_create() orelse return error.OutOfMemory;
-    defer c.pool_free(pool);
-    c.pool_setarch(pool, "");
-    try std.testing.expectError(
-        error.InvalidEnvironment,
-        libsolvPoolArchitecture(pool),
-    );
-    try std.testing.expectError(
-        error.InvalidEnvironment,
-        effectiveArchitecture(
-            std.testing.allocator,
-            &.{ .force_architecture = "" },
-        ),
-    );
-}
-
-test "an absent forced architecture reports the kernel machine" {
-    const host = std.posix.uname();
-    const machine = std.mem.sliceTo(&host.machine, 0);
-    const pool = c.pool_create() orelse return error.OutOfMemory;
-    defer c.pool_free(pool);
-    c.pool_setarch(pool, &host.machine);
-    const native = try effectiveArchitecture(
-        std.testing.allocator,
-        &.{ .force_architecture = null },
-    );
-    defer std.testing.allocator.free(native);
-    try std.testing.expectEqualStrings(machine, native);
-    try std.testing.expectEqualStrings(
-        try libsolvPoolArchitecture(pool),
-        native,
-    );
-}
-
-/// Every field the snapshot id hashes, read back out of libsolv exactly the way
-/// `bindRepositoryVisibility` used to read it.
-fn libsolvVisibilityFacts(
-    allocator: Allocator,
-    pool: *c.Pool,
-    repository: *c.Repo,
-    repository_name: []const u8,
-) IntegrationError![]VisibilityFact {
-    var facts = std.ArrayList(VisibilityFact).empty;
-    errdefer facts.deinit(allocator);
-    errdefer for (facts.items) |fact|
-        deinitSolverPackageFact(allocator, fact.package);
-    var solvid = repository.start;
-    while (solvid < repository.end) : (solvid += 1) {
-        const raw = c.pool_id2solvable(pool, solvid) orelse continue;
-        const solvable: *c.Solvable = @ptrCast(raw);
-        if (solvable.repo != repository or solvable.name == 0) continue;
-        const fact = try solverFactKeyForSolvid(
-            allocator,
-            pool,
-            repository_name,
-            solvid,
-        );
-        // Every solvable a repository holds is visible: `pool->considered`
-        // is retired, so libsolv has no hiding channel left to consult.
-        facts.append(allocator, .{
-            .package = fact,
-            .considered = true,
-        }) catch |err| {
-            deinitSolverPackageFact(allocator, fact);
-            return err;
-        };
-    }
-    return facts.toOwnedSlice(allocator);
-}
-
-fn expectEqualOptionalStrings(
-    expected: ?[]const u8,
-    actual: ?[]const u8,
-) !void {
-    if (expected == null or actual == null) {
-        return std.testing.expectEqual(expected == null, actual == null);
-    }
-    return std.testing.expectEqualStrings(expected.?, actual.?);
-}
-
-/// Packages chosen to exercise every normalization libsolv applies between
-/// `SolvBuilder.addPrimary` and the fact-key readback. Each entry is a case
-/// that a naive native reimplementation gets wrong.
-fn differentialVisibilityPackages() []const metadata_model.Package {
-    const sha256_lower = "0123456789abcdef" ** 4;
-    const sha256_upper = "0123456789ABCDEF" ** 4;
-    const sha1_hex = "0123456789abcdef0123456789abcdef01234567";
-    const S = struct {
-        const packages = [_]metadata_model.Package{
-            // Ordinary case: canonical href, pkgid, explicit size.
-            .{
-                .pkg_id = "p1",
-                .nevra = .{
-                    .name = "alpha",
-                    .version = "1.2",
-                    .release = "3",
-                    .arch = "x86_64",
-                },
-                .checksum = .{
-                    .kind = "sha256",
-                    .value = sha256_lower,
-                    .is_pkgid = true,
-                },
-                .location = .{
-                    .href = "packages/alpha-1.2-3.x86_64.rpm",
-                },
-                .size = .{ .package = 4096 },
-            },
-            // Uppercase kind and value: both fold on the way through libsolv.
-            .{
-                .pkg_id = "p2",
-                .nevra = .{
-                    .name = "beta",
-                    .epoch = 2,
-                    .version = "4.5",
-                    .release = "6",
-                    .arch = "noarch",
-                },
-                .checksum = .{
-                    .kind = "SHA256",
-                    .value = sha256_upper,
-                    .is_pkgid = true,
-                },
-                .location = .{ .href = "beta-4.5-6.noarch.rpm" },
-            },
-            // "sha" is an alias for sha1, not a distinct identity.
-            .{
-                .pkg_id = "p3",
-                .nevra = .{
-                    .name = "gamma",
-                    .version = "7",
-                    .release = "8",
-                    .arch = "i686",
-                },
-                .checksum = .{ .kind = "sha", .value = sha1_hex },
-                .location = .{
-                    .href = "./gamma-7-8.i686.rpm",
-                    .xml_base = "../pool",
-                },
-                .size = .{ .package = 1 },
-            },
-            // Too short for its declared type: libsolv stores no checksum.
-            .{
-                .pkg_id = "p4",
-                .nevra = .{
-                    .name = "delta",
-                    .epoch = 0,
-                    .version = "9",
-                    .release = "10",
-                    .arch = "x86_64",
-                },
-                .checksum = .{ .kind = "sha256", .value = "abcd" },
-                .location = .{ .href = "" },
-            },
-            // Directory equal to the architecture, and a rooted href.
-            .{
-                .pkg_id = "p5",
-                .nevra = .{
-                    .name = "epsilon",
-                    .version = "11",
-                    .release = "12",
-                    .arch = "x86_64",
-                },
-                .checksum = .{ .kind = "sha256", .value = sha256_lower },
-                .location = .{ .href = "x86_64/epsilon-11-12.x86_64.rpm" },
-                .size = .{ .package = 0 },
-            },
-            .{
-                .pkg_id = "p6",
-                .nevra = .{
-                    .name = "zeta",
-                    .version = "13",
-                    .release = "14",
-                    .arch = "noarch",
-                },
-                .checksum = .{ .kind = "md5", .value = "0123456789abcdef" ** 2 },
-                .location = .{ .href = "/zeta-13-14.noarch.rpm" },
-            },
-            // A version that already looks epoch-prefixed forces a zero epoch.
-            .{
-                .pkg_id = "p7",
-                .nevra = .{
-                    .name = "eta",
-                    .version = "15:16",
-                    .release = "17",
-                    .arch = "noarch",
-                },
-                .checksum = .{ .kind = "sha512", .value = "0123456789abcdef" ** 8 },
-                .location = .{ .href = "./deep/eta.rpm" },
-            },
-            // No version, no release, no epoch: the EVR interns as nothing.
-            .{
-                .pkg_id = "p8",
-                .nevra = .{ .name = "theta", .arch = "noarch" },
-                .checksum = .{ .kind = "sha224", .value = "0123456789abcdef" ** 4 },
-                .location = .{ .href = "theta.rpm" },
-            },
-        };
-    };
-    return &S.packages;
-}
-
-fn differentialVisibilityAdvisories() []const metadata_model.Advisory {
-    const S = struct {
-        const advisories = [_]metadata_model.Advisory{
-            .{ .id = "TDNF-2026-0001", .raw_type = "security", .version = "3" },
-            .{ .id = "TDNF-2026-0002", .raw_type = "bugfix" },
-        };
-    };
-    return &S.advisories;
-}
-
-test "native visibility facts reproduce the libsolv readback byte for byte" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const model = metadata_model.RepositoryModel{
-        .packages = @constCast(differentialVisibilityPackages()),
-        .advisories = @constCast(differentialVisibilityAdvisories()),
-        .has_updateinfo = true,
-    };
-
-    const pool = c.pool_create() orelse return error.OutOfMemory;
-    defer c.pool_free(pool);
-    if (c.pool_setdisttype(pool, c.DISTTYPE_RPM) != 0) {
-        return error.TestUnexpectedResult;
-    }
-    c.pool_setarch(pool, "x86_64");
-    const raw_repo = c.repo_create(pool, "available") orelse
-        return error.OutOfMemory;
-    const repo: *c.Repo = @ptrCast(raw_repo);
-    try repository_metadata.solv_bridge.buildRepositoryIntoRepo(
-        arena,
-        repo,
-        &model,
-    );
-    c.pool_createwhatprovides(pool);
-
-    const libsolv_facts = try libsolvVisibilityFacts(
-        arena,
-        pool,
-        repo,
-        "available",
-    );
-    var native_facts = std.ArrayList(VisibilityFact).empty;
-    try collectNativeVisibilityFacts(
-        arena,
-        "available",
-        &model,
-        &.{},
-        &native_facts,
-    );
-
-    try std.testing.expectEqual(libsolv_facts.len, native_facts.items.len);
-    std.mem.sort(VisibilityFact, libsolv_facts, {}, visibilityFactLessThan);
-    std.mem.sort(
-        VisibilityFact,
-        native_facts.items,
-        {},
-        visibilityFactLessThan,
-    );
-    for (libsolv_facts, native_facts.items) |expected, actual| {
-        errdefer std.debug.print(
-            "\nvisibility fact mismatch for {s}\n",
-            .{expected.package.name},
-        );
-        try std.testing.expectEqualStrings(
-            expected.package.repository,
-            actual.package.repository,
-        );
-        try std.testing.expectEqualStrings(
-            expected.package.name,
-            actual.package.name,
-        );
-        try std.testing.expectEqualStrings(
-            expected.package.arch,
-            actual.package.arch,
-        );
-        try std.testing.expectEqualStrings(
-            expected.package.evr,
-            actual.package.evr,
-        );
-        try std.testing.expectEqualStrings(
-            expected.package.pkgid_kind,
-            actual.package.pkgid_kind,
-        );
-        try std.testing.expectEqualStrings(
-            expected.package.pkgid_value,
-            actual.package.pkgid_value,
-        );
-        try std.testing.expectEqualStrings(
-            expected.package.checksum_kind,
-            actual.package.checksum_kind,
-        );
-        try std.testing.expectEqualStrings(
-            expected.package.checksum_value,
-            actual.package.checksum_value,
-        );
-        try expectEqualOptionalStrings(
-            expected.package.location,
-            actual.package.location,
-        );
-        try expectEqualOptionalStrings(
-            expected.package.xml_base,
-            actual.package.xml_base,
-        );
-        try std.testing.expectEqual(
-            expected.package.download_size,
-            actual.package.download_size,
-        );
-        try std.testing.expectEqual(expected.considered, actual.considered);
-    }
-
-    const captured = transaction_plan.Repository{
-        .cost = default_repository_cost,
-        .id = "available",
-        .kind = .available,
-        .priority = 0,
-        .repomd = null,
-        .snapshot = .{
-            .id = "snapshot-v2-" ++ "a" ** 64,
-            .metadata_sha256 = "a" ** 64,
-        },
-    };
-    const libsolv_id = try visibilitySnapshotId(
-        arena,
-        captured.snapshot.?.id,
-        libsolv_facts,
-    );
-    const native = try bindRepositoryVisibility(
-        arena,
-        "available",
-        &model,
-        &.{},
-        captured,
-    );
-    try std.testing.expectEqualStrings(libsolv_id, native.snapshot.?.id);
-}
-
-test "advisory pseudo solvables stay inside the snapshot identity" {
-    try std.testing.expectEqualStrings(
-        "tdnf.repository-visible-snapshot/v2",
-        visible_snapshot_identity_domain,
-    );
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const captured = transaction_plan.Repository{
-        .cost = default_repository_cost,
-        .id = "available",
-        .kind = .available,
-        .priority = 0,
-        .repomd = null,
-        .snapshot = .{
-            .id = "snapshot-v2-" ++ "a" ** 64,
-            .metadata_sha256 = "a" ** 64,
-        },
-    };
-    var with_updateinfo = metadata_model.RepositoryModel{
-        .packages = @constCast(differentialVisibilityPackages()),
-        .advisories = @constCast(differentialVisibilityAdvisories()),
-        .has_updateinfo = true,
-    };
-    var without_updateinfo = with_updateinfo;
-    without_updateinfo.has_updateinfo = false;
-    const bound = try bindRepositoryVisibility(
-        arena,
-        "available",
-        &with_updateinfo,
-        &.{},
-        captured,
-    );
-    const unbound = try bindRepositoryVisibility(
-        arena,
-        "available",
-        &without_updateinfo,
-        &.{},
-        captured,
-    );
-    try std.testing.expect(!std.mem.eql(
-        u8,
-        bound.snapshot.?.id,
-        unbound.snapshot.?.id,
-    ));
-}
-
-test "hiding a package changes the repository snapshot identity" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const model = metadata_model.RepositoryModel{
-        .packages = @constCast(differentialVisibilityPackages()),
-    };
-    const captured = transaction_plan.Repository{
-        .cost = default_repository_cost,
-        .id = "available",
-        .kind = .available,
-        .priority = 0,
-        .repomd = null,
-        .snapshot = .{
-            .id = "snapshot-v2-" ++ "a" ** 64,
-            .metadata_sha256 = "a" ** 64,
-        },
-    };
-    var legacy_labeled = captured;
-    legacy_labeled.snapshot.?.id = "snapshot-v1-" ++ "a" ** 64;
-    try std.testing.expectError(
-        error.InvalidRepository,
-        bindRepositoryVisibility(
-            arena,
-            "available",
-            &model,
-            &.{},
-            legacy_labeled,
-        ),
-    );
-    const all_visible = try bindRepositoryVisibility(
-        arena,
-        "available",
-        &model,
-        &.{},
-        captured,
-    );
-    const hidden = [_]HiddenIdentity{.{
-        .repository_id = "available",
-        .name = "alpha",
-        .arch = "x86_64",
-        .version = "1.2",
-        .release = "3",
-        .epoch = 0,
-    }};
-    const one_hidden = try bindRepositoryVisibility(
-        arena,
-        "available",
-        &model,
-        &hidden,
-        captured,
-    );
-    // A hidden package in another repository must not move this one.
-    const other_repository = [_]HiddenIdentity{.{
-        .repository_id = "other",
-        .name = "alpha",
-        .arch = "x86_64",
-        .version = "1.2",
-        .release = "3",
-        .epoch = 0,
-    }};
-    const unaffected = try bindRepositoryVisibility(
-        arena,
-        "available",
-        &model,
-        &other_repository,
-        captured,
-    );
-    try std.testing.expect(std.mem.startsWith(
-        u8,
-        all_visible.snapshot.?.id,
-        repository_capture.snapshot_id_prefix,
-    ));
-    try std.testing.expect(!std.mem.eql(
-        u8,
-        all_visible.snapshot.?.id,
-        one_hidden.snapshot.?.id,
-    ));
-    try std.testing.expectEqualStrings(
-        all_visible.snapshot.?.id,
-        unaffected.snapshot.?.id,
-    );
-}
-
-fn visibilityBindingAllocationCase(
-    allocator: Allocator,
-    model: *const metadata_model.RepositoryModel,
-) !void {
-    const output = try bindRepositoryVisibility(
-        allocator,
-        "available",
-        model,
-        &.{},
-        .{
-            .cost = default_repository_cost,
-            .id = "available",
-            .kind = .available,
-            .priority = 0,
-            .repomd = null,
-            .snapshot = .{
-                .id = "snapshot-v2-" ++ "a" ** 64,
-                .metadata_sha256 = "a" ** 64,
-            },
-        },
-    );
-    allocator.free(output.snapshot.?.id);
-}
-
-test "visibility binding cleans every allocation failure" {
-    const model = metadata_model.RepositoryModel{
-        .packages = @constCast(differentialVisibilityPackages()),
-        .advisories = @constCast(differentialVisibilityAdvisories()),
-        .has_updateinfo = true,
-    };
-    try std.testing.checkAllAllocationFailures(
-        std.testing.allocator,
-        visibilityBindingAllocationCase,
-        .{&model},
-    );
-}
-
-
-
-fn testRepositoryInput(
-    id: [*:0]const u8,
-    repository: *anyopaque,
-) abi.IntegrationRepository {
-    return .{
-        .repository = repository,
-        .id = id,
-        .cache_dir = "/nonexistent",
-        .priority = 0,
-        .cost = default_repository_cost,
-    };
-}
-
-test "repository input validation rejects malformed capture inputs" {
-    var first: u8 = 0;
-    var second: u8 = 0;
-    const first_repo: *anyopaque = @ptrCast(&first);
-    const second_repo: *anyopaque = @ptrCast(&second);
-
-    try validateRepositoryInputs(&.{
-        testRepositoryInput("base", first_repo),
-        testRepositoryInput("extras", second_repo),
-    });
-
-    var missing = testRepositoryInput("base", first_repo);
-    missing.repository = null;
-    try std.testing.expectError(
-        error.InvalidRepository,
-        validateRepositoryInputs(&.{missing}),
-    );
-
-    var unnegatable = testRepositoryInput("base", first_repo);
-    unnegatable.priority = std.math.minInt(i32);
-    try std.testing.expectError(
-        error.InvalidRepository,
-        validateRepositoryInputs(&.{unnegatable}),
-    );
-
-    // The only validation of the repository cost convention in the tree.
-    var costly = testRepositoryInput("base", first_repo);
-    costly.cost = default_repository_cost + 1;
-    try std.testing.expectError(
-        error.InvalidRepository,
-        validateRepositoryInputs(&.{costly}),
-    );
-    var free = testRepositoryInput("base", first_repo);
-    free.cost = 0;
-    try std.testing.expectError(
-        error.InvalidRepository,
-        validateRepositoryInputs(&.{free}),
-    );
-
-    try std.testing.expectError(
-        error.AmbiguousRepository,
-        validateRepositoryInputs(&.{
-            testRepositoryInput("base", first_repo),
-            testRepositoryInput("base", second_repo),
-        }),
-    );
-    try std.testing.expectError(
-        error.AmbiguousRepository,
-        validateRepositoryInputs(&.{
-            testRepositoryInput("base", first_repo),
-            testRepositoryInput("extras", first_repo),
-        }),
-    );
-}
-
-fn testPlanRepository(
-    id: []const u8,
-    kind: transaction_plan.RepositoryKind,
-) transaction_plan.Repository {
-    return .{
-        .cost = default_repository_cost,
-        .id = id,
-        .kind = kind,
-        .priority = 0,
-        .repomd = null,
-        .snapshot = null,
-    };
-}
-
-fn testComposeDataOwner(
-    allocator: Allocator,
-    id: []const u8,
-) !*repository_capture.Owner {
-    const owner = try allocator.create(repository_capture.Owner);
-    owner.* = .{
-        .allocator = allocator,
-        .arena_state = std.heap.ArenaAllocator.init(allocator),
-        .repository = testPlanRepository(id, .available),
-        .packages = &.{},
-        .entries = &.{},
-        .solver_entries = &.{},
-        .solver_lookup_steps = 0,
-        .load_cookie_sha256 = [_]u8{0} ** 32,
-        .solver_repository = undefined,
-    };
-    return owner;
-}
-
-fn testComposeData(
-    allocator: Allocator,
-    solver_repositories: []const transaction_plan.Repository,
-    solver_packages: []const transaction_plan.Package,
-    captured: []const transaction_plan.Repository,
-) IntegrationError!void {
-    var owners = std.ArrayList(*repository_capture.Owner).empty;
-    defer {
-        for (owners.items) |owner| owner.destroy();
-        owners.deinit(allocator);
-    }
-    for (captured) |repository|
-        owners.append(
-            allocator,
-            testComposeDataOwner(allocator, repository.id) catch
-                return error.OutOfMemory,
-        ) catch return error.OutOfMemory;
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    _ = try composeData(
-        arena.allocator(),
-        .{
-            .actions = &.{},
-            .environment = undefined,
-            .hidden_packages = &.{},
-            .jobs = &.{},
-            .packages = solver_packages,
-            .problems = &.{},
-            .repositories = solver_repositories,
-            .requests = &.{},
-            .selected = &.{},
-            .skipped = &.{},
-        },
-        undefined,
-        captured,
-        owners.items,
-    );
-}
-
-test "composed repositories reject capture entries the solver contradicts" {
-    const allocator = std.testing.allocator;
-
-    // A package-less captured repository is legitimately absent from the
-    // native solver's repository list, so absence alone is not an error.
-    try testComposeData(
-        allocator,
-        &.{testPlanRepository("@System", .installed)},
-        &.{},
-        &.{testPlanRepository("empty", .available)},
-    );
-
-    // The same id claimed by the solver under a different kind would append
-    // a duplicate to the combined list and shadow the solver's entry.
-    try std.testing.expectError(
-        error.InvalidRepository,
-        testComposeData(
-            allocator,
-            &.{testPlanRepository("base", .command_line)},
-            &.{},
-            &.{testPlanRepository("base", .available)},
-        ),
-    );
-
-    // Absent from the solver's list, yet referenced by a solver package:
-    // the capture and the solve disagree about which repositories exist.
-    try std.testing.expectError(
-        error.InvalidRepository,
-        testComposeData(
-            allocator,
-            &.{testPlanRepository("@System", .installed)},
-            &.{.{
-                .id = "package-1",
-                .identity = .{
-                    .name = "app",
-                    .arch = "x86_64",
-                    .epoch = null,
-                    .version = "1",
-                    .release = "1",
-                },
-                .repository_id = "ghost",
-                .rpmdb_hnum = null,
-                .source = null,
-                .state = .available,
-            }},
-            &.{testPlanRepository("ghost", .available)},
-        ),
-    );
 }

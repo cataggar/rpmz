@@ -366,7 +366,7 @@ TDNFSolv(
 
     if (dwExcludeCount != 0 && ppszExcludes)
     {
-        if (!pTdnf->pSack || !pTdnf->pSack->pPool)
+        if (!pTdnf->pSack)
         {
             dwError = ERROR_TDNF_INVALID_PARAMETER;
             BAIL_ON_TDNF_ERROR(dwError);
@@ -1094,7 +1094,7 @@ TDNFGoalSolveNative(
     PTDNF_SOLVED_PKG_INFO pInfo = NULL;
     int nSkipBrokenSolve = 0;
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
-       !pTdnf->pSack->pPool || !pTdnf->pRpmConfig || !pQueueJobs ||
+       !pTdnf->pRpmConfig || !pQueueJobs ||
        (!nPrepareOnly && !nRefuteUnsat && !ppInfo) ||
        ((nPrepareOnly || nRefuteUnsat) && !ppHandle))
     {
@@ -1379,7 +1379,7 @@ TDNFGoalBuildNativeSolverJobs(
        half-built sack through, which is a behaviour change this
        increment does not want to make on the side. */
     if(!pTdnf || !pTdnf->pArgs || !pTdnf->pConf || !pTdnf->pSack ||
-       !pTdnf->pSack->pPool || !pQueueJobs || !ppJobs || !pdwJobCount ||
+       !pQueueJobs || !ppJobs || !pdwJobCount ||
        !ppEraseJobs || !pdwEraseJobCount || !pppszInstallOnlyPkgs ||
        !pppszUserInstalledPkgs || !pppszLockedPkgs || !pppszCmdLinePaths ||
        !ppdwLockedQueuePairs || !pdwGlobalQueuePair ||
@@ -1568,7 +1568,7 @@ TDNFGoalBuildNativeSolverJobs(
         /* A command-line solvable has no downloadable metadata, so the native
            solver rebuilds it from the .rpm that libsolv itself read.
            Testing the repo name alone is equivalent to also comparing against
-           pTdnf->pSolvCmdLineRepo: every writer of that slot creates the repo
+           pTdnf->pCmdLineRepo: every writer of that slot creates the repo
            as CMDLINE_REPO_NAME, so pointer equality implies name equality. */
         if(!strcmp(pJob->pszRepository, CMDLINE_REPO_NAME))
         {
@@ -2005,7 +2005,7 @@ TDNFAddGoal(
     uint32_t nTraceStart = 0;
 
     if(!pTdnf || !pQueueJobs || dwId == 0 || !pTdnf->pSack ||
-       !pTdnf->pSack->pPool)
+       !pTdnf->pSack)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);

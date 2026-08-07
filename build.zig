@@ -1,7 +1,7 @@
 //! tdnf build script (replacement for the former CMake build).
 //!
 //! Produces the same set of artifacts the CMake build did:
-//!   * static libs: common, tdnfsolv, tdnfllconf, jsondump, tdnfhistory
+//!   * static libs: common, tdnfllconf, jsondump, tdnfhistory
 //!   * shared libs: libtdnf.so (SOVERSION=4), libtdnfcli.so (SOVERSION=4)
 //!   * executables: tdnf, tdnf-config, tdnf-history-util, jsondumptest
 //!   * built-ins:   metalink and repository-signature verification
@@ -21,11 +21,7 @@ const default_project_version = "4.0.0";
 const default_project_semver: std.SemanticVersion = .{ .major = 4, .minor = 0, .patch = 0 };
 
 /// Patch level of the vendored libsolv (see `.libsolv` in build.zig.zon).
-/// Handed to both the C and Zig sides as a macro so each can assert the
-/// libsolv headers it compiled against are the vendored ones this build
-/// links -- see the _Static_assert in solv/includes.h and the comptime
-/// check in repomd/solvbridge.zig. Bump alongside build.zig.zon; not
-/// doing so is a loud build error rather than a silent ABI mismatch.
+/// Used only by the opt-in libsolv solver oracle.
 const vendored_libsolv_version_patch = "39";
 
 /// Every client/ C translation unit. libsolv has been pushed out of
@@ -33,8 +29,7 @@ const vendored_libsolv_version_patch = "39";
 /// compiling with no libsolv header anywhere in scope, which the
 /// libsolv-confinement-audit step below proves by building them without
 /// libsolv's include paths. There is no longer an exception --
-/// packageutils.c was the last one. client/transaction_plan_integration.zig
-/// is not covered: it still uses libsolv via repomd (Part B of issue #39).
+/// packageutils.c was the last one.
 const client_libsolv_free_srcs = [_][]const u8{
     "api.c",             "client.c",     "config.c",
     "goal.c",            "gpgcheck.c",   "init.c",    "packageutils.c",
@@ -58,7 +53,7 @@ const tdnf_cflags = [_][]const u8{
     // linking the vendored .a. -I restores the intended precedence, and
     // this flag restores the warning suppression that -isystem used to
     // provide, without exempting any of tdnf's own sources -- every
-    // libsolv header is spelled <solv/...> (see solv/includes.h), and a
+    // libsolv header is spelled <solv/...>, and a
     // header included from a system header is itself a system header, so
     // libsolv's internal quoted includes are covered too.
     "--system-header-prefix=solv/",
@@ -586,10 +581,6 @@ pub fn build(b: *Build) void {
     repomd_mod.addImport("tdnf_error", tdnf_error_mod);
     repomd_mod.addIncludePath(b.path("include"));
     repomd_mod.addIncludePath(b.path("rpmzig"));
-    addLibsolvIncludes(
-        repomd_mod,
-        libsolv_includes,
-    );
 
     const transaction_plan_native_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan_native.zig"),
@@ -727,32 +718,6 @@ pub fn build(b: *Build) void {
         break :blk lib;
     };
 
-    const solv_lib = blk: {
-        const mod = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .pic = true,
-        });
-        mod.addIncludePath(b.path("include"));
-        mod.addIncludePath(b.path("solv"));
-        mod.addIncludePath(b.path("rpmzig"));
-        addLibsolvIncludes(
-            mod,
-            libsolv_includes,
-        );
-        mod.addCSourceFiles(.{
-            .root = b.path("solv"),
-            .files = &.{ "tdnfpackage.c", "tdnfpool.c", "tdnfrepo.c", "tdnfrepo_native.c", "simplequery.c" },
-            .flags = &tdnf_cflags,
-        });
-        break :blk b.addLibrary(.{
-            .name = "tdnfsolv",
-            .linkage = .static,
-            .root_module = mod,
-        });
-    };
-
     const history_lib = blk: {
         const mod = b.createModule(.{
             .root_source_file = b.path("history/history_zig.zig"),
@@ -815,8 +780,6 @@ pub fn build(b: *Build) void {
         );
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addImport("repomd", repomd_mod);
-        test_mod.addObjectFile(libsolv.getEmittedBin());
-        test_mod.addObjectFile(libsolvext.getEmittedBin());
         test_mod.linkLibrary(rpmzig_lib);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
@@ -846,15 +809,9 @@ pub fn build(b: *Build) void {
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
         test_mod.addIncludePath(b.path("include"));
         test_mod.addIncludePath(b.path("rpmzig"));
-        addLibsolvIncludes(
-            test_mod,
-            libsolv_includes,
-        );
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(llconf_lib);
         test_mod.linkLibrary(rpmzig_lib);
-        test_mod.addObjectFile(libsolv.getEmittedBin());
-        test_mod.addObjectFile(libsolvext.getEmittedBin());
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         query_native_test_step.dependOn(&run_tests.step);
@@ -907,8 +864,8 @@ pub fn build(b: *Build) void {
         const tests = b.addTest(.{
             .root_module = test_mod,
         });
-        tests.root_module.addObjectFile(libsolv.getEmittedBin());
-        tests.root_module.addObjectFile(libsolvext.getEmittedBin());
+        tests.root_module.linkLibrary(common_lib);
+        tests.root_module.linkLibrary(llconf_lib);
         tests.root_module.linkLibrary(rpmzig_lib);
         const run_tests = b.addRunArtifact(tests);
         transaction_plan_integration_test_step.dependOn(&run_tests.step);
@@ -1545,25 +1502,20 @@ pub fn build(b: *Build) void {
     // Native transaction ordering, dependency/conflict checks, and the
     // composed transaction executor are unconditional.
     tdnf_so_mod.addCMacro("TDNF_RPMZIG_TRANSACTION_CHECK", "1");
-    // See the stance check at the top of client/includes.h.
+    // The native target may expose host headers, so this production build
+    // declares only that the confinement negative control is not armed.
     tdnf_so_mod.addCMacro("TDNF_CLIENT_LIBSOLV_IN_SCOPE", "1");
-    // All of client/'s C sources are proved libsolv-free by
-    // libsolv-confinement-audit below. This says nothing about
-    // client/transaction_plan_integration.zig, which this same module
-    // compiles and which still reaches libsolv through repomd.
+    // All client C and Zig sources are production-libsolv-free.
     tdnf_so_mod.addCSourceFiles(.{
         .root = b.path("client"),
         .files = &(client_libsolv_free_srcs),
         .flags = &tdnf_cflags,
     });
     tdnf_so_mod.linkLibrary(common_lib);
-    tdnf_so_mod.linkLibrary(solv_lib);
     tdnf_so_mod.linkLibrary(history_lib);
     tdnf_so_mod.linkLibrary(llconf_lib);
     tdnf_so_mod.linkLibrary(rpmzig_lib);
     tdnf_so_mod.linkLibrary(download_zig_lib);
-    tdnf_so_mod.addObjectFile(libsolv.getEmittedBin());
-    tdnf_so_mod.addObjectFile(libsolvext.getEmittedBin());
     const libtdnf = b.addLibrary(.{
         .name = "tdnf",
         .linkage = .dynamic,
@@ -1572,7 +1524,7 @@ pub fn build(b: *Build) void {
     });
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureCreate");
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureDestroy");
-    // Stop re-exporting statically linked libsolv and SQLite. See
+    // Stop re-exporting vendored SQLite. See
     // client/libtdnf.map for why this is a correctness fix and not
     // housekeeping: without it libtdnf.so exports 632 third-party
     // symbols that can interpose on, or be interposed by, a real
@@ -1585,12 +1537,6 @@ pub fn build(b: *Build) void {
     // the sources was wrong eight times; this cannot be: if any of these
     // files reaches for a libsolv type, macro or function -- with or
     // without an #include -- the build fails.
-    //
-    // Scope: C translation units only. client/transaction_plan_integration.zig
-    // is compiled into libtdnf from this same directory and does use
-    // libsolv, through repomd's bindings rather than through
-    // client/includes.h. Porting it is Part B of issue #39; until then
-    // "client/ is libsolv-free" is a statement about client/*.c.
     //
     // What makes this hermetic rather than merely convenient is the
     // explicitly-spelled target:
@@ -1641,7 +1587,7 @@ pub fn build(b: *Build) void {
     // in a module that never calls it can still spell <solv/pool.h> and
     // resolve it from /usr/include with no version assert in scope --
     // exactly the bug the pin exists to prevent, reachable everywhere
-    // except solv/ and repomd/. Nothing in the build graph can catch
+    // outside the oracle module. Nothing in the build graph can catch
     // that, because such a file compiles cleanly; only the spelling
     // gives it away.
     const run_libsolv_include_audit = b.addSystemCommand(
@@ -1999,12 +1945,6 @@ pub fn build(b: *Build) void {
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addIncludePath(b.path("include"));
         test_mod.addIncludePath(b.path("rpmzig"));
-        addLibsolvIncludes(
-            test_mod,
-            libsolv_includes,
-        );
-        test_mod.addObjectFile(libsolv.getEmittedBin());
-        test_mod.addObjectFile(libsolvext.getEmittedBin());
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);

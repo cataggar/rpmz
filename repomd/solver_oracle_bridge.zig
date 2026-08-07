@@ -1,4 +1,11 @@
 const std = @import("std");
+const rpm_add_no_filelist = 1 << 10;
+const rpm_add_with_sha1sum = 1 << 12;
+const rpm_add_with_sha256sum = 1 << 13;
+const rpm_add_with_hdrid = 1 << 15;
+const rpm_add_with_changelog = 1 << 17;
+const rpmdb_keep_gpg_pubkey = 1 << 19;
+
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("stdio.h");
@@ -17,7 +24,7 @@ const c = @cImport({
 pub const libsolv = c;
 
 // The Zig side reaches libsolv through this @cImport, so it needs the
-// same pin as solv/includes.h: zig cc searches /usr/include before user
+// its own vendored-version pin: zig cc searches /usr/include before user
 // -isystem directories, and this module used to be handed libsolv with
 // -isystem, which meant a host libsolv-devel silently supplied the
 // headers while the vendored libsolv was linked. Measured, 0.7.28 and
@@ -322,7 +329,7 @@ pub export fn TDNFRepoMdNativeAddRpm(
     const built = rpmpkg.buildFromRpmFile(arena, &rpm, rpm_path_slice) catch |err| {
         return mapNativeRpmPackageError(err);
     };
-    const header_id = if ((flags & c.RPM_ADD_WITH_HDRID) != 0)
+    const header_id = if ((flags & rpm_add_with_hdrid) != 0)
         buildRpmFileHdrid(arena, &rpm) catch |err| {
             return mapBuildError(err);
         }
@@ -1024,12 +1031,12 @@ const NativeRpmBridge = struct {
 fn optionsFromRpmFlags(flags: c_int) NativeRpmBridgeOptions {
     return .{
         .repodata_flags = flags,
-        .include_filelists = (flags & c.RPM_ADD_NO_FILELIST) == 0,
-        .include_changelogs = (flags & c.RPM_ADD_WITH_CHANGELOG) != 0,
-        .add_hdrid = (flags & c.RPM_ADD_WITH_HDRID) != 0,
-        .checksum_kind = if ((flags & c.RPM_ADD_WITH_SHA256SUM) != 0)
+        .include_filelists = (flags & rpm_add_no_filelist) == 0,
+        .include_changelogs = (flags & rpm_add_with_changelog) != 0,
+        .add_hdrid = (flags & rpm_add_with_hdrid) != 0,
+        .checksum_kind = if ((flags & rpm_add_with_sha256sum) != 0)
             "sha256"
-        else if ((flags & c.RPM_ADD_WITH_SHA1SUM) != 0)
+        else if ((flags & rpm_add_with_sha1sum) != 0)
             "sha1"
         else
             null,
@@ -1457,7 +1464,7 @@ fn loadInstalledPackagesIntoBridge(
             setError("failed to parse rpmdb header blob", .{});
             return error.InvalidRpmHeader;
         };
-        if ((flags & c.RPMDB_KEEP_GPG_PUBKEY) == 0) {
+        if ((flags & rpmdb_keep_gpg_pubkey) == 0) {
             if (header.getString(.name)) |name| {
                 if (std.mem.eql(u8, name, "gpg-pubkey")) {
                     continue;

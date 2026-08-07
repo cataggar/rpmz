@@ -8,13 +8,13 @@
 
 static uint32_t
 NativeQueryAllPkgIds(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueue
     );
 
 static uint32_t
 NativeQuerySerializePackageIdCommon(
-    Pool *pPool,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkgId,
     char **ppszLine
     );
@@ -35,7 +35,7 @@ NativeQueryRefExtractName(
 
 static uint32_t
 NativeQueryAppendRefMatches(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
     PTDNF_ID_LIST pQueue,
@@ -74,7 +74,7 @@ NativeQuerySplitField(
 
 static int
 NativeQueryRefMatchesPkg(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkgId,
     const char *pszRepo,
     const char *pszName,
@@ -356,19 +356,19 @@ error:
  */
 uint32_t
 TDNFNativeQueryInstalledPkgIds(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueue
     )
 {
     uint32_t dwError = 0;
 
-    if(!pSack || !pSack->pPool || !pQueue)
+    if(!pSack || !pQueue)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = TDNFInstalledGetPkgIds(pSack->pPool, pQueue);
+    dwError = TDNFPackageContextGetInstalledPkgIds(pSack, pQueue);
     BAIL_ON_TDNF_ERROR(dwError);
 
 cleanup:
@@ -394,19 +394,19 @@ error:
  */
 static uint32_t
 NativeQueryAllPkgIds(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueue
     )
 {
     uint32_t dwError = 0;
 
-    if(!pSack || !pSack->pPool || !pQueue)
+    if(!pSack || !pQueue)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = TDNFPoolGetPkgIds(pSack->pPool, pQueue);
+    dwError = TDNFPackageContextGetAllPkgIds(pSack, pQueue);
     BAIL_ON_TDNF_ERROR(dwError);
 
 cleanup:
@@ -417,7 +417,7 @@ error:
 
 uint32_t
 TDNFNativeQuerySerializePackageId(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkgId,
     char **ppszLine
     )
@@ -426,12 +426,12 @@ TDNFNativeQuerySerializePackageId(
     {
         return ERROR_TDNF_INVALID_PARAMETER;
     }
-    return NativeQuerySerializePackageIdCommon(pSack->pPool, dwPkgId, ppszLine);
+    return NativeQuerySerializePackageIdCommon(pSack, dwPkgId, ppszLine);
 }
 
 uint32_t
 TDNFNativeQuerySerializeQueuePackageRefs(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueue,
     char ***pppszRefs,
     uint32_t *pdwCount
@@ -651,7 +651,7 @@ error:
 
 uint32_t
 TDNFNativeQueryResolvePackageRefArrayToQueue(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     char **ppszPackageRefs,
     uint32_t dwCount,
     int nInstalledOnly,
@@ -699,7 +699,7 @@ error:
 
 uint32_t
 TDNFNativeQueryResolveSinglePackageRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
     TDNF_PKG_ID *pdwPkgId
@@ -950,7 +950,7 @@ error:
 
 static uint32_t
 NativeQuerySerializePackageIdCommon(
-    Pool *pPool,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkgId,
     char **ppszLine
     )
@@ -960,13 +960,14 @@ NativeQuerySerializePackageIdCommon(
     char *pszNevra = NULL;
     char *pszLine = NULL;
 
-    if(!pPool || !ppszLine)
+    if(!pSack || !ppszLine)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = TDNFPkgHandleGetRepoNevra(pPool, dwPkgId, &pszRepo, &pszNevra);
+    dwError = TDNFPackageContextGetRepoNevra(
+                  pSack, dwPkgId, &pszRepo, &pszNevra);
     BAIL_ON_TDNF_ERROR(dwError);
 
     dwError = TDNFAllocateStringPrintf(
@@ -1102,7 +1103,7 @@ error:
 
 static uint32_t
 NativeQueryAppendRefMatches(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
     PTDNF_ID_LIST pQueue,
@@ -1120,7 +1121,7 @@ NativeQueryAppendRefMatches(
     TDNF_ID_LIST qCandidates = {0};
     int k = 0;
 
-    if(!pSack || !pSack->pPool || IsNullOrEmptyString(pszPackageRef) || !pQueue)
+    if(!pSack || IsNullOrEmptyString(pszPackageRef) || !pQueue)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
         BAIL_ON_TDNF_ERROR(dwError);
@@ -1517,7 +1518,7 @@ NativeQuerySplitField(
    There is one caller.) */
 static int
 NativeQueryRefMatchesPkg(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkgId,
     const char *pszRepo,
     const char *pszName,
@@ -1528,12 +1529,12 @@ NativeQueryRefMatchesPkg(
     TDNF_PKG_FIELDS stFields = {0};
     int nEvrCompare = 0;
 
-    if(!pSack || !pSack->pPool)
+    if(!pSack)
     {
         return 0;
     }
 
-    if(TDNFPkgHandleGetFields(pSack->pPool, dwPkgId, &stFields))
+    if(TDNFPackageContextGetFields(pSack, dwPkgId, &stFields))
     {
         return 0;
     }
@@ -1553,4 +1554,3 @@ NativeQueryRefMatchesPkg(
 
     return nEvrCompare == 0;
 }
-

@@ -27,13 +27,12 @@ TDNFSetRepositoryEnabled(
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
 TDNFBuildRefreshInput(
     PTDNF pTdnf,
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT *pInput
     )
 {
-    if(!pTdnf || !pTdnf->pSack || !pTdnf->pSack->pPool ||
-       !pTdnf->pArgs || !pTdnf->pConf || !pInput ||
-       (pSack && !pSack->pPool))
+    if(!pTdnf || !pTdnf->pSack ||
+       !pTdnf->pArgs || !pTdnf->pConf || !pInput)
     {
         return ERROR_TDNF_INVALID_PARAMETER;
     }
@@ -44,12 +43,12 @@ TDNFBuildRefreshInput(
     pInput->live_sack = pTdnf->pSack;
     pInput->repository_head = pTdnf->pRepos;
     pInput->command_line_repository_slot =
-        (void **)&pTdnf->pSolvCmdLineRepo;
+        (void **)&pTdnf->pCmdLineRepo;
     pInput->state_slot = (void **)&pTdnf->pTransactionPlanState;
     pInput->failure_stage = &pTdnf->nTestReloadFailureStage;
     pInput->refresh_flag = &pTdnf->pArgs->nRefresh;
     pInput->cache_dir = pTdnf->pConf->pszCacheDir;
-    pInput->root_dir = pTdnf->pSack->pszRootDir;
+    pInput->root_dir = TDNFPackageContextRootDir(pTdnf->pSack);
     pInput->architecture = pTdnf->pArgs->pszArch;
     pInput->rpm_config = pTdnf->pRpmConfig;
     pInput->cache_only = pTdnf->pArgs->nCacheOnly;

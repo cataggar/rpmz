@@ -67,20 +67,20 @@ TDNFNativeQueryApplyLocationUrls(
 
 uint32_t
 TDNFNativeQueryInstalledPkgIds(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueue
     );
 
 uint32_t
 TDNFNativeQuerySerializePackageId(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkgId,
     char **ppszLine
     );
 
 uint32_t
 TDNFNativeQuerySerializeQueuePackageRefs(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueue,
     char ***pppszRefs,
     uint32_t *pdwCount
@@ -104,7 +104,7 @@ TDNFNativeQuerySerializeAutoInstalledRefs(
 
 uint32_t
 TDNFNativeQueryResolvePackageRefArrayToQueue(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     char **ppszPackageRefs,
     uint32_t dwCount,
     int nInstalledOnly,
@@ -113,7 +113,7 @@ TDNFNativeQueryResolvePackageRefArrayToQueue(
 
 uint32_t
 TDNFNativeQueryResolveSinglePackageRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
     TDNF_PKG_ID *pdwPkgId
@@ -185,14 +185,14 @@ TDNFFetchRemoteGPGKey(
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
 TDNFBuildRefreshInput(
     PTDNF pTdnf,
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT *pInput
     );
 
 uint32_t
 TDNFRefreshSack(
     PTDNF pTdnf,
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     int nCleanMetadata
     );
 
@@ -324,7 +324,7 @@ TDNFDownloadPackageToDirectory(
 
 uint32_t
 TDNFAddPackagesForInstall(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName,
     int nSource,
@@ -333,14 +333,14 @@ TDNFAddPackagesForInstall(
 
 uint32_t
 TDNFMatchForReinstall(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char* pszName,
     PTDNF_ID_LIST pQueueGoal
     );
 
 uint32_t
 TDNFPopulatePkgInfosFromRefs(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     char **ppszPackageRefs,
     uint32_t dwRefCount,
     PTDNF_PKG_INFO* ppPkgInfo
@@ -348,7 +348,7 @@ TDNFPopulatePkgInfosFromRefs(
 
 uint32_t
 TDNFPkgInfoFilterNewest(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_PKG_INFO pPkgInfos
 );
 
@@ -358,14 +358,14 @@ TDNFPkgInfoFilterNewest(
 
 uint32_t
 TDNFAddPackagesForErase(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     );
 
 uint32_t
 TDNFAddPackagesForUpgrade(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     );
@@ -375,7 +375,7 @@ TDNFAddPackagesForUpgrade(
 uint32_t
 TDNFAddPackagesForDowngrade(
     PTDNF pTdnf,
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     );
@@ -666,7 +666,7 @@ uint32_t
 TDNFInitRepo(
     PTDNF pTdnf,
     PTDNF_REPO_DATA pRepoData,
-    PSolvSack pSack
+    PTDNF_PACKAGE_CONTEXT pSack
     );
 
 uint32_t

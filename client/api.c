@@ -570,7 +570,7 @@ TDNFOpenHandle(
 {
     uint32_t dwError = 0;
     PTDNF pTdnf = NULL;
-    PSolvSack pSack = NULL;
+    PTDNF_PACKAGE_CONTEXT pSack = NULL;
     char *pszConfFile = NULL;
     char *pszConfFileInstallRoot = NULL;
     struct cnfnode *cn = NULL;
@@ -660,21 +660,14 @@ TDNFOpenHandle(
     dwError = TDNFLoadPlugins(pTdnf);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = SolvInitSack(
-                  &pSack,
+    dwError = TDNFPackageContextCreate(
                   pTdnf->pConf->pszCacheDir,
                   pTdnf->pArgs->pszInstallRoot,
-                  pTdnf->pArgs->pszArch);
+                  pTdnf->pArgs->pszArch,
+                  pTdnf->pRpmConfig,
+                  !pArgs->nAllDeps,
+                  &pSack);
     BAIL_ON_TDNF_ERROR(dwError);
-
-    if(!pArgs->nAllDeps)
-    {
-        dwError = SolvSackReadInstalledRpms(
-                      pSack,
-                      pTdnf->pConf->pszCacheDir,
-                      pTdnf->pRpmConfig);
-        BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
-    }
 
     dwError = TDNFLoadRepoData(
                   pTdnf,
@@ -684,9 +677,9 @@ TDNFOpenHandle(
     dwError = TDNFRepoListFinalize(pTdnf);
     BAIL_ON_TDNF_ERROR(dwError);
 
-    dwError = TDNFTransactionPlanInitCommandLineRepository(
+    dwError = TDNFPackageContextInitCommandLine(
                   pSack,
-                  (void **)&pTdnf->pSolvCmdLineRepo);
+                  &pTdnf->pCmdLineRepo);
     BAIL_ON_TDNF_ERROR(dwError);
 
     pTdnf->pSack = pSack;
@@ -708,7 +701,7 @@ error:
     }
     if(pSack)
     {
-        SolvFreeSack(pSack);
+        TDNFPackageContextFree(pSack);
     }
     goto cleanup;
 }
@@ -775,7 +768,7 @@ TDNFAddCmdLinePackages(
        TDNFRefresh() rebuilds the sack from scratch -- refreshLiveSack()
        in client/transaction_plan_integration.zig creates a replacement
        pool, creates a NEW empty command-line repo in it, repoints
-       pTdnf->pSolvCmdLineRepo at it and frees the old pool -- so package
+       pTdnf->pCmdLineRepo at it and frees the old pool -- so package
        handles recorded against the previous pool name nothing here, and
        the fresh pool hands out the same low ids again. Keeping the old
        entries would let a stale one shadow the correct one, because the
@@ -867,11 +860,10 @@ TDNFAddCmdLinePackages(
            }
         }
         dwSolvableId = 0;
-        dwError = TDNFRepoMdNativeAddRpm(
-                      pTdnf->pSolvCmdLineRepo,
+        dwError = TDNFPackageContextAddRpm(
+                      pTdnf->pSack,
+                      pTdnf->pCmdLineRepo,
                       pszRPMPath,
-                      TDNF_REPO_REUSE_REPODATA|
-                      RPM_ADD_WITH_HDRID|RPM_ADD_WITH_SHA256SUM,
                       &dwSolvableId);
         BAIL_ON_TDNF_ERROR(dwError);
         id = (TDNF_PKG_ID)dwSolvableId;
@@ -884,20 +876,8 @@ TDNFAddCmdLinePackages(
             pQueueGoal->dwCount, nAlterType, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, nCmdIndex - 1);
     }
 
-    /* No repo_internalize() here. Every solvable in this repo arrives
-       through TDNFRepoMdNativeAddRpm, whose NativeRpmBridge.finish()
-       (repomd/solvbridge.zig) calls repodata_internalize() on the
-       repodata it created, per rpm. repo_internalize() would walk the
-       same repodata and find nothing pending, so the call was a no-op
-       -- see the commit message for how that was established, because
-       no test in the tree can tell the difference.
-
-       REPO_NO_INTERNALIZE used to be passed in the flag word above and
-       was dropped for the same reason, but on stronger evidence: the
-       word reaches exactly three readers -- the RPM_ADD_WITH_HDRID test
-       here, optionsFromRpmFlags() (RPM_ADD_* bits only) and
-       repo_add_repodata(), which reads REPO_USE_LOADING,
-       REPO_REUSE_REPODATA and REPO_LOCALPOOL. Nothing reads bit 1. */
+    /* The native command-line repository rebuilds its immutable model after
+       every RPM is added; there is no separate internalization step. */
 
 cleanup:
     TDNF_SAFE_FREE_MEMORY(pszRPMPath);
@@ -1792,7 +1772,7 @@ TDNFUpdateInfo(
     char*  pszSeverity = NULL;
     uint32_t dwSecurity = 0;
 
-    if(!pTdnf || !pTdnf->pSack || !pTdnf->pSack->pPool ||
+    if(!pTdnf || !pTdnf->pSack ||
        !ppUpdateInfo)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;
@@ -2011,7 +1991,7 @@ TDNFHistoryResolve(
                           dwRepoCount,
                           pTdnf->pRpmConfig,
                           pszPkgName,
-                          SOLV_NEVRA_UNINSTALLED,
+                          TDNF_NEVRA_UNINSTALLED,
                           &ppszMatches,
                           &dwMatchCount);
             BAIL_ON_TDNF_ERROR(dwError);
@@ -2047,7 +2027,7 @@ TDNFHistoryResolve(
                               dwRepoCount,
                               pTdnf->pRpmConfig,
                               pszPkgName,
-                              SOLV_NEVRA_INSTALLED,
+                              TDNF_NEVRA_INSTALLED,
                               &ppszMatches,
                               &dwMatchCount);
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -2099,7 +2079,7 @@ TDNFHistoryResolve(
                           dwRepoCount,
                           pTdnf->pRpmConfig,
                           pszPkgName,
-                          SOLV_NEVRA_INSTALLED,
+                          TDNF_NEVRA_INSTALLED,
                           &ppszMatches,
                           &dwMatchCount);
             BAIL_ON_TDNF_ERROR(dwError);
@@ -2516,7 +2496,7 @@ TDNFCloseHandle(
         }
         if(pTdnf->pSack)
         {
-            SolvFreeSack(pTdnf->pSack);
+            TDNFPackageContextFree(pTdnf->pSack);
         }
         tdnf_rpm_config_destroy(pTdnf->pRpmConfig);
         TDNFFreePlugins(pTdnf->pPlugins);

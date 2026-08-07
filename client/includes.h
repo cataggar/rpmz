@@ -41,15 +41,9 @@
 
 #include "../rpmzig/rpmdb.h"
 
-/* Deliberately not ../solv/includes.h, which would drag in libsolv:
-   every C file in client/ is libsolv-free and the libsolv-confinement-audit
-   build step proves it, with no exceptions left. This says nothing about
-   client/transaction_plan_integration.zig, which is compiled into libtdnf
-   from this directory and does reach libsolv, through repomd's bindings
-   rather than through this header; porting it is Part B of issue #39.
-   Only solv/defines.h (the client/solv interface types and repo name
-   constants) and solv/prototypes.h (the Solv* entry points, whose libsolv
-   types are all opaque there) are needed here. */
+/* Every C file in client/ uses the native package context. The
+   libsolv-confinement-audit build step proves libsolv headers are
+   unreachable here. */
 /* Every module that compiles client/ must declare whether libsolv headers
    are in scope for it, and exactly one answer is allowed.
    libsolv-confinement-audit declares OUT_OF_SCOPE and is the module that
@@ -112,13 +106,12 @@
 #  endif
 #endif
 
-#include "../solv/defines.h"
 #include "../common/defines.h"
 #include "../common/config.h"
 #include "../common/structs.h"
 #include "../common/prototypes.h"
 #include "../history/history.h"
-#include "../solv/prototypes.h"
+#include "package_context.h"
 
 #include "defines.h"
 #include "builtin_plugins.h"

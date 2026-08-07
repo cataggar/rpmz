@@ -377,7 +377,7 @@ TDNFGetCachePath(
                   pszSubDir,
                   pszFileName,
                   NULL);
-    BAIL_ON_TDNF_LIBSOLV_ERROR(dwError);
+    BAIL_ON_TDNF_ERROR(dwError);
 
 cleanup:
     return dwError;

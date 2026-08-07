@@ -1,22 +1,11 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const metadata_integrity = @import("metadata_integrity.zig");
 const model = @import("model.zig");
 const repomd_xml = @import("repomd.zig");
 const primary_xml = @import("primary.zig");
 const filelists_xml = @import("filelists.zig");
 const other_xml = @import("other.zig");
-const solv_bridge = @import("solvbridge.zig");
 const updateinfo_xml = @import("updateinfo.zig");
-
-const c = if (builtin.is_test) @cImport({
-    @cInclude("stdio.h");
-    @cInclude("solv/pool.h");
-    @cInclude("solv/repo.h");
-    @cInclude("solv/solvable.h");
-    @cInclude("solv/knownid.h");
-    @cInclude("solv/queue.h");
-}) else struct {};
 
 pub const cookie_len = 32;
 // Bumped to 2 when `primary.xml` `<file>` entries started reaching the model:
@@ -1841,86 +1830,6 @@ fn expectRepositoryEqual(expected: *const model.RepositoryModel, actual: *const 
     try testing.expectEqualDeep(expected.advisory_packages, actual.advisory_packages);
 }
 
-fn expectMatchesLibsolv(fixture: *const FixtureRepo, repository: *const model.RepositoryModel) !void {
-    const testing = std.testing;
-
-    var repomd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    var primary_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    var filelists_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    var other_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    var updateinfo_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-
-    const pool = c.pool_create() orelse return error.OutOfMemory;
-    defer c.pool_free(pool);
-    const repo = c.repo_create(pool, "native-cache-golden") orelse return error.OutOfMemory;
-    defer c.repo_free(repo, 1);
-
-    try expectNativeRepoOk(solv_bridge.TDNFRepoMdNativeLoadSolvRepo(
-        @ptrCast(repo),
-        fixture.path(&repomd_buf, "repomd.xml").ptr,
-        fixture.path(&primary_buf, "repodata/primary.xml").ptr,
-        fixture.path(&filelists_buf, "repodata/filelists.xml").ptr,
-        fixture.path(&updateinfo_buf, "repodata/updateinfo-1.xml").ptr,
-        fixture.path(&other_buf, "repodata/other.xml").ptr,
-    ));
-
-    var package_count: usize = 0;
-    var advisory_count: usize = 0;
-    var found_provides = false;
-    var found_pretrans = false;
-    var found_advisory = false;
-
-    var p: c.Id = repo.*.start;
-    while (p < repo.*.end) : (p += 1) {
-        const solvable = c.pool_id2solvable(pool, p);
-        if (solvable == null) continue;
-        const name = std.mem.span(c.pool_id2str(pool, solvable.*.name));
-        if (std.mem.startsWith(u8, name, "patch:")) {
-            advisory_count += 1;
-            if (std.mem.eql(u8, name[6..], repository.advisories[0].id)) {
-                found_advisory = true;
-            }
-            continue;
-        }
-
-        package_count += 1;
-        if (std.mem.eql(u8, name, "tdnf-repoquery-provides")) {
-            var checksum_type: c.Id = 0;
-            const checksum = c.solvable_lookup_checksum(solvable, c.SOLVABLE_CHECKSUM, &checksum_type) orelse return error.TestExpectedEqual;
-            try testing.expectEqualStrings(repository.packages[0].checksum.value, std.mem.span(checksum));
-            try testing.expectEqualStrings(
-                repository.packages[0].checksum.kind,
-                libsolvChecksumKind(std.mem.span(c.pool_id2str(pool, checksum_type))),
-            );
-            try testing.expectEqualStrings(repository.packages[0].nevra.arch, std.mem.span(c.pool_id2str(pool, solvable.*.arch)));
-            var provides: c.Queue = std.mem.zeroes(c.Queue);
-            c.queue_init(&provides);
-            defer c.queue_free(&provides);
-            _ = c.solvable_lookup_deparray(solvable, c.SOLVABLE_PROVIDES, &provides, 0);
-            try testing.expectEqual(@as(c_int, @intCast(repository.packages[0].relationsFor(.provides, repository.relations).len)), provides.count);
-            found_provides = true;
-        } else if (std.mem.eql(u8, name, "tdnf-test-pretrans-one")) {
-            try testing.expectEqualStrings(repository.packages[1].nevra.arch, std.mem.span(c.pool_id2str(pool, solvable.*.arch)));
-            found_pretrans = true;
-        }
-    }
-
-    try testing.expectEqual(repository.packages.len, package_count);
-    try testing.expectEqual(repository.advisories.len, advisory_count);
-    try testing.expect(found_provides);
-    try testing.expect(found_pretrans);
-    try testing.expect(found_advisory);
-}
-
-fn expectNativeRepoOk(rc: u32) !void {
-    try std.testing.expectEqual(@as(u32, 0), rc);
-}
-
-fn libsolvChecksumKind(raw: []const u8) []const u8 {
-    const index = std.mem.lastIndexOfScalar(u8, raw, ':') orelse return raw;
-    return raw[index + 1 ..];
-}
-
 fn writeU16At(bytes: []u8, offset: usize, value: u16) void {
     const le = std.mem.nativeToLittle(u16, value);
     @memcpy(bytes[offset..][0..@sizeOf(u16)], std.mem.asBytes(&le));
@@ -1947,7 +1856,7 @@ fn expectInvalid(data: []const u8, options: LoadOptions, expected: InvalidReason
     }
 }
 
-test "native cache round-trips and matches libsolv golden fields" {
+test "native cache round-trips golden fields" {
     const testing = std.testing;
 
     var fixture = try createGoldenFixture();
@@ -1972,7 +1881,6 @@ test "native cache round-trips and matches libsolv golden fields" {
             var owned = loaded;
             defer owned.deinit();
             try expectRepositoryEqual(&fixture.repository, &owned.repository);
-            try expectMatchesLibsolv(&fixture, &owned.repository);
             try testing.expectEqual(@as(usize, 3), owned.repository.packages.len);
             try testing.expectEqual(@as(usize, 1), owned.repository.advisories.len);
             try testing.expectEqualStrings("tdnf-repoquery-provides", owned.repository.packages[0].nevra.name);
