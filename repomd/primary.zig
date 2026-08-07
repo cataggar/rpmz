@@ -40,6 +40,7 @@ const ElementKind = enum {
     buildhost,
     sourcerpm,
     dependency_container,
+    file,
 };
 
 const Frame = struct {
@@ -49,6 +50,7 @@ const Frame = struct {
     checksum_type: ?[]const u8 = null,
     checksum_is_pkgid: bool = false,
     dependency_kind: ?model.DependencyKind = null,
+    file_kind: model.FileKind = .plain,
 
     fn init(allocator: std.mem.Allocator, kind: ElementKind) Frame {
         return .{
@@ -92,6 +94,7 @@ const PackageBuilder = struct {
     source_rpm: ?[]const u8 = null,
     header_range: ?model.HeaderRange = null,
     relation_buckets: [dependency_kinds.len]std.array_list.Managed(model.Relation),
+    files: std.array_list.Managed(model.FileEntry),
 
     fn init(allocator: std.mem.Allocator) PackageBuilder {
         var relation_buckets: [dependency_kinds.len]std.array_list.Managed(model.Relation) = undefined;
@@ -102,6 +105,7 @@ const PackageBuilder = struct {
         return .{
             .allocator = allocator,
             .relation_buckets = relation_buckets,
+            .files = std.array_list.Managed(model.FileEntry).init(allocator),
         };
     }
 
@@ -109,6 +113,7 @@ const PackageBuilder = struct {
         inline for (&self.relation_buckets) |*relation_bucket| {
             relation_bucket.deinit();
         }
+        self.files.deinit();
     }
 
     fn setRequiredString(self: *PackageBuilder, field: *?[]const u8, value: []const u8) Error!void {
@@ -132,7 +137,15 @@ const PackageBuilder = struct {
         self.relationBucket(kind).append(relation) catch return error.OutOfMemory;
     }
 
-    fn build(self: *PackageBuilder, all_relations: *std.array_list.Managed(model.Relation)) Error!model.Package {
+    fn appendFile(self: *PackageBuilder, entry: model.FileEntry) Error!void {
+        self.files.append(entry) catch return error.OutOfMemory;
+    }
+
+    fn build(
+        self: *PackageBuilder,
+        all_relations: *std.array_list.Managed(model.Relation),
+        all_files: *std.array_list.Managed(model.FileEntry),
+    ) Error!model.Package {
         if (!self.package_type_is_rpm or
             self.name == null or
             self.arch == null or
@@ -186,6 +199,12 @@ const PackageBuilder = struct {
             all_relations.appendSlice(bucket.items) catch return error.OutOfMemory;
         }
 
+        package.files = .{
+            .start = all_files.items.len,
+            .len = self.files.items.len,
+        };
+        all_files.appendSlice(self.files.items) catch return error.OutOfMemory;
+
         return package;
     }
 };
@@ -195,6 +214,7 @@ const Parser = struct {
     frames: std.array_list.Managed(Frame),
     packages: std.array_list.Managed(model.Package),
     relations: std.array_list.Managed(model.Relation),
+    files: std.array_list.Managed(model.FileEntry),
     current_package: PackageBuilder = undefined,
     in_package: bool = false,
     declared_package_count: ?u64 = null,
@@ -206,6 +226,7 @@ const Parser = struct {
             .frames = std.array_list.Managed(Frame).init(allocator),
             .packages = std.array_list.Managed(model.Package).init(allocator),
             .relations = std.array_list.Managed(model.Relation).init(allocator),
+            .files = std.array_list.Managed(model.FileEntry).init(allocator),
         };
     }
 
@@ -216,6 +237,7 @@ const Parser = struct {
         for (self.frames.items) |*frame| {
             frame.deinit();
         }
+        self.files.deinit();
         self.relations.deinit();
         self.packages.deinit();
         self.frames.deinit();
@@ -253,6 +275,7 @@ const Parser = struct {
             .declared_package_count = self.declared_package_count,
             .packages = try self.packages.toOwnedSlice(),
             .relations = try self.relations.toOwnedSlice(),
+            .files = try self.files.toOwnedSlice(),
         };
     }
 
@@ -321,6 +344,18 @@ const Parser = struct {
                         try self.parseLocation(element);
                     } else if (std.mem.eql(u8, element.name.local, "format")) {
                         frame.kind = .format;
+                    }
+                },
+                .format => {
+                    // `primary.xml` carries the filtered subset of each
+                    // package's file list -- the paths libsolv's standard
+                    // filter accepts. A repository that publishes no
+                    // `filelists.xml` has these entries and nothing else, so
+                    // dropping them leaves the model with no file data at all.
+                    if (std.mem.eql(u8, element.name.local, "file")) {
+                        frame.kind = .file;
+                        frame.collect_text = true;
+                        frame.file_kind = try parseFileKind(lookupAttr(element.attrs, "type"));
                     }
                 },
                 else => {},
@@ -393,6 +428,7 @@ const Parser = struct {
                 try builder.setRequiredString(&builder.arch, try copyRequiredText(self.allocator, top.text.items));
             },
             .checksum => try self.finishChecksum(top),
+            .file => try self.finishFile(top),
             .summary => {
                 const builder = try self.currentPackage();
                 builder.setOptionalString(&builder.summary, try copyOptionalText(self.allocator, top.text.items));
@@ -447,10 +483,22 @@ const Parser = struct {
     fn finishPackage(self: *Parser) Error!void {
         if (!self.in_package) return error.InvalidPrimary;
 
-        const package = try self.current_package.build(&self.relations);
+        const package = try self.current_package.build(&self.relations, &self.files);
         try self.packages.append(package);
         self.current_package.deinit();
         self.in_package = false;
+    }
+
+    fn finishFile(self: *Parser, top: *const Frame) Error!void {
+        const builder = try self.currentPackage();
+
+        const path = std.mem.trim(u8, top.text.items, " \t\r\n");
+        if (path.len == 0) return error.InvalidPrimary;
+
+        try builder.appendFile(.{
+            .path = model.dup(self.allocator, path) catch return error.OutOfMemory,
+            .kind = top.file_kind,
+        });
     }
 
     fn currentPackage(self: *Parser) Error!*PackageBuilder {
@@ -639,6 +687,14 @@ fn copyOptionalText(allocator: std.mem.Allocator, text: []const u8) Error!?[]con
     const trimmed = trimText(text);
     if (trimmed.len == 0) return null;
     return model.dup(allocator, trimmed) catch error.OutOfMemory;
+}
+
+fn parseFileKind(raw_type: ?[]const u8) Error!model.FileKind {
+    const kind = raw_type orelse return .plain;
+    if (std.mem.eql(u8, kind, "file")) return .plain;
+    if (std.mem.eql(u8, kind, "dir")) return .dir;
+    if (std.mem.eql(u8, kind, "ghost")) return .ghost;
+    return error.InvalidPrimary;
 }
 
 fn parseUnsigned(text: []const u8) Error!u64 {
@@ -970,6 +1026,69 @@ test "rejects malformed primary xml and invalid dependency flags" {
     ;
 
     for ([_][]const u8{ malformed, bad_flags, bad_count, empty_location }) |xml| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        try testing.expectError(error.InvalidPrimary, parse(arena_state.allocator(), xml));
+    }
+}
+
+test "parses the filtered file list primary.xml carries in format" {
+    const testing = std.testing;
+    const xml =
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="2">
+        \\  <package type="rpm">
+        \\    <name>pkg-one</name>
+        \\    <arch>x86_64</arch>
+        \\    <version epoch="0" ver="1.0" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">pkgid-one</checksum>
+        \\    <location href="pkg-one.rpm"/>
+        \\    <format>
+        \\      <rpm:provides><rpm:entry name="pkg-one"/></rpm:provides>
+        \\      <file>/usr/bin/pkg-one</file>
+        \\      <file type="dir">/etc/pkg-one</file>
+        \\      <file type="ghost">/var/run/pkg-one.pid</file>
+        \\    </format>
+        \\  </package>
+        \\  <package type="rpm">
+        \\    <name>pkg-two</name>
+        \\    <arch>noarch</arch>
+        \\    <version ver="2.0" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">pkgid-two</checksum>
+        \\    <location href="pkg-two.rpm"/>
+        \\    <format/>
+        \\  </package>
+        \\</metadata>
+    ;
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const parsed = try parse(arena_state.allocator(), xml);
+    try testing.expectEqual(@as(usize, 3), parsed.files.len);
+
+    const files = parsed.packages[0].fileEntries(parsed.files);
+    try testing.expectEqual(@as(usize, 3), files.len);
+    try testing.expectEqualStrings("/usr/bin/pkg-one", files[0].path);
+    try testing.expectEqual(model.FileKind.plain, files[0].kind);
+    try testing.expectEqualStrings("/etc/pkg-one", files[1].path);
+    try testing.expectEqual(model.FileKind.dir, files[1].kind);
+    try testing.expectEqualStrings("/var/run/pkg-one.pid", files[2].path);
+    try testing.expectEqual(model.FileKind.ghost, files[2].kind);
+
+    // A package with no <file> entries still gets an empty, in-bounds range.
+    try testing.expectEqual(@as(usize, 0), parsed.packages[1].fileEntries(parsed.files).len);
+}
+
+test "rejects file entries with an unknown type or empty path" {
+    const testing = std.testing;
+    const bad_type =
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common"><package type="rpm"><name>pkg</name><arch>noarch</arch><version ver="1" rel="1"/><checksum type="sha256" pkgid="YES">abc</checksum><location href="pkg.rpm"/><format><file type="weird">/usr/bin/pkg</file></format></package></metadata>
+    ;
+    const empty_path =
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common"><package type="rpm"><name>pkg</name><arch>noarch</arch><version ver="1" rel="1"/><checksum type="sha256" pkgid="YES">abc</checksum><location href="pkg.rpm"/><format><file>  </file></format></package></metadata>
+    ;
+
+    for ([_][]const u8{ bad_type, empty_path }) |xml| {
         var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
         defer arena_state.deinit();
         try testing.expectError(error.InvalidPrimary, parse(arena_state.allocator(), xml));
