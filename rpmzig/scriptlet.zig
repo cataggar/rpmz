@@ -18,9 +18,7 @@ const c = @cImport({
     @cInclude("time.h");
     @cInclude("unistd.h");
 });
-const rpmtrans = @cImport({
-    @cInclude("tdnfrpmtrans.h");
-});
+const rpmtrans = @import("trans_flags.zig");
 
 pub const Phase = enum(u32) {
     pre = 0,

@@ -3,9 +3,7 @@ const Allocator = std.mem.Allocator;
 const header = @import("rpm_header");
 const install_engine = @import("install.zig");
 const txn_config = @import("txn_config.zig");
-const rpmtrans = @cImport({
-    @cInclude("tdnfrpmtrans.h");
-});
+const rpmtrans = @import("trans_flags.zig");
 
 const sysc = @cImport({
     @cInclude("errno.h");

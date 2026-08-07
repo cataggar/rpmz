@@ -5,9 +5,7 @@ const header = @import("rpm_header");
 const pkgfile = @import("rpm_pkgfile");
 const cpio = @import("cpio.zig");
 const txn_config = @import("txn_config.zig");
-const rpmtrans = @cImport({
-    @cInclude("tdnfrpmtrans.h");
-});
+const rpmtrans = @import("trans_flags.zig");
 
 const AT_SYMLINK_NOFOLLOW: c_int = 0x100;
 const AT_REMOVEDIR: c_int = 0x200;

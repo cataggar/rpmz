@@ -11,9 +11,7 @@ const pkgfile = @import("rpm_pkgfile");
 const cpio = @import("cpio.zig");
 const install = @import("install.zig");
 const txn_config = @import("txn_config.zig");
-const rpmtrans = @cImport({
-    @cInclude("tdnfrpmtrans.h");
-});
+const rpmtrans = @import("trans_flags.zig");
 const c = @cImport({
     @cInclude("unistd.h");
 });
