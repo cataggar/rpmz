@@ -50,11 +50,23 @@ typedef struct _TDNF_REPOMD_RECORD
     int nHasDatabaseVersion;
 } TDNF_REPOMD_RECORD;
 
+/*
+ * A repository the native query layer reads packages from. It is backed
+ * either by downloaded metadata (pszCacheDir) or by the .rpm files sitting in
+ * a directory (pszDirectory) -- what --repofromdir produces. Exactly one of
+ * the two is set; the other is NULL.
+ *
+ * This mirrors TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16, which carries
+ * the same distinction for the solver. Unlike that struct, this one is not
+ * versioned: it is passed as an array to one generation of entry points, all
+ * of which are recompiled together, so no caller depends on the old stride.
+ */
 typedef struct _TDNF_REPOMD_NATIVE_REPO_INPUT
 {
     const char *pszId;
     const char *pszCacheDir;
     const char *pszSnapshotFile;
+    const char *pszDirectory;
 } TDNF_REPOMD_NATIVE_REPO_INPUT, *PTDNF_REPOMD_NATIVE_REPO_INPUT;
 
 enum {

@@ -14,6 +14,7 @@ const c = @cImport({
 });
 
 const available_loader = @import("available_loader.zig");
+const directory_repository = @import("directory_repository.zig");
 const installed_repository = @import("installed_repository.zig");
 const model = @import("model.zig");
 const pkgquery = @import("pkgquery.zig");
@@ -1716,11 +1717,20 @@ fn mapQueryError(err: anyerror) u32 {
 
 fn loadAvailableDataset(raw_repo: c.TDNF_REPOMD_NATIVE_REPO_INPUT, options: AvailableLoadOptions) !LoadedDataset {
     const repo_id = spanRequired(raw_repo.pszId, "repo id") orelse return error.InvalidParameter;
-    const cache_dir = spanRequired(raw_repo.pszCacheDir, "repo cache dir") orelse return error.InvalidParameter;
     const snapshot_file = if (raw_repo.pszSnapshotFile != null)
         std.mem.span(raw_repo.pszSnapshotFile)
     else
         null;
+
+    // A --repofromdir repository has no metadata at all: its packages are the
+    // .rpm files under the directory, read straight out of their headers. The
+    // solver already loads one this way (repomd/solver_live.zig); this is the
+    // query layer's half of the same thing.
+    if (spanOptionalRepoField(raw_repo.pszDirectory)) |directory| {
+        return loadDirectoryDataset(repo_id, directory, snapshot_file);
+    }
+
+    const cache_dir = spanRequired(raw_repo.pszCacheDir, "repo cache dir") orelse return error.InvalidParameter;
 
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     errdefer arena_state.deinit();
@@ -1788,6 +1798,53 @@ fn loadAvailableDataset(raw_repo: c.TDNF_REPOMD_NATIVE_REPO_INPUT, options: Avai
             error.FileSystemIo => error.FileSystemIo,
             error.UnsupportedCompressor => error.UnsupportedCompressor,
             error.DecompressFailed => error.DecompressFailed,
+        };
+    };
+
+    const snapshot_entries = if (snapshot_file) |path|
+        try parseSnapshotEntries(arena, path)
+    else
+        &[_]SnapshotEntry{};
+
+    return .{
+        .kind = .available,
+        .repo_id = repo_id,
+        .arena_state = arena_state,
+        .repository = repository,
+        .snapshot_entries = snapshot_entries,
+    };
+}
+
+/// A repository field that is optional rather than required: absent is either
+/// a null pointer or the empty string, since the C side leaves unused members
+/// zeroed but also hands through empty strings from configuration.
+fn spanOptionalRepoField(raw: ?[*:0]const u8) ?[]const u8 {
+    const value = std.mem.span(raw orelse return null);
+    return if (value.len == 0) null else value;
+}
+
+/// Loads a repository whose packages are the `.rpm` files under `directory`,
+/// which is what `--repofromdir` declares. `AvailableLoadOptions` has nothing
+/// to select here: a package header carries its relations, files and
+/// changelogs together, so the model is complete either way.
+fn loadDirectoryDataset(
+    repo_id: []const u8,
+    directory: []const u8,
+    snapshot_file: ?[]const u8,
+) !LoadedDataset {
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    errdefer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const repository = directory_repository.loadModel(arena, directory) catch |err| {
+        setError(
+            "failed to load repo '{s}' from directory '{s}': {t}",
+            .{ repo_id, directory, err },
+        );
+        return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.DirectoryOpenFailed => error.FileNotFound,
+            else => error.InvalidRepoMetadata,
         };
     };
 

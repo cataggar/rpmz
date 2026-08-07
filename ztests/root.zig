@@ -24,6 +24,7 @@ comptime {
     _ = @import("plan_test.zig");
     _ = @import("provides_test.zig");
     _ = @import("protected_test.zig");
+    _ = @import("repofromdir_test.zig");
     _ = @import("repolist_test.zig");
     _ = @import("search_test.zig");
     _ = @import("snapshot_test.zig");

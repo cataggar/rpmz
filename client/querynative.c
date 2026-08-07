@@ -103,8 +103,7 @@ TDNFNativeQueryBuildRepoInputs(
     pRepoData = pTdnf->pRepos;
     while(pRepoData)
     {
-        if(pRepoData->nEnabled && pRepoData->nHasMetaData &&
-           !IsNullOrEmptyString(pRepoData->pszId))
+        if(TDNF_REPO_IS_QUERYABLE(pRepoData))
         {
             dwCount++;
         }
@@ -126,16 +125,22 @@ TDNFNativeQueryBuildRepoInputs(
     dwCount = 0;
     while(pRepoData)
     {
-        if(pRepoData->nEnabled && pRepoData->nHasMetaData &&
-           !IsNullOrEmptyString(pRepoData->pszId))
+        if(TDNF_REPO_IS_QUERYABLE(pRepoData))
         {
-            dwError = TDNFGetCachePath(
-                          pTdnf,
-                          pRepoData,
-                          NULL,
-                          NULL,
-                          (char **)&pRepos[dwCount].pszCacheDir);
-            BAIL_ON_TDNF_ERROR(dwError);
+            /* A --repofromdir repository has no metadata to cache: its
+               packages are the .rpm files under its single base URL, which
+               the native loader reads directly. */
+            pRepos[dwCount].pszDirectory = TDNF_REPO_RPM_DIRECTORY(pRepoData);
+            if(!pRepos[dwCount].pszDirectory)
+            {
+                dwError = TDNFGetCachePath(
+                              pTdnf,
+                              pRepoData,
+                              NULL,
+                              NULL,
+                              (char **)&pRepos[dwCount].pszCacheDir);
+                BAIL_ON_TDNF_ERROR(dwError);
+            }
 
             pRepos[dwCount].pszId = pRepoData->pszId;
             pRepos[dwCount].pszSnapshotFile = pRepoData->pszSnapshotFile;

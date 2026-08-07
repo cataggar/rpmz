@@ -143,3 +143,13 @@ typedef void (*TDNF_ML_FREE_FUNC) (void* data);
      !IsNullOrEmptyString((pRepo)->ppszBaseUrls[0]) ? \
      (pRepo)->ppszBaseUrls[0] : NULL)
 
+/* A repository the native layer can read packages out of: either it has
+   downloaded metadata, or it is a --repofromdir repository whose packages are
+   the .rpm files under its base URL. The query builders used to test
+   nHasMetaData alone, which silently dropped every --repofromdir repository
+   from `list`, `repoquery`, `provides`, `info`, `search` and -- through
+   TDNFResolveListPackages -- from `install <name>` as well. */
+#define TDNF_REPO_IS_QUERYABLE(pRepo) \
+    ((pRepo)->nEnabled && !IsNullOrEmptyString((pRepo)->pszId) && \
+     ((pRepo)->nHasMetaData || TDNF_REPO_RPM_DIRECTORY(pRepo) != NULL))
+
