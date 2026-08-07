@@ -1655,20 +1655,20 @@ pub fn build(b: *Build) void {
     b.installArtifact(tdnf_config_exe);
 
     // tdnf-history-util links the vendored-SQLite history and rpmzig libs.
+    const history_util_options = b.addOptions();
+    history_util_options.addOption([]const u8, "db_dir", history_db_dir);
     const history_util_mod = b.createModule(.{
+        .root_source_file = b.path("history/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .pic = true,
     });
-    history_util_mod.addIncludePath(b.path("include"));
-    history_util_mod.addIncludePath(b.path("history"));
-    history_util_mod.addCSourceFiles(.{
-        .root = b.path("history"),
-        .files = &.{"main.c"},
-        .flags = &tdnf_cflags,
-    });
-    history_util_mod.linkLibrary(history_lib);
+    history_util_mod.addImport("history", history_lib.root_module);
+    history_util_mod.addImport(
+        "history_config",
+        history_util_options.createModule(),
+    );
     history_util_mod.linkLibrary(rpmzig_lib);
     const history_util_exe = b.addExecutable(.{
         .name = "tdnf-history-util",
@@ -1679,6 +1679,30 @@ pub fn build(b: *Build) void {
         .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
     });
     b.getInstallStep().dependOn(&install_history_util.step);
+
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("history/main_cli_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        run_tests.setEnvironmentVariable(
+            "TDNF_HISTORY_UTIL_TEST_BINARY",
+            b.getInstallPath(
+                .{ .custom = "libexec/tdnf" },
+                "tdnf-history-util",
+            ),
+        );
+        run_tests.step.dependOn(&install_history_util.step);
+        const history_util_test_step = b.step(
+            "history-util-test",
+            "Run tdnf-history-util CLI tests",
+        );
+        history_util_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
 
     // jsondumptest
     const jsondump_test_mod = b.createModule(.{
