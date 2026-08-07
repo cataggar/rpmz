@@ -22,6 +22,7 @@ comptime {
     _ = @import("mark_test.zig");
     _ = @import("multiinstall_test.zig");
     _ = @import("plan_test.zig");
+    _ = @import("plugin_test.zig");
     _ = @import("primaryfiles_test.zig");
     _ = @import("provides_test.zig");
     _ = @import("protected_test.zig");

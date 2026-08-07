@@ -2174,11 +2174,47 @@ pub fn build(b: *Build) void {
             "TDNF_ZTEST_PREFIX",
             ztest_prefix,
         );
+        run_ztests.setEnvironmentVariable(
+            "TDNF_ZTEST_PLUGIN_DIR",
+            b.getInstallPath(.{ .custom = plugin_dir_rel }, ""),
+        );
         run_ztests.step.dependOn(&ztest_install_libtdnf.step);
         run_ztests.step.dependOn(&ztest_install_libtdnfcli.step);
         run_ztests.step.dependOn(&ztest_install_tdnf.step);
+        run_ztests.step.dependOn(&install_metalink.step);
+        run_ztests.step.dependOn(&install_repogpgcheck.step);
         run_ztests.has_side_effects = true;
         ztest_step.dependOn(&run_ztests.step);
+
+        const plugin_ztest_step = b.step(
+            "plugin-ztest",
+            "Run focused loadable-plugin Zig integration tests",
+        );
+        const plugin_ztest_mod = b.createModule(.{
+            .root_source_file = b.path("ztests/plugin_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const plugin_ztests = b.addTest(.{
+            .root_module = plugin_ztest_mod,
+            .filters = &.{"plugin contract:"},
+        });
+        const run_plugin_ztests = b.addRunArtifact(plugin_ztests);
+        run_plugin_ztests.setEnvironmentVariable(
+            "TDNF_ZTEST_PREFIX",
+            ztest_prefix,
+        );
+        run_plugin_ztests.setEnvironmentVariable(
+            "TDNF_ZTEST_PLUGIN_DIR",
+            b.getInstallPath(.{ .custom = plugin_dir_rel }, ""),
+        );
+        run_plugin_ztests.step.dependOn(&ztest_install_libtdnf.step);
+        run_plugin_ztests.step.dependOn(&ztest_install_libtdnfcli.step);
+        run_plugin_ztests.step.dependOn(&ztest_install_tdnf.step);
+        run_plugin_ztests.step.dependOn(&install_metalink.step);
+        run_plugin_ztests.step.dependOn(&install_repogpgcheck.step);
+        run_plugin_ztests.has_side_effects = true;
+        plugin_ztest_step.dependOn(&run_plugin_ztests.step);
     }
 
     const lint_step = b.step("lint", "Run flake8 on pytests/");
