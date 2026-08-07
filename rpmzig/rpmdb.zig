@@ -51,6 +51,7 @@ pub const DEFAULT_INSTALL_SCRIPT_PATH = txn_config.DEFAULT_INSTALL_SCRIPT_PATH;
 pub const DEFAULT_SCRIPT_INTERPRETER = txn_config.DEFAULT_SCRIPT_INTERPRETER;
 pub const RpmDbWriter = rpmdb_write.Writer;
 pub const RpmDbInstallOptions = rpmdb_write.InstallOptions;
+pub const RpmFile = pkgfile.RpmFile;
 pub const DEFAULT_INSTALL_COLOR = rpmdb_write.DEFAULT_INSTALL_COLOR;
 pub const ScriptletPhase = scriptlet_engine.Phase;
 pub const ScriptletOutcome = scriptlet_engine.Outcome;
@@ -2061,11 +2062,53 @@ export fn tdnf_rpmdb_blob_free(blob: ?[*]u8) void {
 // rpmzig verifier can preload the rpmdb's existing trust set rather
 // than re-prompting users for keys that librpm already has.
 
-const PubkeyIter = struct {
+pub const PubkeyIter = struct {
     db: ?*c.sqlite3,
     stmt: ?*c.sqlite3_stmt,
     pinned: ?PinnedReadDb,
 };
+
+pub const PubkeyRecord = struct {
+    key: [:0]u8,
+    keyid: ?[:0]u8,
+
+    pub fn deinit(self: *PubkeyRecord, allocator: std.mem.Allocator) void {
+        allocator.free(self.key);
+        if (self.keyid) |keyid| allocator.free(keyid);
+        self.* = undefined;
+    }
+};
+
+pub fn importPubkeysRoot(
+    allocator: std.mem.Allocator,
+    root: []const u8,
+    input: []const u8,
+    timestamp: u32,
+) rpmdb_pubkey.Error!usize {
+    return rpmdb_pubkey.importRoot(allocator, root, input, timestamp);
+}
+
+pub fn currentRpmTimestamp() error{InvalidTimestamp}!u32 {
+    const now = pubkey_c.time(null);
+    if (now < 0 or now > std.math.maxInt(u32)) {
+        return error.InvalidTimestamp;
+    }
+    return @intCast(now);
+}
+
+pub fn openPubkeysRoot(root: []const u8) error{OpenFailed}!*PubkeyIter {
+    clearError();
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const db_path = buildDbPath(&buf, root) catch |err| {
+        setError("path build failed: {t}", .{err});
+        return error.OpenFailed;
+    };
+    return pubkeysOpenAtPath(db_path) orelse error.OpenFailed;
+}
+
+pub fn closePubkeys(iter: *PubkeyIter) void {
+    tdnf_rpmdb_pubkeys_close(iter);
+}
 
 /// Import every armored or binary certificate and replace matching primary
 /// fingerprints atomically. Returns 0 on success and -1 on error.
@@ -2141,14 +2184,8 @@ fn importTimestamp() ?u32 {
 /// Open a forward iterator over rpmdb rows whose RPMTAG_NAME is
 /// "gpg-pubkey".
 export fn tdnf_rpmdb_pubkeys_open(root: ?[*:0]const u8) ?*PubkeyIter {
-    clearError();
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
     const root_slice: []const u8 = if (root) |p| std.mem.span(p) else "";
-    const db_path = buildDbPath(&buf, root_slice) catch |err| {
-        setError("path build failed: {t}", .{err});
-        return null;
-    };
-    return pubkeysOpenAtPath(db_path);
+    return openPubkeysRoot(root_slice) catch null;
 }
 
 /// Config-aware form of `tdnf_rpmdb_pubkeys_open`.
@@ -2277,97 +2314,128 @@ export fn tdnf_rpmdb_pubkeys_next(
     key_len_out: ?*usize,
     keyid_out: ?*[*:0]u8,
 ) i32 {
-    clearError();
     const iter = it orelse {
+        clearError();
         setError("null iterator", .{});
         return -1;
     };
     const out = key_out orelse {
+        clearError();
         setError("null key_out", .{});
         return -1;
     };
-    if (iter.stmt == null) return 0;
+    const record_opt = nextPubkeyInternal(
+        std.heap.c_allocator,
+        iter,
+        keyid_out != null,
+    ) catch return -1;
+    const record = record_opt orelse return 0;
+    out.* = record.key.ptr;
+    if (key_len_out) |p| p.* = record.key.len;
+    if (keyid_out) |p| {
+        p.* = record.keyid.?.ptr;
+    }
+    return 1;
+}
+
+pub fn nextPubkey(
+    allocator: std.mem.Allocator,
+    iter: *PubkeyIter,
+) error{ReadFailed}!?PubkeyRecord {
+    return nextPubkeyInternal(allocator, iter, true);
+}
+
+fn nextPubkeyInternal(
+    allocator: std.mem.Allocator,
+    iter: *PubkeyIter,
+    include_keyid: bool,
+) error{ReadFailed}!?PubkeyRecord {
+    clearError();
+    if (iter.stmt == null) return null;
 
     while (true) {
         const step_rc = c.sqlite3_step(iter.stmt);
-        if (step_rc == c.SQLITE_DONE) return 0;
+        if (step_rc == c.SQLITE_DONE) return null;
         if (step_rc != c.SQLITE_ROW) {
             setError("sqlite3_step: {s}", .{
                 std.mem.span(@as([*:0]const u8, c.sqlite3_errmsg(iter.db))),
             });
-            return -1;
+            return error.ReadFailed;
         }
         const blob_ptr = c.sqlite3_column_blob(iter.stmt, 0);
         const blob_len: usize = @intCast(c.sqlite3_column_bytes(iter.stmt, 0));
         if (blob_ptr == null or blob_len == 0) {
             setError("rpmdb contains an empty header blob", .{});
-            return -1;
+            return error.ReadFailed;
         }
         const blob: []const u8 = @as([*]const u8, @ptrCast(blob_ptr))[0..blob_len];
 
         const h = header.Header.parse(blob) catch |err| {
             setError("header.parse: {t}", .{err});
-            return -1;
+            return error.ReadFailed;
         };
         const name = h.getStringChecked(.name) catch |err| {
             setError("invalid rpmdb NAME: {t}", .{err});
-            return -1;
+            return error.ReadFailed;
         } orelse {
             setError("rpmdb header is missing NAME", .{});
-            return -1;
+            return error.ReadFailed;
         };
         if (!std.mem.eql(u8, name, "gpg-pubkey")) continue;
 
         const keyid = h.getStringChecked(.version) catch |err| {
             setError("invalid gpg-pubkey VERSION: {t}", .{err});
-            return -1;
+            return error.ReadFailed;
         } orelse {
             setError("gpg-pubkey header is missing VERSION", .{});
-            return -1;
+            return error.ReadFailed;
         };
         if (!isPubkeyVersion(keyid)) {
             setError("invalid gpg-pubkey VERSION", .{});
-            return -1;
+            return error.ReadFailed;
         }
 
         const pubkeys = rpmdb_pubkey.decodePubkeys(
-            std.heap.c_allocator,
+            allocator,
             h,
         ) catch |err| {
             setError("invalid gpg-pubkey PUBKEYS: {t}", .{err});
-            return -1;
+            return error.ReadFailed;
         };
         const key_bytes: []const u8 = if (pubkeys) |bytes|
             bytes
         else
             (h.getStringChecked(.description) catch |err| {
                 setError("invalid gpg-pubkey DESCRIPTION: {t}", .{err});
-                return -1;
+                return error.ReadFailed;
             }) orelse {
                 setError("gpg-pubkey header has neither PUBKEYS nor DESCRIPTION", .{});
-                return -1;
+                return error.ReadFailed;
             };
-        defer if (pubkeys) |bytes| std.heap.c_allocator.free(bytes);
+        defer if (pubkeys) |bytes| allocator.free(bytes);
 
         var parsed = certificate.parseAll(
-            std.heap.c_allocator,
+            allocator,
             key_bytes,
         ) catch |err| {
             setError("invalid gpg-pubkey certificate: {t}", .{err});
-            return -1;
+            return error.ReadFailed;
         };
         parsed.deinit();
 
-        out.* = dupZ(key_bytes) orelse return -1;
-        if (key_len_out) |p| p.* = key_bytes.len;
-        if (keyid_out) |p| {
-            const id_z = dupZ(keyid) orelse {
-                libc.free(@ptrCast(out.*));
-                return -1;
-            };
-            p.* = id_z;
-        }
-        return 1;
+        const key = allocator.dupeZ(u8, key_bytes) catch {
+            setError("out of memory", .{});
+            return error.ReadFailed;
+        };
+        errdefer allocator.free(key);
+        const id = if (include_keyid)
+            allocator.dupeZ(u8, keyid) catch {
+                setError("out of memory", .{});
+                return error.ReadFailed;
+            }
+        else
+            null;
+        return .{ .key = key, .keyid = id };
     }
 }
 

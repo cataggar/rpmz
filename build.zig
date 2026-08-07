@@ -1163,22 +1163,19 @@ pub fn build(b: *Build) void {
         read_tool_install_steps[2] = &install.step;
     }
 
+    var key_tool_install_steps: [3]*std.Build.Step = undefined;
+
     // tdnf-rpmdb-pubkeys: smoke-test exe for the rpmdb gpg-pubkey
     // iterator. Lists every rpm-imported public key.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/pubkeys_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"pubkeys_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpmdb-pubkeys",
             .root_module = mod,
@@ -1188,24 +1185,20 @@ pub fn build(b: *Build) void {
             .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
         });
         b.getInstallStep().dependOn(&install.step);
+        key_tool_install_steps[0] = &install.step;
     }
 
     // tdnf-rpmdb-import-pubkeys: smoke-test exe for atomic native
     // OpenPGP certificate import.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/pubkey_import_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"pubkey_import_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpmdb-import-pubkeys",
             .root_module = mod,
@@ -1215,24 +1208,20 @@ pub fn build(b: *Build) void {
             .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
         });
         b.getInstallStep().dependOn(&install.step);
+        key_tool_install_steps[1] = &install.step;
     }
 
     // tdnf-rpmdb-write: smoke-test exe for the native sqlite rpmdb
     // write path.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/write_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{"write_main.c"},
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpmdb-write",
             .root_module = mod,
@@ -1242,6 +1231,52 @@ pub fn build(b: *Build) void {
             .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
         });
         b.getInstallStep().dependOn(&install.step);
+        key_tool_install_steps[2] = &install.step;
+    }
+
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/key_tools_cli_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        run_tests.setEnvironmentVariable(
+            "TDNF_RPMDB_PUBKEYS_TEST_BINARY",
+            b.getInstallPath(
+                .{ .custom = "libexec/tdnf" },
+                "tdnf-rpmdb-pubkeys",
+            ),
+        );
+        run_tests.setEnvironmentVariable(
+            "TDNF_RPMDB_IMPORT_PUBKEYS_TEST_BINARY",
+            b.getInstallPath(
+                .{ .custom = "libexec/tdnf" },
+                "tdnf-rpmdb-import-pubkeys",
+            ),
+        );
+        run_tests.setEnvironmentVariable(
+            "TDNF_RPMDB_WRITE_TEST_BINARY",
+            b.getInstallPath(
+                .{ .custom = "libexec/tdnf" },
+                "tdnf-rpmdb-write",
+            ),
+        );
+        run_tests.setEnvironmentVariable(
+            "TDNF_RPMDB_KEY_FIXTURE",
+            "rpmzig/pgp/testdata/microsoft-rpm-key.asc",
+        );
+        run_tests.setCwd(b.path("."));
+        for (&key_tool_install_steps) |install_step| {
+            run_tests.step.dependOn(install_step);
+        }
+        const key_tools_test_step = b.step(
+            "rpmzig-key-tools-test",
+            "Run rpmzig key tool CLI tests",
+        );
+        key_tools_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
     }
 
     // tdnf-rpm-files: smoke-test exe for the cpio walker + payload
