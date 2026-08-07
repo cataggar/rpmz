@@ -135,6 +135,23 @@ grep -Fq 'NEVRA:       tdnf-rpmzig-smoke-1.0.0-1.noarch' \
 FILES_OUTPUT="$("${LIBEXEC}/tdnf-rpm-files" "${OWNER_RPM}")"
 grep -Fq './var/lib/tdnf-rpmzig-smoke/payload' <<< "${FILES_OUTPUT}"
 
+set +e
+MALFORMED_OUTPUT="$(
+    "${LIBEXEC}/tdnf-rpm-verify" "${OWNER_RPM}" --key 2>&1
+)"
+MALFORMED_STATUS=$?
+set -e
+[[ "${MALFORMED_STATUS}" -eq 4 ]]
+[[ "${MALFORMED_OUTPUT}" == "unknown arg: --key" ]]
+
+set +e
+NO_KEY_OUTPUT="$("${LIBEXEC}/tdnf-rpm-verify" "${OWNER_RPM}")"
+NO_KEY_STATUS=$?
+set -e
+[[ "${NO_KEY_STATUS}" -eq 2 ]]
+grep -Fq 'Result:    signature present, NO matching key' \
+    <<< "${NO_KEY_OUTPUT}"
+
 "${LIBEXEC}/tdnf-rpm-verify" \
     "${OWNER_RPM}" --key "${PUBLIC_KEY}" |
     grep -Fq 'Result:    OK'

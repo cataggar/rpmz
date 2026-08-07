@@ -42,10 +42,9 @@ const pubkey = @import("pubkey.zig");
 const signature = @import("signature.zig");
 const keyring = @import("keyring.zig");
 
-/// Verification verdict. Numeric values must stay in lock-step with
-/// the C `TDNF_RPMZIG_STATUS_*` constants in `rpmzig/verify.h` —
-/// callers compare against them directly.
-pub const Status = enum(c_int) {
+/// Verification verdict. Numeric values preserve the standalone
+/// `tdnf-rpm-verify` helper's historical exit-status mapping.
+pub const Status = enum(u8) {
     ok = 0,
     no_sig = 1,
     no_key = 2,
@@ -53,8 +52,6 @@ pub const Status = enum(c_int) {
     /// Catch-all for "we couldn't decide": unsupported algorithm,
     /// unsupported signature type, malformed input that isn't
     /// clearly a forgery, allocator failure, etc. Numerically
-    /// identical to `TDNF_RPMZIG_STATUS_INTERNAL_ERROR` so the C side
-    /// can compare the value directly.
     internal = 4,
 };
 
@@ -994,66 +991,4 @@ test "Ed25519 sig with empty keyring → no_key" {
         &keys,
     );
     try testing.expectEqual(Status.no_key, status);
-}
-
-// =====================================================================
-// C ABI bridge (consumed by verify_pure.c).
-// =====================================================================
-//
-// Slice-shaped Zig API doesn't survive across the C ABI; the C side
-// passes (pointer, length) pairs. We synthesize slices here and
-// delegate to `verifyDetached`. Allocation goes through the C
-// `malloc`-backed allocator since we have no other handle.
-
-export fn rpmzig_verify_detached(
-    sig_bytes: [*]const u8,
-    sig_len: usize,
-    signed_bytes: [*]const u8,
-    signed_len: usize,
-    key_blobs: ?[*]const ?[*]const u8,
-    key_lens: ?[*]const usize,
-    key_count: usize,
-) c_int {
-    const allocator = std.heap.c_allocator;
-
-    // Build the slice-of-slices keyring on the stack (capped) or on
-    // the heap (uncapped). key_count is bounded by what the C
-    // caller passes, which for the rpm verify path is the size of
-    // the keyring (a few dozen at most). Use a small stack cap with
-    // heap fallback to keep the common path allocation-free.
-    var stack_buf: [32][]const u8 = undefined;
-    var keys_slice: []const []const u8 = &.{};
-    var heap_keys: ?[][]const u8 = null;
-    defer if (heap_keys) |hk| allocator.free(hk);
-
-    if (key_count == 0 or key_blobs == null or key_lens == null) {
-        keys_slice = &.{};
-    } else {
-        const blobs = key_blobs.?;
-        const lens = key_lens.?;
-        if (key_count <= stack_buf.len) {
-            for (0..key_count) |i| {
-                const ptr = blobs[i] orelse return @intFromEnum(Status.internal);
-                stack_buf[i] = ptr[0..lens[i]];
-            }
-            keys_slice = stack_buf[0..key_count];
-        } else {
-            const hk = allocator.alloc([]const u8, key_count) catch
-                return @intFromEnum(Status.internal);
-            heap_keys = hk;
-            for (0..key_count) |i| {
-                const ptr = blobs[i] orelse return @intFromEnum(Status.internal);
-                hk[i] = ptr[0..lens[i]];
-            }
-            keys_slice = hk;
-        }
-    }
-
-    const status = verifyDetached(
-        allocator,
-        sig_bytes[0..sig_len],
-        signed_bytes[0..signed_len],
-        keys_slice,
-    );
-    return @intFromEnum(status);
 }

@@ -130,7 +130,6 @@
         register_ini;
         replace_vars;
         rpmtransflags_map;
-        rpmzig_verify_detached;
         skip_quoted;
         skip_quoted_ifquoted;
         skip_spaces;

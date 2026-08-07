@@ -385,7 +385,6 @@
     "register_ini",
     "replace_vars",
     "rpmtransflags_map",
-    "rpmzig_verify_detached",
     "skip_quoted",
     "skip_quoted_ifquoted",
     "skip_spaces",
@@ -476,7 +475,6 @@
     "tdnf_rpmzig_digest_final",
     "tdnf_rpmzig_digest_open",
     "tdnf_rpmzig_digest_update",
-    "tdnf_rpmzig_verify_pure",
     "unlink_node",
     "unparse_ini",
     "unregister_all"

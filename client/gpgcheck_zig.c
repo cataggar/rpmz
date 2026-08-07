@@ -6,7 +6,6 @@
 
 #include "includes.h"
 
-#include "../rpmzig/verify.h"
 #include "gpgcheck_zig.h"
 
 int

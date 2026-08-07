@@ -547,6 +547,14 @@ pub fn build(b: *Build) void {
     });
     rpmzig_pkgfile_mod.addImport("rpm_header", rpmzig_header_mod);
 
+    const rpmzig_verify_mod = b.createModule(.{
+        .root_source_file = b.path("rpmzig/verify.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    rpmzig_verify_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+
     const rpmzig_cpio_mod = b.createModule(.{
         .root_source_file = b.path("rpmzig/cpio.zig"),
         .target = target,
@@ -1451,18 +1459,14 @@ pub fn build(b: *Build) void {
     // path libtdnf uses.
     {
         const mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/verify_main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .pic = true,
         });
-        mod.addIncludePath(b.path("rpmzig"));
-        mod.addCSourceFiles(.{
-            .root = b.path("rpmzig"),
-            .files = &.{ "verify_main.c", "verify_pure.c" },
-            .flags = &tdnf_cflags,
-        });
-        mod.linkLibrary(rpmzig_lib);
+        mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+        mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
             .name = "tdnf-rpm-verify",
             .root_module = mod,
@@ -1472,6 +1476,34 @@ pub fn build(b: *Build) void {
             .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
         });
         b.getInstallStep().dependOn(&install.step);
+
+        const verify_tests = b.addTest(.{
+            .root_module = rpmzig_verify_mod,
+        });
+        const run_verify_tests = b.addRunArtifact(verify_tests);
+        const cli_test_mod = b.createModule(.{
+            .root_source_file = b.path("rpmzig/verify_cli_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const cli_tests = b.addTest(.{ .root_module = cli_test_mod });
+        const run_cli_tests = b.addRunArtifact(cli_tests);
+        run_cli_tests.setEnvironmentVariable(
+            "TDNF_RPM_VERIFY_TEST_BINARY",
+            b.getInstallPath(
+                .{ .custom = "libexec/tdnf" },
+                "tdnf-rpm-verify",
+            ),
+        );
+        run_cli_tests.step.dependOn(&install.step);
+        const verifier_tools_test_step = b.step(
+            "rpmzig-verifier-tools-test",
+            "Run rpmzig verifier bridge and CLI tests",
+        );
+        verifier_tools_test_step.dependOn(&run_verify_tests.step);
+        verifier_tools_test_step.dependOn(&run_cli_tests.step);
+        zig_test_step.dependOn(&run_verify_tests.step);
+        zig_test_step.dependOn(&run_cli_tests.step);
     }
 
     // ----- libtdnf (shared) ----- //
@@ -1507,11 +1539,6 @@ pub fn build(b: *Build) void {
     tdnf_so_mod.addCSourceFiles(.{
         .root = b.path("client"),
         .files = &(client_libsolv_free_srcs),
-        .flags = &tdnf_cflags,
-    });
-    tdnf_so_mod.addCSourceFiles(.{
-        .root = b.path("rpmzig"),
-        .files = &.{"verify_pure.c"},
         .flags = &tdnf_cflags,
     });
     tdnf_so_mod.linkLibrary(common_lib);
