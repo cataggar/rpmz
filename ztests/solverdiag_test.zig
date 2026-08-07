@@ -203,7 +203,50 @@ test "a package conflict is reported as a numbered problem" {
     try std.testing.expect(!try root.isInstalled(conflicts_1));
 }
 
-test "refusing to erase a protected dependent reports the full diagnostic" {
+test "refusing to erase a locked dependent reports the full diagnostic" {
+    // A locked dependent is used rather than a protected one because
+    // protection is now reported as ERROR_TDNF_PROTECTED with its own
+    // message (see protected_test.zig); locking produces the same
+    // unsatisfiable solve and therefore still exercises this diagnostic.
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root, leaf);
+    defer eraseBestEffort(&root, required);
+    defer root.tmp.dir.deleteTree(std.testing.io, "locks.d") catch {};
+
+    try install(&root, leaf);
+    try root.tmp.dir.createDirPath(std.testing.io, "locks.d");
+    try root.tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "locks.d/test.conf",
+        .data = leaf,
+    });
+
+    var result = try root.run(&.{ "-y", "--nogpgcheck", "remove", required });
+    defer result.deinit();
+    try result.expectCode(solv_code);
+
+    var diagnostics = try parse(std.testing.allocator, &result);
+    defer diagnostics.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.reported);
+    // `protected_test.zig` pins the `requires <name>` fragment; this pins the
+    // whole line, including the "none of the providers" tail that explains why
+    // the locked dependent blocks the erase.
+    try diagnostics.expectContains("package " ++ leaf ++ "-1.0.1-3.");
+    try diagnostics.expectContains(
+        "requires " ++ required ++ ", but none of the providers can be installed",
+    );
+    try std.testing.expect(try root.isInstalled(leaf));
+    try std.testing.expect(try root.isInstalled(required));
+}
+
+test "a solve that fails for its own reasons keeps its diagnostic when packages are protected" {
+    // The protected-package probe re-solves with protection dropped and only
+    // renames the error when that made the request solvable. A request that
+    // is unsatisfiable regardless must keep its solver error and its
+    // problem text.
     var h = try harness.open(std.testing.allocator);
     defer h.deinit();
     var root = try h.root();
@@ -219,7 +262,10 @@ test "refusing to erase a protected dependent reports the full diagnostic" {
         .data = leaf,
     });
 
-    var result = try root.run(&.{ "-y", "--nogpgcheck", "remove", required });
+    var result = try root.run(&.{
+        "-y",           "--nogpgcheck", "install",
+        conflicts_0, conflicts_1,
+    });
     defer result.deinit();
     try result.expectCode(solv_code);
 
@@ -227,15 +273,11 @@ test "refusing to erase a protected dependent reports the full diagnostic" {
     defer diagnostics.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), diagnostics.reported);
-    // `protected_test.zig` pins the `requires <name>` fragment; this pins the
-    // whole line, including the "none of the providers" tail that explains why
-    // the protected dependent blocks the erase.
-    try diagnostics.expectContains("package " ++ leaf ++ "-1.0.1-3.");
     try diagnostics.expectContains(
-        "requires " ++ required ++ ", but none of the providers can be installed",
+        "conflicts with " ++ conflicts_0 ++ " provided by " ++ conflicts_0 ++ "-0:0.1-1.",
     );
+    try result.expectStderrContains("Error(1301)");
     try std.testing.expect(try root.isInstalled(leaf));
-    try std.testing.expect(try root.isInstalled(required));
 }
 
 test "multiple problems are numbered and counted together" {
