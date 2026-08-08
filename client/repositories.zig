@@ -10,6 +10,7 @@ const errors = @import("tdnf_error");
 
 const CnfNode = abi.CnfNode;
 const Conf = abi.Conf;
+const DownloadRequest = abi.DownloadRequest;
 const RepoData = abi.RepoData;
 const RepoMetadata = abi.RepoMetadata;
 const RepoMdRecord = abi.RepoMdRecord;
@@ -28,12 +29,14 @@ const Dirent = extern struct {
 };
 
 const Stat = std.os.linux.Statx;
+const mode_type_mask = std.os.linux.S.IFMT;
+const mode_regular = std.os.linux.S.IFREG;
+const at_symlink_nofollow = std.os.linux.AT.SYMLINK_NOFOLLOW;
 
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
 const LOG_NOTICE: c_int = 3;
-const F_OK: c_int = 0;
 
 const system_repo_name = "@System";
 const cmdline_repo_name = "@cmdline";
@@ -44,6 +47,10 @@ const metadata_marker = "lastrefresh";
 const metadata_mirrorlist = "mirrorlist";
 const metadata_snapshot = "snapshot";
 const cookie_len = 32;
+const download_temp_attempts = 64;
+
+var download_temp_counter = std.atomic.Value(u64).init(0);
+var download_progress_data = DownloadProgressData{};
 
 const repomd_primary = "primary";
 const repomd_filelists = "filelists";
@@ -62,6 +69,11 @@ const default_metadata_expire = 172800;
 const default_skip_filelists = 0;
 const default_skip_updateinfo = 0;
 const default_skip_other = 0;
+
+const DownloadProgressData = struct {
+    text: [1024]u8 = [_]u8{0} ** 1024,
+    previous_time: std.c.time_t = 0,
+};
 
 extern fn TDNFAllocateMemory(usize, usize, *?*anyopaque) u32;
 extern fn TDNFAllocateString(?[*:0]const u8, *?[*:0]u8) u32;
@@ -90,8 +102,7 @@ extern fn readdir(*DIR) ?*Dirent;
 extern fn closedir(*DIR) c_int;
 extern fn fdopendir(c_int) ?*DIR;
 extern fn fnmatch([*:0]const u8, [*:0]const u8, c_int) c_int;
-extern fn access(?[*:0]const u8, c_int) c_int;
-extern fn rename([*:0]const u8, [*:0]const u8) c_int;
+extern fn isatty(c_int) c_int;
 extern fn time(?*std.c.time_t) std.c.time_t;
 extern fn log_console(c_int, [*:0]const u8, ...) void;
 
@@ -114,9 +125,7 @@ extern fn TDNFRemoveRpmCache(?*Tdnf, ?*RepoData) u32;
 extern fn TDNFRemoveTmpRepodata(?[*:0]const u8) u32;
 extern fn TDNFUtilsMakeDir(?[*:0]const u8) u32;
 extern fn TDNFUtilsMakeDirs(?[*:0]const u8) u32;
-extern fn TDNFTouchFile(?[*:0]const u8) u32;
-extern fn TDNFDownloadFile(?*Tdnf, ?*RepoData, ?[*:0]const u8, ?[*:0]const u8, ?[*:0]const u8, c_int) u32;
-extern fn TDNFDownloadFileFromRepo(?*Tdnf, ?*RepoData, ?[*:0]const u8, ?[*:0]const u8, ?[*:0]const u8) u32;
+extern fn client_download_to_fd(?*const DownloadRequest, c_int, ?*c_long) u32;
 extern fn TDNFGetErrorString(u32, *?[*:0]u8) u32;
 
 fn isNullOrEmpty(value: ?[*:0]const u8) bool {
@@ -124,7 +133,11 @@ fn isNullOrEmpty(value: ?[*:0]const u8) bool {
 }
 
 fn systemError() u32 {
-    return errors.ERROR_TDNF_SYSTEM_BASE + @as(u32, @intCast(std.c._errno().*));
+    return systemErrorFrom(std.c._errno().*);
+}
+
+fn systemErrorFrom(errno_value: c_int) u32 {
+    return errors.ERROR_TDNF_SYSTEM_BASE + @as(u32, @intCast(errno_value));
 }
 
 fn freeString(slot: *?[*:0]u8) void {
@@ -377,7 +390,83 @@ fn openDirectoryPathNoFollow(path_z: [*:0]const u8, output: *c_int) u32 {
     return 0;
 }
 
-fn isRegularFd(fd: c_int) bool {
+const PinnedPath = struct {
+    parent_fd: c_int = -1,
+    name: [std.fs.max_name_bytes + 1]u8 = undefined,
+
+    fn deinit(self: *PinnedPath) void {
+        if (self.parent_fd >= 0) _ = std.c.close(self.parent_fd);
+        self.parent_fd = -1;
+    }
+
+    fn nameZ(self: *PinnedPath) [*:0]const u8 {
+        return @ptrCast(&self.name);
+    }
+};
+
+fn pinPath(path_z: [*:0]const u8, output: *PinnedPath) u32 {
+    const path = std.mem.span(path_z);
+    if (path.len == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
+    var end = path.len;
+    while (end > 1 and path[end - 1] == '/') : (end -= 1) {}
+    const trimmed = path[0..end];
+    const slash = std.mem.lastIndexOfScalar(u8, trimmed, '/');
+    const name = if (slash) |index| trimmed[index + 1 ..] else trimmed;
+    if (name.len == 0 or
+        name.len > std.fs.max_name_bytes or
+        std.mem.eql(u8, name, ".") or
+        std.mem.eql(u8, name, ".."))
+    {
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    const parent = if (slash) |index|
+        if (index == 0) "/" else trimmed[0..index]
+    else
+        ".";
+    const parent_z = std.heap.c_allocator.dupeZ(u8, parent) catch
+        return errors.ERROR_TDNF_OUT_OF_MEMORY;
+    defer std.heap.c_allocator.free(parent_z);
+    var parent_fd: c_int = -1;
+    const result = openDirectoryPathNoFollow(parent_z, &parent_fd);
+    if (result != 0) return result;
+    output.* = .{ .parent_fd = parent_fd };
+    @memcpy(output.name[0..name.len], name);
+    output.name[name.len] = 0;
+    return 0;
+}
+
+fn statPinned(path_z: [*:0]const u8, output: *Stat) u32 {
+    var pinned: PinnedPath = undefined;
+    const result = pinPath(path_z, &pinned);
+    if (result != 0) return result;
+    defer pinned.deinit();
+    if (std.c.statx(
+        pinned.parent_fd,
+        pinned.nameZ(),
+        at_symlink_nofollow,
+        .{ .TYPE = true, .SIZE = true, .CTIME = true },
+        output,
+    ) != 0) {
+        return systemError();
+    }
+    if (output.mode & mode_type_mask != mode_regular)
+        return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+    return 0;
+}
+
+fn regularPathExists(path_z: [*:0]const u8, exists: *bool) u32 {
+    var stat_buf = std.mem.zeroes(Stat);
+    const result = statPinned(path_z, &stat_buf);
+    if (result == systemErrorFrom(@intFromEnum(std.c.E.NOENT))) {
+        exists.* = false;
+        return 0;
+    }
+    if (result != 0) return result;
+    exists.* = true;
+    return 0;
+}
+
+fn isRegularFd(fd: c_int, regular: *bool) u32 {
     var stat_buf = std.mem.zeroes(Stat);
     if (std.c.statx(
         fd,
@@ -385,8 +474,18 @@ fn isRegularFd(fd: c_int) bool {
         std.os.linux.AT.EMPTY_PATH,
         .{ .TYPE = true },
         &stat_buf,
-    ) != 0) return false;
-    return stat_buf.mode & std.os.linux.S.IFMT == std.os.linux.S.IFREG;
+    ) != 0) return systemError();
+    regular.* = stat_buf.mode & mode_type_mask == mode_regular;
+    return 0;
+}
+
+fn repoOpenError(errno_value: c_int) ?u32 {
+    if (errno_value == @intFromEnum(std.c.E.NOENT) or
+        errno_value == @intFromEnum(std.c.E.LOOP))
+    {
+        return null;
+    }
+    return systemErrorFrom(errno_value);
 }
 
 fn loadReposFromFile(handle: *Tdnf, path: [*:0]const u8, output: *?*RepoData) u32 {
@@ -495,9 +594,16 @@ pub export fn TDNFLoadRepoData(handle_opt: ?*Tdnf, output_opt: ?*?*RepoData) u32
             .CLOEXEC = true,
             .NOFOLLOW = true,
         });
-        if (repo_fd < 0) continue;
+        if (repo_fd < 0) {
+            const errno_value = std.c._errno().*;
+            if (repoOpenError(errno_value)) |open_error| return open_error;
+            continue;
+        }
         defer _ = std.c.close(repo_fd);
-        if (!isRegularFd(repo_fd)) continue;
+        var regular = false;
+        result = isRegularFd(repo_fd, &regular);
+        if (result != 0) return result;
+        if (!regular) continue;
         var path_buffer: [64]u8 = undefined;
         const path = std.fmt.bufPrintZ(&path_buffer, "/proc/self/fd/{d}", .{repo_fd}) catch
             return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -761,8 +867,11 @@ fn parseRepoMdDoc(path: [*:0]const u8, output: *?*RepoMdDoc) u32 {
 
 fn parseRepoMd(metadata: *RepoMetadata) u32 {
     const path = metadata.pszRepoMD orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    var stat_buf = std.mem.zeroes(Stat);
+    var result = statPinned(path, &stat_buf);
+    if (result != 0) return result;
     var doc: ?*RepoMdDoc = null;
-    var result = parseRepoMdDoc(path, &doc);
+    result = parseRepoMdDoc(path, &doc);
     if (result != 0) return result;
     defer TDNFRepoMdFree(doc);
     result = findRepoMdPart(doc.?, repomd_primary, &metadata.pszPrimary);
@@ -776,6 +885,309 @@ fn parseRepoMd(metadata: *RepoMetadata) u32 {
     return 0;
 }
 
+fn downloadProgressCallback(
+    user_data: ?*anyopaque,
+    download_total: i64,
+    download_now: i64,
+    upload_total: i64,
+    upload_now: i64,
+) callconv(.c) c_int {
+    _ = upload_total;
+    _ = upload_now;
+    if (download_total <= 0 or user_data == null) return 0;
+    const data: *DownloadProgressData = @ptrCast(@alignCast(user_data.?));
+    var percent: u32 = 100;
+    if (download_now < download_total) {
+        const current = time(null);
+        if (data.previous_time != 0 and current - data.previous_time < 1) return 0;
+        data.previous_time = current;
+        percent = @intFromFloat(
+            (@as(f64, @floatFromInt(download_now)) /
+                @as(f64, @floatFromInt(download_total))) * 100.0,
+        );
+    } else {
+        data.previous_time = 0;
+    }
+    if (isatty(2) == 0) {
+        log_console(
+            LOG_NOTICE,
+            "%s %u%% %ld\n",
+            @as([*:0]const u8, @ptrCast(&data.text)),
+            percent,
+            @as(c_long, @intCast(download_now)),
+        );
+    } else {
+        log_console(
+            LOG_NOTICE,
+            "%-35s %10ld %u%%\r",
+            @as([*:0]const u8, @ptrCast(&data.text)),
+            @as(c_long, @intCast(download_now)),
+            percent,
+        );
+    }
+    return 0;
+}
+
+fn prepareDownloadRequest(
+    handle: *Tdnf,
+    repo: *RepoData,
+    url: [*:0]const u8,
+    progress_text: ?[*:0]const u8,
+    request: *DownloadRequest,
+    no_output: *bool,
+) u32 {
+    const args = handle.pArgs orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const conf = handle.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    request.* = .{
+        .pszUrl = url,
+        .pszDestination = "pinned-descriptor",
+        .pszUserAgent = conf.pszUserAgentHeader,
+        .pszProxy = conf.pszProxy,
+        .pszProxyUserPwd = conf.pszProxyUserPass,
+        .pszUserName = repo.pszUser,
+        .pszPassword = repo.pszPass,
+        .pszSSLCaCert = repo.pszSSLCaCert,
+        .pszSSLClientCert = repo.pszSSLClientCert,
+        .pszSSLClientKey = repo.pszSSLClientKey,
+        .nSSLVerify = if (repo.nSSLVerify != 0) 1 else 0,
+        .nConnectTimeout = conf.nConnectTimeout,
+        .nTimeout = repo.nTimeout,
+        .nLowSpeedLimit = repo.nMinrate,
+        .nLowSpeedTime = repo.nTimeout,
+        .nMaxRecvSpeed = repo.nThrottle,
+    };
+    no_output.* = true;
+    if (args.nQuiet == 0 and progress_text != null and
+        (isatty(1) != 0 or args.nVerbose != 0))
+    {
+        download_progress_data = .{};
+        const text = std.mem.span(progress_text.?);
+        const length = @min(text.len, download_progress_data.text.len - 1);
+        @memcpy(download_progress_data.text[0..length], text[0..length]);
+        request.pfnProgress = downloadProgressCallback;
+        request.pProgressData = &download_progress_data;
+        no_output.* = false;
+    }
+    return 0;
+}
+
+fn downloadErrorIsFatal(result: u32, status: c_long) bool {
+    if (status >= 400) return true;
+    return switch (result) {
+        errors.ERROR_TDNF_CALL_NOT_SUPPORTED,
+        errors.ERROR_TDNF_INVALID_PARAMETER,
+        errors.ERROR_TDNF_URL_INVALID,
+        errors.ERROR_TDNF_SET_SSL_SETTINGS,
+        errors.ERROR_TDNF_OPERATION_ABORTED,
+        errors.ERROR_TDNF_OUT_OF_MEMORY,
+        => true,
+        else => false,
+    };
+}
+
+fn redactUrl(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+    const scheme = std.mem.indexOf(u8, value, "://") orelse
+        return allocator.dupe(u8, value);
+    const authority_start = scheme + 3;
+    const authority_end = std.mem.indexOfScalarPos(u8, value, authority_start, '/') orelse
+        value.len;
+    const at = std.mem.lastIndexOfScalar(
+        u8,
+        value[authority_start..authority_end],
+        '@',
+    ) orelse return allocator.dupe(u8, value);
+    return std.fmt.allocPrint(
+        allocator,
+        "{s}<redacted>@{s}",
+        .{ value[0..authority_start], value[authority_start + at + 1 ..] },
+    );
+}
+
+fn downloadUrlToFd(
+    handle: *Tdnf,
+    repo: *RepoData,
+    url: [*:0]const u8,
+    destination_fd: c_int,
+    progress_text: ?[*:0]const u8,
+) u32 {
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena_state.deinit();
+    const safe_url = redactUrl(arena_state.allocator(), std.mem.span(url)) catch
+        "repository URL";
+    var request: DownloadRequest = undefined;
+    var no_output = true;
+    var result = prepareDownloadRequest(
+        handle,
+        repo,
+        url,
+        progress_text,
+        &request,
+        &no_output,
+    );
+    if (result != 0) return result;
+    result = systemErrorFrom(@intFromEnum(std.c.E.NOENT));
+
+    var attempt: c_int = 0;
+    while (attempt <= repo.nRetries) : (attempt += 1) {
+        if (attempt > 0) log_console(LOG_INFO, "retrying %d/%d\n", attempt, repo.nRetries);
+        var status: c_long = 0;
+        result = client_download_to_fd(&request, destination_fd, &status);
+        if (result == 0) break;
+        if (status >= 400) {
+            log_console(
+                LOG_ERR,
+                "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n",
+                status,
+                @as(c_int, @intCast(safe_url.len)),
+                safe_url.ptr,
+            );
+            return result;
+        }
+        if (attempt == repo.nRetries or downloadErrorIsFatal(result, status)) {
+            log_console(
+                LOG_ERR,
+                "Error: failed to download %.*s: error %u\n",
+                @as(c_int, @intCast(safe_url.len)),
+                safe_url.ptr,
+                result,
+            );
+            return result;
+        }
+    }
+    if (!no_output) log_console(LOG_INFO, "\n");
+    return result;
+}
+
+fn downloadFromRepoToFd(
+    handle: *Tdnf,
+    repo: *RepoData,
+    location: [*:0]const u8,
+    destination_fd: c_int,
+    progress_text: ?[*:0]const u8,
+) u32 {
+    if (repo.ppszBaseUrls) |base_urls| {
+        if (base_urls[0] != null and
+            std.mem.indexOf(u8, std.mem.span(location), "://") == null)
+        {
+            var index: usize = 0;
+            while (base_urls[index]) |base_url| : (index += 1) {
+                var url: ?[*:0]u8 = null;
+                defer freeString(&url);
+                var result = joinPath(&url, &.{ base_url, location });
+                if (result != 0) return result;
+                result = downloadUrlToFd(
+                    handle,
+                    repo,
+                    url.?,
+                    destination_fd,
+                    progress_text,
+                );
+                if (result == 0) return 0;
+                if (base_urls[index + 1] == null) return result;
+                var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+                defer arena_state.deinit();
+                const safe_url = redactUrl(
+                    arena_state.allocator(),
+                    std.mem.span(url.?),
+                ) catch "repository URL";
+                log_console(
+                    LOG_ERR,
+                    "Warning: failed to download %.*s, trying next base URL\n",
+                    @as(c_int, @intCast(safe_url.len)),
+                    safe_url.ptr,
+                );
+            }
+        }
+    }
+    return downloadUrlToFd(handle, repo, location, destination_fd, progress_text);
+}
+
+fn secureDownload(
+    handle: *Tdnf,
+    repo: *RepoData,
+    source: [*:0]const u8,
+    destination: [*:0]const u8,
+    progress_text: ?[*:0]const u8,
+    from_repo: bool,
+) u32 {
+    var pinned: PinnedPath = undefined;
+    var result = pinPath(destination, &pinned);
+    if (result != 0) return result;
+    defer pinned.deinit();
+
+    var destination_stat = std.mem.zeroes(Stat);
+    if (std.c.statx(
+        pinned.parent_fd,
+        pinned.nameZ(),
+        at_symlink_nofollow,
+        .{ .TYPE = true },
+        &destination_stat,
+    ) == 0) {
+        if (destination_stat.mode & mode_type_mask != mode_regular)
+            return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+    } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
+        return systemError();
+    }
+
+    var temp_name: [96]u8 = undefined;
+    var temp_fd: c_int = -1;
+    var attempt: usize = 0;
+    while (attempt < download_temp_attempts) : (attempt += 1) {
+        const sequence = download_temp_counter.fetchAdd(1, .monotonic);
+        const name = std.fmt.bufPrintZ(
+            &temp_name,
+            ".tdnf-repository-{d}-{d}.tmp",
+            .{ std.os.linux.getpid(), sequence },
+        ) catch return errors.ERROR_TDNF_INVALID_PARAMETER;
+        temp_fd = std.c.openat(pinned.parent_fd, name, .{
+            .ACCMODE = .WRONLY,
+            .CREAT = true,
+            .EXCL = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        }, @as(c_uint, 0o600));
+        if (temp_fd >= 0) break;
+        if (std.c._errno().* != @intFromEnum(std.c.E.EXIST))
+            return systemError();
+    }
+    if (temp_fd < 0) return systemErrorFrom(@intFromEnum(std.c.E.EXIST));
+    const temp_name_z: [*:0]const u8 = @ptrCast(&temp_name);
+    defer {
+        _ = std.c.close(temp_fd);
+        _ = std.c.unlinkat(pinned.parent_fd, temp_name_z, 0);
+    }
+
+    result = if (from_repo)
+        downloadFromRepoToFd(handle, repo, source, temp_fd, progress_text)
+    else
+        downloadUrlToFd(handle, repo, source, temp_fd, progress_text);
+    if (result != 0) return result;
+    if (std.c.fchmod(temp_fd, 0o644) != 0 or std.c.fsync(temp_fd) != 0)
+        return systemError();
+
+    destination_stat = std.mem.zeroes(Stat);
+    if (std.c.statx(
+        pinned.parent_fd,
+        pinned.nameZ(),
+        at_symlink_nofollow,
+        .{ .TYPE = true },
+        &destination_stat,
+    ) == 0) {
+        if (destination_stat.mode & mode_type_mask != mode_regular)
+            return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+    } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
+        return systemError();
+    }
+    if (std.c.renameat(
+        pinned.parent_fd,
+        temp_name_z,
+        pinned.parent_fd,
+        pinned.nameZ(),
+    ) != 0) return systemError();
+    _ = std.c.fsync(pinned.parent_fd);
+    return 0;
+}
+
 fn downloadRepoMdPart(
     handle: *Tdnf,
     repo: *RepoData,
@@ -784,13 +1196,15 @@ fn downloadRepoMdPart(
     name: [*:0]const u8,
 ) u32 {
     if (!safeRelativePath(location)) return errors.ERROR_TDNF_INVALID_REPO_FILE;
-    if (access(destination, F_OK) == 0) return 0;
-    if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) return systemError();
+    var exists = false;
+    var result = regularPathExists(destination, &exists);
+    if (result != 0) return result;
+    if (exists) return 0;
     var info: ?[*:0]u8 = null;
     defer freeString(&info);
-    var result = TDNFAllocateStringPrintf(&info, "%s (%s)", repo.pszId, name);
+    result = TDNFAllocateStringPrintf(&info, "%s (%s)", repo.pszId, name);
     if (result != 0) return result;
-    result = TDNFDownloadFileFromRepo(handle, repo, location, destination, info);
+    result = secureDownload(handle, repo, location, destination, info, true);
     return result;
 }
 
@@ -830,9 +1244,46 @@ fn ensureRepoMdParts(handle: *Tdnf, repo: *RepoData, relative: *RepoMetadata, ou
 }
 
 fn replaceFile(source: [*:0]const u8, destination: [*:0]const u8) u32 {
-    if (source[0] == 0 or destination[0] == 0 or access(source, F_OK) != 0)
+    if (source[0] == 0 or destination[0] == 0)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (rename(source, destination) != 0) return systemError();
+    var source_path: PinnedPath = undefined;
+    var result = pinPath(source, &source_path);
+    if (result != 0) return result;
+    defer source_path.deinit();
+    var destination_path: PinnedPath = undefined;
+    result = pinPath(destination, &destination_path);
+    if (result != 0) return result;
+    defer destination_path.deinit();
+    var source_stat = std.mem.zeroes(Stat);
+    if (std.c.statx(
+        source_path.parent_fd,
+        source_path.nameZ(),
+        at_symlink_nofollow,
+        .{ .TYPE = true },
+        &source_stat,
+    ) != 0) return systemError();
+    if (source_stat.mode & mode_type_mask != mode_regular)
+        return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+    var destination_stat = std.mem.zeroes(Stat);
+    if (std.c.statx(
+        destination_path.parent_fd,
+        destination_path.nameZ(),
+        at_symlink_nofollow,
+        .{ .TYPE = true },
+        &destination_stat,
+    ) == 0) {
+        if (destination_stat.mode & mode_type_mask != mode_regular)
+            return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+    } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
+        return systemError();
+    }
+    if (std.c.renameat(
+        source_path.parent_fd,
+        source_path.nameZ(),
+        destination_path.parent_fd,
+        destination_path.nameZ(),
+    ) != 0) return systemError();
+    _ = std.c.fsync(destination_path.parent_fd);
     return 0;
 }
 
@@ -853,12 +1304,13 @@ fn filterMirrorComments(values_opt: ?[*]?[*:0]u8) void {
 
 fn statChanged(path: [*:0]const u8, expire: c_long, needs_download: *bool) u32 {
     var stat_buf = std.mem.zeroes(Stat);
-    if (std.c.statx(std.os.linux.AT.FDCWD, path, 0, .{ .TYPE = true, .CTIME = true }, &stat_buf) != 0) {
-        if (std.c._errno().* == @intFromEnum(std.c.E.NOENT)) {
+    const result = statPinned(path, &stat_buf);
+    if (result != 0) {
+        if (result == systemErrorFrom(@intFromEnum(std.c.E.NOENT))) {
             needs_download.* = true;
             return 0;
         }
-        return systemError();
+        return result;
     }
     const now = time(null);
     needs_download.* = now - stat_buf.ctime.sec > expire;
@@ -867,15 +1319,23 @@ fn statChanged(path: [*:0]const u8, expire: c_long, needs_download: *bool) u32 {
 
 fn validateLocalSnapshot(path: [*:0]const u8) u32 {
     var stat_buf = std.mem.zeroes(Stat);
-    if (std.c.statx(
-        std.os.linux.AT.FDCWD,
-        path,
-        std.os.linux.AT.SYMLINK_NOFOLLOW,
-        .{ .TYPE = true },
-        &stat_buf,
-    ) != 0) return systemError();
-    if (stat_buf.mode & std.os.linux.S.IFMT != std.os.linux.S.IFREG)
-        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    return statPinned(path, &stat_buf);
+}
+
+fn touchPinnedFile(path: [*:0]const u8) u32 {
+    var pinned: PinnedPath = undefined;
+    const result = pinPath(path, &pinned);
+    if (result != 0) return result;
+    defer pinned.deinit();
+    const fd = std.c.openat(pinned.parent_fd, pinned.nameZ(), .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    }, @as(c_uint, 0o644));
+    if (fd < 0) return systemError();
+    defer _ = std.c.close(fd);
+    if (std.c.futimens(fd, null) != 0) return systemError();
     return 0;
 }
 
@@ -908,7 +1368,14 @@ fn resolveSnapshot(handle: *Tdnf, repo: *RepoData) u32 {
         result = statChanged(repo.pszSnapshotFile.?, repo.lMetadataExpire, &need_download);
         if (result != 0) return result;
         if (need_download)
-            return TDNFDownloadFile(handle, repo, snapshot, repo.pszSnapshotFile, repo.pszId, 0);
+            return secureDownload(
+                handle,
+                repo,
+                snapshot,
+                repo.pszSnapshotFile.?,
+                repo.pszId,
+                false,
+            );
         return 0;
     }
     const value = std.mem.span(snapshot);
@@ -947,7 +1414,14 @@ fn getRepoMD(
         result = statChanged(mirror_file.?, repo.lMetadataExpire, &need_download);
         if (result != 0) return result;
         if (need_download) {
-            result = TDNFDownloadFile(handle, repo, mirror_url, mirror_file, repo.pszId, 0);
+            result = secureDownload(
+                handle,
+                repo,
+                mirror_url,
+                mirror_file.?,
+                repo.pszId,
+                false,
+            );
             if (result != 0) return result;
         }
         TDNFFreeStringArray(repo.ppszBaseUrls);
@@ -978,11 +1452,13 @@ fn getRepoMD(
     result = TDNFAllocateString(repo.pszId, &relative.pszRepo);
     if (result != 0) return result;
 
-    var need_download = access(repomd_path, F_OK) != 0;
-    if (need_download and std.c._errno().* != @intFromEnum(std.c.E.NOENT)) return systemError();
+    var repomd_exists = false;
+    result = regularPathExists(repomd_path.?, &repomd_exists);
+    if (result != 0) return result;
+    var need_download = !repomd_exists;
     var old_cookie = [_]u8{0} ** cookie_len;
     if (handle.pArgs.?.nRefresh != 0) {
-        if (access(repomd_path, F_OK) == 0) {
+        if (repomd_exists) {
             result = TDNFRepoMdCalculateCookieForFile(repomd_path, &old_cookie);
             if (result != 0) return result;
         }
@@ -1007,7 +1483,14 @@ fn getRepoMD(
         if (result != 0) return result;
         result = joinPath(&temp_repomd, &.{ temp_dir, repomd_file_name });
         if (result != 0) return result;
-        result = TDNFDownloadFileFromRepo(handle, repo, repomd_file_path, temp_repomd, repo.pszId);
+        result = secureDownload(
+            handle,
+            repo,
+            repomd_file_path,
+            temp_repomd.?,
+            repo.pszId,
+            true,
+        );
         if (result != 0) return result;
         replace_repomd = true;
         if (old_cookie[0] != 0) {
@@ -1035,7 +1518,7 @@ fn getRepoMD(
         defer freeString(&marker);
         result = TDNFGetCachePath(handle, repo, metadata_marker, null, &marker);
         if (result != 0) return result;
-        result = TDNFTouchFile(marker);
+        result = touchPinnedFile(marker.?);
         if (result != 0) return result;
     }
     result = parseRepoMd(relative);
@@ -1094,7 +1577,14 @@ pub export fn TDNFDownloadMetadata(
         if (result != 0) return result;
         result = joinPath(&repomd_path, &.{ repodata_dir, repomd_file_name });
         if (result != 0) return result;
-        result = TDNFDownloadFileFromRepo(handle, repo, repomd_file_path, repomd_path, repo.pszId);
+        result = secureDownload(
+            handle,
+            repo,
+            repomd_file_path,
+            repomd_path.?,
+            repo.pszId,
+            true,
+        );
         if (result != 0) return result;
     } else {
         if (repo.ppszBaseUrls == null or repo.ppszBaseUrls.?[0] == null)
@@ -1107,6 +1597,9 @@ pub export fn TDNFDownloadMetadata(
         if (result != 0) return result;
         log_console(LOG_INFO, "%s\n", url);
     }
+    var repomd_stat = std.mem.zeroes(Stat);
+    result = statPinned(repomd_path.?, &repomd_stat);
+    if (result != 0) return result;
     var doc: ?*RepoMdDoc = null;
     result = parseRepoMdDoc(repomd_path.?, &doc);
     if (result != 0) return result;
@@ -1122,7 +1615,14 @@ pub export fn TDNFDownloadMetadata(
         result = joinPath(&destination, &.{ repo_dir, location });
         if (result != 0) return result;
         if (print_only == 0) {
-            result = TDNFDownloadFileFromRepo(handle, repo, location, destination, repo.pszId);
+            result = secureDownload(
+                handle,
+                repo,
+                location,
+                destination.?,
+                repo.pszId,
+                true,
+            );
             if (result != 0) return result;
         } else {
             var url: ?[*:0]u8 = null;
@@ -1146,4 +1646,234 @@ test "repository path validation rejects traversal and absolute metadata" {
 test "repository ABI remains canonical" {
     try std.testing.expectEqual(@sizeOf(abi.C.TDNF_REPO_DATA), @sizeOf(RepoData));
     try std.testing.expectEqual(@sizeOf(abi.C.TDNF_REPO_METADATA), @sizeOf(RepoMetadata));
+}
+
+fn readTestFile(path: []const u8) ![]u8 {
+    const io = std.testing.io;
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var buffer: [256]u8 = undefined;
+    var reader = file.reader(io, &buffer);
+    return reader.interface.allocRemaining(std.testing.allocator, .limited(4096));
+}
+
+test "repository scan skips only vanished entries and symlinks" {
+    try std.testing.expectEqual(
+        @as(?u32, null),
+        repoOpenError(@intFromEnum(std.c.E.NOENT)),
+    );
+    try std.testing.expectEqual(
+        @as(?u32, null),
+        repoOpenError(@intFromEnum(std.c.E.LOOP)),
+    );
+    try std.testing.expectEqual(
+        systemErrorFrom(@intFromEnum(std.c.E.ACCES)),
+        repoOpenError(@intFromEnum(std.c.E.ACCES)).?,
+    );
+    try std.testing.expectEqual(
+        systemErrorFrom(@intFromEnum(std.c.E.MFILE)),
+        repoOpenError(@intFromEnum(std.c.E.MFILE)).?,
+    );
+    try std.testing.expectEqual(
+        systemErrorFrom(@intFromEnum(std.c.E.IO)),
+        repoOpenError(@intFromEnum(std.c.E.IO)).?,
+    );
+
+    const fd = std.c.open(".", .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(fd >= 0);
+    try std.testing.expectEqual(@as(c_int, 0), std.c.close(fd));
+    var regular = false;
+    try std.testing.expectEqual(
+        systemErrorFrom(@intFromEnum(std.c.E.BADF)),
+        isRegularFd(fd, &regular),
+    );
+}
+
+test "metadata and snapshot downloads reject temp and destination symlinks" {
+    const cwd = std.Io.Dir.cwd();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/repository-download-security-{d}",
+        .{std.os.linux.getpid()},
+    );
+    defer std.testing.allocator.free(root);
+    cwd.deleteTree(io, root) catch {};
+    defer cwd.deleteTree(io, root) catch {};
+    try cwd.createDirPath(io, root);
+
+    const source = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}/payload",
+        .{root},
+    );
+    defer std.testing.allocator.free(source);
+    const sentinel = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}/outside-sentinel",
+        .{root},
+    );
+    defer std.testing.allocator.free(sentinel);
+    try cwd.writeFile(io, .{ .sub_path = source, .data = "payload" });
+    try cwd.writeFile(io, .{ .sub_path = sentinel, .data = "outside" });
+
+    const source_url = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "file:///proc/self/cwd/{s}",
+        .{source},
+        0,
+    );
+    defer std.testing.allocator.free(source_url);
+    const source_parent_url = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "file:///proc/self/cwd/{s}",
+        .{root},
+        0,
+    );
+    defer std.testing.allocator.free(source_parent_url);
+    const sentinel_absolute = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "/proc/self/cwd/{s}",
+        .{sentinel},
+    );
+    defer std.testing.allocator.free(sentinel_absolute);
+
+    var args = abi.CmdArgs{};
+    var conf = abi.Conf{};
+    var handle = abi.Tdnf{ .pArgs = &args, .pConf = &conf };
+    var base_urls = [_]?[*:0]u8{ source_parent_url.ptr, null };
+    var repo = RepoData{
+        .ppszBaseUrls = &base_urls,
+        .nRetries = 0,
+        .nSSLVerify = 1,
+    };
+
+    const destinations = [_]struct {
+        directory: []const u8,
+        filename: []const u8,
+        source_value: [*:0]const u8,
+        from_repo: bool,
+    }{
+        .{
+            .directory = "metadata",
+            .filename = "repomd.xml",
+            .source_value = "payload",
+            .from_repo = true,
+        },
+        .{
+            .directory = "snapshot",
+            .filename = "snapshot.list",
+            .source_value = source_url.ptr,
+            .from_repo = false,
+        },
+    };
+    for (destinations) |entry| {
+        const directory = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}/{s}",
+            .{ root, entry.directory },
+        );
+        defer std.testing.allocator.free(directory);
+        try cwd.createDirPath(io, directory);
+        const destination = try std.fmt.allocPrintSentinel(
+            std.testing.allocator,
+            "{s}/{s}",
+            .{ directory, entry.filename },
+            0,
+        );
+        defer std.testing.allocator.free(destination);
+
+        const legacy_temp = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}.tmp",
+            .{destination},
+        );
+        defer std.testing.allocator.free(legacy_temp);
+        try cwd.symLink(io, sentinel_absolute, legacy_temp, .{});
+        download_temp_counter.store(0, .monotonic);
+        const malicious_temp = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}/.tdnf-repository-{d}-0.tmp",
+            .{ directory, std.os.linux.getpid() },
+        );
+        defer std.testing.allocator.free(malicious_temp);
+        try cwd.symLink(io, sentinel_absolute, malicious_temp, .{});
+
+        try std.testing.expectEqual(
+            @as(u32, 0),
+            secureDownload(
+                &handle,
+                &repo,
+                entry.source_value,
+                destination.ptr,
+                null,
+                entry.from_repo,
+            ),
+        );
+        const downloaded = try readTestFile(destination);
+        defer std.testing.allocator.free(downloaded);
+        try std.testing.expectEqualStrings("payload", downloaded);
+        const outside = try readTestFile(sentinel);
+        defer std.testing.allocator.free(outside);
+        try std.testing.expectEqualStrings("outside", outside);
+
+        try cwd.deleteFile(io, destination);
+        try cwd.symLink(io, sentinel_absolute, destination, .{});
+        try std.testing.expectEqual(
+            systemErrorFrom(@intFromEnum(std.c.E.LOOP)),
+            secureDownload(
+                &handle,
+                &repo,
+                entry.source_value,
+                destination.ptr,
+                null,
+                entry.from_repo,
+            ),
+        );
+        const outside_after = try readTestFile(sentinel);
+        defer std.testing.allocator.free(outside_after);
+        try std.testing.expectEqualStrings("outside", outside_after);
+    }
+
+    const outside_dir = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}/outside-directory",
+        .{root},
+    );
+    defer std.testing.allocator.free(outside_dir);
+    try cwd.createDirPath(io, outside_dir);
+    const ancestor_link = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}/cache-link",
+        .{root},
+    );
+    defer std.testing.allocator.free(ancestor_link);
+    try cwd.symLink(io, "outside-directory", ancestor_link, .{ .is_directory = true });
+    const escaped_destination = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/escaped",
+        .{ancestor_link},
+        0,
+    );
+    defer std.testing.allocator.free(escaped_destination);
+    const ancestor_result = secureDownload(
+        &handle,
+        &repo,
+        source_url.ptr,
+        escaped_destination.ptr,
+        null,
+        false,
+    );
+    try std.testing.expect(
+        ancestor_result == systemErrorFrom(@intFromEnum(std.c.E.LOOP)) or
+            ancestor_result == systemErrorFrom(@intFromEnum(std.c.E.NOTDIR)),
+    );
+    try std.testing.expectError(
+        error.FileNotFound,
+        cwd.access(io, escaped_destination, .{}),
+    );
 }
