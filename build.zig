@@ -36,7 +36,6 @@ const client_libsolv_free_srcs = [_][]const u8{
     "repo.c",        "remoterepo.c",
     "repolist.c",    "resolve.c",
     "rpmtrans.c",    "rpmtrans_native.c",
-    "utils.c",
 };
 
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
@@ -903,6 +902,32 @@ pub fn build(b: *Build) void {
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         client_repoutils_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    const client_utils_test_step = b.step(
+        "client-utils-test",
+        "Run client utility production tests",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/utils.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
+        test_mod.addIncludePath(b.path("include"));
+        test_mod.addIncludePath(b.path("client"));
+        test_mod.addIncludePath(b.path("rpmzig"));
+        test_mod.linkLibrary(common_lib);
+        test_mod.linkLibrary(llconf_lib);
+        test_mod.linkLibrary(rpmzig_lib);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        client_utils_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
     }
 

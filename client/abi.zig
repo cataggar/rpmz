@@ -160,6 +160,22 @@ pub const Tdnf = extern struct {
     nTestReloadFailureStage: u32 = 0,
 };
 
+pub const HistoryInfoItem = extern struct {
+    nId: c_int = 0,
+    nType: c_int = 0,
+    pszCmdLine: ?[*:0]u8 = null,
+    timeStamp: std.c.time_t = 0,
+    nAddedCount: c_int = 0,
+    nRemovedCount: c_int = 0,
+    ppszAddedPkgs: ?[*]?[*:0]u8 = null,
+    ppszRemovedPkgs: ?[*]?[*:0]u8 = null,
+};
+
+pub const HistoryInfo = extern struct {
+    nItemCount: c_int = 0,
+    pItems: ?[*]HistoryInfoItem = null,
+};
+
 fn assertLayout(comptime Zig: type, comptime Header: type, comptime fields: anytype) void {
     std.debug.assert(@sizeOf(Zig) == @sizeOf(Header));
     std.debug.assert(@alignOf(Zig) == @alignOf(Header));
@@ -312,5 +328,19 @@ comptime {
         "ppszCmdLinePkgPaths",
         "dwCmdLinePkgCount",
         "nTestReloadFailureStage",
+    });
+    assertLayout(HistoryInfoItem, C.TDNF_HISTORY_INFO_ITEM, .{
+        "nId",
+        "nType",
+        "pszCmdLine",
+        "timeStamp",
+        "nAddedCount",
+        "nRemovedCount",
+        "ppszAddedPkgs",
+        "ppszRemovedPkgs",
+    });
+    assertLayout(HistoryInfo, C.TDNF_HISTORY_INFO, .{
+        "nItemCount",
+        "pItems",
     });
 }
