@@ -28,11 +28,9 @@ const vendored_libsolv_version_patch = "39";
 /// client/'s C sources entirely (issue #39): these files must keep
 /// compiling with no libsolv header anywhere in scope, which the
 /// libsolv-confinement-audit step below proves by building them without
-/// libsolv's include paths. There is no longer an exception --
-/// packageutils.c was the last one.
+/// libsolv's include paths. There is no longer an exception.
 const client_libsolv_free_srcs = [_][]const u8{
     "api.c",             "goal.c",
-    "packageutils.c",    "querynative.c",
     "repo.c",            "repolist.c",
     "resolve.c",         "rpmtrans.c",
     "rpmtrans_native.c",
@@ -1909,6 +1907,26 @@ pub fn build(b: *Build) void {
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         client_history_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    const client_package_query_test_step = b.step(
+        "client-package-query-test",
+        "Run direct production package/query conversion tests",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/package_query_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_root", tdnf_so_mod);
+        test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("repository_metadata", repomd_mod);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        client_package_query_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
     }
 

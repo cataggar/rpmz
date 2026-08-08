@@ -22,6 +22,190 @@ typedef struct _TDNF_ID_LIST TDNF_ID_LIST, *PTDNF_ID_LIST;
 #include "structs.h"
 #include "../llconf/nodes.h"
 
+struct history_ctx;
+
+uint32_t
+TDNFNativeQueryBuildRepoInputs(
+    PTDNF pTdnf,
+    PTDNF_REPOMD_NATIVE_REPO_INPUT *ppRepos,
+    uint32_t *pdwRepoCount
+    );
+
+uint32_t
+TDNFNativeQueryBuildSingleRepoInput(
+    PTDNF pTdnf,
+    PTDNF_REPO_DATA pRepoData,
+    TDNF_REPOMD_NATIVE_REPO_INPUT *pRepo
+    );
+
+void
+TDNFNativeQueryFreeRepoInputs(
+    PTDNF_REPOMD_NATIVE_REPO_INPUT pRepos,
+    uint32_t dwRepoCount
+    );
+
+const char *
+TDNFNativeQueryInstallRoot(
+    PTDNF pTdnf
+    );
+
+uint32_t
+TDNFNativeQueryFilterUserInstalled(
+    PTDNF pTdnf,
+    PTDNF_PKG_INFO pPkgInfos,
+    uint32_t *pdwCount
+    );
+
+uint32_t
+TDNFNativeQueryApplyLocationUrls(
+    PTDNF pTdnf,
+    PTDNF_PKG_INFO pPkgInfos,
+    uint32_t dwCount
+    );
+
+uint32_t
+TDNFNativeQueryInstalledPkgIds(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    PTDNF_ID_LIST pQueue
+    );
+
+uint32_t
+TDNFNativeQuerySerializePackageId(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    TDNF_PKG_ID dwPkgId,
+    char **ppszLine
+    );
+
+uint32_t
+TDNFNativeQuerySerializeQueuePackageRefs(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    PTDNF_ID_LIST pQueue,
+    char ***pppszRefs,
+    uint32_t *pdwCount
+    );
+
+uint32_t
+TDNFNativeQuerySerializePackageInfoRefs(
+    PTDNF_PKG_INFO pPkgInfos,
+    uint32_t dwCount,
+    char ***pppszRefs,
+    uint32_t *pdwCount
+    );
+
+uint32_t
+TDNFNativeQuerySerializeAutoInstalledRefs(
+    PTDNF pTdnf,
+    struct history_ctx *pHistoryCtx,
+    char ***pppszRefs,
+    uint32_t *pdwCount
+    );
+
+uint32_t
+TDNFNativeQueryResolvePackageRefArrayToQueue(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    char **ppszPackageRefs,
+    uint32_t dwCount,
+    int nInstalledOnly,
+    PTDNF_ID_LIST pQueue
+    );
+
+uint32_t
+TDNFNativeQueryResolveSinglePackageRef(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    const char *pszPackageRef,
+    int nInstalledOnly,
+    TDNF_PKG_ID *pdwPkgId
+    );
+
+uint32_t
+TDNFNativeQuerySplitPackageRef(
+    const char *pszRef,
+    char **ppszRepo,
+    uint32_t *pdwEpoch,
+    char **ppszName,
+    char **ppszVersion,
+    char **ppszRelease,
+    char **ppszArch
+    );
+
+uint32_t
+TDNFNativeQueryBuildUpdateInfoSummary(
+    char **ppszLines,
+    uint32_t dwCount,
+    PTDNF_UPDATEINFO_SUMMARY *ppSummary
+    );
+
+uint32_t
+TDNFNativeQueryBuildUpdateInfo(
+    char **ppszLines,
+    uint32_t dwCount,
+    PTDNF_UPDATEINFO *ppInfo
+    );
+
+uint32_t
+TDNFAddPackagesForInstall(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    PTDNF_ID_LIST pQueueGoal,
+    const char *pszPkgName,
+    int nSource,
+    int nInstallOnly
+    );
+
+uint32_t
+TDNFMatchForReinstall(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    const char *pszName,
+    PTDNF_ID_LIST pQueueGoal
+    );
+
+uint32_t
+TDNFPopulatePkgInfosFromRefs(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    char **ppszPackageRefs,
+    uint32_t dwRefCount,
+    PTDNF_PKG_INFO *ppPkgInfo
+    );
+
+uint32_t
+TDNFPkgInfoFilterNewest(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    PTDNF_PKG_INFO pPkgInfos
+    );
+
+uint32_t
+TDNFAddPackagesForErase(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    PTDNF_ID_LIST pQueueGoal,
+    const char *pszPkgName
+    );
+
+uint32_t
+TDNFAddPackagesForUpgrade(
+    PTDNF_PACKAGE_CONTEXT pSack,
+    PTDNF_ID_LIST pQueueGoal,
+    const char *pszPkgName
+    );
+
+uint32_t
+TDNFAddPackagesForDowngrade(
+    PTDNF pTdnf,
+    PTDNF_PACKAGE_CONTEXT pSack,
+    PTDNF_ID_LIST pQueueGoal,
+    const char *pszPkgName
+    );
+
+uint32_t
+TDNFGetAvailableCacheBytes(
+    PTDNF_CONF pConf,
+    uint64_t *pqwAvailCacheBytes
+    );
+
+uint32_t
+TDNFCheckDownloadCacheBytes(
+    PTDNF_SOLVED_PKG_INFO pSolvedPkgInfo,
+    uint64_t qwAvailCacheBytes
+    );
+
 uint32_t
 ReadGPGKeyFile(
     const char *pszFile,

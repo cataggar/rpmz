@@ -24,11 +24,6 @@ TDNFSolvAddInstallOnlyPkgs(
     PTDNF_PKG_INFO pInstalled,
     uint32_t dwInstalledCount
     );
-/* The _Static_asserts that pin tdnf's job encoding and handle widths to
-   libsolv's live in packageutils.c, the one file in client/ that still
-   speaks libsolv. Keeping them here would have made goal.c depend on
-   <solv/solver.h> for constants it no longer uses. */
-
 /*
  * A package handle's name, without asking the pool for it.
  *
@@ -2040,7 +2035,7 @@ TDNFAddGoal(
         case ALTER_DOWNGRADEALL:
         case ALTER_DOWNGRADE:
             /* Same job as an install: a downgrade is expressed by dwId already
-               naming the older solvable (packageutils.c picks it), not by a
+               naming the older package (the query layer picks it), not by a
                distinct solver bit. The deleted SolvAddPkgDowngradeJob was a
                verbatim copy of SolvAddPkgInstallJob, so this is not a change. */
             dwError = TDNFIdListPush2(pQueueJobs, TDNF_JOB_SOLVABLE|TDNF_JOB_INSTALL, dwId);
