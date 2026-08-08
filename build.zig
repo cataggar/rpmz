@@ -31,12 +31,12 @@ const vendored_libsolv_version_patch = "39";
 /// libsolv's include paths. There is no longer an exception --
 /// packageutils.c was the last one.
 const client_libsolv_free_srcs = [_][]const u8{
-    "api.c",             "client.c",     "config.c",
-    "goal.c",            "gpgcheck.c",   "init.c",    "packageutils.c",
-    "querynative.c",
-    "plugins.c",         "repo.c",       "repoutils.c",
-    "remoterepo.c",      "repolist.c",   "resolve.c", "rpmtrans.c",
-    "rpmtrans_native.c", "updateinfo.c", "utils.c",   "history.c",
+    "api.c",             "client.c",      "config.c",
+    "goal.c",            "gpgcheck.c",    "init.c",
+    "packageutils.c",    "querynative.c", "plugins.c",
+    "repo.c",            "repoutils.c",   "remoterepo.c",
+    "repolist.c",        "resolve.c",     "rpmtrans.c",
+    "rpmtrans_native.c", "updateinfo.c",  "utils.c",
     // The C-side entry point into the rpmzig verifier. An ordinary
     // client/ translation unit: it includes client/includes.h and is
     // audited like the rest.
@@ -1481,6 +1481,15 @@ pub fn build(b: *Build) void {
 
     // ----- libtdnf (shared) ----- //
 
+    const client_history_mod = b.createModule(.{
+        .root_source_file = b.path("client/history.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
+    });
+    client_history_mod.addImport("tdnf_error", tdnf_error_mod);
+
     const tdnf_so_mod = b.createModule(.{
         .root_source_file = b.path("client/root.zig"),
         .target = target,
@@ -1498,6 +1507,7 @@ pub fn build(b: *Build) void {
     );
     tdnf_so_mod.addImport("repomd_client_exports", repomd_mod);
     tdnf_so_mod.addImport("builtin_plugins", builtin_plugins_mod);
+    tdnf_so_mod.addImport("client_history", client_history_mod);
     tdnf_so_mod.addIncludePath(b.path("include"));
     tdnf_so_mod.addIncludePath(b.path("client"));
     tdnf_so_mod.addIncludePath(b.path("rpmzig"));
@@ -1608,6 +1618,26 @@ pub fn build(b: *Build) void {
     run_libsolv_artifact_audit.setCwd(b.path("."));
     run_libsolv_artifact_audit.step.dependOn(b.getInstallStep());
     libsolv_confinement_step.dependOn(&run_libsolv_artifact_audit.step);
+
+    const client_history_test_step = b.step(
+        "client-history-test",
+        "Run private client history context tests",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/history_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_history", client_history_mod);
+        test_mod.addImport("client_root", tdnf_so_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        client_history_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
 
     const transaction_plan_handle_test_step = b.step(
         "transaction-plan-handle-test",
