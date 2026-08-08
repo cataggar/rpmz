@@ -21,6 +21,7 @@ const header = @import("rpm_header");
 const pkgfile = @import("rpm_pkgfile");
 const checksum = @import("checksum.zig");
 const integrity = @import("integrity.zig");
+const rpm_file_handle = @import("rpm_file_handle");
 const rpmdb_pubkey = @import("rpmdb_pubkey.zig");
 const certificate = @import("pgp/certificate.zig");
 const rpmdb_write = @import("rpmdb_write.zig");
@@ -2642,13 +2643,7 @@ comptime {
 }
 
 /// Opaque handle wrapping a parsed RpmFile and its allocator.
-pub const FileHandle = struct {
-    file: pkgfile.RpmFile,
-
-    pub fn mainHeader(self: *const FileHandle) header.Header {
-        return self.file.main;
-    }
-};
+pub const FileHandle = rpm_file_handle.FileHandle;
 
 const FileMetadata = extern struct {
     name: ?[*:0]const u8,
