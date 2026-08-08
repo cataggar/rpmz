@@ -32,11 +32,10 @@ const vendored_libsolv_version_patch = "39";
 /// packageutils.c was the last one.
 const client_libsolv_free_srcs = [_][]const u8{
     "api.c",         "goal.c",
-    "gpgcheck.c",    "packageutils.c",
-    "querynative.c", "repo.c",
-    "remoterepo.c",  "repolist.c",
-    "resolve.c",     "rpmtrans.c",
-    "rpmtrans_native.c",
+    "packageutils.c", "querynative.c",
+    "repo.c",        "remoterepo.c",
+    "repolist.c",    "resolve.c",
+    "rpmtrans.c",    "rpmtrans_native.c",
     "utils.c",
 };
 
@@ -585,6 +584,14 @@ pub fn build(b: *Build) void {
     });
     rpmzig_pkgfile_mod.addImport("rpm_header", rpmzig_header_mod);
 
+    const rpmzig_file_handle_mod = b.createModule(.{
+        .root_source_file = b.path("rpmzig/file_handle.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rpmzig_file_handle_mod.addImport("rpm_header", rpmzig_header_mod);
+    rpmzig_file_handle_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+
     const rpmzig_verify_mod = b.createModule(.{
         .root_source_file = b.path("rpmzig/verify.zig"),
         .target = target,
@@ -592,6 +599,16 @@ pub fn build(b: *Build) void {
         .link_libc = true,
     });
     rpmzig_verify_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+
+    const rpmzig_gpgcheck_mod = b.createModule(.{
+        .root_source_file = b.path("rpmzig/gpgcheck.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    rpmzig_gpgcheck_mod.addImport("rpm_header", rpmzig_header_mod);
+    rpmzig_gpgcheck_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+    rpmzig_gpgcheck_mod.addImport("rpm_file_handle", rpmzig_file_handle_mod);
 
     const rpmzig_cpio_mod = b.createModule(.{
         .root_source_file = b.path("rpmzig/cpio.zig"),
@@ -610,6 +627,7 @@ pub fn build(b: *Build) void {
     });
     rpmzig_rpmdb_test_mod.addImport("rpm_header", rpmzig_header_mod);
     rpmzig_rpmdb_test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+    rpmzig_rpmdb_test_mod.addImport("rpm_file_handle", rpmzig_file_handle_mod);
     configureLuaScriptletSupport(b, rpmzig_rpmdb_test_mod, zlua_mod);
 
     const repomd_mod = b.createModule(.{
@@ -798,6 +816,7 @@ pub fn build(b: *Build) void {
         });
         mod.addImport("rpm_header", rpmzig_header_mod);
         mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+        mod.addImport("rpm_file_handle", rpmzig_file_handle_mod);
         configureLuaScriptletSupport(b, mod, zlua_mod);
         const lib = b.addLibrary(.{
             .name = "tdnfrpmzig",
@@ -1017,6 +1036,7 @@ pub fn build(b: *Build) void {
         });
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+        test_mod.addImport("rpm_file_handle", rpmzig_file_handle_mod);
         configureLuaScriptletSupport(b, test_mod, zlua_mod);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
@@ -1672,6 +1692,13 @@ pub fn build(b: *Build) void {
     tdnf_so_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     tdnf_so_mod.addImport("tdnf_error", tdnf_error_mod);
     tdnf_so_mod.addImport("client_updateinfo", client_updateinfo_mod);
+    tdnf_so_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
+    const client_gpgcheck_options = b.addOptions();
+    client_gpgcheck_options.addOption(bool, "test_mode", false);
+    tdnf_so_mod.addImport(
+        "client_gpgcheck_options",
+        client_gpgcheck_options.createModule(),
+    );
     tdnf_so_mod.addIncludePath(b.path("include"));
     tdnf_so_mod.addIncludePath(b.path("client"));
     tdnf_so_mod.addIncludePath(b.path("rpmzig"));
@@ -1707,6 +1734,37 @@ pub fn build(b: *Build) void {
     // libsolv.so or libsqlite3.so in the same process.
     libtdnf.setVersionScript(b.path("client/libtdnf.map"));
     b.installArtifact(libtdnf);
+
+    const client_gpgcheck_test_step = b.step(
+        "client-gpgcheck-test",
+        "Run direct client package-signature policy tests",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/gpgcheck.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
+        const test_options = b.addOptions();
+        test_options.addOption(bool, "test_mode", true);
+        test_mod.addImport(
+            "client_gpgcheck_options",
+            test_options.createModule(),
+        );
+        test_mod.linkLibrary(common_lib);
+        test_mod.linkLibrary(llconf_lib);
+        test_mod.linkLibrary(rpmzig_lib);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        run_tests.argv.items.len = 1;
+        run_tests.stdio = .inherit;
+        client_gpgcheck_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
 
     // Compiler-enforced libsolv confinement (issue #39). Build every C
     // file in client/ with libsolv's headers unreachable. A regex over

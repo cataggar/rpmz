@@ -144,43 +144,6 @@ TDNFNativeQueryBuildUpdateInfo(
     PTDNF_UPDATEINFO *ppInfo
     );
 
-//gpgcheck.c
-uint32_t
-ReadGPGKeyFile(
-    const char* pszFile,
-    char** ppszKeyData,
-    int* pnSize
-   );
-
-
-
-
-uint32_t
-TDNFGPGCheckPackageEx(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo,
-    const char* pszFilePath,
-    tdnf_rpm_file **ppRpmFile,
-    int *pnPolicyRejected
-    );
-
-uint32_t
-TDNFGPGCheckPackageWithFile(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo,
-    const char* pszFilePath,
-    tdnf_rpm_file *pRpmFile,
-    int *pnPolicyRejected
-    );
-
-uint32_t
-TDNFFetchRemoteGPGKey(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo,
-    const char* pszUrlGPGKey,
-    char** ppszKeyLocation
-    );
-
 uint32_t
 TDNFRefreshSack(
     PTDNF pTdnf,

@@ -12,6 +12,7 @@ comptime {
     _ = @import("client_history");
     _ = @import("config.zig");
     _ = @import("excludes.zig");
+    _ = @import("gpgcheck.zig");
     _ = updateinfo;
     _ = @import("client_varsdir");
 }

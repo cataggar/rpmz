@@ -118,6 +118,7 @@
 #include "builtin_plugins.h"
 #include "transaction_plan_capture_abi.inc"
 #include "structs.h"
+#include "client_abi.h"
 #include "history_abi.inc"
 #include "prototypes.h"
 
