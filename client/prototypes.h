@@ -25,7 +25,7 @@ tdnf_repomd_native_verified_transaction_solve_config(
     TDNF_REPOMD_NATIVE_TRANSACTION_PLAN **ppPlan
     );
 
-//client.c
+//querynative.c
 uint32_t
 TDNFNativeQueryBuildRepoInputs(
     PTDNF pTdnf,

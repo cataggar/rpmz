@@ -5,5 +5,6 @@ comptime {
     _ = @import("transaction_plan_integration");
     _ = @import("builtin_plugins");
     _ = @import("client_history");
+    _ = @import("excludes.zig");
     _ = @import("varsdir.zig");
 }
