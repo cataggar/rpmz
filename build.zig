@@ -31,14 +31,13 @@ const vendored_libsolv_version_patch = "39";
 /// libsolv's include paths. There is no longer an exception --
 /// packageutils.c was the last one.
 const client_libsolv_free_srcs = [_][]const u8{
-    "api.c",          "config.c",
-    "goal.c",         "gpgcheck.c",
-    "packageutils.c", "querynative.c",
-    "plugins.c",      "repo.c",
-    "repoutils.c",    "remoterepo.c",
-    "repolist.c",     "resolve.c",
-    "rpmtrans.c",     "rpmtrans_native.c",
-    "utils.c",
+    "api.c",             "goal.c",
+    "gpgcheck.c",        "packageutils.c",
+    "querynative.c",     "plugins.c",
+    "repo.c",            "repoutils.c",
+    "remoterepo.c",      "repolist.c",
+    "resolve.c",         "rpmtrans.c",
+    "rpmtrans_native.c", "utils.c",
 };
 
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
@@ -167,6 +166,10 @@ pub fn build(b: *Build) void {
     else
         b.pathJoin(&.{ b.build_root.path.?, prefix });
     const full_libdir = b.fmt("{s}/{s}", .{ abs_prefix, libdir });
+    const client_config_options = b.addOptions();
+    client_config_options.addOption([]const u8, "history_db_dir", history_db_dir);
+    client_config_options.addOption([]const u8, "source_root", b.build_root.path.?);
+    client_config_options.addOption([]const u8, "system_libdir", full_libdir);
     // Vendored sqlite backs the Zig-side history and rpmdb code paths.
     const sqlite_dep_optional = b.lazyDependency("sqlite", .{});
     const tls_dep_optional = b.lazyDependency("tls", .{});
@@ -365,7 +368,17 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
     });
     const client_abi_mod = b.createModule(.{
-        .root_source_file = b.path("client/init_abi.zig"),
+        .root_source_file = b.path("client/abi.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const rpmtrans_flags_mod = b.createModule(.{
+        .root_source_file = b.path("rpmzig/trans_flags.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const client_varsdir_mod = b.createModule(.{
+        .root_source_file = b.path("client/varsdir.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -373,6 +386,7 @@ pub fn build(b: *Build) void {
     client_abi_mod.addIncludePath(b.path("include"));
     client_abi_mod.addIncludePath(b.path("client"));
     client_abi_mod.addIncludePath(b.path("rpmzig"));
+    client_varsdir_mod.addImport("client_abi", client_abi_mod);
     {
         const tests = b.addTest(.{ .root_module = tdnf_error_mod });
         const run_tests = b.addRunArtifact(tests);
@@ -1007,11 +1021,39 @@ pub fn build(b: *Build) void {
 
     {
         const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/config.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("client_config_options", client_config_options.createModule());
+        test_mod.addImport("client_varsdir", client_varsdir_mod);
+        test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.linkLibrary(common_lib);
+        test_mod.linkLibrary(llconf_lib);
+        test_mod.linkLibrary(rpmzig_lib);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        run_tests.argv.items.len = 1;
+        run_tests.stdio = .inherit;
+        const client_config_test_step = b.step(
+            "client-config-test",
+            "Run client configuration tests",
+        );
+        client_config_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    {
+        const test_mod = b.createModule(.{
             .root_source_file = b.path("client/excludes.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
         });
+        test_mod.addImport("client_abi", client_abi_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(llconf_lib);
@@ -1033,6 +1075,7 @@ pub fn build(b: *Build) void {
             .optimize = optimize,
             .link_libc = true,
         });
+        test_mod.addImport("client_abi", client_abi_mod);
         test_mod.linkLibrary(llconf_lib);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
@@ -1537,6 +1580,7 @@ pub fn build(b: *Build) void {
         .link_libc = true,
         .pic = true,
     });
+    client_history_mod.addImport("client_abi", client_abi_mod);
     client_history_mod.addImport("tdnf_error", tdnf_error_mod);
 
     const client_updateinfo_mod = b.createModule(.{
@@ -1585,6 +1629,10 @@ pub fn build(b: *Build) void {
     tdnf_so_mod.addImport("repomd_client_exports", repomd_mod);
     tdnf_so_mod.addImport("builtin_plugins", builtin_plugins_mod);
     tdnf_so_mod.addImport("client_history", client_history_mod);
+    tdnf_so_mod.addImport("client_abi", client_abi_mod);
+    tdnf_so_mod.addImport("client_config_options", client_config_options.createModule());
+    tdnf_so_mod.addImport("client_varsdir", client_varsdir_mod);
+    tdnf_so_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     tdnf_so_mod.addImport("tdnf_error", tdnf_error_mod);
     tdnf_so_mod.addImport("client_updateinfo", client_updateinfo_mod);
     tdnf_so_mod.addIncludePath(b.path("include"));
