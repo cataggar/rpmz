@@ -498,11 +498,9 @@ TDNFDownloadPackageToCache(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    dwError = TDNFJoinPath(&pszRpmCacheDir,
-                           pTdnf->pConf->pszCacheDir,
-                           pRepo->pszId,
-                           "rpms",
-                           NULL);
+    dwError = RepoutilsGetRpmCachePath(pTdnf,
+                                       pRepo,
+                                       &pszRpmCacheDir);
     BAIL_ON_TDNF_ERROR(dwError);
 
     dwError = TDNFNormalizePath(pszRpmCacheDir,
