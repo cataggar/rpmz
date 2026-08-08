@@ -31,16 +31,19 @@ const vendored_libsolv_version_patch = "39";
 /// libsolv's include paths. There is no longer an exception --
 /// packageutils.c was the last one.
 const client_libsolv_free_srcs = [_][]const u8{
-    "api.c",             "client.c",      "config.c",
-    "goal.c",            "gpgcheck.c",    "init.c",
-    "packageutils.c",    "querynative.c", "plugins.c",
-    "repo.c",            "repoutils.c",   "remoterepo.c",
-    "repolist.c",        "resolve.c",     "rpmtrans.c",
-    "rpmtrans_native.c", "updateinfo.c",  "utils.c",
+    "api.c",             "config.c",
+    "goal.c",            "gpgcheck.c",
+    "init.c",            "packageutils.c",
+    "querynative.c",     "plugins.c",
+    "repo.c",            "repoutils.c",
+    "remoterepo.c",      "repolist.c",
+    "resolve.c",         "rpmtrans.c",
+    "rpmtrans_native.c", "updateinfo.c",
+    "utils.c",
     // The C-side entry point into the rpmzig verifier. An ordinary
     // client/ translation unit: it includes client/includes.h and is
     // audited like the rest.
-    "gpgcheck_zig.c",
+              "gpgcheck_zig.c",
 };
 
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
@@ -979,6 +982,27 @@ pub fn build(b: *Build) void {
 
     {
         const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/excludes.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.linkLibrary(common_lib);
+        test_mod.linkLibrary(llconf_lib);
+        test_mod.linkLibrary(rpmzig_lib);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        const client_excludes_test_step = b.step(
+            "client-excludes-test",
+            "Run package exclusion collection tests",
+        );
+        client_excludes_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    {
+        const test_mod = b.createModule(.{
             .root_source_file = b.path("client/varsdir.zig"),
             .target = target,
             .optimize = optimize,
@@ -1508,6 +1532,7 @@ pub fn build(b: *Build) void {
     tdnf_so_mod.addImport("repomd_client_exports", repomd_mod);
     tdnf_so_mod.addImport("builtin_plugins", builtin_plugins_mod);
     tdnf_so_mod.addImport("client_history", client_history_mod);
+    tdnf_so_mod.addImport("tdnf_error", tdnf_error_mod);
     tdnf_so_mod.addIncludePath(b.path("include"));
     tdnf_so_mod.addIncludePath(b.path("client"));
     tdnf_so_mod.addIncludePath(b.path("rpmzig"));
