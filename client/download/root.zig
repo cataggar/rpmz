@@ -73,6 +73,11 @@ const DownloadTransport = enum {
     tls_http,
 };
 
+const HttpsOrigin = struct {
+    host: []const u8,
+    port: u16,
+};
+
 const ParsedProxy = struct {
     uri: Uri,
     authorization: ?[]const u8,
@@ -683,10 +688,13 @@ fn downloadWithIo(allocator: Allocator, io: Io, request: DownloadRequest) !u16 {
         setError("invalid URL: {s}", .{request.url});
         return error.InvalidUrl;
     };
-    if (request.require_https and !schemeEq(current_uri.scheme, "https")) {
-        setError("signing-key download requires HTTPS: {s}", .{request.url});
-        return error.HttpsRequired;
-    }
+    const required_origin = if (request.require_https)
+        secureHttpsOrigin(allocator, current_uri) catch |err| {
+            setError("invalid signing-key URL: {s}", .{request.url});
+            return err;
+        }
+    else
+        null;
 
     var std_transport: ?StdHttpTransport = null;
     defer if (std_transport) |*transport| transport.deinit();
@@ -714,14 +722,28 @@ fn downloadWithIo(allocator: Allocator, io: Io, request: DownloadRequest) !u16 {
         switch (outcome) {
             .status => |status| return status,
             .redirect => |next_uri| {
-                if (request.require_https and
-                    !schemeEq(next_uri.scheme, "https"))
-                {
-                    setError(
-                        "refusing HTTPS downgrade redirect while downloading {s}",
-                        .{request.url},
-                    );
-                    return error.HttpsRequired;
+                if (required_origin) |origin| {
+                    const next_origin = secureHttpsOrigin(allocator, next_uri) catch |err| {
+                        if (err == error.HttpsRequired) {
+                            setError(
+                                "refusing HTTPS downgrade redirect while downloading {s}",
+                                .{request.url},
+                            );
+                        } else {
+                            setError(
+                                "refusing invalid signing-key redirect while downloading {s}",
+                                .{request.url},
+                            );
+                        }
+                        return err;
+                    };
+                    if (!sameOrigin(origin, next_origin)) {
+                        setError(
+                            "refusing cross-origin signing-key redirect while downloading {s}",
+                            .{request.url},
+                        );
+                        return error.HttpsRequired;
+                    }
                 }
                 redirects += 1;
                 if (redirects > RedirectLimit) {
@@ -732,6 +754,82 @@ fn downloadWithIo(allocator: Allocator, io: Io, request: DownloadRequest) !u16 {
             },
         }
     }
+}
+
+fn secureHttpsOrigin(allocator: Allocator, uri: Uri) !HttpsOrigin {
+    if (!schemeEq(uri.scheme, "https")) return error.HttpsRequired;
+    if (uri.user != null or uri.password != null) return error.InvalidUrl;
+
+    const host_component = uri.host orelse return error.InvalidUrl;
+    const encoded_host = switch (host_component) {
+        .raw, .percent_encoded => |value| value,
+    };
+    if (encoded_host.len == 0 or
+        std.mem.indexOfScalar(u8, encoded_host, '%') != null)
+    {
+        return error.InvalidUrl;
+    }
+
+    var host_buffer: [Io.net.HostName.max_len]u8 = undefined;
+    const host_name = uri.getHost(&host_buffer) catch return error.InvalidUrl;
+    try validateOriginHost(host_name.bytes);
+
+    const normalized = try allocator.alloc(u8, host_name.bytes.len);
+    for (host_name.bytes, normalized) |char, *output| {
+        output.* = std.ascii.toLower(char);
+    }
+    return .{
+        .host = normalized,
+        .port = uri.port orelse 443,
+    };
+}
+
+fn validateOriginHost(host: []const u8) !void {
+    if (host.len == 0) return error.InvalidUrl;
+    for (host) |char| {
+        if (!std.ascii.isAscii(char) or std.ascii.isControl(char) or
+            std.ascii.isWhitespace(char))
+        {
+            return error.InvalidUrl;
+        }
+    }
+
+    if (host[0] == '[') {
+        if (host.len < 4 or host[host.len - 1] != ']') return error.InvalidUrl;
+        for (host[1 .. host.len - 1]) |char| {
+            if (!std.ascii.isHex(char) and char != ':' and char != '.')
+                return error.InvalidUrl;
+        }
+        return;
+    }
+
+    if (host[host.len - 1] == '.') return error.InvalidUrl;
+    var labels = std.mem.splitScalar(u8, host, '.');
+    var label_count: usize = 0;
+    var numeric = true;
+    while (labels.next()) |label| {
+        if (label.len == 0 or label[0] == '-' or label[label.len - 1] == '-')
+            return error.InvalidUrl;
+        label_count += 1;
+        for (label) |char| {
+            if (!std.ascii.isAlphanumeric(char) and char != '-')
+                return error.InvalidUrl;
+            numeric = numeric and std.ascii.isDigit(char);
+        }
+        if (numeric and label.len > 1 and label[0] == '0')
+            return error.InvalidUrl;
+        if (numeric) {
+            const octet = std.fmt.parseInt(u8, label, 10) catch
+                return error.InvalidUrl;
+            _ = octet;
+        }
+    }
+    if (numeric and label_count != 4) return error.InvalidUrl;
+}
+
+fn sameOrigin(left: HttpsOrigin, right: HttpsOrigin) bool {
+    return left.port == right.port and
+        std.mem.eql(u8, left.host, right.host);
 }
 
 fn chooseTransport(uri: Uri, request: DownloadRequest) !DownloadTransport {
@@ -1121,6 +1219,8 @@ const ServerOptions = struct {
     expected_authorization: ?[]const u8 = null,
     body: []const u8 = "hello from zig transport\n",
     redirect_location: ?[]const u8 = null,
+    request_count: usize = 1,
+    connection_observed: ?*std.atomic.Value(bool) = null,
 };
 
 const ServerContext = struct {
@@ -1147,14 +1247,30 @@ fn serverThreadMain(ctx: *ServerContext) void {
         std.testing.allocator.destroy(ctx.server);
         std.testing.allocator.destroy(ctx);
     }
-    serveOne(ctx.io, ctx.server, ctx.options) catch |err| {
-        std.debug.print("server error: {}\n", .{err});
-    };
+    for (0..ctx.options.request_count) |request_index| {
+        serveOne(ctx.io, ctx.server, ctx.options, request_index) catch |err| {
+            if (ctx.options.connection_observed != null and
+                err == error.EndOfStream)
+            {
+                return;
+            }
+            std.debug.print("server error: {}\n", .{err});
+            return;
+        };
+    }
 }
 
-fn serveOne(io: Io, server: *Io.net.Server, options: ServerOptions) !void {
+fn serveOne(
+    io: Io,
+    server: *Io.net.Server,
+    options: ServerOptions,
+    request_index: usize,
+) !void {
     const stream = try server.accept(io);
     defer stream.close(io);
+    if (options.connection_observed) |observed| {
+        observed.store(true, .release);
+    }
 
     if (!options.tls_mode) {
         var reader_buf: [4096]u8 = undefined;
@@ -1167,13 +1283,15 @@ fn serveOne(io: Io, server: *Io.net.Server, options: ServerOptions) !void {
             try writer.interface.flush();
             return;
         }
-        if (options.redirect_location) |location| {
-            try writer.interface.print(
-                "HTTP/1.1 302 Found\r\nLocation: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                .{location},
-            );
-            try writer.interface.flush();
-            return;
+        if (request_index == 0) {
+            if (options.redirect_location) |location| {
+                try writer.interface.print(
+                    "HTTP/1.1 302 Found\r\nLocation: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    .{location},
+                );
+                try writer.interface.flush();
+                return;
+            }
         }
         try writer.interface.print(
             "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
@@ -1213,15 +1331,17 @@ fn serveOne(io: Io, server: *Io.net.Server, options: ServerOptions) !void {
         try conn.writeAll("HTTP/1.1 401 Unauthorized\r\nContent-Length: 4\r\nConnection: close\r\n\r\nauth");
         return;
     }
-    if (options.redirect_location) |location| {
-        var redirect_buf: [512]u8 = undefined;
-        const redirect = try std.fmt.bufPrint(
-            &redirect_buf,
-            "HTTP/1.1 302 Found\r\nLocation: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            .{location},
-        );
-        try conn.writeAll(redirect);
-        return;
+    if (request_index == 0) {
+        if (options.redirect_location) |location| {
+            var redirect_buf: [512]u8 = undefined;
+            const redirect = try std.fmt.bufPrint(
+                &redirect_buf,
+                "HTTP/1.1 302 Found\r\nLocation: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                .{location},
+            );
+            try conn.writeAll(redirect);
+            return;
+        }
     }
 
     var response_buf: [256]u8 = undefined;
@@ -1287,6 +1407,12 @@ fn deleteFileIfExists(io: Io, path: []const u8) void {
         return;
     }
     Io.Dir.cwd().deleteFile(io, path) catch {};
+}
+
+fn wakeServer(io: Io, port: u16) void {
+    const host: Io.net.HostName = .{ .bytes = "127.0.0.1" };
+    var stream = host.connect(io, port, .{ .mode = .stream }) catch return;
+    stream.close(io);
 }
 
 test "http fetch succeeds" {
@@ -1535,6 +1661,231 @@ test "HTTPS-required download rejects downgrade redirect" {
         std.mem.span(TDNFZigDownloadLastError()),
         "downgrade",
     ) != null);
+}
+
+test "HTTPS origin normalizes host case and effective port" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+
+    const implicit = try secureHttpsOrigin(
+        allocator,
+        try Uri.parse("https://Example.COM/key"),
+    );
+    const explicit = try secureHttpsOrigin(
+        allocator,
+        try Uri.parse("HTTPS://example.com:443/other?key=1"),
+    );
+    try std.testing.expect(sameOrigin(implicit, explicit));
+
+    const alternate_port = try secureHttpsOrigin(
+        allocator,
+        try Uri.parse("https://example.com:444/key"),
+    );
+    try std.testing.expect(!sameOrigin(implicit, alternate_port));
+    const alternate_host = try secureHttpsOrigin(
+        allocator,
+        try Uri.parse("https://other.example:443/key"),
+    );
+    try std.testing.expect(!sameOrigin(implicit, alternate_host));
+    try std.testing.expectError(
+        error.InvalidUrl,
+        secureHttpsOrigin(
+            allocator,
+            try Uri.parse("https://user:password@example.com/key"),
+        ),
+    );
+    const userinfo_redirect = try resolveRedirect(
+        allocator,
+        try Uri.parse("https://example.com/key"),
+        "https://redirect-user:secret@example.com/other",
+    );
+    try std.testing.expectError(
+        error.InvalidUrl,
+        secureHttpsOrigin(allocator, userinfo_redirect),
+    );
+    try std.testing.expectError(
+        error.InvalidUrl,
+        secureHttpsOrigin(
+            allocator,
+            try Uri.parse("https://%65xample.com/key"),
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidUrl,
+        secureHttpsOrigin(
+            allocator,
+            try Uri.parse("https://127.0.00.1/key"),
+        ),
+    );
+}
+
+test "HTTPS-required download follows same-origin path redirect" {
+    const io = std.testing.io;
+    try ensureScratchDir(io);
+
+    const server = try spawnServer(.{
+        .tls_mode = true,
+        .redirect_location = "/redirected/key?version=2",
+        .request_count = 2,
+        .body = "same-origin key\n",
+    });
+    defer server.thread.join();
+
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://LOCALHOST:{d}/repository-key",
+        .{server.port},
+    );
+    defer std.testing.allocator.free(url);
+    const z_url = try dupeZ(std.testing.allocator, url);
+    defer std.testing.allocator.free(z_url);
+    const dest = try scratchPath(std.testing.allocator, "https-same-origin.txt");
+    defer std.testing.allocator.free(dest);
+    const z_dest = try dupeZ(std.testing.allocator, dest);
+    defer std.testing.allocator.free(z_dest);
+    deleteFileIfExists(io, z_dest);
+    const ca_path = try Io.Dir.cwd().realPathFileAlloc(
+        io,
+        "client/download/fixtures/ca-cert.pem",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(ca_path);
+    const z_ca_path = try dupeZ(std.testing.allocator, ca_path);
+    defer std.testing.allocator.free(z_ca_path);
+
+    const request: TDNF_ZIG_DOWNLOAD_REQUEST = .{
+        .pszUrl = z_url.ptr,
+        .pszDestination = z_dest.ptr,
+        .pfnProgress = null,
+        .pProgressData = null,
+        .pszUserAgent = null,
+        .pszProxy = null,
+        .pszProxyUserPwd = null,
+        .pszUserName = null,
+        .pszPassword = null,
+        .pszSSLCaCert = z_ca_path.ptr,
+        .pszSSLClientCert = null,
+        .pszSSLClientKey = null,
+        .nSSLVerify = 1,
+        .nConnectTimeout = 0,
+        .nTimeout = 0,
+        .nLowSpeedLimit = 0,
+        .nLowSpeedTime = 0,
+        .nMaxRecvSpeed = 0,
+    };
+    var status: c_long = 0;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        client_download_https_only(&request, &status),
+    );
+    try std.testing.expectEqual(@as(c_long, 200), status);
+    const body = try readFileAlloc(std.testing.allocator, io, z_dest);
+    defer std.testing.allocator.free(body);
+    try std.testing.expectEqualStrings("same-origin key\n", body);
+}
+
+test "HTTPS-required download rejects cross-origin redirect before connection" {
+    const io = std.testing.io;
+    try ensureScratchDir(io);
+
+    var target_observed = std.atomic.Value(bool).init(false);
+    const target = try spawnServer(.{
+        .tls_mode = true,
+        .connection_observed = &target_observed,
+    });
+    var target_joined = false;
+    defer if (!target_joined) {
+        wakeServer(io, target.port);
+        target.thread.join();
+    };
+
+    const redirect = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://localhost:{d}/replaced-key",
+        .{target.port},
+    );
+    defer std.testing.allocator.free(redirect);
+    const origin = try spawnServer(.{
+        .tls_mode = true,
+        .redirect_location = redirect,
+    });
+    defer origin.thread.join();
+
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://localhost:{d}/repository-key",
+        .{origin.port},
+    );
+    defer std.testing.allocator.free(url);
+    const z_url = try dupeZ(std.testing.allocator, url);
+    defer std.testing.allocator.free(z_url);
+    const dest = try scratchPath(std.testing.allocator, "https-cross-origin.txt");
+    defer std.testing.allocator.free(dest);
+    const z_dest = try dupeZ(std.testing.allocator, dest);
+    defer std.testing.allocator.free(z_dest);
+    deleteFileIfExists(io, z_dest);
+    const ca_path = try Io.Dir.cwd().realPathFileAlloc(
+        io,
+        "client/download/fixtures/ca-cert.pem",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(ca_path);
+    const client_cert = try Io.Dir.cwd().realPathFileAlloc(
+        io,
+        "client/download/fixtures/client-cert.pem",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(client_cert);
+    const client_key = try Io.Dir.cwd().realPathFileAlloc(
+        io,
+        "client/download/fixtures/client-key.pem",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(client_key);
+    const z_ca_path = try dupeZ(std.testing.allocator, ca_path);
+    defer std.testing.allocator.free(z_ca_path);
+    const z_client_cert = try dupeZ(std.testing.allocator, client_cert);
+    defer std.testing.allocator.free(z_client_cert);
+    const z_client_key = try dupeZ(std.testing.allocator, client_key);
+    defer std.testing.allocator.free(z_client_key);
+
+    const request: TDNF_ZIG_DOWNLOAD_REQUEST = .{
+        .pszUrl = z_url.ptr,
+        .pszDestination = z_dest.ptr,
+        .pfnProgress = null,
+        .pProgressData = null,
+        .pszUserAgent = null,
+        .pszProxy = null,
+        .pszProxyUserPwd = null,
+        .pszUserName = "repository-user",
+        .pszPassword = "repository-password",
+        .pszSSLCaCert = z_ca_path.ptr,
+        .pszSSLClientCert = z_client_cert.ptr,
+        .pszSSLClientKey = z_client_key.ptr,
+        .nSSLVerify = 1,
+        .nConnectTimeout = 0,
+        .nTimeout = 0,
+        .nLowSpeedLimit = 0,
+        .nLowSpeedTime = 0,
+        .nMaxRecvSpeed = 0,
+    };
+    var status: c_long = 0;
+    try std.testing.expectEqual(
+        errors.ERROR_TDNF_URL_INVALID,
+        client_download_https_only(&request, &status),
+    );
+    try std.testing.expectEqual(@as(c_long, 0), status);
+    try std.testing.expect(!target_observed.load(.acquire));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        std.mem.span(TDNFZigDownloadLastError()),
+        "cross-origin",
+    ) != null);
+
+    wakeServer(io, target.port);
+    target.thread.join();
+    target_joined = true;
 }
 
 test "file uri copies data" {

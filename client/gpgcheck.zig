@@ -481,6 +481,8 @@ fn classifyKeyLocation(value: [*:0]const u8) error{InvalidKeyLocation}!KeyLocati
         return error.InvalidKeyLocation;
     const parsed = std.Uri.parse(text) catch
         return error.InvalidKeyLocation;
+    if (parsed.user != null or parsed.password != null)
+        return error.InvalidKeyLocation;
     if (std.ascii.eqlIgnoreCase(scheme, "file")) {
         if (parsed.path.percent_encoded.len <= 1 or parsed.fragment != null)
             return error.InvalidKeyLocation;
@@ -612,26 +614,34 @@ fn gpgCheckPackage(
         const key_uri = keys.?[index].?;
         const location = classifyKeyLocation(key_uri) catch
             return ERROR_TDNF_KEYURL_INVALID;
+
+        var owned_local_key: ?[*:0]u8 = null;
+        defer freeValue(ops, owned_local_key);
+        var remove_remote = false;
+        defer {
+            if (remove_remote and owned_local_key != null)
+                _ = unlink(owned_local_key.?);
+        }
+        if (location == .https) {
+            result = ops.fetch_remote(
+                ops.context,
+                tdnf,
+                repo,
+                key_uri,
+                &owned_local_key,
+            );
+            if (result != 0) return result;
+            remove_remote = true;
+        }
+
         log_console(LOG_INFO, "importing key from %s\n", key_uri);
         var answer: c_int = 0;
         result = ops.yes_no(ops.context, tdnf.pArgs, "Is this ok [y/N]: ", &answer);
         if (result != 0) return result;
         if (answer == 0) return errors.ERROR_TDNF_OPERATION_ABORTED;
 
-        var owned_local_key: ?[*:0]u8 = null;
-        defer freeValue(ops, owned_local_key);
         const local_key: [*:0]const u8 = switch (location) {
-            .https => blk: {
-                result = ops.fetch_remote(
-                    ops.context,
-                    tdnf,
-                    repo,
-                    key_uri,
-                    &owned_local_key,
-                );
-                if (result != 0) return result;
-                break :blk owned_local_key.?;
-            },
+            .https => owned_local_key.?,
             .file_uri => blk: {
                 result = ops.path_from_uri(
                     ops.context,
@@ -645,12 +655,6 @@ fn gpgCheckPackage(
             },
             .local_path => key_uri,
         };
-
-        var remove_remote = location == .https;
-        defer {
-            if (remove_remote)
-                _ = unlink(local_key);
-        }
 
         var key_data: ?[*:0]u8 = null;
         var key_size: c_int = 0;
@@ -1310,6 +1314,7 @@ test "key acquisition failures preserve ordering and exact errors" {
     mock.keys = &.{"https://example/key"};
     mock.fetch_result = errors.ERROR_TDNF_REPO_PERFORM;
     mock.signature_calls = 0;
+    const prompts_before_fetch = mock.prompt_calls;
     try std.testing.expectEqual(errors.ERROR_TDNF_REPO_PERFORM, gpgCheckPackage(
         &ops,
         &context.tdnf,
@@ -1319,6 +1324,7 @@ test "key acquisition failures preserve ordering and exact errors" {
         null,
     ));
     try std.testing.expectEqual(@as(usize, 1), mock.fetch_calls);
+    try std.testing.expectEqual(prompts_before_fetch, mock.prompt_calls);
 
     mock.keys = &.{"file:///key"};
     mock.fetch_result = 0;
@@ -1403,6 +1409,10 @@ test "key URL classification is case robust and rejects malformed schemes" {
     try std.testing.expectError(
         error.InvalidKeyLocation,
         classifyKeyLocation("ftp://example.invalid/key"),
+    );
+    try std.testing.expectError(
+        error.InvalidKeyLocation,
+        classifyKeyLocation("https://user:password@example.invalid/key"),
     );
 }
 
