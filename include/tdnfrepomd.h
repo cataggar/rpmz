@@ -823,7 +823,7 @@ TDNFRepoMdNativeFindNameEvrMatches(
 
 /*
  * Compute updateinfo summary counts for installed packages, applying the same
- * security/severity filtering as `client/updateinfo.zig`. Returned lines are
+ * security/severity filtering as `client/updateinfo.c`. Returned lines are
  * serialized as `type<US>count`.
  */
 uint32_t
@@ -840,7 +840,7 @@ TDNFRepoMdNativeUpdateInfoSummaryLines(
 
 /*
  * Compute updateinfo advisory detail lines for installed packages, applying
- * the same security/severity/reboot filtering as `client/updateinfo.zig`.
+ * the same security/severity/reboot filtering as `client/updateinfo.c`.
  */
 uint32_t
 TDNFRepoMdNativeUpdateInfoLines(
