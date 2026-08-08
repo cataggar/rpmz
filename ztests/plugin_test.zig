@@ -1,8 +1,8 @@
-//! Loadable-plugin contract coverage required before the built-in Zig port.
+//! Built-in plugin contract coverage.
 //!
-//! These tests drive the installed CLI and shared objects. In particular,
+//! These tests drive the installed CLI. In particular,
 //! repogpgcheck's current contract is that repository `gpgkey=` entries do not
-//! supply keys for repository metadata signatures: GPGME uses the ambient
+//! supply keys for repository metadata signatures: verification uses the ambient
 //! OpenPGP keyring selected by `GNUPGHOME`.
 
 const std = @import("std");
@@ -164,7 +164,7 @@ fn setAmbientGpgHome(root: *harness.Root, import_repo_key: bool) !void {
     return error.TestUnexpectedResult;
 }
 
-test "plugin contract: global, per-plugin, and CLI glob controls select loadable plugins" {
+test "plugin contract: global, per-plugin, and CLI glob controls select built-in plugins" {
     var h = try harness.open(std.testing.allocator);
     defer h.deinit();
 

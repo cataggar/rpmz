@@ -207,8 +207,7 @@ def main():
         }
         if not expected_plugins.issubset(loaded):
             raise RuntimeError(
-                "installed tdnf did not load plugins from its absolute "
-                f"default directory {prefix / 'lib' / 'tdnf-plugins'}"
+                "installed tdnf did not enable its configured built-in plugins"
             )
     except (FileNotFoundError, OSError, RuntimeError) as error:
         print(f"public API audit failed: {error}", file=sys.stderr)

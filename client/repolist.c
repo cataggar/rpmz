@@ -596,66 +596,12 @@ TDNFEventRepoReadConfigEnd(
     const struct cnfnode *cn_section
     )
 {
-    uint32_t dwError = 0;
-    TDNF_EVENT_CONTEXT stContext = {0};
-
     if (!pTdnf || !cn_section)
     {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
+        return ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    stContext.nEvent = MAKE_PLUGIN_EVENT(
-                           TDNF_PLUGIN_EVENT_TYPE_REPO,
-                           TDNF_PLUGIN_EVENT_STATE_READCONFIG,
-                           TDNF_PLUGIN_EVENT_PHASE_END);
-    dwError = TDNFAddEventDataPtr(&stContext,
-                  TDNF_EVENT_ITEM_REPO_SECTION,
-                  cn_section);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFPluginRaiseEvent(pTdnf, &stContext);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-cleanup:
-    TDNFFreeEventData(stContext.pData);
-    return dwError;
-error:
-    goto cleanup;
-}
-
-static uint32_t
-TDNFEventRepoReadConfigStart(
-    PTDNF pTdnf,
-    const struct cnfnode *cn_section
-    )
-{
-    uint32_t dwError = 0;
-    TDNF_EVENT_CONTEXT stContext = {0};
-
-    if (!pTdnf || !cn_section)
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    stContext.nEvent = MAKE_PLUGIN_EVENT(
-                           TDNF_PLUGIN_EVENT_TYPE_REPO,
-                           TDNF_PLUGIN_EVENT_STATE_READCONFIG,
-                           TDNF_PLUGIN_EVENT_PHASE_START);
-    dwError = TDNFAddEventDataPtr(&stContext,
-                  TDNF_EVENT_ITEM_REPO_SECTION,
-                  cn_section);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFPluginRaiseEvent(pTdnf, &stContext);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-cleanup:
-    TDNFFreeEventData(stContext.pData);
-    return dwError;
-error:
-    goto cleanup;
+    return BuiltinPluginsRepoConfig(pTdnf, cn_section);
 }
 
 static uint32_t
@@ -709,10 +655,6 @@ TDNFLoadReposFromFile(
         }
 
         dwError = TDNFCreateRepo(pTdnf, &pRepo, cn_section->name);
-        BAIL_ON_TDNF_ERROR(dwError);
-
-        /* plugin event repo readconfig start */
-        dwError = TDNFEventRepoReadConfigStart(pTdnf, cn_section);
         BAIL_ON_TDNF_ERROR(dwError);
 
         dwError = TDNFRepoConfigFromCnfTree(pTdnf, pRepo, cn_section);

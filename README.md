@@ -7,14 +7,7 @@ public headers have no dependency on system RPM libraries or headers.
 
 ## Build
 
-Requires Zig 0.16+ and the following C development packages
-(Debian/Ubuntu names):
-
-```
-libgpgme-dev
-```
-
-SQLite and libsolv are built from the dependencies pinned in
+Requires Zig 0.16+. SQLite and libsolv are built from the dependencies pinned in
 `build.zig.zon`. No RPM development package is needed. The source and
 binary audits additionally use `binutils`, `pkg-config`, and a C
 compiler; Python lint uses `flake8`.

@@ -36,7 +36,6 @@ jobs:
             createrepo-c \
             gcc \
             gnupg \
-            libgpgme-dev \
             pkg-config \
             python3-openssl \
             python3-pytest \

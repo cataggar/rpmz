@@ -15,9 +15,7 @@ DEFAULT_BASELINE = ROOT / "scripts" / "abi-baseline.json"
 PUBLIC_SYMBOL = re.compile(
     r"^(?:TDNF[A-Za-z0-9_]*|tdnf_rpm_config_[A-Za-z0-9_]*)$"
 )
-COMPATIBILITY_HEADERS = (
-    ROOT / "plugins" / "metalink" / "xml.h",
-)
+COMPATIBILITY_HEADERS = ()
 EXPECTED_SONAMES = {
     "libtdnf": "libtdnf.so.4",
     "libtdnfcli": "libtdnfcli.so.4",
@@ -39,12 +37,6 @@ def artifact_paths(prefix):
     return {
         "libtdnf": versioned_library("libtdnf"),
         "libtdnfcli": versioned_library("libtdnfcli"),
-        "libtdnfmetalink": (
-            lib_dir / "tdnf-plugins" / "libtdnfmetalink.so"
-        ),
-        "libtdnfrepogpgcheck": (
-            lib_dir / "tdnf-plugins" / "libtdnfrepogpgcheck.so"
-        ),
     }
 
 

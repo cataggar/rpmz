@@ -30,7 +30,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgpgme-dev \
             pkg-config
 
       - name: Install Zig
@@ -144,7 +143,7 @@ jobs:
 
             Each archive contains the same install layout produced by
             `zig build install --prefix ./out`:
-            `bin/`, `lib/`, `lib/tdnf-plugins/`, `libexec/`, `etc/`,
+            `bin/`, `lib/`, `libexec/`, `etc/`,
             `include/`, plus the project `COPYING` and `README.md`.
 
             See the source tarball (`tdnf-*.tar.xz`) for a reproducible source snapshot.

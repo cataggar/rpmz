@@ -37,8 +37,6 @@
 #include <tdnfdownload.h>
 #include <tdnfrpmconfig.h>
 #include <tdnfrepomd.h>
-#include <tdnfplugin.h>
-#include <tdnfplugineventmap.h>
 #include <tdnf-common-defines.h>
 
 #include "../rpmzig/rpmdb.h"
@@ -123,6 +121,7 @@
 #include "../solv/prototypes.h"
 
 #include "defines.h"
+#include "builtin_plugins.h"
 #include "transaction_plan_capture_abi.inc"
 #include "structs.h"
 #include "prototypes.h"

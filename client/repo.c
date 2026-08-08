@@ -94,39 +94,16 @@ TDNFEventRepoMDDownloadStart(
     const char *pcszRepoDataDir
     )
 {
-    uint32_t dwError = 0;
-    TDNF_EVENT_CONTEXT stContext = {0};
-
     if (!pTdnf ||
         IsNullOrEmptyString(pcszRepoId))
     {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
+        return ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    stContext.nEvent = MAKE_PLUGIN_EVENT(
-                           TDNF_PLUGIN_EVENT_TYPE_REPO_MD,
-                           TDNF_PLUGIN_EVENT_STATE_DOWNLOAD,
-                           TDNF_PLUGIN_EVENT_PHASE_START);
-
-    dwError = TDNFAddEventDataString(&stContext,
-                  TDNF_EVENT_ITEM_REPO_ID,
-                  pcszRepoId);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFAddEventDataString(&stContext,
-                  TDNF_EVENT_ITEM_REPO_DATADIR,
-                  pcszRepoDataDir);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFPluginRaiseEvent(pTdnf, &stContext);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-cleanup:
-    TDNFFreeEventData(stContext.pData);
-    return dwError;
-error:
-    goto cleanup;
+    return BuiltinPluginsRepoMDDownloadStart(
+               pTdnf,
+               pcszRepoId,
+               pcszRepoDataDir);
 }
 
 static uint32_t
@@ -136,38 +113,17 @@ TDNFEventRepoMDDownloadEnd(
     const char *pcszRepoMDFile
     )
 {
-    uint32_t dwError = 0;
-    TDNF_EVENT_CONTEXT stContext = {0};
-
     if (!pTdnf ||
         IsNullOrEmptyString(pcszRepoId) ||
         IsNullOrEmptyString(pcszRepoMDFile))
     {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
+        return ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    stContext.nEvent = MAKE_PLUGIN_EVENT(
-                           TDNF_PLUGIN_EVENT_TYPE_REPO_MD,
-                           TDNF_PLUGIN_EVENT_STATE_DOWNLOAD,
-                           TDNF_PLUGIN_EVENT_PHASE_END);
-    dwError = TDNFAddEventDataString(&stContext,
-                  TDNF_EVENT_ITEM_REPO_ID,
-                  pcszRepoId);
-    BAIL_ON_TDNF_ERROR(dwError);
-    dwError = TDNFAddEventDataString(&stContext,
-                  TDNF_EVENT_ITEM_REPO_MD_FILE,
-                  pcszRepoMDFile);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    dwError = TDNFPluginRaiseEvent(pTdnf, &stContext);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-cleanup:
-    TDNFFreeEventData(stContext.pData);
-    return dwError;
-error:
-    goto cleanup;
+    return BuiltinPluginsRepoMDDownloadEnd(
+               pTdnf,
+               pcszRepoId,
+               pcszRepoMDFile);
 }
 
 uint32_t

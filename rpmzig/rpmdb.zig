@@ -3197,6 +3197,41 @@ export fn tdnf_rpm_file_verify_digests(
     return verifyFileDigests(std.heap.c_allocator, f, out);
 }
 
+export fn rpmzig_verify_detached_armored(
+    sig_bytes: [*]const u8,
+    sig_len: usize,
+    signed_bytes: [*]const u8,
+    signed_len: usize,
+    key_ptrs: ?[*]const ?[*]const u8,
+    key_lens: ?[*]const usize,
+    key_count: usize,
+) c_int {
+    if (key_count > 0 and (key_ptrs == null or key_lens == null))
+        return @intFromEnum(standalone_verifier.Status.internal);
+
+    var keys = std.ArrayList([]const u8).empty;
+    defer keys.deinit(std.heap.c_allocator);
+    if (key_count > 0) {
+        const ptrs = key_ptrs.?;
+        const lens = key_lens.?;
+        for (0..key_count) |index| {
+            const key = ptrs[index] orelse
+                return @intFromEnum(standalone_verifier.Status.internal);
+            keys.append(
+                std.heap.c_allocator,
+                key[0..lens[index]],
+            ) catch return @intFromEnum(standalone_verifier.Status.internal);
+        }
+    }
+
+    return @intFromEnum(standalone_verifier.verifyDetachedArmored(
+        std.heap.c_allocator,
+        sig_bytes[0..sig_len],
+        signed_bytes[0..signed_len],
+        keys.items,
+    ));
+}
+
 fn verifyFileSignatures(
     allocator: std.mem.Allocator,
     file: *const FileHandle,

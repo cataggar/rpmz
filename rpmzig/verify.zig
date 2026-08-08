@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const pkgfile = @import("rpm_pkgfile");
+const armor = @import("pgp/armor.zig");
 const pgp = @import("pgp/verify.zig");
 
 pub const Status = pgp.Status;
@@ -17,6 +18,17 @@ pub fn verifyDetached(
     keys: []const []const u8,
 ) Status {
     return pgp.verifyDetached(allocator, signature, signed_bytes, keys);
+}
+
+pub fn verifyDetachedArmored(
+    allocator: std.mem.Allocator,
+    armored_signature: []const u8,
+    signed_bytes: []const u8,
+    keys: []const []const u8,
+) Status {
+    var decoded = armor.decode(allocator, armored_signature) catch return .bad;
+    defer decoded.deinit();
+    return verifyDetached(allocator, decoded.bytes, signed_bytes, keys);
 }
 
 pub fn verifyRpm(
