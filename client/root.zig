@@ -8,7 +8,8 @@ comptime {
     _ = @import("client_init");
     _ = @import("builtin_plugins");
     _ = @import("client_history");
+    _ = @import("config.zig");
     _ = @import("excludes.zig");
     _ = updateinfo;
-    _ = @import("varsdir.zig");
+    _ = @import("client_varsdir");
 }

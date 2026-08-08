@@ -13,18 +13,9 @@
 // worked (or failed) before behaves the same way now. See MAX_* below.
 
 const std = @import("std");
+const abi = @import("client_abi");
 
-/// A node in llconf's parsed configuration tree. Mirrors `struct cnfnode`
-/// in llconf/nodes.h. llconf is itself Zig now, but it publishes a C ABI,
-/// and declaring that ABI here rather than importing the header keeps this
-/// file free of any C header dependency.
-pub const CnfNode = extern struct {
-    next: ?*CnfNode,
-    name: ?[*:0]u8,
-    value: ?[*:0]u8,
-    first_child: ?*CnfNode,
-    parent: ?*CnfNode,
-};
+pub const CnfNode = abi.CnfNode;
 
 extern fn create_cnfnode(name: ?[*:0]const u8) ?*CnfNode;
 extern fn cnfnode_getval(cn: ?*const CnfNode) ?[*:0]const u8;
@@ -165,7 +156,7 @@ fn collectDirectory(root: *CnfNode, dir_path: [*:0]const u8) bool {
 
 /// Build a variable tree from every file in `dirs`, a NULL-terminated array
 /// of directory paths. Returns NULL with errno set on failure.
-export fn parse_varsdirs(dirs: ?[*:null]const ?[*:0]const u8) ?*CnfNode {
+pub export fn parse_varsdirs(dirs: ?[*:null]const ?[*:0]const u8) ?*CnfNode {
     const root = create_cnfnode("(root)") orelse {
         setErrno(@intFromEnum(std.c.E.NOMEM));
         return null;
@@ -190,7 +181,7 @@ export fn parse_varsdirs(dirs: ?[*:null]const ?[*:0]const u8) ?*CnfNode {
 /// match the C, and dnf, which treat expansion as best-effort.
 ///
 /// Returns a malloc'd string the caller frees with TDNFFreeMemory.
-export fn replace_vars(cn_vars: ?*CnfNode, source: ?[*:0]const u8) ?[*:0]u8 {
+pub export fn replace_vars(cn_vars: ?*CnfNode, source: ?[*:0]const u8) ?[*:0]u8 {
     const vars = cn_vars orelse return null;
     const text = source orelse return null;
 

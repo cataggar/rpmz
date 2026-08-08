@@ -5,28 +5,11 @@
 // of the License are located in the COPYING file of this distribution.
 
 const tdnf_error = @import("tdnf_error");
+const abi = @import("client_abi");
 
-pub const CmdArgs = extern struct {
-    option_values: [31]c_int = [_]c_int{0} ** 31,
-    pszArch: ?[*:0]u8 = null,
-    pszDownloadDir: ?[*:0]u8 = null,
-    pszInstallRoot: ?[*:0]u8 = null,
-};
-
-pub const Conf = extern struct {
-    integer_values_before_flags: [10]c_int = [_]c_int{0} ** 10,
-    rpmTransFlags: u32 = 0,
-    integer_values_after_flags: [3]c_int = [_]c_int{0} ** 3,
-    pszRepoDir: ?[*:0]u8 = null,
-    pszCacheDir: ?[*:0]u8 = null,
-    pszPersistDir: ?[*:0]u8 = null,
-};
-
-pub const Tdnf = extern struct {
-    pSack: ?*anyopaque = null,
-    pArgs: ?*CmdArgs = null,
-    pConf: ?*Conf = null,
-};
+pub const CmdArgs = abi.CmdArgs;
+pub const Conf = abi.Conf;
+pub const Tdnf = abi.Tdnf;
 
 pub const HistoryCtx = opaque {};
 
