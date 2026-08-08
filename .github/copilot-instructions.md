@@ -120,11 +120,9 @@ install/erase/scriptlet/trigger engines used from
   plan-pure-zig-pgp.md, issue #14) — do not confuse their policies:
   - `tdnf_rpm_file_verify_signatures_config`
     (`rpmzig/rpmdb.zig`, → `integrity.verifySignatures`) is
-    **libtdnf's** path. It is reached through the narrow
-    `TDNFRpmzigVerifyFile` bridge in `client/gpgcheck_zig.c`,
-    called from `client/gpgcheck.c`, which hands rpmzig an
-    already-parsed file handle plus the complete key set and owns
-    no files or buffers itself.
+    **libtdnf's** path. `client/gpgcheck.c` calls it directly,
+    handing rpmzig an already-parsed file handle plus the complete
+    key set and retaining ownership of all files and buffers.
   - The typed helper in `rpmzig/verify.zig` serves the standalone
     `tdnf-rpm-verify` smoke helper (`rpmzig/verify_main.zig`) and the
     built-in repository-metadata verifier. The latter reaches it through

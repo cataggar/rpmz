@@ -8,8 +8,6 @@
 
 #include "includes.h"
 
-#include "gpgcheck_zig.h"
-
 
 static uint32_t
 TDNFImportGPGKeyData(
@@ -207,7 +205,7 @@ TDNFGPGCheckPackageInternal(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    if(TDNFRpmzigVerifyFile(
+    if(tdnf_rpm_file_verify_signatures_config(
            pRpmFile,
            pTdnf->pRpmConfig,
            NULL,
@@ -334,7 +332,7 @@ TDNFGPGCheckPackageInternal(
         TDNF_SAFE_FREE_MEMORY(pszLocalGPGKey);
     }
 
-    if(TDNFRpmzigVerifyFile(
+    if(tdnf_rpm_file_verify_signatures_config(
            pRpmFile,
            pTdnf->pRpmConfig,
            (const void *const *)ppFreshKeys,

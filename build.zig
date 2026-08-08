@@ -40,10 +40,6 @@ const client_libsolv_free_srcs = [_][]const u8{
     "resolve.c",         "rpmtrans.c",
     "rpmtrans_native.c", "updateinfo.c",
     "utils.c",
-    // The C-side entry point into the rpmzig verifier. An ordinary
-    // client/ translation unit: it includes client/includes.h and is
-    // audited like the rest.
-              "gpgcheck_zig.c",
 };
 
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
