@@ -1806,25 +1806,29 @@ pub fn build(b: *Build) void {
 
     // jsondumptest
     const jsondump_test_mod = b.createModule(.{
+        .root_source_file = b.path("jsondump/test.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .pic = true,
     });
-    jsondump_test_mod.addIncludePath(b.path("include"));
-    jsondump_test_mod.addIncludePath(b.path("jsondump"));
-    jsondump_test_mod.addCSourceFiles(.{
-        .root = b.path("jsondump"),
-        .files = &.{"test.c"},
-        .flags = &tdnf_cflags,
-    });
-    jsondump_test_mod.linkLibrary(jsondump_lib);
+    jsondump_test_mod.addImport("jsondump", jsondump_lib.root_module);
     const jsondump_test_exe = b.addExecutable(.{
         .name = "jsondumptest",
         .root_module = jsondump_test_mod,
     });
     hardenExe(jsondump_test_exe);
     b.installArtifact(jsondump_test_exe);
+    {
+        const tests = b.addTest(.{ .root_module = jsondump_test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        const jsondump_test_step = b.step(
+            "jsondump-test",
+            "Run jsondump unit tests",
+        );
+        jsondump_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
 
     {
         const tests = b.addTest(.{ .root_module = xml_mod });

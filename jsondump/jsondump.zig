@@ -9,7 +9,7 @@ const libc = std.c;
 
 const SIZE_INC: c_uint = 256;
 
-const JsonDump = extern struct {
+pub const JsonDump = extern struct {
     buf: ?*anyopaque,
     buf_size: c_uint,
     pos: c_uint,
@@ -197,7 +197,7 @@ fn listAddRaw(jd_opt: ?*JsonDump, value: []const u8) c_int {
     return 0;
 }
 
-export fn jd_create(size: c_uint) ?*JsonDump {
+pub export fn jd_create(size: c_uint) ?*JsonDump {
     var buf_size = size;
 
     const jd_mem = libc.calloc(1, @sizeOf(JsonDump)) orelse return null;
@@ -217,7 +217,7 @@ export fn jd_create(size: c_uint) ?*JsonDump {
     return jd;
 }
 
-export fn jd_destroy(jd_opt: ?*JsonDump) void {
+pub export fn jd_destroy(jd_opt: ?*JsonDump) void {
     if (jd_opt) |jd| {
         if (jd.buf) |buf| {
             libc.free(@ptrCast(buf));
@@ -226,7 +226,7 @@ export fn jd_destroy(jd_opt: ?*JsonDump) void {
     }
 }
 
-export fn jd_map_start(jd_opt: ?*JsonDump) c_int {
+pub export fn jd_map_start(jd_opt: ?*JsonDump) c_int {
     if (ensureCapacity(jd_opt, 2) != 0) {
         return -1;
     }
@@ -246,7 +246,7 @@ export fn jd_map_start(jd_opt: ?*JsonDump) c_int {
     return 0;
 }
 
-export fn jd_map_add_string(jd_opt: ?*JsonDump, key: [*:0]const u8, value_opt: ?[*:0]const u8) c_int {
+pub export fn jd_map_add_string(jd_opt: ?*JsonDump, key: [*:0]const u8, value_opt: ?[*:0]const u8) c_int {
     const value = value_opt orelse return jd_map_add_null(jd_opt, key);
     const json_value = jsonifyString(value) orelse return -1;
     defer libc.free(@ptrCast(json_value));
@@ -254,31 +254,31 @@ export fn jd_map_add_string(jd_opt: ?*JsonDump, key: [*:0]const u8, value_opt: ?
     return mapAddRaw(jd_opt, key, std.mem.span(json_value));
 }
 
-export fn jd_map_add_int(jd_opt: ?*JsonDump, key: [*:0]const u8, value: c_int) c_int {
+pub export fn jd_map_add_int(jd_opt: ?*JsonDump, key: [*:0]const u8, value: c_int) c_int {
     var buf: [22]u8 = undefined;
     const formatted = std.fmt.bufPrintZ(&buf, "{d}", .{value}) catch return -1;
     return mapAddRaw(jd_opt, key, formatted);
 }
 
-export fn jd_map_add_int64(jd_opt: ?*JsonDump, key: [*:0]const u8, value: i64) c_int {
+pub export fn jd_map_add_int64(jd_opt: ?*JsonDump, key: [*:0]const u8, value: i64) c_int {
     var buf: [22]u8 = undefined;
     const formatted = std.fmt.bufPrintZ(&buf, "{d}", .{value}) catch return -1;
     return mapAddRaw(jd_opt, key, formatted);
 }
 
-export fn jd_map_add_bool(jd_opt: ?*JsonDump, key: [*:0]const u8, value: c_int) c_int {
+pub export fn jd_map_add_bool(jd_opt: ?*JsonDump, key: [*:0]const u8, value: c_int) c_int {
     return mapAddRaw(jd_opt, key, if (value != 0) "true" else "false");
 }
 
-export fn jd_map_add_null(jd_opt: ?*JsonDump, key: [*:0]const u8) c_int {
+pub export fn jd_map_add_null(jd_opt: ?*JsonDump, key: [*:0]const u8) c_int {
     return mapAddRaw(jd_opt, key, "null");
 }
 
-export fn jd_map_add_child(jd_opt: ?*JsonDump, key: [*:0]const u8, jd_child: *const JsonDump) c_int {
+pub export fn jd_map_add_child(jd_opt: ?*JsonDump, key: [*:0]const u8, jd_child: *const JsonDump) c_int {
     return mapAddRaw(jd_opt, key, std.mem.span(bufStr(jd_child)));
 }
 
-export fn jd_list_start(jd_opt: ?*JsonDump) c_int {
+pub export fn jd_list_start(jd_opt: ?*JsonDump) c_int {
     if (ensureCapacity(jd_opt, 2) != 0) {
         return -1;
     }
@@ -298,7 +298,7 @@ export fn jd_list_start(jd_opt: ?*JsonDump) c_int {
     return 0;
 }
 
-export fn jd_list_add_string(jd_opt: ?*JsonDump, value_opt: ?[*:0]const u8) c_int {
+pub export fn jd_list_add_string(jd_opt: ?*JsonDump, value_opt: ?[*:0]const u8) c_int {
     const value = value_opt orelse return jd_list_add_null(jd_opt);
     const json_value = jsonifyString(value) orelse return -1;
     defer libc.free(@ptrCast(json_value));
@@ -306,26 +306,26 @@ export fn jd_list_add_string(jd_opt: ?*JsonDump, value_opt: ?[*:0]const u8) c_in
     return listAddRaw(jd_opt, std.mem.span(json_value));
 }
 
-export fn jd_list_add_int(jd_opt: ?*JsonDump, value: c_int) c_int {
+pub export fn jd_list_add_int(jd_opt: ?*JsonDump, value: c_int) c_int {
     var buf: [22]u8 = undefined;
     const formatted = std.fmt.bufPrintZ(&buf, "{d}", .{value}) catch return -1;
     return listAddRaw(jd_opt, formatted);
 }
 
-export fn jd_list_add_int64(jd_opt: ?*JsonDump, value: i64) c_int {
+pub export fn jd_list_add_int64(jd_opt: ?*JsonDump, value: i64) c_int {
     var buf: [22]u8 = undefined;
     const formatted = std.fmt.bufPrintZ(&buf, "{d}", .{value}) catch return -1;
     return listAddRaw(jd_opt, formatted);
 }
 
-export fn jd_list_add_bool(jd_opt: ?*JsonDump, value: c_int) c_int {
+pub export fn jd_list_add_bool(jd_opt: ?*JsonDump, value: c_int) c_int {
     return listAddRaw(jd_opt, if (value != 0) "true" else "false");
 }
 
-export fn jd_list_add_null(jd_opt: ?*JsonDump) c_int {
+pub export fn jd_list_add_null(jd_opt: ?*JsonDump) c_int {
     return listAddRaw(jd_opt, "null");
 }
 
-export fn jd_list_add_child(jd_opt: ?*JsonDump, jd_child: *const JsonDump) c_int {
+pub export fn jd_list_add_child(jd_opt: ?*JsonDump, jd_child: *const JsonDump) c_int {
     return listAddRaw(jd_opt, std.mem.span(bufStr(jd_child)));
 }
