@@ -165,11 +165,9 @@ pub fn loadInstalled(
         .{},
     );
     var arena_state = loaded.arena_state;
+    errdefer arena_state.deinit();
     const repository = try context.impl.allocator.create(Repository);
-    errdefer {
-        arena_state.deinit();
-        context.impl.allocator.destroy(repository);
-    }
+    errdefer context.impl.allocator.destroy(repository);
     const id = try arena_state.allocator().dupeZ(u8, "@System");
     const fields = try buildFields(
         arena_state.allocator(),
@@ -552,14 +550,38 @@ fn samePackageIdentity(left: model.Package, right: model.Package) bool {
         std.mem.eql(u8, left.nevra.arch, right.nevra.arch);
 }
 
+fn sameRetainedIdentity(
+    prior: *const Repository,
+    prior_index: usize,
+    replacement: *const Repository,
+    replacement_index: usize,
+) bool {
+    if (!samePackageIdentity(
+        prior.model.packages[prior_index],
+        replacement.model.packages[replacement_index],
+    )) return false;
+    if (prior.kind != .installed) return true;
+    if (prior_index >= prior.installed_states.len or
+        replacement_index >= replacement.installed_states.len)
+    {
+        return false;
+    }
+    return prior.installed_states[prior_index].rpmdb_hnum ==
+        replacement.installed_states[replacement_index].rpmdb_hnum;
+}
+
 fn retainedHandle(
     prior: *const Repository,
     replacement: *const Repository,
     replacement_index: usize,
 ) ?u32 {
-    const package = replacement.model.packages[replacement_index];
-    for (prior.model.packages, 0..) |candidate, prior_index| {
-        if (!samePackageIdentity(candidate, package)) continue;
+    for (prior.model.packages, 0..) |_, prior_index| {
+        if (!sameRetainedIdentity(
+            prior,
+            prior_index,
+            replacement,
+            replacement_index,
+        )) continue;
         const handle = prior.handles[prior_index];
         var already_retained = false;
         for (replacement.handles[0..replacement_index]) |assigned| {
@@ -727,9 +749,7 @@ fn formatEvr(
 
 fn needsZeroEpoch(version: []const u8) bool {
     var index: usize = 0;
-    while (index < version.len and std.ascii.isDigit(version[index])) :
-        (index += 1)
-    {}
+    while (index < version.len and std.ascii.isDigit(version[index])) : (index += 1) {}
     return index > 0 and index < version.len and version[index] == ':';
 }
 
@@ -1422,10 +1442,30 @@ fn appendTestRepositoryPackages(
     id_value: []const u8,
     package_values: []const model.Package,
 ) !*Repository {
+    return appendTestRepositoryPackagesWithStates(
+        context,
+        kind,
+        id_value,
+        package_values,
+        &.{},
+    );
+}
+
+fn appendTestRepositoryPackagesWithStates(
+    context: *Context,
+    kind: RepositoryKind,
+    id_value: []const u8,
+    package_values: []const model.Package,
+    installed_state_values: []const installed_repository.InstalledState,
+) !*Repository {
     var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
     const packages = try arena.dupe(model.Package, package_values);
+    const installed_states = try arena.dupe(
+        installed_repository.InstalledState,
+        installed_state_values,
+    );
     const repository_model = model.RepositoryModel{ .packages = packages };
     const id = try arena.dupeZ(u8, id_value);
     const fields = try buildFields(arena, id, repository_model);
@@ -1438,7 +1478,7 @@ fn appendTestRepositoryPackages(
         .owner = null,
         .priority = 0,
         .model = repository_model,
-        .installed_states = &.{},
+        .installed_states = installed_states,
         .fields = fields,
         .handles = &.{},
     };
@@ -1662,6 +1702,43 @@ test "repository replacement never retargets stable package handles" {
     try testing.expect(packageModel(context, @intCast(repo_a_id)) == null);
 }
 
+test "installed duplicate refresh retains handles by rpmdb hnum" {
+    const testing = std.testing;
+    const context = try create(testing.allocator, null, null, "x86_64");
+    defer destroy(context);
+    const duplicate = testPackage("duplicate-installed");
+    const original = try appendTestRepositoryPackagesWithStates(
+        context,
+        .installed,
+        "@System",
+        &.{ duplicate, duplicate },
+        &.{
+            .{ .rpmdb_hnum = 41 },
+            .{ .rpmdb_hnum = 73 },
+        },
+    );
+    const removed_handle = packageIdFor(original, 0);
+    const survivor_handle = packageIdFor(original, 1);
+
+    const refreshed = try appendTestRepositoryPackagesWithStates(
+        context,
+        .installed,
+        "@System",
+        &.{duplicate},
+        &.{.{ .rpmdb_hnum = 73 }},
+    );
+
+    try testing.expect(packageModel(
+        context,
+        @intCast(removed_handle),
+    ) == null);
+    try testing.expectEqual(survivor_handle, packageIdFor(refreshed, 0));
+    try testing.expectEqual(
+        @as(u32, 73),
+        packageInstalledState(context, @intCast(survivor_handle)).?.rpmdb_hnum,
+    );
+}
+
 fn testRootPath(
     tmp: *const std.testing.TmpDir,
     buffer: *[std.Io.Dir.max_path_bytes]u8,
@@ -1711,23 +1788,44 @@ test "context creation releases every allocation on installed load failures" {
         ),
     );
 
-    var empty = testing.tmpDir(.{});
-    defer empty.cleanup();
-    var empty_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const empty_root = testRootPath(&empty, &empty_buffer);
+    const package_blob = try rpmpkg.makeMinimalHeaderForTest(
+        testing.allocator,
+        "allocation-loaded-package",
+        "1.0",
+        "1",
+        "noarch",
+    );
+    defer testing.allocator.free(package_blob);
+    var populated = try installed_repository.TestFixture.create(&.{
+        .{ .hnum = 19, .blob = package_blob },
+    });
+    defer populated.cleanup();
+    var populated_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const populated_root = populated.rootPath(&populated_buffer);
     try testing.checkAllAllocationFailures(
         testing.allocator,
         contextCreationAllocationFailureCase,
-        .{empty_root.ptr},
+        .{populated_root},
     );
 }
 
 test "legacy installed loading honors the context install root" {
     const testing = std.testing;
-    var scratch = testing.tmpDir(.{});
+    const sentinel_name = "tdnf-scratch-root-sentinel-41";
+    const package_blob = try rpmpkg.makeMinimalHeaderForTest(
+        testing.allocator,
+        sentinel_name,
+        "1.0",
+        "1",
+        "noarch",
+    );
+    defer testing.allocator.free(package_blob);
+    var scratch = try installed_repository.TestFixture.create(&.{
+        .{ .hnum = 91, .blob = package_blob },
+    });
     defer scratch.cleanup();
     var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const scratch_root = testRootPath(&scratch, &root_buffer);
+    const scratch_root = scratch.rootPath(&root_buffer);
     const context = try create(
         testing.allocator,
         null,
@@ -1741,7 +1839,15 @@ test "legacy installed loading honors the context install root" {
         SolvSackReadInstalledRpms(context, null, null),
     );
     try testing.expect(context.impl.installed != null);
-    try testing.expectEqual(@as(usize, 0), packageCount(context));
+    try testing.expectEqual(@as(usize, 1), packageCount(context));
+    try testing.expectEqualStrings(
+        sentinel_name,
+        packageModel(context, 1).?.nevra.name,
+    );
+    try testing.expectEqual(
+        @as(u32, 91),
+        packageInstalledState(context, 1).?.rpmdb_hnum,
+    );
     try testing.expectEqualStrings(
         scratch_root,
         std.mem.span(rootDir(context).?),

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -53,6 +54,27 @@ def extract_dependency_closure(package_cache, system_packages, initial_hashes):
             )
 
 
+def zig_package_cache(zig):
+    result = subprocess.run(
+        [zig, "env"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout or result.stderr
+    try:
+        global_cache = json.loads(output)["global_cache_dir"]
+    except (json.JSONDecodeError, KeyError):
+        match = re.search(
+            r'\.global_cache_dir\s*=\s*"([^"]+)"',
+            output,
+        )
+        if match is None:
+            raise RuntimeError("unable to determine Zig global cache path")
+        global_cache = match.group(1)
+    return Path(global_cache) / "p"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--zig", default="zig")
@@ -66,7 +88,7 @@ def main():
     package_cache = (
         Path(package_cache_arg)
         if package_cache_arg
-        else Path(os.environ["ZIG_GLOBAL_CACHE_DIR"]) / "p"
+        else zig_package_cache(args.zig)
     )
     scratch = root / ".product-no-libsolv-fetch"
     shutil.rmtree(scratch, ignore_errors=True)

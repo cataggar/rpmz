@@ -144,16 +144,16 @@ pub fn loadModel(
     };
 }
 
-const FixtureRow = struct {
+pub const TestFixtureRow = struct {
     hnum: u32,
     blob: []const u8,
 };
 
-const Fixture = struct {
+pub const TestFixture = struct {
     tmp: std.testing.TmpDir,
 
-    fn create(rows: []const FixtureRow) !Fixture {
-        var fixture = Fixture{ .tmp = std.testing.tmpDir(.{}) };
+    pub fn create(rows: []const TestFixtureRow) !TestFixture {
+        var fixture = TestFixture{ .tmp = std.testing.tmpDir(.{}) };
         errdefer fixture.tmp.cleanup();
         try fixture.tmp.dir.createDirPath(
             std.testing.io,
@@ -189,20 +189,20 @@ const Fixture = struct {
         return fixture;
     }
 
-    fn cleanup(self: *Fixture) void {
+    pub fn cleanup(self: *TestFixture) void {
         self.tmp.cleanup();
         self.* = undefined;
     }
 
-    fn rootPath(
-        self: *const Fixture,
+    pub fn rootPath(
+        self: *const TestFixture,
         buffer: *[std.Io.Dir.max_path_bytes]u8,
     ) [:0]const u8 {
         return self.path(buffer, "");
     }
 
     fn path(
-        self: *const Fixture,
+        self: *const TestFixture,
         buffer: *[std.Io.Dir.max_path_bytes]u8,
         name: []const u8,
     ) [:0]const u8 {
@@ -245,7 +245,7 @@ test "owning loader preserves hnum order duplicate identities and state" {
     );
     defer std.testing.allocator.free(pubkey_blob);
 
-    var fixture = try Fixture.create(&.{
+    var fixture = try TestFixture.create(&.{
         .{ .hnum = 73, .blob = package_blob },
         .{ .hnum = 12, .blob = pubkey_blob },
         .{ .hnum = 41, .blob = package_blob },
@@ -332,7 +332,7 @@ test "owning loader cleans every allocation failure" {
         "noarch",
     );
     defer std.testing.allocator.free(package_blob);
-    var fixture = try Fixture.create(&.{
+    var fixture = try TestFixture.create(&.{
         .{ .hnum = 19, .blob = package_blob },
     });
     defer fixture.cleanup();
@@ -349,7 +349,7 @@ test "owning loader cleans every allocation failure" {
 }
 
 test "loader reports malformed and unreadable rpmdb input" {
-    var malformed = try Fixture.create(&.{
+    var malformed = try TestFixture.create(&.{
         .{ .hnum = 1, .blob = &.{ 1, 2, 3 } },
     });
     defer malformed.cleanup();
@@ -363,7 +363,7 @@ test "loader reports malformed and unreadable rpmdb input" {
         ),
     );
 
-    var unreadable = Fixture{ .tmp = std.testing.tmpDir(.{}) };
+    var unreadable = TestFixture{ .tmp = std.testing.tmpDir(.{}) };
     defer unreadable.cleanup();
     try unreadable.tmp.dir.createDirPath(
         std.testing.io,
@@ -392,7 +392,7 @@ test "loader reports malformed and unreadable rpmdb input" {
 }
 
 test "missing rpmdb produces an empty aligned repository" {
-    var fixture = Fixture{ .tmp = std.testing.tmpDir(.{}) };
+    var fixture = TestFixture{ .tmp = std.testing.tmpDir(.{}) };
     defer fixture.cleanup();
     var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     var loaded = try load(
