@@ -79,6 +79,8 @@ comptime {
     assertSameCaptureLayout(capture_abi.IntegrationRepository, c.TDNF_TRANSACTION_PLAN_INTEGRATION_REPOSITORY);
     assertSameCaptureLayout(capture_abi.IntegrationEnvironment, c.TDNF_TRANSACTION_PLAN_INTEGRATION_ENVIRONMENT);
     assertSameCaptureLayout(capture_abi.RepositoryInitCallbacks, c.TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS);
+    assertSameCaptureLayout(capture_abi.RepositoryRefreshView, c.TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_VIEW);
+    assertSameCaptureLayout(capture_abi.RepositoryRefreshInput, c.TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT);
     assertSameCaptureLayout(capture_abi.RepositoryInitInput, c.TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT);
     assertSameCaptureLayout(capture_abi.RequestTraceJob, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_JOB);
     assertSameCaptureLayout(capture_abi.RequestTraceQueueOrigin, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_QUEUE_ORIGIN);

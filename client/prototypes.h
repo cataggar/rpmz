@@ -181,14 +181,6 @@ TDNFFetchRemoteGPGKey(
     char** ppszKeyLocation
     );
 
-//init.c
-TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
-TDNFBuildRefreshInput(
-    PTDNF pTdnf,
-    PTDNF_PACKAGE_CONTEXT pSack,
-    TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT *pInput
-    );
-
 uint32_t
 TDNFRefreshSack(
     PTDNF pTdnf,
