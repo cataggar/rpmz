@@ -38,7 +38,7 @@ const client_libsolv_free_srcs = [_][]const u8{
     "repoutils.c",    "remoterepo.c",
     "repolist.c",     "resolve.c",
     "rpmtrans.c",     "rpmtrans_native.c",
-    "updateinfo.c",   "utils.c",
+    "utils.c",
 };
 
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
@@ -180,6 +180,10 @@ pub fn build(b: *Build) void {
     {
         return;
     }
+    const client_updateinfo_test_step = b.step(
+        "client-updateinfo-test",
+        "Run client updateinfo production-logic tests",
+    );
     const sqlite_dep = sqlite_dep_optional.?;
     const tls_dep = tls_dep_optional.?;
     const zlua_mod = zlua_dep_optional.?.module("zlua");
@@ -360,6 +364,15 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const client_abi_mod = b.createModule(.{
+        .root_source_file = b.path("client/init_abi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    client_abi_mod.addIncludePath(b.path("include"));
+    client_abi_mod.addIncludePath(b.path("client"));
+    client_abi_mod.addIncludePath(b.path("rpmzig"));
     {
         const tests = b.addTest(.{ .root_module = tdnf_error_mod });
         const run_tests = b.addRunArtifact(tests);
@@ -369,6 +382,23 @@ pub fn build(b: *Build) void {
     {
         const tests = b.addTest(.{ .root_module = public_tdnf_mod });
         const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/updateinfo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addIncludePath(b.path("include"));
+        test_mod.addIncludePath(b.path("client"));
+        test_mod.addIncludePath(b.path("rpmzig"));
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        client_updateinfo_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
     }
     {
@@ -1509,15 +1539,18 @@ pub fn build(b: *Build) void {
     });
     client_history_mod.addImport("tdnf_error", tdnf_error_mod);
 
-    const client_init_abi_mod = b.createModule(.{
-        .root_source_file = b.path("client/init_abi.zig"),
+    const client_updateinfo_mod = b.createModule(.{
+        .root_source_file = b.path("client/updateinfo_exports.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .pic = true,
     });
-    client_init_abi_mod.addIncludePath(b.path("include"));
-    client_init_abi_mod.addIncludePath(b.path("client"));
-    client_init_abi_mod.addIncludePath(b.path("rpmzig"));
+    client_updateinfo_mod.addImport("tdnf_error", tdnf_error_mod);
+    client_updateinfo_mod.addImport("client_abi", client_abi_mod);
+    client_updateinfo_mod.addIncludePath(b.path("include"));
+    client_updateinfo_mod.addIncludePath(b.path("client"));
+    client_updateinfo_mod.addIncludePath(b.path("rpmzig"));
 
     const client_init_mod = b.createModule(.{
         .root_source_file = b.path("client/init.zig"),
@@ -1530,7 +1563,7 @@ pub fn build(b: *Build) void {
         "transaction_plan_capture_abi",
         transaction_plan_capture_abi_mod,
     );
-    client_init_mod.addImport("client_init_abi", client_init_abi_mod);
+    client_init_mod.addImport("client_init_abi", client_abi_mod);
     client_init_mod.addImport("tdnf_error", tdnf_error_mod);
 
     const tdnf_so_mod = b.createModule(.{
@@ -1553,6 +1586,7 @@ pub fn build(b: *Build) void {
     tdnf_so_mod.addImport("builtin_plugins", builtin_plugins_mod);
     tdnf_so_mod.addImport("client_history", client_history_mod);
     tdnf_so_mod.addImport("tdnf_error", tdnf_error_mod);
+    tdnf_so_mod.addImport("client_updateinfo", client_updateinfo_mod);
     tdnf_so_mod.addIncludePath(b.path("include"));
     tdnf_so_mod.addIncludePath(b.path("client"));
     tdnf_so_mod.addIncludePath(b.path("rpmzig"));
@@ -1720,10 +1754,25 @@ pub fn build(b: *Build) void {
             "transaction_plan_capture_abi",
             transaction_plan_capture_abi_mod,
         );
-        test_mod.addImport("client_init_abi", client_init_abi_mod);
+        test_mod.addImport("client_init_abi", client_abi_mod);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         client_init_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/updateinfo_export_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_root", tdnf_so_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        client_updateinfo_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
     }
 

@@ -776,7 +776,7 @@ TDNFRpmExecHistoryTransaction(
 
 
 
-//updateinfo.c
+//updateinfo.zig
 uint32_t
 TDNFGetSecuritySeverityOption(
     PTDNF pTdnf,

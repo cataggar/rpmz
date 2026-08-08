@@ -19,3 +19,4 @@ typedef struct _TDNF_ID_LIST TDNF_ID_LIST, *PTDNF_ID_LIST;
 #include "package_context.h"
 #include "transaction_plan_capture_abi.inc"
 #include "structs.h"
+#include "../llconf/nodes.h"
