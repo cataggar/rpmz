@@ -950,15 +950,6 @@ uint32_t BuiltinRepoGPGCheckRepoMDDownloadEnd(
     const char *pszRepoMDFile
     );
 
-/* api.c */
-
-uint32_t
-TDNFGetHistoryCtx(
-    PTDNF pTdnf,
-    struct history_ctx **ppCtx,
-    int nMustExist
-);
-
 struct cnfnode *parse_varsdirs(char *dirs[]);
 
 char *replace_vars(struct cnfnode *cn_vars, const char *source);

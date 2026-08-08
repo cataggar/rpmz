@@ -7,6 +7,8 @@ pub const ERROR_TDNF_URL_INVALID: u32 = 1524;
 pub const ERROR_TDNF_SYSTEM_BASE: u32 = 1600;
 pub const ERROR_TDNF_INVALID_PARAMETER: u32 = fromErrno(.INVAL);
 pub const ERROR_TDNF_OUT_OF_MEMORY: u32 = fromErrno(.NOMEM);
+pub const ERROR_TDNF_ALREADY_EXISTS: u32 = fromErrno(.EXIST);
+pub const ERROR_TDNF_INVALID_DIR: u32 = fromErrno(.NOTDIR);
 pub const ERROR_TDNF_CALL_NOT_SUPPORTED: u32 = fromErrno(.NOSYS);
 pub const ERROR_TDNF_SOLV_FAILED: u32 = 1301;
 pub const ERROR_TDNF_SOLV_IO: u32 = 1304;
@@ -15,6 +17,8 @@ pub const ERROR_TDNF_RPMTS_OPENDB_FAILED: u32 = 1526;
 pub const ERROR_TDNF_INVALID_REPO_FILE: u32 = 1004;
 pub const ERROR_TDNF_FILE_NOT_FOUND: u32 = fromErrno(.NOENT);
 pub const ERROR_TDNF_TIMED_OUT: u32 = fromErrno(.TIMEDOUT);
+pub const ERROR_TDNF_HISTORY_ERROR: u32 = 1801;
+pub const ERROR_TDNF_HISTORY_NODB: u32 = 1802;
 
 pub fn fromErrno(value: std.posix.E) u32 {
     return ERROR_TDNF_SYSTEM_BASE + @intFromEnum(value);
