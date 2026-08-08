@@ -148,6 +148,37 @@ pub const RepoData = extern struct {
     pNext: ?*RepoData = null,
 };
 
+pub const RepoMetadata = extern struct {
+    pszRepoCacheDir: ?[*:0]u8 = null,
+    pszRepo: ?[*:0]u8 = null,
+    pszRepoMD: ?[*:0]u8 = null,
+    pszPrimary: ?[*:0]u8 = null,
+    pszFileLists: ?[*:0]u8 = null,
+    pszUpdateInfo: ?[*:0]u8 = null,
+    pszOther: ?[*:0]u8 = null,
+};
+
+pub const RepoMdChecksum = extern struct {
+    pszType: ?[*:0]const u8 = null,
+    pszValue: ?[*:0]const u8 = null,
+};
+
+pub const RepoMdRecord = extern struct {
+    pszType: ?[*:0]const u8 = null,
+    dwKind: u32 = 0,
+    pszLocationHref: ?[*:0]const u8 = null,
+    checksum: RepoMdChecksum = .{},
+    openChecksum: RepoMdChecksum = .{},
+    nTimestamp: u64 = 0,
+    nSize: u64 = 0,
+    nOpenSize: u64 = 0,
+    nDatabaseVersion: u64 = 0,
+    nHasTimestamp: c_int = 0,
+    nHasSize: c_int = 0,
+    nHasOpenSize: c_int = 0,
+    nHasDatabaseVersion: c_int = 0,
+};
+
 pub const Plugin = extern struct {
     pszName: ?[*:0]u8 = null,
     nEnabled: c_int = 0,
@@ -347,6 +378,34 @@ comptime {
         "pszCacheName",
         "pRepo",
         "pNext",
+    });
+    assertLayout(RepoMetadata, C.TDNF_REPO_METADATA, .{
+        "pszRepoCacheDir",
+        "pszRepo",
+        "pszRepoMD",
+        "pszPrimary",
+        "pszFileLists",
+        "pszUpdateInfo",
+        "pszOther",
+    });
+    assertLayout(RepoMdChecksum, C.TDNF_REPOMD_CHECKSUM, .{
+        "pszType",
+        "pszValue",
+    });
+    assertLayout(RepoMdRecord, C.TDNF_REPOMD_RECORD, .{
+        "pszType",
+        "dwKind",
+        "pszLocationHref",
+        "checksum",
+        "openChecksum",
+        "nTimestamp",
+        "nSize",
+        "nOpenSize",
+        "nDatabaseVersion",
+        "nHasTimestamp",
+        "nHasSize",
+        "nHasOpenSize",
+        "nHasDatabaseVersion",
     });
     assertLayout(Plugin, C.TDNF_PLUGIN, .{
         "pszName",
