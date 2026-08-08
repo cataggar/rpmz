@@ -343,11 +343,7 @@ fn alwaysFailRealloc(_: ?*anyopaque, _: ?*anyopaque, _: usize) ?*anyopaque {
     return null;
 }
 
-extern fn TDNFTestAllocateStringPrintf(
-    ppszDst: ?*?[*:0]u8,
-    pszArg: ?[*:0]const u8,
-    nValue: c_int,
-) u32;
+extern fn TDNFAllocateStringPrintf(ppszDst: ?*?[*:0]u8, pszFmt: ?[*:0]const u8, ...) u32;
 
 test "TDNFAllocateMemory zeroes allocations and clears stale output on zero-size rejection" {
     var raw: ?*anyopaque = null;
@@ -457,11 +453,16 @@ test "TDNFAllocateString and TDNFSafeAllocateString preserve output semantics" {
     try std.testing.expect(preserved_out == &preserved);
 }
 
-test "TDNFAllocateStringPrintf formats through the C shim" {
+test "TDNFAllocateStringPrintf formats through the production C varargs entry point" {
     var formatted: ?[*:0]u8 = null;
     try std.testing.expectEqual(
         @as(u32, 0),
-        TDNFTestAllocateStringPrintf(&formatted, "value", 7),
+        TDNFAllocateStringPrintf(
+            &formatted,
+            "%s %d",
+            @as([*:0]const u8, "value"),
+            @as(c_int, 7),
+        ),
     );
     defer TDNFFreeMemory(@ptrCast(formatted.?));
     try std.testing.expectEqualStrings("value 7", std.mem.span(formatted.?));

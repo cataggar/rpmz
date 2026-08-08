@@ -90,6 +90,19 @@ fn freeCStringArray(ppszValues: [*c]?[*:0]u8) void {
     }
 }
 
+const CnfTreeDestroyOps = struct {
+    ctx: ?*anyopaque = null,
+    destroyFn: *const fn (ctx: ?*anyopaque, cn: [*c]c.struct_cnfnode) void,
+};
+
+fn destroyCnfTree(_: ?*anyopaque, cn: [*c]c.struct_cnfnode) void {
+    c.destroy_cnftree(cn);
+}
+
+const cnf_tree_destroy_ops = CnfTreeDestroyOps{
+    .destroyFn = destroyCnfTree,
+};
+
 fn allocateCStringCapacity(nCapacity: usize, ppszDst: ?*?[*:0]u8) u32 {
     var raw: ?*anyopaque = null;
 
@@ -552,7 +565,7 @@ export fn TDNFFreeCmdOpt(pCmdOptOpt: c.PTDNF_CMD_OPT) void {
     }
 }
 
-export fn TDNFFreeCmdArgs(pCmdArgs: c.PTDNF_CMD_ARGS) void {
+fn freeCmdArgsWithOps(pCmdArgs: c.PTDNF_CMD_ARGS, destroy_ops: CnfTreeDestroyOps) void {
     if (pCmdArgs == null) {
         return;
     }
@@ -571,9 +584,13 @@ export fn TDNFFreeCmdArgs(pCmdArgs: c.PTDNF_CMD_ARGS) void {
     freeCString(pCmdArgs[0].pszConfFile);
     freeCString(pCmdArgs[0].pszReleaseVer);
 
-    c.destroy_cnftree(pCmdArgs[0].cn_setopts);
-    c.destroy_cnftree(pCmdArgs[0].cn_repoopts);
+    destroy_ops.destroyFn(destroy_ops.ctx, pCmdArgs[0].cn_setopts);
+    destroy_ops.destroyFn(destroy_ops.ctx, pCmdArgs[0].cn_repoopts);
     TDNFFreeMemory(pCmdArgs);
+}
+
+export fn TDNFFreeCmdArgs(pCmdArgs: c.PTDNF_CMD_ARGS) void {
+    freeCmdArgsWithOps(pCmdArgs, cnf_tree_destroy_ops);
 }
 
 export fn TDNFFreeRepos(pReposOpt: c.PTDNF_REPO_DATA) void {
@@ -1265,6 +1282,19 @@ test "TDNFGetDigestForFile and TDNFCheckHash use the checksum ABI" {
     }
 }
 
+const TrackingCnfTreeDestroyContext = struct {
+    nodes: [2][*c]c.struct_cnfnode = .{ null, null },
+    count: usize = 0,
+};
+
+fn trackCnfTreeDestroy(ctx: ?*anyopaque, cn: [*c]c.struct_cnfnode) void {
+    const tracking: *TrackingCnfTreeDestroyContext = @ptrCast(@alignCast(ctx.?));
+    if (tracking.count < tracking.nodes.len) {
+        tracking.nodes[tracking.count] = cn;
+    }
+    tracking.count += 1;
+}
+
 test "TDNFFreeCmdArgs tolerates a command count with no command vector" {
     // `TDNFCliParseArgs` publishes `nCmdCount` only after `ppszCmds` exists,
     // but this is exported public API: a C caller can hand us the half-filled
@@ -1276,4 +1306,53 @@ test "TDNFFreeCmdArgs tolerates a command count with no command vector" {
     pCmdArgs[0].nCmdCount = 3;
     pCmdArgs[0].ppszCmds = null;
     TDNFFreeCmdArgs(pCmdArgs);
+}
+
+test "TDNFFreeCmdArgs destroys real llconf option trees" {
+    const setopts = c.create_cnfnode("setopts");
+    if (setopts == null) return error.OutOfMemory;
+    errdefer c.destroy_cnftree(setopts);
+
+    const setopt = c.create_cnfnode_keyval("install_weak_deps=false");
+    if (setopt == null) return error.OutOfMemory;
+    c.append_node(setopts, setopt);
+
+    const repoopts = c.create_cnfnode("repoopts");
+    if (repoopts == null) return error.OutOfMemory;
+    errdefer c.destroy_cnftree(repoopts);
+
+    const repo = c.create_cnfnode("base");
+    if (repo == null) return error.OutOfMemory;
+    c.append_node(repoopts, repo);
+    const repoopt = c.create_cnfnode_keyval("skip_if_unavailable=true");
+    if (repoopt == null) return error.OutOfMemory;
+    c.append_node(repo, repoopt);
+
+    const pAllocated = c.calloc(1, @sizeOf(c.TDNF_CMD_ARGS)) orelse
+        return error.OutOfMemory;
+    const pCmdArgs: c.PTDNF_CMD_ARGS = @ptrCast(@alignCast(pAllocated));
+    pCmdArgs[0].cn_setopts = setopts;
+    pCmdArgs[0].cn_repoopts = repoopts;
+
+    TDNFFreeCmdArgs(pCmdArgs);
+}
+
+test "freeCmdArgsWithOps routes both option trees to the destroy operation" {
+    const pAllocated = c.calloc(1, @sizeOf(c.TDNF_CMD_ARGS)) orelse
+        return error.OutOfMemory;
+    const pCmdArgs: c.PTDNF_CMD_ARGS = @ptrCast(@alignCast(pAllocated));
+    var setopts = std.mem.zeroes(c.struct_cnfnode);
+    var repoopts = std.mem.zeroes(c.struct_cnfnode);
+    pCmdArgs[0].cn_setopts = &setopts;
+    pCmdArgs[0].cn_repoopts = &repoopts;
+
+    var tracking = TrackingCnfTreeDestroyContext{};
+    freeCmdArgsWithOps(pCmdArgs, .{
+        .ctx = &tracking,
+        .destroyFn = trackCnfTreeDestroy,
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), tracking.count);
+    try std.testing.expectEqual(@intFromPtr(&setopts), @intFromPtr(tracking.nodes[0]));
+    try std.testing.expectEqual(@intFromPtr(&repoopts), @intFromPtr(tracking.nodes[1]));
 }
