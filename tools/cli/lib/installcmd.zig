@@ -4,6 +4,7 @@
 // you may not use this file except in compliance with the License. The terms
 // of the License are located in the COPYING file of this distribution.
 
+const std = @import("std");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("jsondump.h");
@@ -12,6 +13,7 @@ const c = @cImport({
     @cInclude("tdnfcli.h");
     @cInclude("tdnferror.h");
 });
+const jsonfmt = @import("jsonfmt.zig");
 const output = @import("output.zig");
 
 extern fn log_console(loglevel: i32, format: [*:0]const u8, ...) void;
@@ -29,6 +31,7 @@ const LOG_INFO: c_int = 0;
 const LOG_CRIT: c_int = 2;
 const COL_COUNT: c_int = 6;
 const MAX_COL_LEN: usize = 256;
+const allocator = std.heap.c_allocator;
 
 fn checkJsonResult(nResult: c_int) u32 {
     if (nResult != 0) {
@@ -65,6 +68,10 @@ fn nonNullString(pszValue: ?[*:0]const u8) [*:0]const u8 {
     return pszValue orelse "";
 }
 
+fn formatStringSlice(pszValue: ?[*:0]const u8) []const u8 {
+    return if (pszValue) |value| std.mem.span(value) else "(null)";
+}
+
 fn mapAlterError(dwError: u32) u32 {
     return if (dwError == c.ERROR_TDNF_ALREADY_INSTALLED)
         c.ERROR_TDNF_CLI_NOTHING_TO_DO
@@ -90,6 +97,25 @@ fn addSolvedPackageList(
     }
 
     return checkJsonResult(c.jd_map_add_child(jd, pszKey, jd_list));
+}
+
+fn addPackageEvr(
+    format_allocator: std.mem.Allocator,
+    jd: ?*c.struct_json_dump,
+    pszVersion: ?[*:0]const u8,
+    pszRelease: ?[*:0]const u8,
+) u32 {
+    return checkJsonResult(jsonfmt.mapAddFormatted(
+        format_allocator,
+        c.jd_map_add_string,
+        jd,
+        "Evr",
+        "{s}-{s}",
+        .{
+            formatStringSlice(pszVersion),
+            formatStringSlice(pszRelease),
+        },
+    ));
 }
 
 fn printActionHeader(nAlterType: c.TDNF_ALTERTYPE) u32 {
@@ -419,13 +445,12 @@ fn JDPkgList(
         if (dwError != 0) {
             return dwError;
         }
-        dwError = checkJsonResult(c.jd_map_add_fmt(
+        dwError = addPackageEvr(
+            allocator,
             jd_pkg,
-            "Evr",
-            "%s-%s",
             pPkgInfo.pszVersion,
             pPkgInfo.pszRelease,
-        ));
+        );
         if (dwError != 0) {
             return dwError;
         }
@@ -456,6 +481,52 @@ fn JDPkgList(
     ppJDList.?.* = jd_list;
     transfer_complete = true;
     return 0;
+}
+
+fn jsonBuffer(jd: *const c.struct_json_dump) []const u8 {
+    const ptr: [*:0]const u8 = @ptrCast(jd.buf);
+    return std.mem.span(ptr);
+}
+
+test "package EVR JSON formatting preserves long values" {
+    const jd = c.jd_create(0) orelse return error.OutOfMemory;
+    defer c.jd_destroy(jd);
+    try std.testing.expectEqual(@as(c_int, 0), c.jd_map_start(jd));
+
+    const version = try std.testing.allocator.allocSentinel(u8, 1024, 0);
+    defer std.testing.allocator.free(version);
+    @memset(version, 'v');
+    const release = try std.testing.allocator.allocSentinel(u8, 513, 0);
+    defer std.testing.allocator.free(release);
+    @memset(release, 'r');
+
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        addPackageEvr(std.testing.allocator, jd, version.ptr, release.ptr),
+    );
+    const expected = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"Evr\":\"{s}-{s}\"}}",
+        .{ version, release },
+    );
+    defer std.testing.allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, jsonBuffer(jd));
+}
+
+test "package EVR formatting allocation failure maps to JSON error" {
+    const jd = c.jd_create(0) orelse return error.OutOfMemory;
+    defer c.jd_destroy(jd);
+    try std.testing.expectEqual(@as(c_int, 0), c.jd_map_start(jd));
+
+    var failing = std.testing.FailingAllocator.init(
+        std.testing.allocator,
+        .{ .fail_index = 0 },
+    );
+    try std.testing.expectEqual(
+        @as(u32, c.ERROR_TDNF_JSONDUMP),
+        addPackageEvr(failing.allocator(), jd, "1.2.3", "4"),
+    );
+    try std.testing.expectEqualStrings("{}", jsonBuffer(jd));
 }
 
 pub export fn PrintSolvedInfoJson(pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO) u32 {

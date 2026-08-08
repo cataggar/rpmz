@@ -18,6 +18,7 @@ const c = @cImport({
     @cInclude("tdnfcli.h");
     @cInclude("tdnferror.h");
 });
+const jsonfmt = @import("jsonfmt.zig");
 const output = @import("output.zig");
 
 extern fn log_console(loglevel: i32, format: [*:0]const u8, ...) void;
@@ -132,6 +133,57 @@ fn cString(ptr: anytype) ?[*:0]const u8 {
 
 fn cStringSlice(ptr: anytype) []const u8 {
     return if (cString(ptr)) |psz| std.mem.span(psz) else "";
+}
+
+fn formatStringSlice(ptr: anytype) []const u8 {
+    return if (cString(ptr)) |psz| std.mem.span(psz) else "(null)";
+}
+
+fn addPackageNevra(
+    format_allocator: std.mem.Allocator,
+    jd: ?*c.struct_json_dump,
+    pszName: ?[*:0]const u8,
+    pszVersion: ?[*:0]const u8,
+    pszRelease: ?[*:0]const u8,
+    pszArch: ?[*:0]const u8,
+) u32 {
+    return checkJsonResult(jsonfmt.mapAddFormatted(
+        format_allocator,
+        c.jd_map_add_string,
+        jd,
+        "Nevra",
+        "{s}-{s}-{s}.{s}",
+        .{
+            formatStringSlice(pszName),
+            formatStringSlice(pszVersion),
+            formatStringSlice(pszRelease),
+            formatStringSlice(pszArch),
+        },
+    ));
+}
+
+test "repoquery Nevra JSON formatting preserves exact shape" {
+    const jd = c.jd_create(0) orelse return error.OutOfMemory;
+    defer c.jd_destroy(jd);
+    try std.testing.expectEqual(@as(c_int, 0), c.jd_map_start(jd));
+
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        addPackageNevra(
+            std.testing.allocator,
+            jd,
+            "pkg",
+            "1.2.3",
+            "4",
+            "x86_64",
+        ),
+    );
+    const dump: *const c.struct_json_dump = @ptrCast(jd);
+    const ptr: [*:0]const u8 = @ptrCast(dump.buf);
+    try std.testing.expectEqualStrings(
+        "{\"Nevra\":\"pkg-1.2.3-4.x86_64\"}",
+        std.mem.span(ptr),
+    );
 }
 
 fn appendByte(builder: *std.ArrayList(u8), value: u8) u32 {
@@ -464,15 +516,14 @@ pub export fn TDNFCliRepoQueryCommand(
 
             const pPkgInfo = &pPkgInfos[@intCast(i)];
 
-            dwError = checkJsonResult(c.jd_map_add_fmt(
+            dwError = addPackageNevra(
+                allocator,
                 jd_pkg,
-                "Nevra",
-                "%s-%s-%s.%s",
                 pPkgInfo.pszName,
                 pPkgInfo.pszVersion,
                 pPkgInfo.pszRelease,
                 pPkgInfo.pszArch,
-            ));
+            );
             if (dwError != 0) return dwError;
             dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Name", pPkgInfo.pszName));
             if (dwError != 0) return dwError;
