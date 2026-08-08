@@ -23,12 +23,12 @@ typedef struct _TDNF_PLUGIN_
 
 typedef struct _TDNF_
 {
-    PSolvSack pSack;
+    PTDNF_PACKAGE_CONTEXT pSack;
     PTDNF_CMD_ARGS pArgs;
     PTDNF_CONF pConf;
     tdnf_rpm_config *pRpmConfig;
     PTDNF_REPO_DATA pRepos;
-    Repo *pSolvCmdLineRepo;
+    PTDNF_REPOSITORY_CONTEXT pCmdLineRepo;
     PTDNF_PLUGIN pPlugins;
     char **ppszRepoFromDirIds;
     TDNF_TRANSACTION_PLAN_REQUEST_TRACE *pRequestTrace;

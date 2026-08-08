@@ -6,10 +6,9 @@ host libsolv-devel, but that pin is attached per module, by
 addLibsolvIncludes. A source file in a module that never calls it can
 still write `#include <solv/pool.h>`: /usr/include is on the default
 search path, so the include resolves against whatever the host has, the
-version asserts in solv/includes.h and repomd/solvbridge.zig are not in
-that translation unit, and nothing fails. That is the original bug this
-pin exists to prevent, reachable from every component except the two
-that are pinned.
+version assert in repomd/solver_oracle_bridge.zig is not in that
+translation unit, and nothing fails. The bridge is test-only and belongs
+exclusively to the opt-in solver oracle.
 
 This audit narrows that: only the files that are compiled into pinned
 modules may spell a libsolv header at all.
@@ -34,18 +33,10 @@ ROOT = Path(__file__).resolve().parents[1]
 # are passed LibsolvIncludes, so `repomd/**` would exempt files that
 # compile with /usr/include on the search path and no version assert in
 # scope. Keeping this a file list also makes it fail loudly rather than
-# silently when solv/ is deleted.
+# silently when the oracle bridge is renamed or deleted.
 ALLOWED = {
-    # The pinned C entry point; carries the _Static_assert.
-    "solv/includes.h",
-    # The pinned Zig @cImport; carries the comptime assert.
-    "repomd/solvbridge.zig",
-    # Test-only libsolv fixtures. They carry no assert themselves; they
-    # are safe because they @import solvbridge.zig, so any module that
-    # pulls them in also compiles its assert. That is checked below, not
-    # assumed.
-    "repomd/cache.zig",
-    "repomd/pkgquery.zig",
+    # The test-only pinned Zig @cImport; carries the comptime assert.
+    "repomd/solver_oracle_bridge.zig",
 }
 
 # Walked from the repository root and pruned, rather than an allowlist of

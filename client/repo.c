@@ -145,8 +145,8 @@ TDNFGetRepoMD(
     char* pszLastRefreshMarker = NULL;
     PTDNF_REPO_METADATA pRepoMDRel = NULL;
     PTDNF_REPO_METADATA pRepoMD = NULL;
-    unsigned char pszMDCookie[SOLV_COOKIE_LEN] = {0};
-    unsigned char pszTmpCookie[SOLV_COOKIE_LEN] = {0};
+    unsigned char pszMDCookie[TDNF_METADATA_COOKIE_LEN] = {0};
+    unsigned char pszTmpCookie[TDNF_METADATA_COOKIE_LEN] = {0};
     int nNeedDownload = 0;
     int nNewRepoMDFile = 0;
     int nReplaceRepoMD = 0;

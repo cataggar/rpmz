@@ -406,19 +406,6 @@ pub const RepositoryInitCallbacks = extern struct {
         ?[*:0]const u8,
         ?[*]u8,
     ) callconv(.c) u32 = null,
-    use_metadata_cache: ?*const fn (
-        ?*anyopaque,
-        ?*anyopaque,
-        ?*c_int,
-    ) callconv(.c) u32 = null,
-    create_metadata_cache: ?*const fn (
-        ?*anyopaque,
-        ?*anyopaque,
-    ) callconv(.c) u32 = null,
-    read_rpms_from_directory: ?*const fn (
-        ?*anyopaque,
-        ?[*:0]const u8,
-    ) callconv(.c) u32 = null,
 };
 
 pub const RepositoryRefreshView = extern struct {
@@ -464,8 +451,7 @@ pub const RepositoryRefreshInput = extern struct {
 pub const RepositoryInitInput = extern struct {
     tdnf_handle: ?*anyopaque = null,
     repo_data: ?*anyopaque = null,
-    sack: ?*anyopaque = null,
-    pool: ?*anyopaque = null,
+    context: ?*anyopaque = null,
     callbacks: ?*const RepositoryInitCallbacks = null,
     refresh_input: ?*const RepositoryRefreshInput = null,
     state_slot: ?*?*anyopaque = null,

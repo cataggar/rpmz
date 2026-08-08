@@ -401,8 +401,6 @@ typedef struct TDNF_TRANSACTION_PLAN_STATE TDNF_TRANSACTION_PLAN_STATE;
 
 struct _TDNF_;
 struct _TDNF_REPO_METADATA;
-struct _SolvSack;
-struct _SOLV_REPO_INFO_INTERNAL_;
 
 typedef struct
 {
@@ -421,14 +419,6 @@ typedef struct
         struct _TDNF_REPO_METADATA **);
     void (*free_repo_metadata)(struct _TDNF_REPO_METADATA *);
     uint32_t (*calculate_cookie)(const char *, unsigned char *);
-    uint32_t (*use_metadata_cache)(
-        struct _SolvSack *,
-        struct _SOLV_REPO_INFO_INTERNAL_ *,
-        int *);
-    uint32_t (*create_metadata_cache)(
-        struct _SolvSack *,
-        struct _SOLV_REPO_INFO_INTERNAL_ *);
-    uint32_t (*read_rpms_from_directory)(Repo *, const char *);
 } TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS;
 
 typedef struct
@@ -474,8 +464,7 @@ typedef struct
 {
     void *tdnf_handle;
     void *repo_data;
-    void *sack;
-    void *pool;
+    void *context;
     const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS *callbacks;
     const TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT *refresh_input;
     void **state_slot;
@@ -497,9 +486,6 @@ typedef struct
         .get_repo_md = TDNFGetRepoMD,                                   \
         .free_repo_metadata = TDNFFreeRepoMetadata,                     \
         .calculate_cookie = TDNFRepoMdCalculateCookieForFile,           \
-        .use_metadata_cache = SolvUseMetaDataCache,                     \
-        .create_metadata_cache = SolvCreateMetaDataCache,               \
-        .read_rpms_from_directory = SolvReadRpmsFromDirectory,          \
     }
 
 #define TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT_DEFAULTS            \
@@ -637,7 +623,7 @@ TDNFTransactionPlanInitRepository(
  * the pool -- shares one implementation with it rather than a parallel
  * repo_create() call.
  *
- * `sack` is a PSolvSack. It is spelled void * because this header is
+ * `sack` is a PTDNF_PACKAGE_CONTEXT. It is spelled void * because this header is
  * C-imported in isolation by abi/repomd_layout.zig and so must not
  * depend on any project type it does not itself define.
  *
@@ -693,70 +679,10 @@ TDNFTransactionPlanStateFailNextCaptureIntegrity(
     TDNF_TRANSACTION_PLAN_STATE *state
     );
 
-TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
-TDNFTransactionPlanLoadSolvRepo(
-    void *repository,
-    const char *repomd,
-    const char *primary,
-    const char *filelists,
-    const char *updateinfo,
-    const char *other,
-    uint8_t cookie_sha256[32]
-    );
-
-TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN int
-TDNFTransactionPlanBindSolvCookie(
-    const uint8_t raw_cookie[32],
-    uint32_t include_filelists,
-    uint32_t include_updateinfo,
-    uint32_t include_other,
-    uint8_t output[32]
-    );
-
-#define TDNF_TRANSACTION_PLAN_BIND_CACHE_COOKIE(_metadata, _cookie, _error) \
-    do {                                                                 \
-        if (TDNFTransactionPlanBindSolvCookie(                           \
-                (_cookie), (_metadata)->pszFileLists != NULL,            \
-                (_metadata)->pszUpdateInfo != NULL,                      \
-                (_metadata)->pszOther != NULL, (_cookie)) != 0)          \
-        {                                                                \
-            (_error) = ERROR_TDNF_INVALID_PARAMETER;                    \
-            BAIL_ON_TDNF_ERROR(_error);                                  \
-        }                                                                \
-    } while (0)
-
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN int
 TDNFTransactionPlanTestWriteFileProvider(
     const void *rpm_config
     );
-
-#define TDNF_TRANSACTION_PLAN_LOAD_REPOSITORY(                           \
-    _repo, _metadata, _cookie, _error)                                  \
-    do {                                                                 \
-        (_error) = TDNFTransactionPlanLoadSolvRepo(                      \
-            (_repo), (_metadata)->pszRepoMD,                             \
-            (_metadata)->pszPrimary, (_metadata)->pszFileLists,          \
-            (_metadata)->pszUpdateInfo, (_metadata)->pszOther,           \
-            (_cookie));                                                  \
-    } while (0)
-
-#define TDNF_TRANSACTION_PLAN_RECORD_LOADED_REPOSITORY(                  \
-    _tdnf, _repo_data, _repo, _metadata, _used_cache, _cache_cookie,    \
-    _load_cookie, _error)                                                \
-    do {                                                                 \
-        if ((_repo_data)->nHasMetaData &&                                \
-            TDNFTransactionPlanStateIsEnabled(                           \
-                (_tdnf)->pTransactionPlanState))                         \
-        {                                                                \
-            const uint8_t *_cookie = (_used_cache)                       \
-                ? (_cache_cookie) : (_load_cookie);                      \
-            (_error) = TDNFTransactionPlanStateRecordRepository(         \
-                &(_tdnf)->pTransactionPlanState, (_repo), _cookie,       \
-                (_metadata)->pszFileLists != NULL,                       \
-                (_metadata)->pszUpdateInfo != NULL,                      \
-                (_metadata)->pszOther != NULL);                          \
-        }                                                                \
-    } while (0)
 
 TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN void
 TDNFTransactionPlanStateClear(
@@ -1109,7 +1035,7 @@ TDNFInitRepoWithResult(
             {                                                            \
                 (_error) = TDNFTransactionPlanIntegrationCapturePending( \
                     (_tdnf)->pTransactionPlanState,                       \
-                    (_tdnf)->pSack->pPool, (_native),                    \
+                    (_tdnf)->pSack, (_native),                           \
                     TDNFTransactionPlanRequestTraceGetView(              \
                         (_tdnf)->pRequestTrace),                          \
                     !!(_accepted),                                       \

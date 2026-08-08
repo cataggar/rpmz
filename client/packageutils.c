@@ -17,24 +17,24 @@ static uint32_t
 TDNFPackageGetDowngrade(
     PTDNF pTdnf,
     TDNF_PKG_ID dwInstalled,
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID* pdwDowngradePkgId
     );
 static uint32_t
 TDNFVerifyInstallPackage(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkg,
     uint32_t* pdwInstallPackage
     );
 static uint32_t
 TDNFVerifyUpgradePackage(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkg,
     uint32_t* pdwUpgradePackage
     );
 static uint32_t
 PackageUtilsBuildNativeRepoInputsFromSack(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_REPOMD_NATIVE_REPO_INPUT *ppRepos,
     uint32_t *pdwRepoCount
     );
@@ -47,13 +47,13 @@ PackageUtilsFreeNativeRepoInputs(
 
 static uint32_t
 PackageUtilsCreateRpmConfigFromSack(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     tdnf_rpm_config **ppConfig
     );
 
 static uint32_t
 PackageUtilsFindNativePackageRefs(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPkgName,
     TDNF_SCOPE nScope,
     char ***pppszPackageRefs,
@@ -62,7 +62,7 @@ PackageUtilsFindNativePackageRefs(
 
 static uint32_t
 PackageUtilsFindHighestAvailableRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPkgName,
     int nSource,
     char **ppszPackageRef
@@ -70,7 +70,7 @@ PackageUtilsFindHighestAvailableRef(
 
 static uint32_t
 PackageUtilsFindHighestOrLowestInstalledRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPkgName,
     uint32_t dwFindHighest,
     char **ppszPackageRef
@@ -78,7 +78,7 @@ PackageUtilsFindHighestOrLowestInstalledRef(
 
 static uint32_t
 PackageUtilsComparePackageRefsEvr(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszLeftRef,
     const char *pszRightRef,
     int *pnResult
@@ -86,7 +86,7 @@ PackageUtilsComparePackageRefsEvr(
 
 static uint32_t
 PackageUtilsGetPackageNameFromRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPackageRef,
     char **ppszName
     );
@@ -99,7 +99,7 @@ PackageUtilsCopyNevraFromRef(
 
 static uint32_t
 PackageUtilsResolveSinglePackageRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
     TDNF_PKG_ID* pdwPkgId
@@ -107,7 +107,7 @@ PackageUtilsResolveSinglePackageRef(
 
 static uint32_t
 PackageUtilsResolvePackageRefsToQueue(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     char **ppszPackageRefs,
     uint32_t dwCount,
     int nInstalledOnly,
@@ -116,7 +116,7 @@ PackageUtilsResolvePackageRefsToQueue(
 
 static uint32_t
 PackageUtilsPopulatePkgInfoFromRefs(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     char **ppszPackageRefs,
     uint32_t dwRefCount,
     TDNF_PKG_DETAIL nDetail,
@@ -137,7 +137,7 @@ _pkginfo_compare(
 
 uint32_t
 TDNFMatchForReinstall(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char* pszName,
     PTDNF_ID_LIST pQueueGoal
     )
@@ -212,7 +212,7 @@ error:
 
 uint32_t
 TDNFPkgInfoFilterNewest(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_PKG_INFO pPkgInfos
 )
 {
@@ -272,7 +272,7 @@ static uint32_t
 TDNFPackageGetDowngrade(
     PTDNF pTdnf,
     TDNF_PKG_ID dwInstalled,
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID* pdwDowngradePkgId
     )
 {
@@ -340,7 +340,7 @@ error:
 
 uint32_t
 TDNFAddPackagesForErase(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     )
@@ -382,7 +382,7 @@ error:
 
 static uint32_t
 TDNFVerifyInstallPackage(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkg,
     uint32_t* pdwInstallPackage
     )
@@ -454,7 +454,7 @@ error:
 
 uint32_t
 TDNFAddPackagesForInstall(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName,
     int nSource,
@@ -529,7 +529,7 @@ error:
 
 static uint32_t
 TDNFVerifyUpgradePackage(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     TDNF_PKG_ID dwPkg,
     uint32_t* pdwUpgradePackage
     )
@@ -597,7 +597,7 @@ error:
 }
 uint32_t
 TDNFAddPackagesForUpgrade(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     )
@@ -651,7 +651,7 @@ error:
 uint32_t
 TDNFAddPackagesForDowngrade(
     PTDNF pTdnf,
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_ID_LIST pQueueGoal,
     const char* pszPkgName
     )
@@ -812,7 +812,7 @@ error:
    refs and populated from those. */
 uint32_t
 TDNFPopulatePkgInfosFromRefs(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     char **ppszPackageRefs,
     uint32_t dwRefCount,
     PTDNF_PKG_INFO* ppPkgInfos
@@ -889,7 +889,7 @@ error:
 
 static uint32_t
 PackageUtilsBuildNativeRepoInputsFromSack(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     PTDNF_REPOMD_NATIVE_REPO_INPUT *ppRepos,
     uint32_t *pdwRepoCount
     )
@@ -911,7 +911,8 @@ PackageUtilsBuildNativeRepoInputsFromSack(
 
     /* Which repos the sack holds is its business; which of them are worth
        handing to the native reader is this file's. */
-    dwError = SolvGetRepoDataList(pSack, &ppRepoData, &dwRepoDataCount);
+    dwError = TDNFPackageContextGetRepoDataList(
+                  pSack, &ppRepoData, &dwRepoDataCount);
     BAIL_ON_TDNF_ERROR(dwError);
 
     for(dwRepoDataIndex = 0;
@@ -955,7 +956,7 @@ PackageUtilsBuildNativeRepoInputsFromSack(
         pRepos[dwIndex].pszDirectory = TDNF_REPO_RPM_DIRECTORY(pRepoData);
         if(!pRepos[dwIndex].pszDirectory)
         {
-            if(IsNullOrEmptyString(pSack->pszCacheDir))
+            if(IsNullOrEmptyString(TDNFPackageContextCacheDir(pSack)))
             {
                 dwError = ERROR_TDNF_INVALID_PARAMETER;
                 BAIL_ON_TDNF_ERROR(dwError);
@@ -965,7 +966,7 @@ PackageUtilsBuildNativeRepoInputsFromSack(
                            pRepoData->pszCacheName : pRepoData->pszId;
             dwError = TDNFJoinPath(
                           (char **)&pRepos[dwIndex].pszCacheDir,
-                          pSack->pszCacheDir,
+                          TDNFPackageContextCacheDir(pSack),
                           pszCacheName,
                           NULL);
             BAIL_ON_TDNF_ERROR(dwError);
@@ -1019,7 +1020,7 @@ PackageUtilsFreeNativeRepoInputs(
 
 static uint32_t
 PackageUtilsCreateRpmConfigFromSack(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     tdnf_rpm_config **ppConfig
     )
 {
@@ -1033,8 +1034,8 @@ PackageUtilsCreateRpmConfigFromSack(
         BAIL_ON_TDNF_ERROR(dwError);
     }
 
-    pszRootDir = IsNullOrEmptyString(pSack->pszRootDir) ?
-                 "/" : pSack->pszRootDir;
+    pszRootDir = IsNullOrEmptyString(TDNFPackageContextRootDir(pSack)) ?
+                 "/" : TDNFPackageContextRootDir(pSack);
     pConfig = tdnf_rpm_config_create(pszRootDir);
     if(!pConfig)
     {
@@ -1058,7 +1059,7 @@ error:
 
 static uint32_t
 PackageUtilsFindNativePackageRefs(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPkgName,
     TDNF_SCOPE nScope,
     char ***pppszPackageRefs,
@@ -1120,7 +1121,7 @@ error:
 
 static uint32_t
 PackageUtilsFindHighestAvailableRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPkgName,
     int nSource,
     char **ppszPackageRef
@@ -1178,7 +1179,7 @@ error:
 
 static uint32_t
 PackageUtilsFindHighestOrLowestInstalledRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPkgName,
     uint32_t dwFindHighest,
     char **ppszPackageRef
@@ -1235,7 +1236,7 @@ error:
 
 static uint32_t
 PackageUtilsComparePackageRefsEvr(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszLeftRef,
     const char *pszRightRef,
     int *pnResult
@@ -1295,7 +1296,7 @@ error:
 
 static uint32_t
 PackageUtilsGetPackageNameFromRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPackageRef,
     char **ppszName
     )
@@ -1395,7 +1396,7 @@ error:
 
 static uint32_t
 PackageUtilsResolveSinglePackageRef(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     const char *pszPackageRef,
     int nInstalledOnly,
     TDNF_PKG_ID* pdwPkgId
@@ -1429,7 +1430,7 @@ error:
 
 static uint32_t
 PackageUtilsResolvePackageRefsToQueue(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     char **ppszPackageRefs,
     uint32_t dwCount,
     int nInstalledOnly,
@@ -1466,7 +1467,7 @@ error:
 
 static uint32_t
 PackageUtilsPopulatePkgInfoFromRefs(
-    PSolvSack pSack,
+    PTDNF_PACKAGE_CONTEXT pSack,
     char **ppszPackageRefs,
     uint32_t dwRefCount,
     TDNF_PKG_DETAIL nDetail,

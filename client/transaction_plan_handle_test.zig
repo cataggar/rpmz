@@ -65,12 +65,6 @@ const HistoryDelta = extern struct {
     removed_count: c_int,
 };
 
-const SolvSackView = extern struct {
-    pool: ?*anyopaque,
-    cache_dir: ?[*:0]u8,
-    root_dir: ?[*:0]u8,
-};
-
 const SackSnapshot = extern struct {
     pool_identity: usize = 0,
     repository_identity: usize = 0,
@@ -125,22 +119,19 @@ extern fn TDNFRefreshSack(
     sack: ?*anyopaque,
     clean_metadata: c_int,
 ) u32;
-extern fn SolvInitSack(
-    sack: ?*?*anyopaque,
+extern fn TDNFPackageContextCreate(
     cache_dir: ?[*:0]const u8,
     root_dir: ?[*:0]const u8,
     arch: ?[*:0]const u8,
+    rpm_config: ?*const anyopaque,
+    include_installed: c_int,
+    context: ?*?*anyopaque,
 ) u32;
-extern fn SolvFreeSack(sack: ?*anyopaque) void;
+extern fn TDNFPackageContextFree(context: ?*anyopaque) void;
 extern fn TDNFTransactionPlanTestSackSolvableCount(
     sack: ?*anyopaque,
     count: ?*u32,
 ) u32;
-extern fn repo_create(
-    pool: ?*anyopaque,
-    name: ?[*:0]const u8,
-) ?*anyopaque;
-extern fn repo_add_solvable(repo: ?*anyopaque) c_int;
 extern fn TDNFFreeSolvedPackageInfo(solved: ?*anyopaque) void;
 extern fn TDNFTransactionPlanCaptureSetEnabled(
     handle: ?*anyopaque,
@@ -292,15 +283,6 @@ extern fn history_get_delta_range(
 extern fn history_free_delta(delta: ?*HistoryDelta) void;
 extern fn TDNFTransactionPlanRequestTraceTestFailNextCreate() void;
 extern fn TDNFTransactionPlanRequestTraceTestFailNextRecord() void;
-extern fn TDNFRepoMdNativeLoadSolvRepo(
-    repository: ?*anyopaque,
-    repomd_path: ?[*:0]const u8,
-    primary_path: ?[*:0]const u8,
-    filelists_path: ?[*:0]const u8,
-    updateinfo_path: ?[*:0]const u8,
-    other_path: ?[*:0]const u8,
-) u32;
-extern fn chmod(path: ?[*:0]const u8, mode: c_uint) c_int;
 
 const primary_xml =
     \\<?xml version="1.0" encoding="UTF-8"?>
@@ -413,7 +395,6 @@ const Fixture = struct {
     config: [:0]u8,
     base_repomd: []u8,
     extras_repomd: []u8,
-    base_solv: []u8,
 
     fn create() !Fixture {
         var tmp = std.testing.tmpDir(.{});
@@ -511,12 +492,6 @@ const Fixture = struct {
             .{std.mem.span(cache_name_pointer)},
         );
         defer allocator.free(cache_relative);
-        const base_solv = try std.fmt.allocPrint(
-            allocator,
-            "root/cache/{s}/solvcache/base.solv",
-            .{std.mem.span(cache_name_pointer)},
-        );
-        errdefer allocator.free(base_solv);
         try tmp.dir.createDirPath(std.testing.io, cache_relative);
         const extras_cache_relative = try std.fmt.allocPrint(
             allocator,
@@ -737,7 +712,6 @@ const Fixture = struct {
             .config = config,
             .base_repomd = base_repomd,
             .extras_repomd = extras_repomd_path,
-            .base_solv = base_solv,
         };
     }
 
@@ -747,35 +721,8 @@ const Fixture = struct {
         allocator.free(self.config);
         allocator.free(self.base_repomd);
         allocator.free(self.extras_repomd);
-        allocator.free(self.base_solv);
         self.tmp.cleanup();
         self.* = undefined;
-    }
-
-    fn corruptBaseSolvCookie(self: *Fixture) !void {
-        const bytes = try self.tmp.dir.readFileAlloc(
-            std.testing.io,
-            self.base_solv,
-            std.testing.allocator,
-            .limited(64 * 1024 * 1024),
-        );
-        defer std.testing.allocator.free(bytes);
-        if (bytes.len < 32) return error.TestUnexpectedResult;
-        @memset(bytes[bytes.len - 32 ..], 0);
-        const absolute = try std.fmt.allocPrintSentinel(
-            std.testing.allocator,
-            "{s}/{s}",
-            .{ self.root, self.base_solv["root/".len..] },
-            0,
-        );
-        defer std.testing.allocator.free(absolute);
-        if (chmod(absolute.ptr, 0o600) != 0) {
-            return error.TestUnexpectedResult;
-        }
-        try self.tmp.dir.writeFile(std.testing.io, .{
-            .sub_path = self.base_solv,
-            .data = bytes,
-        });
     }
 
     fn requireBaseAvailable(self: *Fixture) !void {
@@ -822,9 +769,6 @@ const Fixture = struct {
             .sub_path = self.base_repomd,
             .data = output,
         });
-        self.tmp.dir.deleteFile(std.testing.io, self.base_solv) catch |err| {
-            if (err != error.FileNotFound) return err;
-        };
     }
 
     fn enableFilteredUpdate(self: *Fixture) !void {
@@ -892,9 +836,6 @@ const Fixture = struct {
             .sub_path = self.base_repomd,
             .data = repomd,
         });
-        self.tmp.dir.deleteFile(std.testing.io, self.base_solv) catch |err| {
-            if (err != error.FileNotFound) return err;
-        };
     }
 
     fn enableBaseSnapshot(self: *Fixture) !void {
@@ -1919,15 +1860,6 @@ test "filtered update-all is capture-only unsupported before refresh" {
 }
 
 test "private handle capture follows production resolve lifecycle" {
-    // The refresh path's repository loader rejects a null repo with
-    // ERROR_TDNF_INVALID_PARAMETER. It used to be reached through
-    // TDNFInitRepoFromMetadata(), a client/ wrapper that re-checked the
-    // same arguments; the wrapper is gone and this pins the check on the
-    // function that now performs it.
-    try std.testing.expectEqual(
-        @as(u32, 1622),
-        TDNFRepoMdNativeLoadSolvRepo(null, null, null, null, null, null),
-    );
     var fixture = try Fixture.create();
     defer fixture.destroy();
     const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
@@ -1974,15 +1906,6 @@ test "private handle capture follows production resolve lifecycle" {
     );
     var handle_live = true;
     defer if (handle_live) TDNFCloseHandle(handle);
-    var sack_without_pool = SolvSackView{
-        .pool = null,
-        .cache_dir = null,
-        .root_dir = null,
-    };
-    try std.testing.expectEqual(
-        error_invalid_parameter,
-        TDNFRefreshSack(handle, &sack_without_pool, 0),
-    );
     try std.testing.expectEqual(
         @as(u32, 0),
         TDNFRefreshSack(handle, null, 0),
@@ -2050,14 +1973,16 @@ test "private handle capture follows production resolve lifecycle" {
     );
     defer std.testing.allocator.free(alternate_cache);
     var alternate_sack: ?*anyopaque = null;
-    defer if (alternate_sack) |sack| SolvFreeSack(sack);
+    defer if (alternate_sack) |sack| TDNFPackageContextFree(sack);
     try std.testing.expectEqual(
         @as(u32, 0),
-        SolvInitSack(
-            &alternate_sack,
+        TDNFPackageContextCreate(
             alternate_cache.ptr,
             fixture.root.ptr,
             "x86_64",
+            null,
+            0,
+            &alternate_sack,
         ),
     );
     try std.testing.expectEqual(
@@ -2075,18 +2000,10 @@ test "private handle capture follows production resolve lifecycle" {
         TDNFRefreshSack(handle, null, 1),
     );
     try std.testing.expectEqual(@as(c_int, 0), args.nRefresh);
-    SolvFreeSack(alternate_sack);
+    TDNFPackageContextFree(alternate_sack);
     alternate_sack = null;
     try std.testing.expectEqual(@as(u32, 0), TDNFRefresh(handle));
     try resolve(handle);
-    const cache_solvable_count =
-        TDNFTransactionPlanTestPoolSolvableCount(handle);
-    try fixture.corruptBaseSolvCookie();
-    try std.testing.expectEqual(@as(u32, 0), TDNFRefresh(handle));
-    try std.testing.expectEqual(
-        cache_solvable_count,
-        TDNFTransactionPlanTestPoolSolvableCount(handle),
-    );
     TDNFTransactionPlanRequestTraceTestFailNextCreate();
     try resolve(handle);
     try std.testing.expectEqual(
@@ -3479,7 +3396,7 @@ test "repofromdir tracking preserves whitespace repository ids" {
     try std.testing.expect(solved == null);
 }
 
-test "alternate sack snapshot uses its own shifted repository ids" {
+test "alternate context snapshot remains isolated from live repositories" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     try fixture.enableBaseSnapshot();
@@ -3542,14 +3459,16 @@ test "alternate sack snapshot uses its own shifted repository ids" {
     );
     defer std.testing.allocator.free(alternate_cache);
     var alternate: ?*anyopaque = null;
-    defer if (alternate) |sack| SolvFreeSack(sack);
+    defer if (alternate) |sack| TDNFPackageContextFree(sack);
     try std.testing.expectEqual(
         @as(u32, 0),
-        SolvInitSack(
-            &alternate,
+        TDNFPackageContextCreate(
             alternate_cache.ptr,
             fixture.root.ptr,
             "x86_64",
+            null,
+            0,
+            &alternate,
         ),
     );
     try std.testing.expectEqual(
@@ -3590,17 +3509,6 @@ test "alternate sack snapshot uses its own shifted repository ids" {
         &live_base_digest,
         &after_alternate_init_digest,
     );
-    const alternate_view: *SolvSackView = @ptrCast(@alignCast(alternate.?));
-    const foreign = repo_create(alternate_view.pool, "base") orelse
-        return error.OutOfMemory;
-    for (0..2) |_| {
-        if (repo_add_solvable(foreign) <= 0) return error.OutOfMemory;
-    }
-    const dummy = repo_create(alternate_view.pool, "shift") orelse
-        return error.OutOfMemory;
-    for (0..3) |_| {
-        if (repo_add_solvable(dummy) <= 0) return error.OutOfMemory;
-    }
     try std.testing.expectEqual(
         @as(u32, 0),
         TDNFRefreshSack(handle, alternate, 0),
@@ -3765,14 +3673,8 @@ test "alternate sack snapshot uses its own shifted repository ids" {
         @as(u32, 0),
         TDNFTransactionPlanTestSackSolvableCount(alternate, &alternate_count),
     );
-    // 2 `base` + 3 `shift` (both synthesized above) + 1 `@System`
-    // + 2 `extras` + 3 `base`. The predecessor `SolvCountPackages`
-    // reported 9 here: it skipped solvables cleared in
-    // `pool->considered`, and libsolv's `map_grow` zero-fills, so the
-    // two `shift` solvables past the first byte of the staged map read
-    // back as hidden. That was an artefact of the staging map, not a
-    // property of the sack.
-    try std.testing.expectEqual(@as(u32, 11), alternate_count);
+    // One installed package, two from extras, and three from base.
+    try std.testing.expectEqual(@as(u32, 6), alternate_count);
     try std.testing.expectEqual(
         @as(u32, 0),
         TDNFRefreshSack(handle, null, 0),
@@ -3834,7 +3736,7 @@ test "alternate sack snapshot uses its own shifted repository ids" {
         @as(u32, 0),
         TDNFTransactionPlanTestSackSolvableCount(alternate, &alternate_count),
     );
-    try std.testing.expectEqual(@as(u32, 11), alternate_count);
+    try std.testing.expectEqual(@as(u32, 6), alternate_count);
     const before_free_identity =
         TDNFTransactionPlanTestRepoIdentity(handle, "base");
     var before_free_digest: [32]u8 = undefined;
@@ -3846,7 +3748,7 @@ test "alternate sack snapshot uses its own shifted repository ids" {
             &before_free_digest,
         ),
     );
-    SolvFreeSack(alternate);
+    TDNFPackageContextFree(alternate);
     alternate = null;
     try std.testing.expectEqual(
         before_free_identity,
@@ -3950,14 +3852,16 @@ test "alternate sack repository failure preserves exact state" {
     );
     defer std.testing.allocator.free(alternate_cache);
     var alternate: ?*anyopaque = null;
-    defer if (alternate) |sack| SolvFreeSack(sack);
+    defer if (alternate) |sack| TDNFPackageContextFree(sack);
     try std.testing.expectEqual(
         @as(u32, 0),
-        SolvInitSack(
-            &alternate,
+        TDNFPackageContextCreate(
             alternate_cache.ptr,
             fixture.root.ptr,
             "x86_64",
+            null,
+            0,
+            &alternate,
         ),
     );
     try std.testing.expectEqual(
@@ -3996,15 +3900,7 @@ test "alternate sack repository failure preserves exact state" {
         .limited(1024 * 1024),
     );
     defer std.testing.allocator.free(cached_primary);
-    const cached_solv = try fixture.tmp.dir.readFileAlloc(
-        std.testing.io,
-        fixture.base_solv,
-        std.testing.allocator,
-        .limited(64 * 1024 * 1024),
-    );
-    defer std.testing.allocator.free(cached_solv);
     try fixture.tmp.dir.deleteFile(std.testing.io, fixture.base_repomd);
-    try fixture.tmp.dir.deleteFile(std.testing.io, fixture.base_solv);
     args.nRefresh = 0;
     const result = TDNFRefreshSack(handle, alternate, 1);
     try fixture.tmp.dir.createDirPath(std.testing.io, repodata_dir);
@@ -4015,15 +3911,6 @@ test "alternate sack repository failure preserves exact state" {
     try fixture.tmp.dir.writeFile(std.testing.io, .{
         .sub_path = primary_path,
         .data = cached_primary,
-    });
-    try fixture.tmp.dir.createDirPath(
-        std.testing.io,
-        std.fs.path.dirname(fixture.base_solv) orelse
-            return error.TestUnexpectedResult,
-    );
-    try fixture.tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = fixture.base_solv,
-        .data = cached_solv,
     });
     try std.testing.expect(result != 0);
     try std.testing.expectEqual(@as(c_int, 0), args.nRefresh);

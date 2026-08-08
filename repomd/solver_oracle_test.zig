@@ -2787,7 +2787,7 @@ test "downgrade and reinstall require exact package selections" {
     }
 }
 
-test "versioned capability without EVR matches solvbridge encoding" {
+test "versioned capability without EVR matches oracle bridge encoding" {
     const capabilities = [_]metadata.Relation{
         .{
             .name = "versioned-without-evr",

@@ -3,7 +3,7 @@ const metadata = @import("model.zig");
 const solver_model = @import("solver_model.zig");
 const solver_rules = @import("solver_rules.zig");
 const solver_visibility = @import("solver_visibility.zig");
-const solv_bridge = @import("solvbridge.zig");
+const solv_bridge = @import("solver_oracle_bridge.zig");
 
 const c = solv_bridge.libsolv;
 

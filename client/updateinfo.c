@@ -31,7 +31,7 @@ TDNFUpdateInfoSummary(
     char **ppszLines = NULL;
     uint32_t dwLineCount = 0;
 
-    if(!pTdnf || !pTdnf->pSack || !pTdnf->pSack->pPool ||
+    if(!pTdnf || !pTdnf->pSack ||
        !ppSummary)
     {
         dwError = ERROR_TDNF_INVALID_PARAMETER;

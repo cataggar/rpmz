@@ -67,7 +67,7 @@ its own CMake component — the source layout is unchanged):
 | `llconf/` | `libtdnfllconf.a` | vendored ini/config parser (`.repo` and `tdnf.conf`) |
 | `jsondump/` | `libjsondump.a` | JSON output used by `tdnf <cmd> -j` |
 | `history/` | `libtdnfhistory.a` + `tdnf-history-util` | sqlite-backed transaction history |
-| `solv/` | `libtdnfsolv.a` | thin wrapper around libsolv (pool/repo/query/goal) |
+| `repomd/` | (part of `libtdnf`) | native repository models, query engine, and authoritative solver |
 | `client/` | `libtdnf.so` | the public library — implements every `TDNF*` API in `include/tdnf.h` |
 | `tools/cli/` | `tdnf` + `libtdnfcli.so` | argument parsing, output formatting, subcommand dispatch |
 | `tools/config/` | `tdnf-config` | read/edit `tdnf.conf` |
@@ -76,7 +76,8 @@ its own CMake component — the source layout is unchanged):
 | `pytests/` | (test only) | pytest-based integration tests |
 
 Dependency direction is one-way: `tools/cli` → `client` (libtdnf) →
-`solv` → `common`. The two built-in plugins are called directly from the repository lifecycle.
+`repomd` → `common`. The two built-in plugins are called directly from
+the repository lifecycle.
 
 Public headers live in `include/`. A component must **never** include a
 header from another component's source folder — only headers under
@@ -93,7 +94,6 @@ that an in-cache layout would create.
 
 - `client/config.h` — `PACKAGE_NAME`, `VERSION`, `SYSTEM_LIBDIR`
 - `history/config.h` — `HISTORY_DB_DIR`
-- `plugins/{metalink,repogpgcheck}/config.h` — plugin name + version
 
 Pkg-config files and the `tdnf-automatic` script are produced via
 `b.addConfigHeader(.autoconf_at, ...)` into the build cache, then
@@ -230,7 +230,8 @@ they are defined; defined at the bottom of the file.
   blind spots (a green `libsolv-oracle-test` has shipped three real
   bugs), how to diff two binaries without false positives, why
   `Solv*` call-site counts are a gameable proxy, and the
-  no-silent-fallback rule.
+  no-silent-fallback rule. The oracle is explicitly opt-in:
+  `zig build -Dlibsolv-oracle=true libsolv-oracle-test`.
 - `client/config.h`, `history/config.h`, the plugin `config.h`s, and
   the `.pc` files are **generated**. Edit the `.in` files, not the
   outputs.

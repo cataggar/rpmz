@@ -1,21 +1,10 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const model = @import("model.zig");
 const primary_xml = @import("primary.zig");
 const filelists_xml = @import("filelists.zig");
 const other_xml = @import("other.zig");
 const rpmpkg = @import("rpmpkg.zig");
 const rpm_header = @import("rpm_header");
-const solv_bridge = @import("solvbridge.zig");
-
-const c = if (builtin.is_test) @cImport({
-    @cDefine("_GNU_SOURCE", "1");
-    @cInclude("stdio.h");
-    @cInclude("solv/pool.h");
-    @cInclude("solv/repo.h");
-    @cInclude("solv/solvable.h");
-    @cInclude("solv/knownid.h");
-}) else struct {};
 
 pub const DependencyQueryKind = enum {
     provides,
@@ -644,9 +633,6 @@ test "package metadata and source accessors match primary metadata" {
     defer arena_state.deinit();
     const fixture = try parsePrimaryAccessorFixture(arena_state.allocator());
 
-    var libsolv = try loadLibsolvFixture(arena_state.allocator(), &fixture.parsed);
-    defer libsolv.deinit();
-
     const pkg_one = fixture.parsed.packages[0];
     try testing.expectEqualStrings("pkg-one", name(pkg_one));
     try testing.expectEqual(@as(?u32, 7), epoch(pkg_one));
@@ -687,16 +673,6 @@ test "package metadata and source accessors match primary metadata" {
     defer testing.allocator.free(pkg_one_nevra);
     try testing.expectEqualStrings("pkg-one-7:1.2.3-4.x86_64", pkg_one_nevra);
 
-    const libsolv_pkg_one = libsolv.findPackage("pkg-one") orelse return error.TestExpectedEqual;
-    try testing.expectEqualStrings(
-        std.mem.span(c.solvable_lookup_str(libsolv_pkg_one, c.SOLVABLE_EVR) orelse return error.TestExpectedEqual),
-        pkg_one_evr,
-    );
-    try testing.expectEqualStrings(
-        std.mem.span(c.pool_solvable2str(libsolv.pool, libsolv_pkg_one)),
-        pkg_one_nevra,
-    );
-
     try testing.expectEqualStrings("pkg-one", sourceName(pkg_one).?);
     try testing.expectEqualStrings("src", sourceArch(pkg_one).?);
     const pkg_one_source_evr = (try sourceEvrString(testing.allocator, pkg_one)) orelse return error.TestExpectedEqual;
@@ -705,10 +681,6 @@ test "package metadata and source accessors match primary metadata" {
     const pkg_one_source_pkg = (try sourcePackageString(testing.allocator, pkg_one)) orelse return error.TestExpectedEqual;
     defer testing.allocator.free(pkg_one_source_pkg);
     try testing.expectEqualStrings("pkg-one-7:1.2.3-4.src", pkg_one_source_pkg);
-
-    const libsolv_pkg_one_source = try libsolvSourcePackageString(testing.allocator, &libsolv, libsolv_pkg_one);
-    defer testing.allocator.free(libsolv_pkg_one_source);
-    try testing.expectEqualStrings(libsolv_pkg_one_source, pkg_one_source_pkg);
 
     const pkg_sub = fixture.parsed.packages[1];
     const pkg_sub_evr = try evrString(testing.allocator, pkg_sub);
@@ -719,11 +691,6 @@ test "package metadata and source accessors match primary metadata" {
     const pkg_sub_source_pkg = (try sourcePackageString(testing.allocator, pkg_sub)) orelse return error.TestExpectedEqual;
     defer testing.allocator.free(pkg_sub_source_pkg);
     try testing.expectEqualStrings("pkg-src-2.0-1.src", pkg_sub_source_pkg);
-
-    const libsolv_pkg_sub = libsolv.findPackage("pkg-sub") orelse return error.TestExpectedEqual;
-    const libsolv_pkg_sub_source = try libsolvSourcePackageString(testing.allocator, &libsolv, libsolv_pkg_sub);
-    defer testing.allocator.free(libsolv_pkg_sub_source);
-    try testing.expectEqualStrings(libsolv_pkg_sub_source, pkg_sub_source_pkg);
 
     const pkg_depdup = fixture.parsed.packages[2];
     try testing.expect(sourceName(pkg_depdup) == null);
@@ -738,14 +705,6 @@ test "dependency accessors match libsolv formatting and filter semantics" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const built = try buildRpmpkgAccessorFixture(arena_state.allocator());
-
-    for (built.relations) |relation| {
-        const actual = try formatRelation(testing.allocator, relation);
-        defer testing.allocator.free(actual);
-        const expected = try libsolvDependencyString(testing.allocator, relation);
-        defer testing.allocator.free(expected);
-        try testing.expectEqualStrings(expected, actual);
-    }
 
     const provides = try providesStrings(testing.allocator, built.package, built.relations);
     defer provides.deinit();
@@ -949,109 +908,6 @@ fn parsePrimaryAccessorFixture(allocator: std.mem.Allocator) !PrimaryAccessorFix
     return .{
         .parsed = parsed,
         .primary_xml = primary_xml_text,
-    };
-}
-
-const LibsolvFixture = struct {
-    pool: *c.Pool,
-    repo: *c.Repo,
-
-    fn deinit(self: *LibsolvFixture) void {
-        c.repo_free(self.repo, 1);
-        c.pool_free(self.pool);
-    }
-
-    fn findPackage(self: *const LibsolvFixture, wanted_name: []const u8) ?*c.Solvable {
-        var solvid: c.Id = self.repo.*.start;
-        while (solvid < self.repo.*.end) : (solvid += 1) {
-            const solvable = c.pool_id2solvable(self.pool, solvid) orelse continue;
-            if (std.mem.eql(u8, std.mem.span(c.pool_id2str(self.pool, solvable.*.name)), wanted_name)) {
-                return solvable;
-            }
-        }
-        return null;
-    }
-};
-
-fn loadLibsolvFixture(
-    allocator: std.mem.Allocator,
-    primary: *const model.ParsedPrimary,
-) !LibsolvFixture {
-    const pool = c.pool_create() orelse return error.OutOfMemory;
-    errdefer c.pool_free(pool);
-
-    const repo = c.repo_create(pool, "pkgquery-test") orelse return error.OutOfMemory;
-    errdefer c.repo_free(repo, 1);
-
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const repository = model.RepositoryModel{
-        .packages = primary.packages,
-        .relations = primary.relations,
-        .files = primary.files,
-        .changelogs = primary.changelogs,
-        .has_filelists = primary.files.len != 0,
-        .has_other = primary.changelogs.len != 0,
-    };
-    try solv_bridge.buildRepositoryIntoRepo(arena_state.allocator(), @ptrCast(repo), &repository);
-
-    return .{ .pool = pool, .repo = repo };
-}
-
-fn libsolvSourcePackageString(
-    allocator: std.mem.Allocator,
-    fixture: *const LibsolvFixture,
-    solvable: *c.Solvable,
-) ![]const u8 {
-    const source_name = if (c.solvable_lookup_str(solvable, c.SOLVABLE_SOURCENAME)) |value|
-        std.mem.span(value)
-    else
-        std.mem.span(c.pool_id2str(fixture.pool, solvable.*.name));
-    const source_arch = c.solvable_lookup_str(solvable, c.SOLVABLE_SOURCEARCH) orelse return error.TestExpectedEqual;
-    const source_evr = if (c.solvable_lookup_str(solvable, c.SOLVABLE_SOURCEEVR)) |value|
-        std.mem.span(value)
-    else
-        std.mem.span(c.solvable_lookup_str(solvable, c.SOLVABLE_EVR) orelse return error.TestExpectedEqual);
-    const normalized_source_evr = if (std.mem.startsWith(u8, source_evr, "0:"))
-        source_evr[2..]
-    else
-        source_evr;
-    return std.fmt.allocPrint(
-        allocator,
-        "{s}-{s}.{s}",
-        .{ source_name, normalized_source_evr, std.mem.span(source_arch) },
-    );
-}
-
-fn libsolvDependencyString(allocator: std.mem.Allocator, relation: model.Relation) ![]const u8 {
-    const pool = c.pool_create() orelse return error.OutOfMemory;
-    defer c.pool_free(pool);
-
-    const name_z = try allocator.dupeZ(u8, relation.name);
-    defer allocator.free(name_z);
-    const name_id = c.pool_str2id(pool, name_z, 1);
-    if (relation.comparison == .none or
-        (relation.epoch == null and relation.version == null and relation.release == null))
-    {
-        return allocator.dupe(u8, std.mem.span(c.pool_dep2str(pool, name_id)));
-    }
-
-    const evr = try formatEvrText(allocator, relation.epoch, relation.version, relation.release);
-    defer allocator.free(evr);
-    const evr_z = try allocator.dupeZ(u8, evr);
-    defer allocator.free(evr_z);
-    const dep_id = c.pool_rel2id(pool, name_id, c.pool_str2id(pool, evr_z, 1), compareOpToSolv(relation.comparison), 1);
-    return allocator.dupe(u8, std.mem.span(c.pool_dep2str(pool, dep_id)));
-}
-
-fn compareOpToSolv(op: model.CompareOp) c_int {
-    return switch (op) {
-        .none => 0,
-        .eq => c.REL_EQ,
-        .lt => c.REL_LT,
-        .le => c.REL_LT | c.REL_EQ,
-        .gt => c.REL_GT,
-        .ge => c.REL_GT | c.REL_EQ,
     };
 }
 
