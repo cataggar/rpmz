@@ -953,12 +953,18 @@ pub fn build(b: *Build) void {
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addCSourceFiles(.{
             .root = b.path("common"),
-            .files = &.{ "memory_printf_shim.c", "memory_test_shim.c", "log_shim.c", "joinpath_shim.c", "utils_test_shim.c" },
+            .files = &.{ "memory_printf_shim.c", "log_shim.c", "joinpath_shim.c" },
             .flags = &tdnf_cflags,
         });
+        test_mod.linkLibrary(llconf_lib);
         test_mod.linkLibrary(rpmzig_lib);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
+        const common_test_step = b.step(
+            "common-test",
+            "Run common Zig unit tests",
+        );
+        common_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
     }
 
