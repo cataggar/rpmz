@@ -1798,7 +1798,20 @@ pub fn build(b: *Build) void {
         test_mod.addImport("client_root", tdnf_so_mod);
         test_mod.addImport("client_abi", client_abi_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
-        const tests = b.addTest(.{ .root_module = test_mod });
+        const tests = b.addTest(.{
+            .name = "client-repositories-integration-test",
+            .root_module = test_mod,
+        });
+        const run_tests = b.addRunArtifact(tests);
+        client_repositories_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const tests = b.addTest(.{
+            .name = "client-repositories-production-test",
+            .root_module = tdnf_so_mod,
+            .filters = &.{"repositories production:"},
+        });
         const run_tests = b.addRunArtifact(tests);
         client_repositories_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);

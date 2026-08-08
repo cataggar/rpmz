@@ -73,6 +73,11 @@ const ScanFailure = struct {
     triggered: bool = false,
 };
 
+const CloseFailure = struct {
+    errno_value: c_int,
+    triggered: bool = false,
+};
+
 const SyncFailureStage = enum {
     file,
     source_directory,
@@ -86,6 +91,7 @@ const SyncFailure = struct {
 };
 
 var injected_scan_failure: ?ScanFailure = null;
+var injected_close_failure: ?CloseFailure = null;
 var injected_sync_failure: ?SyncFailure = null;
 var sync_stage_counts = [_]usize{0} ** 3;
 
@@ -546,6 +552,26 @@ fn repoFdopendir(fd: c_int) ?*DIR {
     return fdopendir(fd);
 }
 
+fn closeRepoScanFd(fd: c_int) c_int {
+    if (builtin.is_test) {
+        if (injected_close_failure) |*failure| {
+            if (!failure.triggered) {
+                failure.triggered = true;
+                _ = std.c.close(fd);
+                std.c._errno().* = failure.errno_value;
+                return -1;
+            }
+        }
+    }
+    return std.c.close(fd);
+}
+
+fn closeRepoScanFdPreservingError(fd: c_int, errno_value: c_int) u32 {
+    _ = closeRepoScanFd(fd);
+    std.c._errno().* = errno_value;
+    return systemErrorFrom(errno_value);
+}
+
 fn readRepoEntry(dir: *DIR) ?*Dirent {
     if (injectScanFailure(.readdir)) return null;
     return readdir(dir);
@@ -734,8 +760,8 @@ pub export fn TDNFLoadRepoData(handle_opt: ?*Tdnf, output_opt: ?*?*RepoData) u32
     const scan_fd = duplicateRepoDirectory(repo_dir_fd);
     if (scan_fd < 0) return systemError();
     const dir = repoFdopendir(scan_fd) orelse {
-        _ = std.c.close(scan_fd);
-        return systemError();
+        const errno_value = std.c._errno().*;
+        return closeRepoScanFdPreservingError(scan_fd, errno_value);
     };
     defer _ = closedir(dir);
     while (true) {
@@ -1814,7 +1840,7 @@ pub export fn TDNFDownloadMetadata(
     return 0;
 }
 
-test "repository path validation rejects traversal and absolute metadata" {
+test "repositories production: path validation rejects traversal and absolute metadata" {
     try std.testing.expect(safeRelativePath("repodata/primary.xml.gz"));
     try std.testing.expect(!safeRelativePath("../outside"));
     try std.testing.expect(!safeRelativePath("repodata/../outside"));
@@ -1822,7 +1848,7 @@ test "repository path validation rejects traversal and absolute metadata" {
     try std.testing.expect(safeRelativePath("repodata//primary"));
 }
 
-test "repository ABI remains canonical" {
+test "repositories production: ABI remains canonical" {
     try std.testing.expectEqual(@sizeOf(abi.C.TDNF_REPO_DATA), @sizeOf(RepoData));
     try std.testing.expectEqual(@sizeOf(abi.C.TDNF_REPO_METADATA), @sizeOf(RepoMetadata));
 }
@@ -1836,17 +1862,18 @@ fn readTestFile(path: []const u8) ![]u8 {
     return reader.interface.allocRemaining(std.testing.allocator, .limited(4096));
 }
 
-fn testRepoHandle(repo_dir: [*:0]u8, setopts: *CnfNode) struct {
+const TestRepoFixture = struct {
     args: abi.CmdArgs,
     conf: Conf,
     handle: Tdnf,
-} {
-    const value = .{
+};
+
+fn testRepoHandle(repo_dir: [*:0]u8, setopts: *CnfNode) TestRepoFixture {
+    return .{
         .args = abi.CmdArgs{ .cn_setopts = setopts },
         .conf = Conf{ .pszRepoDir = repo_dir },
         .handle = Tdnf{},
     };
-    return value;
 }
 
 fn expectProductionScanFailure(
@@ -1871,7 +1898,7 @@ fn expectProductionScanFailure(
     try std.testing.expectEqual(@as(?*RepoData, null), repos);
 }
 
-test "production repository scan propagates syscall failures" {
+test "repositories production: scan propagates syscall failures" {
     const cwd = std.Io.Dir.cwd();
     const io = std.testing.io;
     const root = try std.fmt.allocPrintSentinel(
@@ -1937,7 +1964,47 @@ test "production repository scan propagates syscall failures" {
     );
 }
 
-test "production repository scan skips fifo socket device and symlink promptly" {
+test "repositories production: fdopendir error survives cleanup close failure" {
+    const cwd = std.Io.Dir.cwd();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        ".zig-cache/repository-close-error-{d}",
+        .{std.os.linux.getpid()},
+        0,
+    );
+    defer std.testing.allocator.free(root);
+    cwd.deleteTree(io, root) catch {};
+    defer cwd.deleteTree(io, root) catch {};
+    try cwd.createDirPath(io, root);
+
+    var setopts = CnfNode{};
+    injected_scan_failure = .{
+        .stage = .fdopendir,
+        .errno_value = @intFromEnum(std.c.E.MFILE),
+    };
+    defer injected_scan_failure = null;
+    injected_close_failure = .{
+        .errno_value = @intFromEnum(std.c.E.IO),
+    };
+    defer injected_close_failure = null;
+    var fixture = testRepoHandle(root.ptr, &setopts);
+    fixture.handle = .{ .pArgs = &fixture.args, .pConf = &fixture.conf };
+    var repos: ?*RepoData = @ptrFromInt(@alignOf(RepoData));
+    try std.testing.expectEqual(
+        systemErrorFrom(@intFromEnum(std.c.E.MFILE)),
+        TDNFLoadRepoData(&fixture.handle, &repos),
+    );
+    try std.testing.expect(injected_scan_failure.?.triggered);
+    try std.testing.expect(injected_close_failure.?.triggered);
+    try std.testing.expectEqual(
+        @intFromEnum(std.c.E.MFILE),
+        std.c._errno().*,
+    );
+    try std.testing.expectEqual(@as(?*RepoData, null), repos);
+}
+
+test "repositories production: scan skips fifo socket device and symlink promptly" {
     const cwd = std.Io.Dir.cwd();
     const io = std.testing.io;
     const root = try std.fmt.allocPrintSentinel(
@@ -2036,7 +2103,7 @@ test "production repository scan skips fifo socket device and symlink promptly" 
     try std.testing.expectEqual(@as(?*RepoData, null), repos.?.pNext);
 }
 
-test "repository download temp names are high entropy and unique" {
+test "repositories production: download temp names are high entropy and unique" {
     var names: [32][96]u8 = undefined;
     for (&names, 0..) |*name, index| {
         try std.testing.expectEqual(@as(u32, 0), randomTempName(name));
@@ -2061,7 +2128,7 @@ test "repository download temp names are high entropy and unique" {
     }
 }
 
-test "metadata and snapshot downloads reject temp and destination symlinks" {
+test "repositories production: metadata and snapshot downloads reject temp and destination symlinks" {
     const cwd = std.Io.Dir.cwd();
     const io = std.testing.io;
     const root = try std.fmt.allocPrint(
@@ -2247,7 +2314,7 @@ test "metadata and snapshot downloads reject temp and destination symlinks" {
     );
 }
 
-test "production metadata download reports fsync failure after committed rename" {
+test "repositories production: metadata download reports fsync failure after committed rename" {
     const cwd = std.Io.Dir.cwd();
     const io = std.testing.io;
     const root = try std.fmt.allocPrint(
@@ -2351,7 +2418,7 @@ test "production metadata download reports fsync failure after committed rename"
     }
 }
 
-test "cross-directory rename syncs both parents and never rolls back" {
+test "repositories production: cross-directory rename syncs both parents and never rolls back" {
     const cwd = std.Io.Dir.cwd();
     const io = std.testing.io;
     const root = try std.fmt.allocPrint(
