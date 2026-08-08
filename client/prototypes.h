@@ -188,68 +188,6 @@ TDNFRefreshSack(
     int nCleanMetadata
     );
 
-//repoutils.c
-
-uint32_t
-TDNFRepoRemoveCacheDir(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo
-    );
-
-uint32_t
-TDNFRepoRemoveCache(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo
-    );
-
-uint32_t
-TDNFRemoveRpmCache(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo
-    );
-
-uint32_t
-TDNFRemoveLastRefreshMarker(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo
-    );
-
-uint32_t
-TDNFRemoveMirrorList(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo
-    );
-
-uint32_t
-TDNFRemoveSnapshot(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo
-    );
-
-uint32_t
-TDNFRemoveTmpRepodata(
-    const char* pszTmpRepodataDir
-    );
-
-uint32_t
-TDNFRemoveSolvCache(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo
-    );
-
-uint32_t
-TDNFRemoveKeysCache(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo
-    );
-
-uint32_t
-TDNFFindRepoById(
-    PTDNF pTdnf,
-    const char* pszRepo,
-    PTDNF_REPO_DATA* ppRepo
-    );
-
 void
 TDNFFreeHistoryInfoItems(
     PTDNF_HISTORY_INFO_ITEM pHistoryItems,
@@ -669,16 +607,6 @@ TDNFGetGPGKeys(
     );
 
 uint32_t
-TDNFGetCachePath(
-    PTDNF pTdnf,
-    PTDNF_REPO_DATA pRepo,
-    const char *pszSubDir,
-    const char *pszFileName,
-    char **ppszPath
-);
-
-
-uint32_t
 TDNFGetRepoMD(
     PTDNF pTdnf,
     PTDNF_REPO_DATA pRepoData,
@@ -824,11 +752,6 @@ TDNFUtilsMakeDir(
     );
 
 uint32_t
-TDNFTouchFile(
-    const char* pszFile
-    );
-
-uint32_t
 TDNFGetReleaseVersion(
    const char* pszRootDir,
    const char* pszDistroVerPkg,
@@ -851,13 +774,6 @@ uint32_t
 TDNFParseMetadataExpire(
     const char* pszMetadataExpire,
     long* plMetadataExpire
-    );
-
-uint32_t
-TDNFShouldSyncMetadata(
-    const char* pszRepoDataFolder,
-    long lMetadataExpire,
-    int* pnShouldSync
     );
 
 

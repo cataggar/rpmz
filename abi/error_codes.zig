@@ -1,6 +1,9 @@
 const std = @import("std");
 
 pub const ERROR_TDNF_REPO_PERFORM: u32 = 1006;
+pub const ERROR_TDNF_NO_REPOS: u32 = 1008;
+pub const ERROR_TDNF_REPO_NOT_FOUND: u32 = 1009;
+pub const ERROR_TDNF_INVALID_CONF: u32 = 1010;
 pub const ERROR_TDNF_CONF_FILE_LOAD: u32 = 1002;
 pub const ERROR_TDNF_NO_DISTROVERPKG: u32 = 1022;
 pub const ERROR_TDNF_OPERATION_ABORTED: u32 = 1032;

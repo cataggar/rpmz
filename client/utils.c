@@ -293,61 +293,6 @@ error:
     goto cleanup;
 }
 
-/* update time if file exists, create if not */
-uint32_t
-TDNFTouchFile(
-    const char* pszFile
-    )
-{
-    int32_t fd = 0;
-    mode_t old_mask;
-    uint32_t dwError = 0;
-
-    if (IsNullOrEmptyString(pszFile))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    old_mask = umask(022);
-    fd = creat(pszFile, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-    if (fd < 0)
-    {
-        if (errno == EEXIST)
-        {
-            struct stat st = {0};
-            struct utimbuf times = {0};
-
-            times.actime = st.st_atime;
-            times.modtime = time(NULL);
-            if (utime(pszFile, &times))
-            {
-                dwError = errno;
-                BAIL_ON_TDNF_SYSTEM_ERROR(dwError);
-            }
-        }
-        else
-        {
-            dwError = errno;
-            BAIL_ON_TDNF_SYSTEM_ERROR(dwError);
-        }
-    }
-
-cleanup:
-    if (dwError != ERROR_TDNF_INVALID_PARAMETER)
-    {
-        umask(old_mask);
-    }
-    if (fd >= 0)
-    {
-        close(fd);
-    }
-    return dwError;
-
-error:
-    goto cleanup;
-}
-
 uint32_t
 TdnfGetReleaseVersionConfig(
    const tdnf_rpm_config* pRpmConfig,
@@ -552,67 +497,6 @@ error:
     if(plMetadataExpire)
     {
         *plMetadataExpire = 0;
-    }
-    goto cleanup;
-}
-
-uint32_t
-TDNFShouldSyncMetadata(
-    const char* pszRepoDataFolder,
-    long lMetadataExpire,
-    int* pnShouldSync
-    )
-{
-    uint32_t dwError = 0;
-    int nShouldSync = 0;
-    struct stat st = {0};
-    time_t tCurrent = time(NULL);
-    char* pszMarkerFile = NULL;
-
-    if(!pnShouldSync || IsNullOrEmptyString(pszRepoDataFolder))
-    {
-        dwError = ERROR_TDNF_INVALID_PARAMETER;
-        BAIL_ON_TDNF_ERROR(dwError);
-    }
-
-    dwError = TDNFJoinPath(
-                  &pszMarkerFile,
-                  pszRepoDataFolder,
-                  TDNF_REPO_METADATA_MARKER,
-                  NULL);
-    BAIL_ON_TDNF_ERROR(dwError);
-
-    //Look for the metadata marker file
-    if(stat(pszMarkerFile, &st) == -1)
-    {
-        if(errno == ENOENT)
-        {
-            nShouldSync = 1;
-        }
-        else
-        {
-            dwError = errno;
-            BAIL_ON_TDNF_SYSTEM_ERROR(dwError);
-        }
-    }
-    else
-    {
-        if(difftime(tCurrent, st.st_ctime) > lMetadataExpire)
-        {
-            nShouldSync = 1;
-        }
-    }
-
-    *pnShouldSync = nShouldSync;
-
-cleanup:
-    TDNF_SAFE_FREE_MEMORY(pszMarkerFile);
-    return dwError;
-
-error:
-    if(pnShouldSync)
-    {
-        *pnShouldSync = 0;
     }
     goto cleanup;
 }

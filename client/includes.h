@@ -40,6 +40,7 @@
 #include <tdnf-common-defines.h>
 
 #include "../rpmzig/rpmdb.h"
+#include "repoutils_abi.h"
 
 /* Every C file in client/ uses the native package context. The
    libsolv-confinement-audit build step proves libsolv headers are
