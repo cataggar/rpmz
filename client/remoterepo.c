@@ -233,7 +233,7 @@ TDNFDownloadFileFromRepo(
             dwError = TDNFJoinPath(&pszUrl, pRepo->ppszBaseUrls[i], pszLocation, NULL);
             BAIL_ON_TDNF_ERROR(dwError);
 
-            dwError = TDNFDownloadFile(pTdnf, pRepo, pszUrl, pszFile, pszProgressData);
+            dwError = TDNFDownloadFile(pTdnf, pRepo, pszUrl, pszFile, pszProgressData, 0);
             if (dwError == 0) {
                 break;
             }
@@ -245,7 +245,7 @@ TDNFDownloadFileFromRepo(
     } else {
         /* pszLocation is already an absolute URL (xml:base was absolute), or
            there is no base URL (command line packages): use it directly. */
-        dwError = TDNFDownloadFile(pTdnf, pRepo, pszLocation, pszFile, pszProgressData);
+        dwError = TDNFDownloadFile(pTdnf, pRepo, pszLocation, pszFile, pszProgressData, 0);
     }
     BAIL_ON_TDNF_ERROR(dwError);
 
@@ -262,7 +262,8 @@ TDNFDownloadFile(
     PTDNF_REPO_DATA pRepo,
     const char *pszFileUrl,
     const char *pszFile,
-    const char *pszProgressData
+    const char *pszProgressData,
+    int nRequireHttps
     )
 {
     uint32_t dwError = 0;
@@ -296,6 +297,10 @@ TDNFDownloadFile(
                   &request,
                   &nNoOutput);
     BAIL_ON_TDNF_ERROR(dwError);
+    if(nRequireHttps)
+    {
+        request.nSSLVerify = 1;
+    }
 
     for(i = 0; i <= pRepo->nRetries; i++)
     {
@@ -305,7 +310,9 @@ TDNFDownloadFile(
         }
 
         lStatus = 0;
-        dwError = TDNFZigDownloadFile(&request, &lStatus);
+        dwError = nRequireHttps
+                      ? client_download_https_only(&request, &lStatus)
+                      : TDNFZigDownloadFile(&request, &lStatus);
         if (dwError == 0)
         {
             break;

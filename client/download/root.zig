@@ -59,6 +59,7 @@ const DownloadRequest = struct {
     low_speed_limit: u64,
     low_speed_time_secs: u32,
     max_recv_speed: u64,
+    require_https: bool,
 };
 
 const DownloadOutcome = union(enum) {
@@ -569,6 +570,21 @@ pub export fn TDNFZigDownloadFile(
     raw_request: ?*const TDNF_ZIG_DOWNLOAD_REQUEST,
     out_status: ?*c_long,
 ) u32 {
+    return downloadFile(raw_request, out_status, false);
+}
+
+pub export fn client_download_https_only(
+    raw_request: ?*const TDNF_ZIG_DOWNLOAD_REQUEST,
+    out_status: ?*c_long,
+) u32 {
+    return downloadFile(raw_request, out_status, true);
+}
+
+fn downloadFile(
+    raw_request: ?*const TDNF_ZIG_DOWNLOAD_REQUEST,
+    out_status: ?*c_long,
+    require_https: bool,
+) u32 {
     clearError();
     if (out_status) |status| {
         status.* = 0;
@@ -577,7 +593,7 @@ pub export fn TDNFZigDownloadFile(
         setError("null download request", .{});
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     };
-    const request = parseRequest(request_ptr) catch |err| {
+    const request = parseRequest(request_ptr, require_https) catch |err| {
         if (err == error.InvalidParameter) {
             ensureErrorSet("invalid download request", .{});
             return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -598,7 +614,7 @@ pub export fn TDNFZigDownloadFile(
             ensureErrorSet("download configuration not yet supported by zig transport", .{});
             return errors.ERROR_TDNF_CALL_NOT_SUPPORTED;
         }
-        if (err == error.InvalidUrl) {
+        if (err == error.InvalidUrl or err == error.HttpsRequired) {
             ensureErrorSet("invalid URL: {s}", .{request.url});
             return errors.ERROR_TDNF_URL_INVALID;
         }
@@ -632,7 +648,10 @@ pub export fn TDNFZigDownloadFile(
     return 0;
 }
 
-fn parseRequest(raw_request: *const TDNF_ZIG_DOWNLOAD_REQUEST) !DownloadRequest {
+fn parseRequest(
+    raw_request: *const TDNF_ZIG_DOWNLOAD_REQUEST,
+    require_https: bool,
+) !DownloadRequest {
     const url = requiredSpan(raw_request.pszUrl) orelse return error.InvalidParameter;
     const destination = requiredSpan(raw_request.pszDestination) orelse return error.InvalidParameter;
 
@@ -655,6 +674,7 @@ fn parseRequest(raw_request: *const TDNF_ZIG_DOWNLOAD_REQUEST) !DownloadRequest 
         .low_speed_limit = try longToU64(raw_request.nLowSpeedLimit),
         .low_speed_time_secs = try longToU32(raw_request.nLowSpeedTime),
         .max_recv_speed = try longToU64(raw_request.nMaxRecvSpeed),
+        .require_https = require_https,
     };
 }
 
@@ -663,6 +683,10 @@ fn downloadWithIo(allocator: Allocator, io: Io, request: DownloadRequest) !u16 {
         setError("invalid URL: {s}", .{request.url});
         return error.InvalidUrl;
     };
+    if (request.require_https and !schemeEq(current_uri.scheme, "https")) {
+        setError("signing-key download requires HTTPS: {s}", .{request.url});
+        return error.HttpsRequired;
+    }
 
     var std_transport: ?StdHttpTransport = null;
     defer if (std_transport) |*transport| transport.deinit();
@@ -690,6 +714,15 @@ fn downloadWithIo(allocator: Allocator, io: Io, request: DownloadRequest) !u16 {
         switch (outcome) {
             .status => |status| return status,
             .redirect => |next_uri| {
+                if (request.require_https and
+                    !schemeEq(next_uri.scheme, "https"))
+                {
+                    setError(
+                        "refusing HTTPS downgrade redirect while downloading {s}",
+                        .{request.url},
+                    );
+                    return error.HttpsRequired;
+                }
                 redirects += 1;
                 if (redirects > RedirectLimit) {
                     setError("too many redirects while downloading {s}", .{request.url});
@@ -1087,6 +1120,7 @@ const ServerOptions = struct {
     require_client_auth: bool = false,
     expected_authorization: ?[]const u8 = null,
     body: []const u8 = "hello from zig transport\n",
+    redirect_location: ?[]const u8 = null,
 };
 
 const ServerContext = struct {
@@ -1133,6 +1167,14 @@ fn serveOne(io: Io, server: *Io.net.Server, options: ServerOptions) !void {
             try writer.interface.flush();
             return;
         }
+        if (options.redirect_location) |location| {
+            try writer.interface.print(
+                "HTTP/1.1 302 Found\r\nLocation: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                .{location},
+            );
+            try writer.interface.flush();
+            return;
+        }
         try writer.interface.print(
             "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
             .{ options.body.len, options.body },
@@ -1169,6 +1211,16 @@ fn serveOne(io: Io, server: *Io.net.Server, options: ServerOptions) !void {
     const auth_ok = try requestAuthorizationMatches(&conn_reader.interface, options.expected_authorization);
     if (!auth_ok) {
         try conn.writeAll("HTTP/1.1 401 Unauthorized\r\nContent-Length: 4\r\nConnection: close\r\n\r\nauth");
+        return;
+    }
+    if (options.redirect_location) |location| {
+        var redirect_buf: [512]u8 = undefined;
+        const redirect = try std.fmt.bufPrint(
+            &redirect_buf,
+            "HTTP/1.1 302 Found\r\nLocation: {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            .{location},
+        );
+        try conn.writeAll(redirect);
         return;
     }
 
@@ -1305,7 +1357,6 @@ test "http fetch supports basic auth" {
     const z_dest = try dupeZ(std.testing.allocator, dest);
     defer std.testing.allocator.free(z_dest);
     deleteFileIfExists(io, z_dest);
-
     const request: TDNF_ZIG_DOWNLOAD_REQUEST = .{
         .pszUrl = z_url.ptr,
         .pszDestination = z_dest.ptr,
@@ -1419,6 +1470,71 @@ test "insecure https fetch succeeds" {
     const body = try readFileAlloc(std.testing.allocator, io, z_dest);
     defer std.testing.allocator.free(body);
     try std.testing.expectEqualStrings("insecure https body\n", body);
+}
+
+test "HTTPS-required download rejects downgrade redirect" {
+    const io = std.testing.io;
+    try ensureScratchDir(io);
+
+    const server = try spawnServer(.{
+        .tls_mode = true,
+        .redirect_location = "http://127.0.0.1:9/replaced-key",
+    });
+    defer server.thread.join();
+
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://localhost:{d}/repository-key",
+        .{server.port},
+    );
+    defer std.testing.allocator.free(url);
+    const z_url = try dupeZ(std.testing.allocator, url);
+    defer std.testing.allocator.free(z_url);
+    const dest = try scratchPath(std.testing.allocator, "https-downgrade.txt");
+    defer std.testing.allocator.free(dest);
+    const z_dest = try dupeZ(std.testing.allocator, dest);
+    defer std.testing.allocator.free(z_dest);
+    deleteFileIfExists(io, z_dest);
+    const ca_path = try Io.Dir.cwd().realPathFileAlloc(
+        io,
+        "client/download/fixtures/ca-cert.pem",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(ca_path);
+    const z_ca_path = try dupeZ(std.testing.allocator, ca_path);
+    defer std.testing.allocator.free(z_ca_path);
+
+    const request: TDNF_ZIG_DOWNLOAD_REQUEST = .{
+        .pszUrl = z_url.ptr,
+        .pszDestination = z_dest.ptr,
+        .pfnProgress = null,
+        .pProgressData = null,
+        .pszUserAgent = null,
+        .pszProxy = null,
+        .pszProxyUserPwd = null,
+        .pszUserName = null,
+        .pszPassword = null,
+        .pszSSLCaCert = z_ca_path.ptr,
+        .pszSSLClientCert = null,
+        .pszSSLClientKey = null,
+        .nSSLVerify = 1,
+        .nConnectTimeout = 0,
+        .nTimeout = 0,
+        .nLowSpeedLimit = 0,
+        .nLowSpeedTime = 0,
+        .nMaxRecvSpeed = 0,
+    };
+    var status: c_long = 0;
+    try std.testing.expectEqual(
+        errors.ERROR_TDNF_URL_INVALID,
+        client_download_https_only(&request, &status),
+    );
+    try std.testing.expectEqual(@as(c_long, 0), status);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        std.mem.span(TDNFZigDownloadLastError()),
+        "downgrade",
+    ) != null);
 }
 
 test "file uri copies data" {

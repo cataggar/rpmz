@@ -1160,6 +1160,10 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
+    const client_download_test_step = b.step(
+        "client-download-test",
+        "Run Zig HTTP/TLS transport tests",
+    );
     {
         const test_mod = b.createModule(.{
             .root_source_file = b.path("client/download/root.zig"),
@@ -1173,6 +1177,7 @@ pub fn build(b: *Build) void {
         });
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
+        client_download_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
     }
 

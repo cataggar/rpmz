@@ -121,6 +121,7 @@ const Production = if (builtin.is_test) struct {
         url: ?[*:0]const u8,
         destination: ?[*:0]const u8,
         progress: ?[*:0]const u8,
+        require_https: c_int,
     ) callconv(.c) u32;
     extern fn TDNFDownloadFileFromRepo(
         tdnf: ?*Tdnf,
@@ -149,7 +150,7 @@ const Production = if (builtin.is_test) struct {
         destination: ?[*:0]const u8,
         progress: ?[*:0]const u8,
     ) u32 {
-        return TDNFDownloadFile(tdnf, repo, url, destination, progress);
+        return TDNFDownloadFile(tdnf, repo, url, destination, progress, 0);
     }
 
     fn downloadFileFromRepo(

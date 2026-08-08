@@ -173,7 +173,14 @@ TDNFDownloadFile(
     PTDNF_REPO_DATA pRepo,
     const char *pszFileUrl,
     const char *pszFile,
-    const char *pszProgressData
+    const char *pszProgressData,
+    int nRequireHttps
+    );
+
+uint32_t
+client_download_https_only(
+    const TDNF_ZIG_DOWNLOAD_REQUEST *pRequest,
+    long *pnResponseCode
     );
 
 uint32_t

@@ -55,10 +55,6 @@ extern fn TDNFYesOrNo(
     question: ?[*:0]const u8,
     answer: *c_int,
 ) callconv(.c) u32;
-extern fn TDNFUriIsRemote(
-    uri: ?[*:0]const u8,
-    remote: *c_int,
-) callconv(.c) u32;
 extern fn TDNFPathFromUri(
     uri: ?[*:0]const u8,
     path: *?[*:0]u8,
@@ -90,6 +86,7 @@ extern fn TDNFDownloadFile(
     url: ?[*:0]const u8,
     path: ?[*:0]const u8,
     progress: ?[*:0]const u8,
+    require_https: c_int,
 ) callconv(.c) u32;
 extern fn log_console(level: c_int, format: [*:0]const u8, ...) callconv(.c) void;
 extern fn access(path: [*:0]const u8, mode: c_int) callconv(.c) c_int;
@@ -140,7 +137,6 @@ const Ops = struct {
     read_all: *const fn (?*anyopaque, [*:0]const u8, *?[*:0]u8, *c_int) u32,
     get_keys: *const fn (?*anyopaque, *Tdnf, *Repo, *?[*]?[*:0]u8) u32,
     yes_no: *const fn (?*anyopaque, ?*abi.CmdArgs, [*:0]const u8, *c_int) u32,
-    uri_remote: *const fn (?*anyopaque, [*:0]const u8, *c_int) u32,
     path_from_uri: *const fn (?*anyopaque, [*:0]const u8, *?[*:0]u8) u32,
     fetch_remote: *const fn (?*anyopaque, *Tdnf, *Repo, [*:0]const u8, *?[*:0]u8) u32,
     import_key: *const fn (?*anyopaque, *TxnConfig, []const u8) u32,
@@ -209,14 +205,6 @@ fn productionYesNo(
     answer: *c_int,
 ) u32 {
     return TDNFYesOrNo(args, question, answer);
-}
-
-fn productionUriRemote(
-    _: ?*anyopaque,
-    uri: [*:0]const u8,
-    remote: *c_int,
-) u32 {
-    return TDNFUriIsRemote(uri, remote);
 }
 
 fn productionPathFromUri(
@@ -371,7 +359,6 @@ const production_ops = Ops{
     .read_all = &productionReadAll,
     .get_keys = &productionGetKeys,
     .yes_no = &productionYesNo,
-    .uri_remote = &productionUriRemote,
     .path_from_uri = &productionPathFromUri,
     .fetch_remote = &productionFetchRemote,
     .import_key = &productionImportKey,
@@ -455,6 +442,58 @@ fn mapSignatureOutcome(outcome: c_int) u32 {
             return ERROR_TDNF_RPM_CHECK;
         },
     }
+}
+
+const KeyLocation = enum {
+    https,
+    file_uri,
+    local_path,
+};
+
+fn classifyKeyLocation(value: [*:0]const u8) error{InvalidKeyLocation}!KeyLocation {
+    const text = std.mem.span(value);
+    if (text.len == 0 or
+        std.ascii.isWhitespace(text[0]) or
+        std.ascii.isWhitespace(text[text.len - 1]))
+    {
+        return error.InvalidKeyLocation;
+    }
+
+    const colon = std.mem.indexOfScalar(u8, text, ':') orelse
+        return .local_path;
+    const first_separator = std.mem.indexOfAny(u8, text, "/\\");
+    if (first_separator != null and colon > first_separator.?)
+        return .local_path;
+    if (colon == 0) return error.InvalidKeyLocation;
+    for (text[0..colon], 0..) |char, index| {
+        const valid = std.ascii.isAlphabetic(char) or
+            (index != 0 and
+                (std.ascii.isDigit(char) or char == '+' or
+                    char == '-' or char == '.'));
+        if (!valid) return error.InvalidKeyLocation;
+    }
+
+    const remainder = text[colon + 1 ..];
+    if (!std.mem.startsWith(u8, remainder, "//"))
+        return error.InvalidKeyLocation;
+    const scheme = text[0..colon];
+    if (std.ascii.eqlIgnoreCase(scheme, "http"))
+        return error.InvalidKeyLocation;
+    const parsed = std.Uri.parse(text) catch
+        return error.InvalidKeyLocation;
+    if (std.ascii.eqlIgnoreCase(scheme, "file")) {
+        if (parsed.path.percent_encoded.len <= 1 or parsed.fragment != null)
+            return error.InvalidKeyLocation;
+        return .file_uri;
+    }
+    if (!std.ascii.eqlIgnoreCase(scheme, "https"))
+        return error.InvalidKeyLocation;
+
+    if (parsed.host == null or parsed.fragment != null)
+    {
+        return error.InvalidKeyLocation;
+    }
+    return .https;
 }
 
 fn gpgCheckPackage(
@@ -571,33 +610,46 @@ fn gpgCheckPackage(
 
     for (0..configured_count) |index| {
         const key_uri = keys.?[index].?;
+        const location = classifyKeyLocation(key_uri) catch
+            return ERROR_TDNF_KEYURL_INVALID;
         log_console(LOG_INFO, "importing key from %s\n", key_uri);
         var answer: c_int = 0;
         result = ops.yes_no(ops.context, tdnf.pArgs, "Is this ok [y/N]: ", &answer);
         if (result != 0) return result;
         if (answer == 0) return errors.ERROR_TDNF_OPERATION_ABORTED;
 
-        var remote: c_int = 0;
-        result = ops.uri_remote(ops.context, key_uri, &remote);
-        if (result == errors.ERROR_TDNF_URL_INVALID)
-            result = ERROR_TDNF_KEYURL_INVALID;
-        if (result != 0) return result;
+        var owned_local_key: ?[*:0]u8 = null;
+        defer freeValue(ops, owned_local_key);
+        const local_key: [*:0]const u8 = switch (location) {
+            .https => blk: {
+                result = ops.fetch_remote(
+                    ops.context,
+                    tdnf,
+                    repo,
+                    key_uri,
+                    &owned_local_key,
+                );
+                if (result != 0) return result;
+                break :blk owned_local_key.?;
+            },
+            .file_uri => blk: {
+                result = ops.path_from_uri(
+                    ops.context,
+                    key_uri,
+                    &owned_local_key,
+                );
+                if (result == errors.ERROR_TDNF_URL_INVALID)
+                    result = ERROR_TDNF_KEYURL_INVALID;
+                if (result != 0) return result;
+                break :blk owned_local_key.?;
+            },
+            .local_path => key_uri,
+        };
 
-        var local_key: ?[*:0]u8 = null;
-        defer freeValue(ops, local_key);
-        if (remote != 0) {
-            result = ops.fetch_remote(ops.context, tdnf, repo, key_uri, &local_key);
-        } else {
-            result = ops.path_from_uri(ops.context, key_uri, &local_key);
-            if (result == errors.ERROR_TDNF_URL_INVALID)
-                result = ERROR_TDNF_KEYURL_INVALID;
-        }
-        if (result != 0) return result;
-
-        var remove_remote = remote != 0;
+        var remove_remote = location == .https;
         defer {
-            if (remove_remote and local_key != null)
-                _ = unlink(local_key.?);
+            if (remove_remote)
+                _ = unlink(local_key);
         }
 
         var key_data: ?[*:0]u8 = null;
@@ -616,8 +668,8 @@ fn gpgCheckPackage(
         fresh_count += 1;
         key_data = null;
 
-        if (remote != 0) {
-            if (unlink(local_key.?) != 0) return systemError();
+        if (location == .https) {
+            if (unlink(local_key) != 0) return systemError();
             remove_remote = false;
         }
     }
@@ -661,6 +713,10 @@ fn fetchRemoteGpgKey(
     const url = url_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out = location_out orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (url[0] == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const location = classifyKeyLocation(url) catch
+        return fetchError(url, ERROR_TDNF_KEYURL_INVALID);
+    if (location != .https)
+        return fetchError(url, ERROR_TDNF_KEYURL_INVALID);
 
     var key_location: ?[*:0]u8 = null;
     defer freeValue(&production_ops, key_location);
@@ -712,7 +768,10 @@ fn fetchRemoteGpgKey(
         url,
         file_path,
         basename(file_path.?),
+        1,
     );
+    if (result == errors.ERROR_TDNF_URL_INVALID)
+        result = ERROR_TDNF_KEYURL_INVALID;
     if (result != 0) return fetchError(url, result);
 
     out.* = normal_path;
@@ -964,23 +1023,6 @@ const Mock = struct {
         return 0;
     }
 
-    fn uriRemote(
-        _: ?*anyopaque,
-        uri: [*:0]const u8,
-        output: *c_int,
-    ) u32 {
-        const value = std.mem.span(uri);
-        if (std.mem.startsWith(u8, value, "file://")) {
-            output.* = 0;
-            return 0;
-        }
-        if (std.mem.startsWith(u8, value, "http://")) {
-            output.* = 1;
-            return 0;
-        }
-        return errors.ERROR_TDNF_URL_INVALID;
-    }
-
     fn pathFromUri(
         _: ?*anyopaque,
         _: [*:0]const u8,
@@ -1076,7 +1118,6 @@ const Mock = struct {
             .read_all = &readAll,
             .get_keys = &getKeys,
             .yes_no = &yesNo,
-            .uri_remote = &uriRemote,
             .path_from_uri = &pathFromUri,
             .fetch_remote = &fetchRemote,
             .import_key = &importKey,
@@ -1266,7 +1307,7 @@ test "key acquisition failures preserve ordering and exact errors" {
     ));
 
     mock.import_result = 0;
-    mock.keys = &.{"http://example/key"};
+    mock.keys = &.{"https://example/key"};
     mock.fetch_result = errors.ERROR_TDNF_REPO_PERFORM;
     mock.signature_calls = 0;
     try std.testing.expectEqual(errors.ERROR_TDNF_REPO_PERFORM, gpgCheckPackage(
@@ -1292,6 +1333,77 @@ test "key acquisition failures preserve ordering and exact errors" {
         fakeFile(),
         null,
     ));
+}
+
+test "key URL policy rejects plaintext before prompt fetch or import" {
+    var context = TestContext.init();
+    context.bind();
+    var mock = Mock{
+        .keys = &.{"HtTp://example.invalid/repository-key"},
+        .initial_signature = @intFromEnum(rpm.Outcome.missing),
+    };
+    const ops = mock.ops();
+
+    try std.testing.expectEqual(ERROR_TDNF_KEYURL_INVALID, gpgCheckPackage(
+        &ops,
+        &context.tdnf,
+        &context.repo,
+        "/package.rpm",
+        fakeFile(),
+        null,
+    ));
+    try std.testing.expectEqual(@as(usize, 0), mock.prompt_calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.fetch_calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.import_calls);
+
+    mock.keys = &.{"https:/example.invalid/repository-key"};
+    mock.signature_calls = 0;
+    try std.testing.expectEqual(ERROR_TDNF_KEYURL_INVALID, gpgCheckPackage(
+        &ops,
+        &context.tdnf,
+        &context.repo,
+        "/package.rpm",
+        fakeFile(),
+        null,
+    ));
+    try std.testing.expectEqual(@as(usize, 0), mock.prompt_calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.fetch_calls);
+    try std.testing.expectEqual(@as(usize, 0), mock.import_calls);
+}
+
+test "key URL classification is case robust and rejects malformed schemes" {
+    try std.testing.expectEqual(
+        KeyLocation.https,
+        try classifyKeyLocation("hTtPs://example.invalid/key"),
+    );
+    try std.testing.expectEqual(
+        KeyLocation.https,
+        try classifyKeyLocation("https://example.invalid"),
+    );
+    try std.testing.expectEqual(
+        KeyLocation.file_uri,
+        try classifyKeyLocation("FiLe:///etc/pki/key"),
+    );
+    try std.testing.expectEqual(
+        KeyLocation.local_path,
+        try classifyKeyLocation("/etc/pki/key"),
+    );
+    try std.testing.expectError(
+        error.InvalidKeyLocation,
+        classifyKeyLocation("HTTP://example.invalid/key"),
+    );
+    try std.testing.expectError(
+        error.InvalidKeyLocation,
+        classifyKeyLocation("https:/example.invalid/key"),
+    );
+    try std.testing.expectError(
+        error.InvalidKeyLocation,
+        classifyKeyLocation("https:///key"),
+    );
+    try std.testing.expectError(
+        error.InvalidKeyLocation,
+        classifyKeyLocation("ftp://example.invalid/key"),
+    );
 }
 
 test "both entry points reset outputs and transfer parsed file ownership" {

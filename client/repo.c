@@ -191,7 +191,7 @@ TDNFGetRepoMD(
             needDownload = 1;
 
         if (needDownload) {
-            dwError = TDNFDownloadFile(pTdnf, pRepoData, pRepoData->pszMirrorList, pszMirrorFile, pRepoData->pszId);
+            dwError = TDNFDownloadFile(pTdnf, pRepoData, pRepoData->pszMirrorList, pszMirrorFile, pRepoData->pszId, 0);
             BAIL_ON_TDNF_ERROR(dwError);
         }
 
@@ -405,7 +405,7 @@ TDNFGetRepoMD(
                         needDownload = 1;
 
                     if (needDownload) {
-                        dwError = TDNFDownloadFile(pTdnf, pRepoData, pRepoData->pszSnapshotUrl, pRepoData->pszSnapshotFile, pRepoData->pszId);
+                        dwError = TDNFDownloadFile(pTdnf, pRepoData, pRepoData->pszSnapshotUrl, pRepoData->pszSnapshotFile, pRepoData->pszId, 0);
                         BAIL_ON_TDNF_ERROR(dwError);
                     }
                 } else if (strncmp(pRepoData->pszSnapshotUrl, "file://", 7) == 0) {

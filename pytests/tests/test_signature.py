@@ -6,7 +6,14 @@
 # of the License are located in the COPYING file of this distribution.
 
 import os
+import socket
+import time
+from contextlib import contextmanager
+from multiprocessing import Process
+
 import pytest
+
+from conftest import StopTestRepoServer, TestRepoServer
 
 DIST = os.environ.get('DIST')
 if DIST == 'fedora':
@@ -71,6 +78,44 @@ def set_gpgcheck(utils, enabled, repo='photon-test'):
 
 def set_repo_key(utils, url):
     utils.edit_config({'gpgkey': url}, repo='photon-test')
+
+
+@contextmanager
+def https_key_server(utils):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(('127.0.0.1', 0))
+        port = sock.getsockname()[1]
+
+    workdir = os.path.join(utils.config['build_dir'], 'signature-https')
+    os.makedirs(workdir, exist_ok=True)
+    certfile = os.path.join(workdir, 'cert.pem')
+    keyfile = os.path.join(workdir, 'key.pem')
+    server = Process(
+        target=TestRepoServer,
+        args=(utils.config['repo_path'],),
+        kwargs={
+            'port': port,
+            'enable_https': True,
+            'certfile': certfile,
+            'keyfile': keyfile,
+        },
+    )
+    server.start()
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            if probe.connect_ex(('127.0.0.1', port)) == 0:
+                break
+        time.sleep(0.1)
+    else:
+        StopTestRepoServer(server)
+        raise AssertionError('HTTPS key server failed to start')
+
+    try:
+        utils.edit_config({'sslcacert': certfile}, repo='photon-test')
+        yield f'https://localhost:{port}'
+    finally:
+        StopTestRepoServer(server)
 
 
 # install unsigned package with gpgcheck enabled in repo,
@@ -203,19 +248,36 @@ def test_install_rejects_malformed_repo_keyring(utils):
 # import remote, correct key during install from repo config, expect success
 def test_install_remote_key(utils):
     set_gpgcheck(utils, True)
-    set_repo_key(utils, 'http://localhost:8080/photon-test/keys/pubkey.asc')
-    pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+    with https_key_server(utils) as origin:
+        set_repo_key(utils, f'{origin}/photon-test/keys/pubkey.asc')
+        pkgname = utils.config["sglversion_pkgname"]
+        ret = utils.run(['tdnf', 'install', '-y', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
+
+
+def test_install_http_key_rejected_before_prompt_fetch_or_import(utils):
+    set_gpgcheck(utils, True)
+    set_repo_key(utils, 'http://127.0.0.1:9/replaced-key.asc')
+    host_gpg_keys = get_host_gpg_keys(utils)
+    pkgname = utils.config["sglversion_pkgname"]
+
+    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+
+    assert ret['retval'] == 1507
+    output = '\n'.join(ret['stdout'] + ret['stderr'])
+    assert 'Is this ok [y/N]:' not in output
+    assert get_new_gpg_keys(get_host_gpg_keys(utils), host_gpg_keys) == []
+    assert not utils.check_package(pkgname)
 
 
 # -v (verbose) prints progress data
 def test_install_remote_key_verbose(utils):
     set_gpgcheck(utils, True)
-    set_repo_key(utils, 'http://localhost:8080/photon-test/keys/pubkey.asc')
-    pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-v', '-y', pkgname])
+    with https_key_server(utils) as origin:
+        set_repo_key(utils, f'{origin}/photon-test/keys/pubkey.asc')
+        pkgname = utils.config["sglversion_pkgname"]
+        ret = utils.run(['tdnf', 'install', '-v', '-y', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -223,18 +285,23 @@ def test_install_remote_key_verbose(utils):
 # import remote key with url containing a directory traversal, expect fail
 def test_install_remote_key_no_traversal(utils):
     set_gpgcheck(utils, True)
-    set_repo_key(utils, 'http://localhost:8080/../photon-test/keys/pubkey.asc')
-    pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+    with https_key_server(utils) as origin:
+        set_repo_key(utils, f'{origin}/../photon-test/keys/pubkey.asc')
+        pkgname = utils.config["sglversion_pkgname"]
+        ret = utils.run(['tdnf', 'install', '-y', pkgname])
     assert ret['retval'] != 0
 
 
 # import remote key with url containing a directory traversal, expect fail
 def test_install_remote_key_no_traversal2(utils):
     set_gpgcheck(utils, True)
-    set_repo_key(utils, 'http://localhost:8080/photon-test/keys/../../../pubkey.asc')
-    pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+    with https_key_server(utils) as origin:
+        set_repo_key(
+            utils,
+            f'{origin}/photon-test/keys/../../../pubkey.asc',
+        )
+        pkgname = utils.config["sglversion_pkgname"]
+        ret = utils.run(['tdnf', 'install', '-y', pkgname])
     assert ret['retval'] != 0
 
 
