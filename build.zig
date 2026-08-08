@@ -719,11 +719,6 @@ pub fn build(b: *Build) void {
         });
         mod.addIncludePath(b.path("include"));
         mod.addIncludePath(b.path("jsondump"));
-        mod.addCSourceFiles(.{
-            .root = b.path("jsondump"),
-            .files = &.{"fmt_shim.c"},
-            .flags = &tdnf_cflags,
-        });
         const lib = b.addLibrary(.{
             .name = "jsondump",
             .linkage = .static,

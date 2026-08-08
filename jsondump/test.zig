@@ -10,19 +10,6 @@ const testing = std.testing;
 
 const JsonDump = jsondump.JsonDump;
 
-extern fn jd_map_add_fmt(
-    jd: ?*JsonDump,
-    key: [*:0]const u8,
-    format: [*:0]const u8,
-    ...,
-) c_int;
-
-extern fn jd_list_add_fmt(
-    jd: ?*JsonDump,
-    format: [*:0]const u8,
-    ...,
-) c_int;
-
 const flat_map =
     "{\"foo\":\"bar\",\"goo\":\"car\",\"hoo\":\"\\tdar\\n\"," ++
     "\"ioo\":\"2 ears\",\"nothing\":null,\"yes\":true,\"no\":false}";
@@ -64,7 +51,9 @@ fn buildFlatMap() !*JsonDump {
     try expectSuccess(jsondump.jd_map_add_string(jd, "foo", "bar"));
     try expectSuccess(jsondump.jd_map_add_string(jd, "goo", "car"));
     try expectSuccess(jsondump.jd_map_add_string(jd, "hoo", "\tdar\n"));
-    try expectSuccess(jd_map_add_fmt(jd, "ioo", "%d ears", @as(c_int, 2)));
+    var ears_buf: [16]u8 = undefined;
+    const ears = try std.fmt.bufPrintZ(&ears_buf, "{d} ears", .{2});
+    try expectSuccess(jsondump.jd_map_add_string(jd, "ioo", ears));
     try expectSuccess(jsondump.jd_map_add_null(jd, "nothing"));
     try expectSuccess(jsondump.jd_map_add_bool(jd, "yes", 1));
     try expectSuccess(jsondump.jd_map_add_bool(jd, "no", 0));
@@ -103,7 +92,9 @@ fn buildFormatList() !*JsonDump {
     try expectSuccess(jsondump.jd_list_start(jd));
 
     for (0..10) |i| {
-        try expectSuccess(jd_list_add_fmt(jd, "i=%d", @as(c_int, @intCast(i))));
+        var item: [5]u8 = undefined;
+        const value = try std.fmt.bufPrintZ(&item, "i={d}", .{i});
+        try expectSuccess(jsondump.jd_list_add_string(jd, value));
     }
     return jd;
 }
