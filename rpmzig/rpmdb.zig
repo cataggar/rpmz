@@ -4654,7 +4654,7 @@ fn providerTestFlagsBytes(
     return bytes;
 }
 
-fn insertProviderTestPackage(
+pub fn insertProviderTestPackage(
     allocator: std.mem.Allocator,
     path: []const u8,
     package_name: []const u8,
