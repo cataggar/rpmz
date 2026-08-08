@@ -133,6 +133,14 @@ pub const RepoData = extern struct {
     pNext: ?*RepoData = null,
 };
 
+pub const Plugin = extern struct {
+    pszName: ?[*:0]u8 = null,
+    nEnabled: c_int = 0,
+    nKind: c_uint = 0,
+    pHandle: ?*anyopaque = null,
+    pNext: ?*Plugin = null,
+};
+
 pub const Tdnf = extern struct {
     pSack: ?*anyopaque = null,
     pArgs: ?*CmdArgs = null,
@@ -140,7 +148,7 @@ pub const Tdnf = extern struct {
     pRpmConfig: ?*anyopaque = null,
     pRepos: ?*RepoData = null,
     pCmdLineRepo: ?*anyopaque = null,
-    pPlugins: ?*anyopaque = null,
+    pPlugins: ?*Plugin = null,
     ppszRepoFromDirIds: ?[*]?[*:0]u8 = null,
     pRequestTrace: ?*anyopaque = null,
     pTransactionPlanState: ?*anyopaque = null,
@@ -278,6 +286,13 @@ comptime {
         "nSkipMDOther",
         "pszCacheName",
         "pRepo",
+        "pNext",
+    });
+    assertLayout(Plugin, C.TDNF_PLUGIN, .{
+        "pszName",
+        "nEnabled",
+        "nKind",
+        "pHandle",
         "pNext",
     });
     assertLayout(Tdnf, C.TDNF, .{

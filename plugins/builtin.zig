@@ -163,7 +163,7 @@ fn sectionHasOption(
     return false;
 }
 
-export fn BuiltinMetalinkCreate(
+pub export fn BuiltinMetalinkCreate(
     tdnf: ?*anyopaque,
     out_handle: ?*?*anyopaque,
 ) u32 {
@@ -175,13 +175,13 @@ export fn BuiltinMetalinkCreate(
     return 0;
 }
 
-export fn BuiltinMetalinkDestroy(handle: ?*anyopaque) void {
+pub export fn BuiltinMetalinkDestroy(handle: ?*anyopaque) void {
     const state = metalinkState(handle) orelse return;
     state.deinit();
     allocator.destroy(state);
 }
 
-export fn BuiltinMetalinkRepoConfig(
+pub export fn BuiltinMetalinkRepoConfig(
     handle: ?*anyopaque,
     section_ptr: ?*const c.struct_cnfnode,
 ) u32 {
@@ -199,7 +199,7 @@ export fn BuiltinMetalinkRepoConfig(
     return 0;
 }
 
-export fn BuiltinMetalinkRepoMDDownloadStart(
+pub export fn BuiltinMetalinkRepoMDDownloadStart(
     handle: ?*anyopaque,
     repo_id_ptr: ?[*:0]const u8,
     repo_data_dir_ptr: ?[*:0]const u8,
@@ -272,7 +272,7 @@ export fn BuiltinMetalinkRepoMDDownloadStart(
     return 0;
 }
 
-export fn BuiltinMetalinkRepoMDDownloadEnd(
+pub export fn BuiltinMetalinkRepoMDDownloadEnd(
     handle: ?*anyopaque,
     repo_id_ptr: ?[*:0]const u8,
     repomd_file_ptr: ?[*:0]const u8,
@@ -455,7 +455,7 @@ fn checkMetalinkHashes(path: [*:0]const u8, hashes: []const MetalinkHash) u32 {
     return ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
 }
 
-export fn BuiltinRepoGPGCheckCreate(
+pub export fn BuiltinRepoGPGCheckCreate(
     tdnf: ?*anyopaque,
     out_handle: ?*?*anyopaque,
 ) u32 {
@@ -468,13 +468,13 @@ export fn BuiltinRepoGPGCheckCreate(
     return 0;
 }
 
-export fn BuiltinRepoGPGCheckDestroy(handle: ?*anyopaque) void {
+pub export fn BuiltinRepoGPGCheckDestroy(handle: ?*anyopaque) void {
     const state = repoGPGCheckState(handle) orelse return;
     state.deinit();
     allocator.destroy(state);
 }
 
-export fn BuiltinRepoGPGCheckRepoConfig(
+pub export fn BuiltinRepoGPGCheckRepoConfig(
     handle: ?*anyopaque,
     section_ptr: ?*const c.struct_cnfnode,
 ) u32 {
@@ -493,7 +493,7 @@ export fn BuiltinRepoGPGCheckRepoConfig(
     return 0;
 }
 
-export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
+pub export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
     handle: ?*anyopaque,
     repo_id_ptr: ?[*:0]const u8,
     repomd_file_ptr: ?[*:0]const u8,

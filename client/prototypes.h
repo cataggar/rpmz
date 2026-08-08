@@ -798,7 +798,7 @@ TDNFReportNativeSolverProblems(
     TDNF_SKIPPROBLEM_TYPE dwSkipProblem
     );
 
-/* plugins.c */
+/* plugins.zig */
 uint32_t
 TDNFLoadPlugins(
     PTDNF pTdnf
@@ -825,35 +825,6 @@ BuiltinPluginsRepoMDDownloadStart(
 uint32_t
 BuiltinPluginsRepoMDDownloadEnd(
     PTDNF pTdnf,
-    const char *pszRepoId,
-    const char *pszRepoMDFile
-    );
-
-uint32_t BuiltinMetalinkCreate(PTDNF pTdnf, void **ppHandle);
-void BuiltinMetalinkDestroy(void *pHandle);
-uint32_t BuiltinMetalinkRepoConfig(
-    void *pHandle,
-    const struct cnfnode *pSection
-    );
-uint32_t BuiltinMetalinkRepoMDDownloadStart(
-    void *pHandle,
-    const char *pszRepoId,
-    const char *pszRepoDataDir
-    );
-uint32_t BuiltinMetalinkRepoMDDownloadEnd(
-    void *pHandle,
-    const char *pszRepoId,
-    const char *pszRepoMDFile
-    );
-
-uint32_t BuiltinRepoGPGCheckCreate(PTDNF pTdnf, void **ppHandle);
-void BuiltinRepoGPGCheckDestroy(void *pHandle);
-uint32_t BuiltinRepoGPGCheckRepoConfig(
-    void *pHandle,
-    const struct cnfnode *pSection
-    );
-uint32_t BuiltinRepoGPGCheckRepoMDDownloadEnd(
-    void *pHandle,
     const char *pszRepoId,
     const char *pszRepoMDFile
     );
