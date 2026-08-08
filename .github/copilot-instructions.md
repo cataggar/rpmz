@@ -230,7 +230,8 @@ they are defined; defined at the bottom of the file.
   blind spots (a green `libsolv-oracle-test` has shipped three real
   bugs), how to diff two binaries without false positives, why
   `Solv*` call-site counts are a gameable proxy, and the
-  no-silent-fallback rule.
+  no-silent-fallback rule. The oracle is explicitly opt-in:
+  `zig build -Dlibsolv-oracle=true libsolv-oracle-test`.
 - `client/config.h`, `history/config.h`, the plugin `config.h`s, and
   the `.pc` files are **generated**. Edit the `.in` files, not the
   outputs.

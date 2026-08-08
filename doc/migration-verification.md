@@ -9,7 +9,8 @@ Delete this file when `libsolv` is gone.
 
 ## 1. A green gate is not evidence of correctness
 
-`libsolv-oracle-test` crosschecks **solver results only**. It does not check
+`zig build -Dlibsolv-oracle=true libsolv-oracle-test` crosschecks
+**solver results only**. It does not check
 query-command semantics, output formatting, cache paths, or plan field
 values. `ztest` covers a broad but finite set of scenarios.
 

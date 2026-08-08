@@ -50,6 +50,7 @@ pub const Repository = struct {
     model: model.RepositoryModel,
     installed_states: []const installed_repository.InstalledState,
     fields: []const PackageFields,
+    handles: []u32,
     cookie_sha256: [32]u8 = [_]u8{0} ** 32,
     cache_options: available_loader.CacheOptions = .{},
     has_cookie: bool = false,
@@ -69,6 +70,7 @@ const Impl = struct {
     root_dir: ?[:0]u8,
     architecture: [:0]u8,
     repositories: std.ArrayList(*Repository) = .empty,
+    package_slots: std.ArrayList(?PackageView) = .empty,
     installed: ?*Repository = null,
     command_line: ?*Repository = null,
 
@@ -77,6 +79,7 @@ const Impl = struct {
             repository.deinit(self.allocator);
         }
         self.repositories.deinit(self.allocator);
+        self.package_slots.deinit(self.allocator);
         if (self.cache_dir) |value| self.allocator.free(value);
         if (self.root_dir) |value| self.allocator.free(value);
         self.allocator.free(self.architecture);
@@ -131,7 +134,8 @@ pub fn destroy(context: *Context) void {
     allocator.destroy(context);
 }
 
-pub fn swap(left: *Context, right: *Context) void {
+pub fn swap(left: *Context, right: *Context) error{OutOfMemory}!void {
+    try remapReplacementHandles(left.impl, right.impl);
     std.mem.swap(*Impl, &left.impl, &right.impl);
 }
 
@@ -181,6 +185,7 @@ pub fn loadInstalled(
         .model = loaded.repository,
         .installed_states = loaded.installed_states,
         .fields = fields,
+        .handles = &.{},
     };
     try replaceRepository(context, repository);
 }
@@ -201,8 +206,14 @@ pub fn createCommandLine(context: *Context) error{OutOfMemory}!*Repository {
         .model = .{},
         .installed_states = &.{},
         .fields = &.{},
+        .handles = &.{},
     };
-    try context.impl.repositories.append(context.impl.allocator, repository);
+    try context.impl.repositories.ensureUnusedCapacity(
+        context.impl.allocator,
+        1,
+    );
+    try bindRepositoryHandles(context.impl, repository, null, repository);
+    context.impl.repositories.appendAssumeCapacity(repository);
     context.impl.command_line = repository;
     return repository;
 }
@@ -298,6 +309,7 @@ fn finishAvailable(
         .model = repository_model,
         .installed_states = &.{},
         .fields = fields,
+        .handles = &.{},
     };
     try replaceRepository(context, repository);
     return repository;
@@ -308,21 +320,25 @@ fn replaceRepository(
     replacement: *Repository,
 ) error{OutOfMemory}!void {
     for (context.impl.repositories.items, 0..) |current, index| {
-        const matches = switch (replacement.kind) {
-            .installed => current.kind == .installed,
-            .command_line => current.kind == .command_line,
-            .available => current.kind == .available and
-                ((replacement.owner != null and current.owner == replacement.owner) or
-                std.mem.eql(u8, current.id, replacement.id)),
-        };
-        if (!matches) continue;
+        if (!repositoriesMatch(current, replacement)) continue;
+        try bindRepositoryHandles(
+            context.impl,
+            replacement,
+            current,
+            replacement,
+        );
         context.impl.repositories.items[index] = replacement;
         if (current == context.impl.installed) context.impl.installed = replacement;
         if (current == context.impl.command_line) context.impl.command_line = replacement;
         current.deinit(context.impl.allocator);
         return;
     }
-    try context.impl.repositories.append(context.impl.allocator, replacement);
+    try context.impl.repositories.ensureUnusedCapacity(
+        context.impl.allocator,
+        1,
+    );
+    try bindRepositoryHandles(context.impl, replacement, null, replacement);
+    context.impl.repositories.appendAssumeCapacity(replacement);
     if (replacement.kind == .installed) context.impl.installed = replacement;
     if (replacement.kind == .command_line) context.impl.command_line = replacement;
 }
@@ -331,6 +347,7 @@ pub fn removeRepository(context: *Context, repository: *Repository) bool {
     for (context.impl.repositories.items, 0..) |candidate, index| {
         if (candidate != repository) continue;
         _ = context.impl.repositories.orderedRemove(index);
+        invalidateRepositoryHandles(context.impl, candidate);
         if (candidate == context.impl.installed) context.impl.installed = null;
         if (candidate == context.impl.command_line) context.impl.command_line = null;
         candidate.deinit(context.impl.allocator);
@@ -389,12 +406,30 @@ pub fn addCommandLineRpm(
         id,
         repository_model,
     );
+    var replacement = Repository{
+        .arena_state = arena_state,
+        .id = id,
+        .kind = .command_line,
+        .owner = null,
+        .priority = repository.priority,
+        .model = repository_model,
+        .installed_states = &.{},
+        .fields = fields,
+        .handles = &.{},
+    };
+    try bindRepositoryHandles(
+        context.impl,
+        &replacement,
+        repository,
+        repository,
+    );
     repository.arena_state.deinit();
     repository.arena_state = arena_state;
     repository.id = id;
     repository.model = repository_model;
     repository.fields = fields;
-    return packageIdFor(context, repository, repository_model.packages.len - 1);
+    repository.handles = replacement.handles;
+    return packageIdFor(repository, repository_model.packages.len - 1);
 }
 
 pub fn resetCommandLine(context: *Context) error{OutOfMemory}!*Repository {
@@ -407,11 +442,13 @@ pub fn resetCommandLine(context: *Context) error{OutOfMemory}!*Repository {
     );
     for (current.cmdline_paths.items) |path| context.impl.allocator.free(path);
     current.cmdline_paths.clearRetainingCapacity();
+    invalidateRepositoryHandles(context.impl, current);
     current.arena_state.deinit();
     current.arena_state = replacement_arena;
     current.id = replacement_id;
     current.model = .{};
     current.fields = &.{};
+    current.handles = &.{};
     return current;
 }
 
@@ -420,12 +457,8 @@ pub fn installedPackageIds(
     output: *std.ArrayList(i32),
 ) error{OutOfMemory}!void {
     const repository = context.impl.installed orelse return;
-    for (0..repository.model.packages.len) |index| {
-        try output.append(context.impl.allocator, @intCast(packageIdFor(
-            context,
-            repository,
-            index,
-        )));
+    for (repository.handles) |handle| {
+        try output.append(context.impl.allocator, @intCast(handle));
     }
 }
 
@@ -433,24 +466,20 @@ pub fn allPackageIds(
     context: *const Context,
     output: *std.ArrayList(i32),
 ) error{OutOfMemory}!void {
-    var id: u32 = 1;
     if (context.impl.installed) |repository| {
-        for (repository.model.packages) |_| {
-            try output.append(context.impl.allocator, @intCast(id));
-            id += 1;
+        for (repository.handles) |handle| {
+            try output.append(context.impl.allocator, @intCast(handle));
         }
     }
     for (context.impl.repositories.items) |repository| {
         if (repository.kind != .available) continue;
-        for (repository.model.packages) |_| {
-            try output.append(context.impl.allocator, @intCast(id));
-            id += 1;
+        for (repository.handles) |handle| {
+            try output.append(context.impl.allocator, @intCast(handle));
         }
     }
     if (context.impl.command_line) |repository| {
-        for (repository.model.packages) |_| {
-            try output.append(context.impl.allocator, @intCast(id));
-            id += 1;
+        for (repository.handles) |handle| {
+            try output.append(context.impl.allocator, @intCast(handle));
         }
     }
 }
@@ -493,47 +522,157 @@ pub fn packageInstalledState(
 
 fn packageView(context: *const Context, raw_id: i32) ?PackageView {
     if (raw_id <= 0) return null;
-    var remaining: usize = @intCast(raw_id - 1);
-    if (context.impl.installed) |repository| {
-        if (remaining < repository.model.packages.len) {
-            return .{ .repository = repository, .index = remaining };
+    const index: usize = @intCast(raw_id - 1);
+    if (index >= context.impl.package_slots.items.len) return null;
+    return context.impl.package_slots.items[index];
+}
+
+fn packageIdFor(
+    target: *const Repository,
+    package_index: usize,
+) u32 {
+    return target.handles[package_index];
+}
+
+fn repositoriesMatch(left: *const Repository, right: *const Repository) bool {
+    if (left.kind != right.kind) return false;
+    return switch (right.kind) {
+        .installed, .command_line => true,
+        .available => (right.owner != null and left.owner == right.owner) or
+            std.mem.eql(u8, left.id, right.id),
+    };
+}
+
+fn samePackageIdentity(left: model.Package, right: model.Package) bool {
+    return std.mem.eql(u8, left.pkg_id, right.pkg_id) and
+        std.mem.eql(u8, left.nevra.name, right.nevra.name) and
+        left.nevra.epoch == right.nevra.epoch and
+        std.mem.eql(u8, left.nevra.version, right.nevra.version) and
+        std.mem.eql(u8, left.nevra.release, right.nevra.release) and
+        std.mem.eql(u8, left.nevra.arch, right.nevra.arch);
+}
+
+fn retainedHandle(
+    prior: *const Repository,
+    replacement: *const Repository,
+    replacement_index: usize,
+) ?u32 {
+    const package = replacement.model.packages[replacement_index];
+    for (prior.model.packages, 0..) |candidate, prior_index| {
+        if (!samePackageIdentity(candidate, package)) continue;
+        const handle = prior.handles[prior_index];
+        var already_retained = false;
+        for (replacement.handles[0..replacement_index]) |assigned| {
+            if (assigned == handle) {
+                already_retained = true;
+                break;
+            }
         }
-        remaining -= repository.model.packages.len;
-    }
-    for (context.impl.repositories.items) |repository| {
-        if (repository.kind != .available) continue;
-        if (remaining < repository.model.packages.len) {
-            return .{ .repository = repository, .index = remaining };
-        }
-        remaining -= repository.model.packages.len;
-    }
-    if (context.impl.command_line) |repository| {
-        if (remaining < repository.model.packages.len) {
-            return .{ .repository = repository, .index = remaining };
-        }
+        if (!already_retained) return handle;
     }
     return null;
 }
 
-fn packageIdFor(
-    context: *const Context,
-    target: *Repository,
-    package_index: usize,
-) u32 {
-    var id: usize = 1;
-    if (context.impl.installed) |repository| {
-        if (repository == target) return @intCast(id + package_index);
-        id += repository.model.packages.len;
+fn bindRepositoryHandles(
+    impl: *Impl,
+    repository: *Repository,
+    prior: ?*const Repository,
+    binding: *Repository,
+) error{OutOfMemory}!void {
+    const handles = try repository.arena_state.allocator().alloc(
+        u32,
+        repository.model.packages.len,
+    );
+    repository.handles = handles;
+    var new_count: usize = 0;
+    for (repository.model.packages, 0..) |_, index| {
+        handles[index] = if (prior) |value|
+            retainedHandle(value, repository, index) orelse blk: {
+                new_count += 1;
+                break :blk 0;
+            }
+        else blk: {
+            new_count += 1;
+            break :blk 0;
+        };
     }
-    for (context.impl.repositories.items) |repository| {
-        if (repository.kind != .available) continue;
-        if (repository == target) return @intCast(id + package_index);
-        id += repository.model.packages.len;
+    try impl.package_slots.ensureUnusedCapacity(impl.allocator, new_count);
+
+    if (prior) |value| invalidateRepositoryHandles(impl, value);
+    for (handles, 0..) |*handle, index| {
+        if (handle.* == 0) {
+            handle.* = @intCast(impl.package_slots.items.len + 1);
+            impl.package_slots.appendAssumeCapacity(null);
+        }
+        impl.package_slots.items[handle.* - 1] = .{
+            .repository = binding,
+            .index = index,
+        };
     }
-    if (context.impl.command_line) |repository| {
-        if (repository == target) return @intCast(id + package_index);
+}
+
+fn invalidateRepositoryHandles(impl: *Impl, repository: *const Repository) void {
+    for (repository.handles) |handle| {
+        const index = handle - 1;
+        if (index < impl.package_slots.items.len) {
+            impl.package_slots.items[index] = null;
+        }
     }
-    unreachable;
+}
+
+fn matchingRepository(
+    repositories_list: []const *Repository,
+    replacement: *const Repository,
+) ?*const Repository {
+    for (repositories_list) |candidate| {
+        if (repositoriesMatch(candidate, replacement)) return candidate;
+    }
+    return null;
+}
+
+fn remapReplacementHandles(
+    stable: *const Impl,
+    replacement: *Impl,
+) error{OutOfMemory}!void {
+    var new_count: usize = 0;
+    for (replacement.repositories.items) |repository| {
+        const prior = matchingRepository(stable.repositories.items, repository);
+        @memset(repository.handles, 0);
+        for (repository.model.packages, 0..) |_, index| {
+            repository.handles[index] = if (prior) |value|
+                retainedHandle(value, repository, index) orelse blk: {
+                    new_count += 1;
+                    break :blk 0;
+                }
+            else blk: {
+                new_count += 1;
+                break :blk 0;
+            };
+        }
+    }
+
+    var slots: std.ArrayList(?PackageView) = .empty;
+    errdefer slots.deinit(replacement.allocator);
+    try slots.resize(
+        replacement.allocator,
+        stable.package_slots.items.len + new_count,
+    );
+    @memset(slots.items, null);
+    var next_handle: u32 = @intCast(stable.package_slots.items.len + 1);
+    for (replacement.repositories.items) |repository| {
+        for (repository.handles, 0..) |*handle, index| {
+            if (handle.* == 0) {
+                handle.* = next_handle;
+                next_handle += 1;
+            }
+            slots.items[handle.* - 1] = .{
+                .repository = repository,
+                .index = index,
+            };
+        }
+    }
+    replacement.package_slots.deinit(replacement.allocator);
+    replacement.package_slots = slots;
 }
 
 fn buildFields(
@@ -600,6 +739,29 @@ fn nativeArchitecture() error{SystemResources}![]const u8 {
     return std.mem.sliceTo(&info.machine, 0);
 }
 
+fn createWithInstalled(
+    allocator: std.mem.Allocator,
+    cache_dir: ?[]const u8,
+    root_dir: ?[]const u8,
+    requested_architecture: []const u8,
+    source: installed_repository.Source,
+    include_installed: bool,
+) (error{OutOfMemory} || installed_repository.LoadError)!*Context {
+    const context = try create(
+        allocator,
+        cache_dir,
+        root_dir,
+        requested_architecture,
+    );
+    if (include_installed) {
+        loadInstalled(context, source) catch |err| {
+            destroy(context);
+            return err;
+        };
+    }
+    return context;
+}
+
 fn TDNFPackageContextCreate(
     cache_dir: ?[*:0]const u8,
     root_dir: ?[*:0]const u8,
@@ -614,27 +776,22 @@ fn TDNFPackageContextCreate(
         std.mem.span(value)
     else
         nativeArchitecture() catch return c.ERROR_TDNF_SOLV_IO;
-    const context = create(
+    const context = createWithInstalled(
         std.heap.c_allocator,
         if (cache_dir) |value| std.mem.span(value) else null,
         if (root_dir) |value| std.mem.span(value) else null,
         arch,
-    ) catch return c.ERROR_TDNF_OUT_OF_MEMORY;
-    errdefer destroy(context);
-    if (include_installed != 0) {
-        loadInstalled(
-            context,
-            if (rpm_config) |config|
-                .{ .config = config }
-            else
-                .{ .root_dir = root_dir },
-        ) catch |err| return switch (err) {
-            error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
-            error.InvalidRpmHeader => c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
-            error.RpmDbOpenFailed => c.ERROR_TDNF_RPMTS_OPENDB_FAILED,
-            error.RpmDbReadFailed => c.ERROR_TDNF_SOLV_IO,
-        };
-    }
+        if (rpm_config) |config|
+            .{ .config = config }
+        else
+            .{ .root_dir = root_dir },
+        include_installed != 0,
+    ) catch |err| return switch (err) {
+        error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
+        error.InvalidRpmHeader => c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
+        error.RpmDbOpenFailed => c.ERROR_TDNF_RPMTS_OPENDB_FAILED,
+        error.RpmDbReadFailed => c.ERROR_TDNF_SOLV_IO,
+    };
     slot.* = context;
     return 0;
 }
@@ -756,10 +913,10 @@ fn TDNFPackageContextGetInstalledPkgIds(
     const value = context orelse return c.ERROR_TDNF_INVALID_PARAMETER;
     const list = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
     const repository = value.impl.installed orelse return 0;
-    for (0..repository.model.packages.len) |index| {
+    for (repository.handles) |handle| {
         const result = TDNFIdListPush(
             list,
-            @intCast(packageIdFor(value, repository, index)),
+            @intCast(handle),
         );
         if (result != 0) return result;
     }
@@ -772,27 +929,23 @@ fn TDNFPackageContextGetAllPkgIds(
 ) callconv(.c) u32 {
     const value = context orelse return c.ERROR_TDNF_INVALID_PARAMETER;
     const list = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    var id: i32 = 1;
     if (value.impl.installed) |repository| {
-        for (repository.model.packages) |_| {
-            const result = TDNFIdListPush(list, id);
+        for (repository.handles) |handle| {
+            const result = TDNFIdListPush(list, @intCast(handle));
             if (result != 0) return result;
-            id += 1;
         }
     }
     for (value.impl.repositories.items) |repository| {
         if (repository.kind != .available) continue;
-        for (repository.model.packages) |_| {
-            const result = TDNFIdListPush(list, id);
+        for (repository.handles) |handle| {
+            const result = TDNFIdListPush(list, @intCast(handle));
             if (result != 0) return result;
-            id += 1;
         }
     }
     if (value.impl.command_line) |repository| {
-        for (repository.model.packages) |_| {
-            const result = TDNFIdListPush(list, id);
+        for (repository.handles) |handle| {
+            const result = TDNFIdListPush(list, @intCast(handle));
             if (result != 0) return result;
-            id += 1;
         }
     }
     return 0;
@@ -1065,12 +1218,13 @@ pub export fn SolvSackReadInstalledRpms(
     rpm_config: ?*const anyopaque,
 ) u32 {
     _ = cache_file;
+    const value = context orelse return c.ERROR_TDNF_INVALID_PARAMETER;
     loadInstalled(
-        context orelse return c.ERROR_TDNF_INVALID_PARAMETER,
+        value,
         if (rpm_config) |config|
             .{ .config = config }
         else
-            .{ .root_dir = null },
+            .{ .root_dir = rootDir(value) },
     ) catch |err| return switch (err) {
         error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
         error.InvalidRpmHeader => c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
@@ -1254,11 +1408,24 @@ fn appendTestRepository(
     id_value: []const u8,
     package: model.Package,
 ) !*Repository {
+    return appendTestRepositoryPackages(
+        context,
+        kind,
+        id_value,
+        &.{package},
+    );
+}
+
+fn appendTestRepositoryPackages(
+    context: *Context,
+    kind: RepositoryKind,
+    id_value: []const u8,
+    package_values: []const model.Package,
+) !*Repository {
     var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
-    const packages = try arena.alloc(model.Package, 1);
-    packages[0] = package;
+    const packages = try arena.dupe(model.Package, package_values);
     const repository_model = model.RepositoryModel{ .packages = packages };
     const id = try arena.dupeZ(u8, id_value);
     const fields = try buildFields(arena, id, repository_model);
@@ -1273,6 +1440,7 @@ fn appendTestRepository(
         .model = repository_model,
         .installed_states = &.{},
         .fields = fields,
+        .handles = &.{},
     };
     try replaceRepository(context, repository);
     return repository;
@@ -1297,15 +1465,15 @@ test "package handles keep installed available and command-line order" {
     defer destroy(context);
     _ = try appendTestRepository(
         context,
-        .available,
-        "available",
-        testPackage("available"),
-    );
-    _ = try appendTestRepository(
-        context,
         .installed,
         "@System",
         testPackage("installed"),
+    );
+    _ = try appendTestRepository(
+        context,
+        .available,
+        "available",
+        testPackage("available"),
     );
     _ = try appendTestRepository(
         context,
@@ -1353,12 +1521,13 @@ test "context swap replaces repository lifetime atomically" {
     );
     const prior_identity = identity(live);
 
-    swap(live, replacement);
+    try swap(live, replacement);
 
     try std.testing.expect(prior_identity != identity(live));
+    try std.testing.expect(packageModel(live, 1) == null);
     try std.testing.expectEqualStrings(
         "after",
-        packageModel(live, 1).?.nevra.name,
+        packageModel(live, 2).?.nevra.name,
     );
     try std.testing.expectEqualStrings(
         "before",
@@ -1405,4 +1574,176 @@ test "command-line rpm handles append and reset" {
     _ = try resetCommandLine(context);
     try testing.expect(packageModel(context, 2) == null);
     try testing.expectEqual(@as(usize, 0), command_line.cmdline_paths.items.len);
+}
+
+test "repository replacement never retargets stable package handles" {
+    const testing = std.testing;
+    const context = try create(testing.allocator, null, null, "x86_64");
+    defer destroy(context);
+    const repo_a = try appendTestRepository(
+        context,
+        .available,
+        "repo-a",
+        testPackage("a-one"),
+    );
+    const repo_b = try appendTestRepository(
+        context,
+        .available,
+        "repo-b",
+        testPackage("b-one"),
+    );
+    const command_line = try createCommandLine(context);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const bytes = try rpmpkg.makeMinimalRpmBytesForTest(
+        testing.allocator,
+        "local",
+        "1",
+        "1",
+        "x86_64",
+    );
+    defer testing.allocator.free(bytes);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "local.rpm",
+        .data = bytes,
+    });
+    const path = try std.fmt.allocPrintSentinel(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/local.rpm",
+        .{&tmp.sub_path},
+        0,
+    );
+    defer testing.allocator.free(path);
+    const cmdline_id = try addCommandLineRpm(context, command_line, path);
+    const repo_a_id = packageIdFor(repo_a, 0);
+    const repo_b_id = packageIdFor(repo_b, 0);
+
+    const grown_a = try appendTestRepositoryPackages(
+        context,
+        .available,
+        "repo-a",
+        &.{ testPackage("a-one"), testPackage("a-two") },
+    );
+    const grown_id = packageIdFor(grown_a, 1);
+    try testing.expectEqual(repo_b_id, packageIdFor(repo_b, 0));
+    try testing.expectEqualStrings(
+        "b-one",
+        packageModel(context, @intCast(repo_b_id)).?.nevra.name,
+    );
+    try testing.expectEqualStrings(
+        "local",
+        packageModel(context, @intCast(cmdline_id)).?.nevra.name,
+    );
+
+    const shrunk_a = try appendTestRepository(
+        context,
+        .available,
+        "repo-a",
+        testPackage("a-two"),
+    );
+    try testing.expect(packageModel(context, @intCast(repo_a_id)) == null);
+    try testing.expectEqual(grown_id, packageIdFor(shrunk_a, 0));
+    try testing.expectEqualStrings(
+        "b-one",
+        packageModel(context, @intCast(repo_b_id)).?.nevra.name,
+    );
+    try testing.expectEqualStrings(
+        "local",
+        packageModel(context, @intCast(cmdline_id)).?.nevra.name,
+    );
+
+    const regrown_a = try appendTestRepositoryPackages(
+        context,
+        .available,
+        "repo-a",
+        &.{ testPackage("a-two"), testPackage("a-three") },
+    );
+    try testing.expect(packageIdFor(regrown_a, 1) > grown_id);
+    try testing.expect(packageModel(context, @intCast(repo_a_id)) == null);
+}
+
+fn testRootPath(
+    tmp: *const std.testing.TmpDir,
+    buffer: *[std.Io.Dir.max_path_bytes]u8,
+) [:0]const u8 {
+    return std.fmt.bufPrintZ(
+        buffer,
+        ".zig-cache/tmp/{s}",
+        .{&tmp.sub_path},
+    ) catch @panic("test root path too long");
+}
+
+fn contextCreationAllocationFailureCase(
+    allocator: std.mem.Allocator,
+    root: [*:0]const u8,
+) !void {
+    const context = try createWithInstalled(
+        allocator,
+        "cache",
+        std.mem.span(root),
+        "x86_64",
+        .{ .root_dir = root },
+        true,
+    );
+    destroy(context);
+}
+
+test "context creation releases every allocation on installed load failures" {
+    const testing = std.testing;
+    var malformed = testing.tmpDir(.{});
+    defer malformed.cleanup();
+    try malformed.dir.createDirPath(testing.io, "var/lib/rpm");
+    try malformed.dir.writeFile(testing.io, .{
+        .sub_path = "var/lib/rpm/rpmdb.sqlite",
+        .data = "not a sqlite database",
+    });
+    var malformed_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const malformed_root = testRootPath(&malformed, &malformed_buffer);
+    try testing.expectError(
+        error.RpmDbOpenFailed,
+        createWithInstalled(
+            testing.allocator,
+            null,
+            malformed_root,
+            "x86_64",
+            .{ .root_dir = malformed_root },
+            true,
+        ),
+    );
+
+    var empty = testing.tmpDir(.{});
+    defer empty.cleanup();
+    var empty_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const empty_root = testRootPath(&empty, &empty_buffer);
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        contextCreationAllocationFailureCase,
+        .{empty_root.ptr},
+    );
+}
+
+test "legacy installed loading honors the context install root" {
+    const testing = std.testing;
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const scratch_root = testRootPath(&scratch, &root_buffer);
+    const context = try create(
+        testing.allocator,
+        null,
+        scratch_root,
+        "x86_64",
+    );
+    defer destroy(context);
+
+    try testing.expectEqual(
+        @as(u32, 0),
+        SolvSackReadInstalledRpms(context, null, null),
+    );
+    try testing.expect(context.impl.installed != null);
+    try testing.expectEqual(@as(usize, 0), packageCount(context));
+    try testing.expectEqualStrings(
+        scratch_root,
+        std.mem.span(rootDir(context).?),
+    );
 }

@@ -92,6 +92,11 @@ const tdnf_cflags = [_][]const u8{
 pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const enable_libsolv_oracle = b.option(
+        bool,
+        "libsolv-oracle",
+        "Enable the opt-in vendored libsolv parity oracle",
+    ) orelse false;
     const transaction_plan_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan.zig"),
         .target = target,
@@ -171,34 +176,15 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
-    // libsolv's C sources intentionally rely on wraparound in a few internal
-    // hash paths; build them without Zig's safe-mode C traps to match the
-    // behaviour of the system libsolv packages we are replacing.
-    const libsolv_optimize: OptimizeMode = .ReleaseFast;
-    const libsolv_dep_optional = b.lazyDependency("libsolv", .{
-        .target = target,
-        .optimize = libsolv_optimize,
-        .ext = true,
-        .zlib = false,
-    });
     if (sqlite_dep_optional == null or
         tls_dep_optional == null or
-        zlua_dep_optional == null or
-        libsolv_dep_optional == null)
+        zlua_dep_optional == null)
     {
         return;
     }
     const sqlite_dep = sqlite_dep_optional.?;
     const tls_dep = tls_dep_optional.?;
     const zlua_mod = zlua_dep_optional.?.module("zlua");
-    const libsolv_dep = libsolv_dep_optional.?;
-    const libsolv = libsolv_dep.artifact("solv");
-    const libsolvext = libsolv_dep.artifact("solvext");
-    // Bundled and derived, not three loose LazyPaths: they are the same
-    // type, so five hand-written call sites could silently swap or repeat
-    // one, and passing the core tree where the ext tree belongs builds and
-    // links fine while leaving <solv/solv_xfopen.h> on /usr/include.
-    const libsolv_includes = LibsolvIncludes.init(b, libsolv, libsolvext);
 
     // ----- generated headers (written into source tree to match the CMake
     //       layout, which avoids the "two config.h" search-order problem).
@@ -308,6 +294,22 @@ pub fn build(b: *Build) void {
     run_native_dependency_audit.setCwd(b.path("."));
     run_native_dependency_audit.step.dependOn(b.getInstallStep());
     native_dependency_audit_step.dependOn(&run_native_dependency_audit.step);
+    const product_no_libsolv_fetch_audit_step = b.step(
+        "product-no-libsolv-fetch-audit",
+        "Build the product cleanly with fetching disabled and no libsolv",
+    );
+    const run_product_no_libsolv_fetch_audit = b.addSystemCommand(
+        &.{
+            "python3",
+            "scripts/product-no-libsolv-fetch-audit.py",
+            "--zig",
+            b.graph.zig_exe,
+        },
+    );
+    run_product_no_libsolv_fetch_audit.setCwd(b.path("."));
+    product_no_libsolv_fetch_audit_step.dependOn(
+        &run_product_no_libsolv_fetch_audit.step,
+    );
     const public_api_audit_step = b.step(
         "public-api-audit",
         "Compile and link an external C consumer using installed metadata",
@@ -1596,6 +1598,16 @@ pub fn build(b: *Build) void {
     run_libsolv_include_audit.setCwd(b.path("."));
     libsolv_confinement_step.dependOn(&run_libsolv_include_audit.step);
 
+    const run_libsolv_artifact_audit = b.addSystemCommand(
+        &.{
+            "python3",
+            "scripts/libsolv-artifact-audit.py",
+            b.getInstallPath(.prefix, ""),
+        },
+    );
+    run_libsolv_artifact_audit.setCwd(b.path("."));
+    run_libsolv_artifact_audit.step.dependOn(b.getInstallStep());
+    libsolv_confinement_step.dependOn(&run_libsolv_artifact_audit.step);
 
     const transaction_plan_handle_test_step = b.step(
         "transaction-plan-handle-test",
@@ -1857,6 +1869,33 @@ pub fn build(b: *Build) void {
 
     {
         const test_mod = b.createModule(.{
+            .root_source_file = b.path("repomd/package_context.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+            },
+        });
+        test_mod.addImport("xml", xml_mod);
+        test_mod.addImport("rpm_header", rpmzig_header_mod);
+        test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+        test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
+        test_mod.addIncludePath(b.path("include"));
+        test_mod.linkLibrary(common_lib);
+        test_mod.linkLibrary(llconf_lib);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        const package_context_test_step = b.step(
+            "package-context-test",
+            "Run native package context lifetime and stable handle tests",
+        );
+        package_context_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    {
+        const test_mod = b.createModule(.{
             .root_source_file = b.path("repomd/solver_identity.zig"),
             .target = target,
             .optimize = optimize,
@@ -1950,7 +1989,28 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
-    {
+    const oracle_test_step = b.step(
+        "libsolv-oracle-test",
+        "Run the opt-in canonical libsolv solver oracle tests",
+    );
+    if (enable_libsolv_oracle) {
+        // libsolv's C sources intentionally rely on wraparound in a few
+        // internal hash paths; match packaged libsolv's release behaviour.
+        const libsolv_dep_optional = b.lazyDependency("libsolv", .{
+            .target = target,
+            .optimize = OptimizeMode.ReleaseFast,
+            .ext = true,
+            .zlib = false,
+        });
+        if (libsolv_dep_optional == null) return;
+        const libsolv_dep = libsolv_dep_optional.?;
+        const libsolv = libsolv_dep.artifact("solv");
+        const libsolvext = libsolv_dep.artifact("solvext");
+        const libsolv_includes = LibsolvIncludes.init(
+            b,
+            libsolv,
+            libsolvext,
+        );
         const test_mod = b.createModule(.{
             .root_source_file = b.path("repomd/solver_oracle_test.zig"),
             .target = target,
@@ -1973,11 +2033,14 @@ pub fn build(b: *Build) void {
         test_mod.addObjectFile(libsolv.getEmittedBin());
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
-        const oracle_test_step = b.step(
-            "libsolv-oracle-test",
-            "Run the opt-in canonical libsolv solver oracle tests",
-        );
         oracle_test_step.dependOn(&run_tests.step);
+    } else {
+        const disabled = b.addSystemCommand(&.{
+            "sh",
+            "-c",
+            "echo 'error: libsolv oracle disabled; rerun with -Dlibsolv-oracle=true' >&2; exit 1",
+        });
+        oracle_test_step.dependOn(&disabled.step);
     }
 
     {

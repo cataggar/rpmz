@@ -46,6 +46,10 @@ jobs:
       - name: Build (Debug)
         run: zig build install --prefix ./out
 
+      - name: Prove product build does not fetch libsolv
+        if: matrix.name == 'linux-x64'
+        run: zig build product-no-libsolv-fetch-audit
+
       - name: Smoke test (Debug)
         run: |
           LD_LIBRARY_PATH=./out/lib ./out/bin/tdnf --version
@@ -54,7 +58,7 @@ jobs:
       - name: Zig unit tests
         run: |
           zig build test --prefix ./out
-          zig build libsolv-oracle-test --prefix ./out
+          zig build -Dlibsolv-oracle=true libsolv-oracle-test --prefix ./out
           # Also run them optimized. Debug masks whole classes of bug:
           # dangling stack pointers stay readable and the safety
           # allocator hides use-after-free. A segfault in

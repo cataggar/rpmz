@@ -674,7 +674,8 @@ fn refreshContext(
     if (consumeFailure(input.failure_stage, 4) or consumeFailure(input.failure_stage, 5))
         return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
 
-    package_context.swap(target, replacement);
+    package_context.swap(target, replacement) catch
+        return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
     if (bind_live) bindLiveRepositories(input, target);
     for (entries, disabled) |entry, disable| {
         if (disable) input.set_repository_enabled.?(entry.data, 0);
