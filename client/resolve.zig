@@ -3609,6 +3609,23 @@ pub extern fn TDNFLoadRepoData(pTdnf: PTDNF, ppReposAll: [*c]PTDNF_REPO_DATA) u3
 pub extern fn TDNFRepoListFinalize(pTdnf: PTDNF) u32;
 pub extern fn TDNFCloneRepo(pRepoIn: PTDNF_REPO_DATA, ppRepo: [*c]PTDNF_REPO_DATA) u32;
 pub extern fn TDNFFreeReposInternal(pRepos: PTDNF_REPO_DATA) void;
+
+const builtin = @import("builtin");
+threadlocal var prepare_all_test_error_after_update_pkgs: u32 = 0;
+threadlocal var prepare_all_test_update_pkgs_frees: usize = 0;
+
+pub fn prepareAllPackagesTestFailAfterUpdatePkgs(error_code: u32) void {
+    if (builtin.is_test) prepare_all_test_error_after_update_pkgs = error_code;
+}
+
+pub fn prepareAllPackagesTestResetUpdatePkgsFrees() void {
+    if (builtin.is_test) prepare_all_test_update_pkgs_frees = 0;
+}
+
+pub fn prepareAllPackagesTestUpdatePkgsFrees() usize {
+    return if (builtin.is_test) prepare_all_test_update_pkgs_frees else 0;
+}
+
 pub export fn TDNFPrepareAllPackages(pTdnf: PTDNF, pAlterType: [*c]TDNF_ALTERTYPE, ppszPkgsNotResolved: [*c][*c]u8, queueGoal: PTDNF_ID_LIST) u32 {
     var rc: u32 = 0;
     var severity: [*c]u8 = null;
@@ -3648,6 +3665,17 @@ pub export fn TDNFPrepareAllPackages(pTdnf: PTDNF, pAlterType: [*c]TDNF_ALTERTYP
             var count: u32 = 0;
             rc = TDNFGetUpdatePkgs(pTdnf, &pkgs, &count);
             if (rc != 0) break :process;
+            defer {
+                if (builtin.is_test and pkgs != null) {
+                    prepare_all_test_update_pkgs_frees += 1;
+                }
+                TDNFFreeStringArray(pkgs);
+            }
+            if (builtin.is_test and prepare_all_test_error_after_update_pkgs != 0) {
+                rc = prepare_all_test_error_after_update_pkgs;
+                prepare_all_test_error_after_update_pkgs = 0;
+                break :process;
+            }
             var i: u32 = 0;
             while (i < count) : (i += 1) {
                 var request_ref: u32 = if (alter_type == ALTER_UPGRADEALL) 0 else TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST;

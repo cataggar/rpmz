@@ -1840,6 +1840,23 @@ fn expectNoCapturedPlan(handle: ?*anyopaque) !void {
     try std.testing.expectEqual(@as(usize, 0), length);
 }
 
+fn prepareFilteredUpdateAll(handle: ?*anyopaque) u32 {
+    var not_resolved = [_][*c]u8{ null, null };
+    var queue = IdList{};
+    defer {
+        if (not_resolved[0] != null) TDNFFreeMemory(not_resolved[0]);
+        TDNFIdListFree(&queue);
+    }
+    var alter_type: client.resolve.TDNF_ALTERTYPE =
+        @intCast(alter_upgrade_all);
+    return client.resolve.TDNFPrepareAllPackages(
+        @ptrCast(@alignCast(handle)),
+        &alter_type,
+        &not_resolved,
+        @ptrCast(&queue),
+    );
+}
+
 fn runFilteredUpdateAllCase(filters: u8) !void {
     var fixture = try Fixture.create();
     defer fixture.destroy();
@@ -1953,6 +1970,50 @@ fn runFilteredUpdateAllCase(filters: u8) !void {
     defer TDNFFreeSolvedPackageInfo(filtered);
     try std.testing.expect(filtered != null);
     try expectNoCapturedPlan(compatibility_handle);
+
+    for (0..16) |_| {
+        var repeated: ?*anyopaque = null;
+        try std.testing.expectEqual(
+            @as(u32, 0),
+            TDNFResolve(
+                compatibility_handle,
+                alter_upgrade_all,
+                &repeated,
+            ),
+        );
+        try std.testing.expect(repeated != null);
+        TDNFFreeSolvedPackageInfo(repeated);
+    }
+
+    client.resolve.prepareAllPackagesTestResetUpdatePkgsFrees();
+    for (0..32) |_| {
+        try std.testing.expectEqual(
+            @as(u32, 0),
+            prepareFilteredUpdateAll(compatibility_handle),
+        );
+    }
+    for (0..32) |_| {
+        client.resolve.prepareAllPackagesTestFailAfterUpdatePkgs(
+            error_call_not_supported,
+        );
+        try std.testing.expectEqual(
+            error_call_not_supported,
+            prepareFilteredUpdateAll(compatibility_handle),
+        );
+    }
+    for (0..32) |_| {
+        client.resolve.prepareAllPackagesTestFailAfterUpdatePkgs(
+            error_out_of_memory,
+        );
+        try std.testing.expectEqual(
+            error_out_of_memory,
+            prepareFilteredUpdateAll(compatibility_handle),
+        );
+    }
+    try std.testing.expectEqual(
+        @as(usize, 96),
+        client.resolve.prepareAllPackagesTestUpdatePkgsFrees(),
+    );
 }
 
 test "filtered update-all is capture-only unsupported before refresh" {
