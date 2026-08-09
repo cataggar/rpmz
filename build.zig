@@ -31,8 +31,6 @@ const vendored_libsolv_version_patch = "39";
 /// libsolv's include paths. There is no longer an exception.
 const client_libsolv_free_srcs = [_][]const u8{
     "api.c",
-    "rpmtrans.c",
-    "rpmtrans_native.c",
 };
 
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
@@ -1721,6 +1719,12 @@ pub fn build(b: *Build) void {
         .link_libc = true,
         .pic = true,
     });
+    const client_transaction_options = b.addOptions();
+    client_transaction_options.addOption(bool, "export_entry_points", true);
+    tdnf_so_mod.addImport(
+        "client_transaction_options",
+        client_transaction_options.createModule(),
+    );
     tdnf_so_mod.addImport(
         "transaction_plan_capture",
         transaction_plan_capture_test_mod,
@@ -1751,9 +1755,6 @@ pub fn build(b: *Build) void {
     tdnf_so_mod.addIncludePath(b.path("include"));
     tdnf_so_mod.addIncludePath(b.path("client"));
     tdnf_so_mod.addIncludePath(b.path("rpmzig"));
-    // Native transaction ordering, dependency/conflict checks, and the
-    // composed transaction executor are unconditional.
-    tdnf_so_mod.addCMacro("TDNF_RPMZIG_TRANSACTION_CHECK", "1");
     // The native target may expose host headers, so this production build
     // declares only that the confinement negative control is not armed.
     tdnf_so_mod.addCMacro("TDNF_CLIENT_LIBSOLV_IN_SCOPE", "1");
@@ -1773,6 +1774,32 @@ pub fn build(b: *Build) void {
         .root_module = tdnf_so_mod,
         .version = project_semver,
     });
+    const transaction_test_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_test_mod.addImport("client_abi", client_abi_mod);
+    const client_transaction_test_options = b.addOptions();
+    client_transaction_test_options.addOption(bool, "export_entry_points", false);
+    transaction_test_mod.addImport(
+        "client_transaction_options",
+        client_transaction_test_options.createModule(),
+    );
+    transaction_test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
+    transaction_test_mod.addImport("tdnf_error", tdnf_error_mod);
+    transaction_test_mod.addIncludePath(b.path("include"));
+    transaction_test_mod.addIncludePath(b.path("client"));
+    transaction_test_mod.addIncludePath(b.path("rpmzig"));
+    const transaction_tests = b.addTest(.{ .root_module = transaction_test_mod });
+    const run_transaction_tests = b.addRunArtifact(transaction_tests);
+    const transaction_test_step = b.step(
+        "client-transaction-test",
+        "Run client native transaction tests",
+    );
+    transaction_test_step.dependOn(&run_transaction_tests.step);
+    zig_test_step.dependOn(&run_transaction_tests.step);
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureCreate");
     libtdnf.forceUndefinedSymbol("TDNFTransactionPlanCaptureDestroy");
     // Stop re-exporting vendored SQLite. See
@@ -1878,10 +1905,6 @@ pub fn build(b: *Build) void {
         .files = &client_libsolv_free_srcs,
     });
     client_confinement.root_module.addIncludePath(b.path("rpmzig"));
-    client_confinement.root_module.addCMacro(
-        "TDNF_RPMZIG_TRANSACTION_CHECK",
-        "1",
-    );
     // Arms the negative control in client/includes.h. The audit is only
     // evidence if libsolv is genuinely unreachable; if it were reachable
     // the audit would pass while proving nothing, which is the exact

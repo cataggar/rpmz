@@ -21,6 +21,7 @@ comptime {
     _ = @import("repositories.zig");
     _ = goal;
     _ = resolve;
+    _ = @import("transaction.zig");
     _ = updateinfo;
     _ = @import("client_varsdir");
 }

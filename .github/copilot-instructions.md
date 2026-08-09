@@ -106,7 +106,7 @@ access, OpenPGP verification, configuration, pubkey import, and the
 composed transaction executor.
 Today it exposes (via the C ABI in `rpmzig/rpmdb.h` and the
 install/erase/scriptlet/trigger engines used from
-`client/rpmtrans_native.c`):
+`client/transaction.zig`):
 
 - **rpmdb reader** (T1): `tdnf_rpmdb_count_packages`,
   `tdnf_rpmdb_iter_*`, `tdnf_rpmdb_cookie`,
@@ -129,7 +129,7 @@ install/erase/scriptlet/trigger engines used from
     the narrow internal `rpmzig_verify_detached_armored` bridge in
     `rpmzig/rpmdb.zig`; no package-install path calls this helper.
 - **Composed native transaction executor** (T4, issue #117):
-  `client/rpmtrans_native.c` composes the rpmzig install,
+  `client/transaction.zig` composes the rpmzig install,
   rpmdb-write, file-erase, scriptlet, trigger, and pure-Zig Lua
   engines into the sole transaction path. It runs
   `%pretrans` once, then per-item in native order
@@ -152,7 +152,7 @@ The crosscheck-only scaffolding flags used during T4 development
 native executor after PR #132 flipped it on by default) have been
 removed — their behaviours are now unconditional. Every
 `tdnf install`/`erase`/`upgrade` dispatches through the native
-executor in `client/rpmtrans_native.c`; there is no host implementation
+executor in `client/transaction.zig`; there is no host implementation
 fallback.
 
 Smoke-test consumers under `libexec/tdnf/`:

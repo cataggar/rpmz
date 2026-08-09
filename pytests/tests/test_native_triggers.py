@@ -614,7 +614,7 @@ def test_native_trigger_upgrade_arg2_matches_real_rpm():
 
     The native executor now matches this via the trigger engine's
     `arg2_override_present/value` fields wired from
-    client/rpmtrans_native.c.
+    client/transaction.zig.
     """
     case = make_case('upgrade-arg2')
     target_name = 'tdnf-native-trigger-upgrade-target'
@@ -669,7 +669,7 @@ def test_native_trigger_upgrade_arg2_matches_real_rpm():
     # Native simulation. write_replace collapses the two-instance
     # state, so we drive the trigger engine using the explicit arg2
     # override for the upgrade-only phases, mirroring what
-    # client/rpmtrans_native.c does in ProcessInstallItem +
+    # client/transaction.zig does in processInstallItem +
     # EraseOldAfterReplace.
     owner_hnum = native_db_install(case['native']['db_root'], native_owner, 1)
     assert owner_hnum == 1

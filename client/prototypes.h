@@ -231,29 +231,6 @@ TDNFConfigReplaceVars(
     );
 
 
-//rpmtrans.c
-uint32_t
-TDNFRpmExecTransaction(
-    PTDNF pTdnf,
-    PTDNF_SOLVED_PKG_INFO pInfo
-    );
-
-uint32_t
-TDNFRpmExecHistoryTransaction(
-    PTDNF pTdnf,
-    PTDNF_SOLVED_PKG_INFO pSolvedInfo,
-    PTDNF_HISTORY_ARGS pHistoryArgs
-    );
-
-
-
-
-
-
-
-
-
-
 //updateinfo.zig
 uint32_t
 TDNFGetSecuritySeverityOption(
