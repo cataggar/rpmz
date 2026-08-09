@@ -3,6 +3,7 @@
 // Licensed under the GNU Lesser General Public License v2.1.
 
 const __root = @This();
+const common = @import("tdnf_common");
 const canonical_abi = @import("client_abi");
 pub const __builtin = @import("std").zig.c_translation.builtins;
 pub const __helpers = @import("std").zig.c_translation.helpers;
@@ -3472,7 +3473,6 @@ pub extern fn TDNFMergeStringArrays(pppszArray0: [*c][*c][*c]u8, ppszArray1: [*c
 pub extern fn TDNFAddStringArray(pppszArray: [*c][*c][*c]u8, pszValue: [*c]u8) u32;
 pub extern fn TDNFJoinArrayToString(ppszArray: [*c][*c]u8, pszSep: [*c]const u8, count: c_int, ppszResult: [*c][*c]u8) u32;
 pub extern fn TDNFJoinArrayToStringSorted(ppszDependencies: [*c][*c]u8, pszSep: [*c]const u8, ppszResult: [*c][*c]u8) u32;
-pub extern fn TDNFAllocateStringPrintf(ppszDst: [*c][*c]u8, pszFmt: [*c]const u8, ...) u32;
 pub extern fn TDNFAllocateStringArray(ppszSrc: [*c][*c]u8, pppszDst: [*c][*c][*c]u8) u32;
 pub extern fn TDNFAllocateStringN(pszSrc: [*c]const u8, dwNumElements: u32, ppszDst: [*c][*c]u8) u32;
 pub extern fn TDNFReplaceString(pszSource: [*c]const u8, pszSearch: [*c]const u8, pszReplace: [*c]const u8, ppszDst: [*c][*c]u8) u32;
@@ -3498,7 +3498,6 @@ pub extern fn TDNFYesOrNo(pArgs: PTDNF_CMD_ARGS, pszQuestion: [*c]const u8, pAns
 pub extern fn TDNFNormalizePath(pszPath: [*c]const u8, ppszNormalPath: [*c][*c]u8) u32;
 pub extern fn TDNFRecursivelyRemoveDir(pszPath: [*c]const u8) u32;
 pub extern fn TDNFStringMatchesOneOf(pszSearch: [*c]const u8, ppszList: [*c][*c]u8, pRet: [*c]c_int) u32;
-pub extern fn TDNFJoinPath(ppszPath: [*c][*c]u8, ...) u32;
 pub extern fn TDNFReadFileToStringArray(pszFile: [*c]const u8, pppszArray: [*c][*c][*c]u8) u32;
 pub extern fn TDNFIsDir(pszPath: [*c]const u8, pnPathIsDir: [*c]c_int) u32;
 pub extern fn TDNFDirName(pszPath: [*c]const u8, ppszDirName: [*c][*c]u8) u32;
@@ -3507,7 +3506,6 @@ pub extern fn GlobalSetQuiet(val: i32) void;
 pub extern fn GlobalSetJson(val: i32) void;
 pub extern fn GlobalSetDnfCheckUpdateCompat(val: i32) void;
 pub extern fn GlobalGetDnfCheckUpdateCompat() bool;
-pub extern fn log_console(loglevel: i32, format: [*c]const u8, ...) void;
 pub extern fn tdnfLockAcquire(lockPath: [*c]const u8) c_int;
 pub extern fn tdnfLockFree(lockPath: [*c]const u8, lockFd: c_int) void;
 pub extern fn strtoi(ptr: [*c]const u8) i32;
@@ -3956,7 +3954,7 @@ fn tdnfSolv(
             if (rc != 0) break :solve;
         }
         if (pTdnf.*.pArgs.*.nDebugSolver != 0) {
-            log_console(LOG_ERR, "--debugsolver: solver debug data is no longer produced; the native solver has no libsolv testcase to write\n");
+            common.log(LOG_ERR, "--debugsolver: solver debug data is no longer produced; the native solver has no libsolv testcase to write\n", .{});
         }
 
         rc = TDNFGoalSolveNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, nReInstall, &info, 0, 0, 0, if (TDNFTransactionPlanStateIsEnabled(pTdnf.*.pTransactionPlanState) != 0) &native_solve else null);
@@ -3965,10 +3963,10 @@ fn tdnfSolv(
             var action: [*c]const u8 = null;
             const find_rc = TDNFGoalFindProtectedInTransaction(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, &protected_name, &action);
             if (protected_name != null) {
-                log_console(LOG_ERR, "package %s would be %s but it is protected\n", protected_name, action);
+                common.log(LOG_ERR, "package %s would be %s but it is protected\n", .{ protected_name, action });
                 rc = ERROR_TDNF_PROTECTED;
             } else if (rc == ERROR_TDNF_PROTECTED) {
-                log_console(LOG_ERR, "a protected package blocks this transaction but it could not be named (%u)\n", find_rc);
+                common.log(LOG_ERR, "a protected package blocks this transaction but it could not be named (%u)\n", .{find_rc});
             }
         }
 
@@ -3977,7 +3975,7 @@ fn tdnfSolv(
             if (rc != 0) break :solve;
             var reported = TDNFReportProblemsNative(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, skip_problem);
             if (reported == 0) {
-                log_console(LOG_ERR, "The request cannot be resolved. Every problem found was hidden by a skip option.\n");
+                common.log(LOG_ERR, "The request cannot be resolved. Every problem found was hidden by a skip option.\n", .{});
                 reported = ERROR_TDNF_SOLV_FAILED;
             }
             rc = captureFailure(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, nUnresolved, 0xffffffff, ppszExcludes, 0, 1, 0, &native_solve, reported);
@@ -4418,17 +4416,17 @@ pub export fn TDNFReportNativeSolverProblems(arg_pHandle: ?*anyopaque, arg_dwSki
                 if (!false) break;
             }
             if ((nReported != 0) and (pszMessage != null)) {
-                log_console(LOG_ERR, "%u. %s\n", blk: {
+                common.log(LOG_ERR, "%u. %s\n", .{ blk: {
                     const ref = &total_prblms;
                     ref.* +%= 1;
                     break :blk ref.*;
-                }, pszMessage);
+                }, pszMessage });
             }
         }
     }
     if (total_prblms > @as(u32, 0)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SOLV_BASE + @as(c_int, 1)));
-        log_console(LOG_ERR, "Found %u problem(s) while resolving\n", total_prblms);
+        common.log(LOG_ERR, "Found %u problem(s) while resolving\n", .{total_prblms});
     }
     return dwError;
 }
@@ -4711,7 +4709,7 @@ pub fn TDNFSolvAddProtectPkgs(arg_pTdnf: PTDNF, arg_pQueueJobs: PTDNF_ID_LIST) c
                         }
                     }
                     if (i == @as(c_int, @bitCast(@as(c_uint, @truncate(pQueueJobs.*.dwCount))))) {
-                        log_console(LOG_ERR, "package %s is protected\n", pszPkgName);
+                        common.log(LOG_ERR, "package %s is protected\n", .{pszPkgName});
                         dwError = ERROR_TDNF_PROTECTED;
                         while (true) {
                             if (dwError != @as(u32, 0)) return dwError;
@@ -4916,7 +4914,7 @@ pub fn TDNFGoalSolveNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_L
     }
     dwError = TDNFRepoMdNativeSolverLiveSolve(pRepos, dwRepoCount, pJobs, dwJobCount, pEraseJobs, dwEraseJobCount, pHiddenAvailable, dwHiddenAvailableCount, pTdnf.*.pArgs.*.nAllDeps, pTdnf.*.pArgs.*.nBest, nAutoErase, nSkipBrokenSolve, nAllowErasing, nUpdateAll, nDistSyncAll, @ptrCast(@alignCast(ppszLockedPkgs)), pdwLockedQueuePairs, dwGlobalQueuePair, nHasGlobalQueuePair, @ptrCast(@alignCast(ppszInstallOnlyPkgs)), @bitCast(@as(c_int, pTdnf.*.pConf.*.nInstallOnlyLimit)), @ptrCast(@alignCast(if (nDropProtected != 0) @as(?*const anyopaque, @ptrCast(@alignCast(@as(?*anyopaque, null)))) else @as(?*const anyopaque, @ptrCast(@alignCast(@as([*c]const [*c]const u8, @ptrCast(@alignCast(pTdnf.*.pConf.*.ppszProtectedPkgs)))))))), @ptrCast(@alignCast(ppszUserInstalledPkgs)), @ptrCast(@alignCast(ppszCmdLinePaths)), nReInstall, pTdnf.*.pRpmConfig, pszNativeArch, nPrepareOnly, nRefuteUnsat, @ptrCast(@alignCast(if ((nPrepareOnly != 0) or (nRefuteUnsat != 0)) @as(?*anyopaque, null) else @as(?*anyopaque, @ptrCast(@alignCast(&pInfo))))), ppHandle);
     if ((dwError != 0) and (@as(u32, @bitCast(@as(c_int, @intFromBool(!(!(TDNFRepoMdLastError() != null) or !(@as(c_int, TDNFRepoMdLastError().*) != 0)))))) != 0)) {
-        log_console(LOG_ERR, "native-solver: %s\n", TDNFRepoMdLastError());
+        common.log(LOG_ERR, "native-solver: %s\n", .{TDNFRepoMdLastError()});
     }
     while (true) {
         if (dwError != @as(u32, 0)) return dwError;
@@ -5728,7 +5726,7 @@ pub fn TDNFReportProblemsNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF
         if (!false) break;
     }
     if (!(pHandle != null)) {
-        log_console(LOG_ERR, "native-solver: unable to render solver diagnostics\n");
+        common.log(LOG_ERR, "native-solver: unable to render solver diagnostics\n", .{});
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SOLV_BASE + @as(c_int, 1)));
         while (true) {
             if (dwError != @as(u32, 0)) return dwError;
@@ -5741,7 +5739,7 @@ pub fn TDNFReportProblemsNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF
         if (!false) break;
     }
     if (dwCount == @as(u32, 0)) {
-        log_console(LOG_ERR, "native-solver: unable to render solver diagnostics\n");
+        common.log(LOG_ERR, "native-solver: unable to render solver diagnostics\n", .{});
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SOLV_BASE + @as(c_int, 1)));
         while (true) {
             if (dwError != @as(u32, 0)) return dwError;

@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
 const errors = @import("tdnf_error");
@@ -66,7 +67,6 @@ extern fn TDNFAllocateString(
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
 extern fn GlobalSetJson(nValue: c_int) void;
 extern fn GlobalSetQuiet(nValue: c_int) void;
-extern fn log_console(nLogLevel: c_int, pszFormat: [*:0]const u8, ...) void;
 extern fn tdnf_rpm_config_create(root: ?[*:0]const u8) ?*anyopaque;
 extern fn tdnf_rpm_config_destroy(config: ?*anyopaque) void;
 extern fn tdnf_rpm_config_last_error() [*:0]const u8;
@@ -512,12 +512,7 @@ fn releaseVersionConfigWithOps(
         &native_version,
     );
     if (resolve_result < 0) {
-        log_console(
-            LOG_ERR,
-            "Failed to read distroverpkg provider '%s': %s\n",
-            distro_package.?,
-            rpm.dbError(rpm.context),
-        );
+        common.log(LOG_ERR, "Failed to read distroverpkg provider '%s': %s\n", .{ distro_package.?, rpm.dbError(rpm.context) });
         return errors.ERROR_TDNF_DISTROVERPKG_READ;
     }
     if (resolve_result == 0) return errors.ERROR_TDNF_NO_DISTROVERPKG;
@@ -555,11 +550,7 @@ fn releaseVersionWithOps(
     }
 
     const config = rpm.create(rpm.context, root.?) orelse {
-        log_console(
-            LOG_ERR,
-            "Failed to initialize native rpm configuration: %s\n",
-            rpm.configError(rpm.context),
-        );
+        common.log(LOG_ERR, "Failed to initialize native rpm configuration: %s\n", .{rpm.configError(rpm.context)});
         return errors.ERROR_TDNF_DISTROVERPKG_READ;
     };
     defer rpm.destroy(rpm.context, config);

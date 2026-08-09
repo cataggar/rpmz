@@ -1,4 +1,5 @@
 const std = @import("std");
+const common = @import("tdnf_common");
 const Allocator = std.mem.Allocator;
 
 const integration_options = @import("transaction_plan_integration_options");
@@ -320,7 +321,6 @@ extern fn TDNFRemoveSolvCache(?*anyopaque, ?*anyopaque) u32;
 extern fn TDNFFreeMemory(?*anyopaque) void;
 extern fn TDNFBuildRefreshInput(?*anyopaque, ?*anyopaque, *abi.RepositoryRefreshInput) u32;
 extern fn TDNFRemoveLastRefreshMarker(?*anyopaque, ?*anyopaque) u32;
-extern fn log_console(c_int, [*:0]const u8, ...) void;
 
 const IdList = extern struct {
     pnElements: ?[*]i32,
@@ -430,7 +430,11 @@ fn loadRepository(
     var cache_dir: ?[*:0]u8 = null;
     var metadata: ?*RepoMetadata = null;
     var result = callbacks.get_cache_path.?(
-        input.tdnf_handle, input.repo_data, null, null, &cache_dir,
+        input.tdnf_handle,
+        input.repo_data,
+        null,
+        null,
+        &cache_dir,
     );
     if (result != 0) return result;
     const cache_path = cache_dir orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
@@ -449,7 +453,10 @@ fn loadRepository(
         result = callbacks.make_dirs.?(repo_data_dir.ptr);
         if (result != 0 and result != error_codes.fromErrno(.EXIST)) return result;
         result = callbacks.get_repo_md.?(
-            input.tdnf_handle, input.repo_data, repo_data_dir.ptr, @ptrCast(&metadata),
+            input.tdnf_handle,
+            input.repo_data,
+            repo_data_dir.ptr,
+            @ptrCast(&metadata),
         );
         if (result != 0) return result;
         defer callbacks.free_repo_metadata.?(
@@ -535,7 +542,8 @@ fn initRepository(
     const result = loadRepository(input, context);
     if (result != 0) return result;
     const repository = package_context.findRepositoryByOwner(
-        context, input.repo_data,
+        context,
+        input.repo_data,
     ) orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     if (loaded_repo) |output| output.* = @ptrCast(repository);
     return 0;
@@ -633,12 +641,18 @@ fn refreshContext(
         if (entry.view.metadata_expire >= 0 and input.cache_only == 0) {
             var cache_path: ?[*:0]u8 = null;
             var result = TDNFGetCachePath(
-                input.tdnf_handle, entry.data, null, null, &cache_path,
+                input.tdnf_handle,
+                entry.data,
+                null,
+                null,
+                &cache_path,
             );
             if (result != 0) return result;
             defer if (cache_path) |path| TDNFFreeMemory(path);
             result = TDNFShouldSyncMetadata(
-                cache_path, entry.view.metadata_expire, &metadata_expired,
+                cache_path,
+                entry.view.metadata_expire,
+                &metadata_expired,
             );
             if (result != 0) return result;
         }
@@ -761,11 +775,7 @@ fn initRepoFromHandle(
     };
     result = initRepository(&input, loaded_repo);
     if (result != 0) {
-        log_console(
-            1,
-            "Error: Failed to synchronize cache for repo '%s'\n",
-            view.name orelse view.id orelse "(unknown)",
-        );
+        common.log(1, "Error: Failed to synchronize cache for repo '%s'\n", .{view.name orelse view.id orelse "(unknown)"});
         if (result != error_codes.ERROR_TDNF_OUT_OF_MEMORY) {
             _ = TDNFRepoRemoveCache(handle, data);
             _ = TDNFRemoveSolvCache(handle, data);
@@ -799,7 +809,6 @@ fn initCommandLineRepository(
         return error_codes.ERROR_TDNF_OUT_OF_MEMORY);
     return 0;
 }
-
 
 fn historyGoalImpl(
     handle: ?*anyopaque,
@@ -1794,7 +1803,7 @@ fn nativeLocation(
     const separator = std.mem.lastIndexOfScalar(u8, href, '/') orelse
         return allocator.dupe(u8, href);
     const file = href[separator + 1 ..];
-    var directory = href[0 .. if (separator == 0) 1 else separator];
+    var directory = href[0..if (separator == 0) 1 else separator];
     if (directory.len >= 2 and directory[0] == '.' and directory[1] == '/' and
         (directory.len == 2 or directory[2] != '/'))
     {

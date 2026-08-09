@@ -174,7 +174,7 @@ export fn parse_options(string: ?[*:0]const u8) [*c]c.struct_cnfnode {
     return cn_top;
 }
 
-export fn cnfmodule_parse(cm: [*c]c.struct_cnfmodule, fin: [*c]c.FILE) [*c]c.struct_cnfnode {
+export fn cnfmodule_parse(cm: [*c]c.struct_cnfmodule, fin: ?*c.FILE) [*c]c.struct_cnfnode {
     if (cm == null or cm[0].parser == null) {
         return null;
     }
@@ -201,7 +201,7 @@ export fn cnfmodule_parse_file(cm: [*c]c.struct_cnfmodule, fnameOpt: ?[*:0]const
     return null;
 }
 
-export fn cnfmodule_unparse(cm: [*c]c.struct_cnfmodule, fout: [*c]c.FILE, cn_root: [*c]c.struct_cnfnode) c_int {
+export fn cnfmodule_unparse(cm: [*c]c.struct_cnfmodule, fout: ?*c.FILE, cn_root: [*c]c.struct_cnfnode) c_int {
     if (cm == null or cm[0].unparser == null) {
         return -1;
     }
@@ -251,11 +251,11 @@ export fn cnfmodule_register_plugin(nameOpt: ?[*:0]const u8, pathOpt: ?[*:0]cons
     return -2;
 }
 
-fn testParser(_: [*c]c.struct_cnfmodule, _: [*c]c.FILE) callconv(.c) [*c]c.struct_cnfnode {
+fn testParser(_: [*c]c.struct_cnfmodule, _: ?*c.FILE) callconv(.c) [*c]c.struct_cnfnode {
     return c.create_cnfnode("(parsed)");
 }
 
-fn testUnparser(_: [*c]c.struct_cnfmodule, _: [*c]c.FILE, _: [*c]c.struct_cnfnode) callconv(.c) c_int {
+fn testUnparser(_: [*c]c.struct_cnfmodule, _: ?*c.FILE, _: [*c]c.struct_cnfnode) callconv(.c) c_int {
     return 7;
 }
 

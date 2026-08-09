@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const getopt = @import("getopt_c.zig").c;
 const c = @cImport({
     @cInclude("errno.h");
@@ -20,7 +21,6 @@ const argparse = @import("argparse.zig");
 const help = @import("help.zig");
 const options = @import("options.zig");
 
-extern fn log_console(loglevel: i32, format: [*:0]const u8, ...) void;
 extern fn TDNFStrIsValidRepoName(str: ?[*:0]const u8) c_int;
 
 const LOG_ERR: c_int = 1;
@@ -387,7 +387,7 @@ pub export fn TDNFCliParseArgs(
             return dwError;
         }
     } else if (pCmdArgs.?.pszInstallRoot[0] != '/') {
-        log_console(LOG_CRIT, "Install root must be an absolute path.\n");
+        common.log(LOG_CRIT, "Install root must be an absolute path.\n", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
     }
 
@@ -411,7 +411,7 @@ pub export fn TDNFCliParseArgs(
         var nIndex: usize = 0;
         while (nArgIndex < argc) : (nArgIndex += 1) {
             if (argv[@intCast(nArgIndex)] == null or argv[@intCast(nArgIndex)].?[0] == 0) {
-                log_console(LOG_ERR, "argument is empty string\n");
+                common.log(LOG_ERR, "argument is empty string\n", .{});
                 return c.ERROR_TDNF_INVALID_PARAMETER;
             }
 
@@ -548,7 +548,7 @@ pub export fn HandleOptionsError(
     if (dwError == c.ERROR_TDNF_CLI_OPTION_NAME_INVALID) {
         help.TDNFCliShowNoSuchOption(pszName);
     } else if (dwError == c.ERROR_TDNF_CLI_OPTION_ARG_REQUIRED) {
-        log_console(LOG_ERR, "Option %s requires an argument\n", pszName.?);
+        common.log(LOG_ERR, "Option %s requires an argument\n", .{pszName.?});
     }
 
     return dwError;

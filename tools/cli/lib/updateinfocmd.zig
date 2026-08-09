@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("stdio.h");
@@ -13,8 +14,6 @@ const c = @cImport({
     @cInclude("tdnfcli.h");
     @cInclude("tdnferror.h");
 });
-
-extern fn log_console(loglevel: i32, format: [*:0]const u8, ...) void;
 
 const LOG_CRIT: c_int = 2;
 
@@ -130,17 +129,12 @@ pub export fn TDNFCliUpdateInfoSummary(
         const summary = pSummary.?[@intCast(i)];
         if (summary.nCount > 0) {
             nCount += 1;
-            log_console(
-                LOG_CRIT,
-                "%d %s notice(s)\n",
-                summary.nCount,
-                TDNFGetUpdateInfoType(summary.nType),
-            );
+            common.log(LOG_CRIT, "%d %s notice(s)\n", .{ summary.nCount, TDNFGetUpdateInfoType(summary.nType) });
         }
     }
 
     if (nCount == 0) {
-        log_console(LOG_CRIT, "\n%d updates.\n", nCount);
+        common.log(LOG_CRIT, "\n%d updates.\n", .{nCount});
         return c.ERROR_TDNF_NO_DATA;
     }
 
@@ -156,29 +150,14 @@ pub export fn TDNFCliUpdateInfoOutput(
         var pPkg = info.pPackages;
         while (pPkg) |pkg| : (pPkg = pkg[0].pNext) {
             if (mode == c.OUTPUT_INFO) {
-                log_console(
-                    LOG_CRIT,
-                    "       Name : %s\n" ++
-                        "  Update ID : %s\n" ++
-                        "       Type : %s\n" ++
-                        "    Updated : %s\n" ++
-                        "Needs Reboot: %d\n" ++
-                        "Description : %s\n",
-                    pkg[0].pszFileName,
-                    info.pszID,
-                    TDNFGetUpdateInfoType(info.nType),
-                    info.pszDate,
-                    info.nRebootRequired,
-                    info.pszDescription,
-                );
+                common.log(LOG_CRIT, "       Name : %s\n" ++
+                    "  Update ID : %s\n" ++
+                    "       Type : %s\n" ++
+                    "    Updated : %s\n" ++
+                    "Needs Reboot: %d\n" ++
+                    "Description : %s\n", .{ pkg[0].pszFileName, info.pszID, TDNFGetUpdateInfoType(info.nType), info.pszDate, info.nRebootRequired, info.pszDescription });
             } else if (mode == c.OUTPUT_LIST) {
-                log_console(
-                    LOG_CRIT,
-                    "%s %s %s\n",
-                    info.pszID,
-                    TDNFGetUpdateInfoType(info.nType),
-                    pkg[0].pszFileName,
-                );
+                common.log(LOG_CRIT, "%s %s %s\n", .{ info.pszID, TDNFGetUpdateInfoType(info.nType), pkg[0].pszFileName });
             }
         }
     }

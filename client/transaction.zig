@@ -3,6 +3,7 @@
 // Licensed under the GNU Lesser General Public License v2.1.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const abi = @import("client_abi");
 const transaction_options = @import("client_transaction_options");
 const errors = @import("tdnf_error");
@@ -345,7 +346,6 @@ const PostunQueue = struct {
 
 extern fn TDNFAllocateMemory(usize, usize, *?*anyopaque) callconv(.c) u32;
 extern fn TDNFAllocateString(?[*:0]const u8, *?[*:0]u8) callconv(.c) u32;
-extern fn TDNFAllocateStringPrintf(*?[*:0]u8, [*:0]const u8, ...) callconv(.c) u32;
 extern fn TDNFFreeMemory(?*anyopaque) callconv(.c) void;
 extern fn TDNFFindRepoById(?*abi.Tdnf, ?[*:0]const u8, *?*abi.RepoData) callconv(.c) u32;
 extern fn TDNFDownloadPackageToCache(
@@ -370,7 +370,6 @@ extern fn TDNFGPGCheckPackageWithFile(
     ?*c.tdnf_rpm_file,
     ?*c_int,
 ) callconv(.c) u32;
-extern fn TDNFJoinPath(*?[*:0]u8, ?[*:0]const u8, ...) callconv(.c) u32;
 extern fn TDNFUtilsMakeDirs(?[*:0]const u8) callconv(.c) u32;
 extern fn TDNFJoinArrayToString(
     ?[*]?[*:0]u8,
@@ -405,7 +404,6 @@ extern fn tdnf_repomd_native_verified_transaction_solve_config(
     ?*const anyopaque,
     *?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32;
-extern fn log_console(c_int, [*:0]const u8, ...) callconv(.c) void;
 extern fn access(?[*:0]const u8, c_int) callconv(.c) c_int;
 extern fn unlink(?[*:0]const u8) callconv(.c) c_int;
 extern fn strerror(c_int) callconv(.c) [*:0]const u8;
@@ -609,12 +607,7 @@ fn addInstallPackage(
             while (repo.ppszBaseUrls.?[i]) |base| : (i += 1) {
                 if (!std.ascii.startsWithIgnoreCase(std.mem.span(base), "file://"))
                     continue;
-                rc = TDNFJoinPath(
-                    &path,
-                    base + 7,
-                    location,
-                    @as(?[*:0]const u8, null),
-                );
+                rc = common.joinPath(&path, &.{ base + 7, location });
                 if (rc != 0) return rc;
                 if (access(path, F_OK) == 0) {
                     in_place = true;
@@ -642,23 +635,12 @@ fn addInstallPackage(
 
     if (path == null or access(path, F_OK) != 0) {
         const errno_value = std.c._errno().*;
-        log_console(
-            LOG_ERR,
-            "could not access file %s: %s (%d)\n",
-            path orelse "(null)",
-            strerror(errno_value),
-            errno_value,
-        );
+        common.log(LOG_ERR, "could not access file %s: %s (%d)\n", .{ path orelse "(null)", strerror(errno_value), errno_value });
         return systemError();
     }
     rpm_file = c.tdnf_rpm_file_open(path);
     if (rpm_file == null) {
-        log_console(
-            LOG_ERR,
-            "Unable to parse package %s: %s\n",
-            path.?,
-            c.tdnf_rpmdb_last_error(),
-        );
+        common.log(LOG_ERR, "Unable to parse package %s: %s\n", .{ path.?, c.tdnf_rpmdb_last_error() });
         return ERROR_TDNF_RPMRC_NOTFOUND;
     }
 
@@ -673,7 +655,7 @@ fn addInstallPackage(
             digest.len,
         ) != 0) return ERROR_TDNF_RPM_CHECK;
         if (!std.mem.eql(u8, digest[0..len], info.pbChecksum[0..len])) {
-            log_console(LOG_ERR, "rpm file (%s) Checksum FAILED (digest mismatch)\n", path.?);
+            common.log(LOG_ERR, "rpm file (%s) Checksum FAILED (digest mismatch)\n", .{path.?});
             return ERROR_TDNF_CHECKSUM_MISMATCH;
         }
     }
@@ -683,13 +665,7 @@ fn addInstallPackage(
     if (c.tdnf_rpm_file_bytes(rpm_file, &bytes, &byte_len) != 0)
         return ERROR_TDNF_RPM_CHECK;
     if (byte_len != info.dwDownloadSizeBytes) {
-        log_console(
-            LOG_ERR,
-            "rpm file (%s) size (%zu) does not match expected size (%u)\n",
-            path.?,
-            byte_len,
-            info.dwDownloadSizeBytes,
-        );
+        common.log(LOG_ERR, "rpm file (%s) size (%zu) does not match expected size (%u)\n", .{ path.?, byte_len, info.dwDownloadSizeBytes });
         return ERROR_TDNF_SIZE_MISMATCH;
     }
     rc = TDNFGPGCheckPackageWithFile(tdnf, repo, path, rpm_file, null);
@@ -700,20 +676,9 @@ fn addInstallPackage(
         metadata.main_header_blob == null or metadata.main_header_blob_len == 0)
         return ERROR_TDNF_RPM_CHECK;
     if (metadata.has_epoch != 0) {
-        rc = TDNFAllocateStringPrintf(
-            &header_evr,
-            "%u:%s-%s",
-            metadata.epoch,
-            metadata.version,
-            metadata.release,
-        );
+        rc = common.allocPrint(&header_evr, "%u:%s-%s", .{ metadata.epoch, metadata.version, metadata.release });
     } else {
-        rc = TDNFAllocateStringPrintf(
-            &header_evr,
-            "%s-%s",
-            metadata.version,
-            metadata.release,
-        );
+        rc = common.allocPrint(&header_evr, "%s-%s", .{ metadata.version, metadata.release });
     }
     if (rc != 0) return rc;
     if (isEmpty(metadata.name) or isEmpty(header_evr) or isEmpty(metadata.arch))
@@ -881,7 +846,7 @@ fn reportProblems(ts: *c.TDNFRPMTS) void {
     const plan = ts.pNativePlan orelse return;
     const plan_ptr: *c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN = @ptrCast(plan);
     if (plan_ptr.dwProblemCount == 0 or plan_ptr.pProblems == null) return;
-    log_console(LOG_CRIT, "Found %u problems\n", plan_ptr.dwProblemCount);
+    common.log(LOG_CRIT, "Found %u problems\n", .{plan_ptr.dwProblemCount});
     for (plan_ptr.pProblems[0..plan_ptr.dwProblemCount]) |problem| {
         const package: [*c]const u8 = if (problem.pszPackage != null)
             problem.pszPackage
@@ -896,29 +861,12 @@ fn reportProblems(ts: *c.TDNFRPMTS) void {
         else
             "(unknown)";
         switch (problem.nType) {
-            1, 2 => log_console(
-                LOG_CRIT,
-                "nothing provides %s needed by %s\n",
-                subject,
-                package,
-            ),
-            3 => log_console(LOG_CRIT, "package %s conflicts with %s\n", package, related),
-            4 => log_console(LOG_CRIT, "package %s obsoletes %s\n", package, related),
-            5 => log_console(
-                LOG_CRIT,
-                "file %s from install of %s conflicts with file from package %s\n",
-                subject,
-                package,
-                related,
-            ),
-            6 => log_console(
-                LOG_CRIT,
-                "package %s has %u installed %s instances selected for one upgrade; remove extra instances or configure the package as installonly\n",
-                package,
-                problem.dwCount,
-                subject,
-            ),
-            else => log_console(LOG_CRIT, "unknown native transaction problem for %s\n", package),
+            1, 2 => common.log(LOG_CRIT, "nothing provides %s needed by %s\n", .{ subject, package }),
+            3 => common.log(LOG_CRIT, "package %s conflicts with %s\n", .{ package, related }),
+            4 => common.log(LOG_CRIT, "package %s obsoletes %s\n", .{ package, related }),
+            5 => common.log(LOG_CRIT, "file %s from install of %s conflicts with file from package %s\n", .{ subject, package, related }),
+            6 => common.log(LOG_CRIT, "package %s has %u installed %s instances selected for one upgrade; remove extra instances or configure the package as installonly\n", .{ package, problem.dwCount, subject }),
+            else => common.log(LOG_CRIT, "unknown native transaction problem for %s\n", .{package}),
         }
     }
 }
@@ -926,9 +874,9 @@ fn reportProblems(ts: *c.TDNFRPMTS) void {
 fn logRpmzigError(action: [*:0]const u8) void {
     const detail = c.tdnf_rpmdb_last_error();
     if (!isEmpty(detail))
-        log_console(LOG_ERR, "rpmzig-transaction-execute: %s failed: %s\n", action, detail)
+        common.log(LOG_ERR, "rpmzig-transaction-execute: %s failed: %s\n", .{ action, detail })
     else
-        log_console(LOG_ERR, "rpmzig-transaction-execute: %s failed\n", action);
+        common.log(LOG_ERR, "rpmzig-transaction-execute: %s failed\n", .{action});
 }
 
 fn ownershipIgnores(context: *const OwnershipContext, hnum: u32) bool {
@@ -1077,29 +1025,15 @@ fn logScriptletOutcome(
         result.outcome == c.TDNF_RPM_SCRIPTLET_OUTCOME_OK) return;
     const package = nevra orelse "(unknown)";
     if (result.outcome == c.TDNF_RPM_SCRIPTLET_OUTCOME_SIGNALED) {
-        log_console(
-            LOG_CRIT,
-            "package %s: script %s in %s (signal %d)\n",
-            package,
-            if (result.critical != 0)
-                @as([*:0]const u8, "error")
-            else
-                @as([*:0]const u8, "warning"),
-            phase,
-            result.signal_number,
-        );
+        common.log(LOG_CRIT, "package %s: script %s in %s (signal %d)\n", .{ package, if (result.critical != 0)
+            @as([*:0]const u8, "error")
+        else
+            @as([*:0]const u8, "warning"), phase, result.signal_number });
     } else {
-        log_console(
-            LOG_CRIT,
-            "package %s: script %s in %s (exit %d)\n",
-            package,
-            if (result.critical != 0)
-                @as([*:0]const u8, "error")
-            else
-                @as([*:0]const u8, "warning"),
-            phase,
-            result.exit_status,
-        );
+        common.log(LOG_CRIT, "package %s: script %s in %s (exit %d)\n", .{ package, if (result.critical != 0)
+            @as([*:0]const u8, "error")
+        else
+            @as([*:0]const u8, "warning"), phase, result.exit_status });
     }
 }
 
@@ -1786,13 +1720,7 @@ fn formatNevra(item: *const c.TDNF_RPM_TS_ITEM) struct { u32, ?[*:0]u8 } {
         isEmpty(@ptrCast(item.pszArch)))
         return .{ 0, null };
     var result: ?[*:0]u8 = null;
-    const rc = TDNFAllocateStringPrintf(
-        &result,
-        "%s-%s.%s",
-        item.pszName,
-        item.pszEVR,
-        item.pszArch,
-    );
+    const rc = common.allocPrint(&result, "%s-%s.%s", .{ item.pszName, item.pszEVR, item.pszArch });
     return .{ rc, result };
 }
 
@@ -2098,17 +2026,12 @@ fn processInstallItem(
         if (rc != 0) return rc;
     }
     if (ts.nQuiet == 0) {
-        log_console(
-            LOG_INFO,
-            "%s: %s\n",
-            if (item.nType == item_reinstall)
-                @as([*:0]const u8, "Reinstalling")
-            else if (item.nType == item_upgrade)
-                @as([*:0]const u8, "Upgrading")
-            else
-                @as([*:0]const u8, "Installing"),
-            nevra orelse @as(?[*:0]const u8, @ptrCast(item.pszPath)),
-        );
+        common.log(LOG_INFO, "%s: %s\n", .{ if (item.nType == item_reinstall)
+            @as([*:0]const u8, "Reinstalling")
+        else if (item.nType == item_upgrade)
+            @as([*:0]const u8, "Upgrading")
+        else
+            @as([*:0]const u8, "Installing"), nevra orelse @as(?[*:0]const u8, @ptrCast(item.pszPath)) });
     }
     if (tdnf.pArgs.?.nTestOnly == 0) {
         var options = std.mem.zeroes(c.tdnf_rpm_install_options);
@@ -2390,11 +2313,7 @@ fn processEraseItem(
         if (rc != 0) return rc;
     }
     if (ts.nQuiet == 0)
-        log_console(
-            LOG_INFO,
-            "Removing: %s\n",
-            nevra orelse @as(?[*:0]const u8, @ptrCast(item.pszName)),
-        );
+        common.log(LOG_INFO, "Removing: %s\n", .{nevra orelse @as(?[*:0]const u8, @ptrCast(item.pszName))});
     if (tdnf.pArgs.?.nTestOnly == 0) {
         var erase_options = std.mem.zeroes(c.tdnf_rpm_erase_options);
         erase_options.config = @ptrCast(config);
@@ -2573,7 +2492,7 @@ fn runTransactionNative(
         redirect = 1;
     }
     if (ts.nQuiet == 0)
-        log_console(LOG_INFO, "Running transaction (rpmzig native executor)\n");
+        common.log(LOG_INFO, "Running transaction (rpmzig native executor)\n", .{});
 
     rc = runTransactionScriptletPhase(
         plan,
@@ -2765,7 +2684,7 @@ fn orderAndCheck(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
     if (rc != 0) {
         const message = c.TDNFRepoMdNativeTransactionLastError();
         if (!isEmpty(message))
-            log_console(LOG_ERR, "rpmzig-transaction-check: %s\n", message);
+            common.log(LOG_ERR, "rpmzig-transaction-check: %s\n", .{message});
         return rc;
     }
     if (plan == null or plan.?.dwItemCount != count or
@@ -2803,12 +2722,7 @@ fn runWithHistory(
 ) u32 {
     var data_dir: ?[*:0]u8 = null;
     defer free(data_dir);
-    var rc = TDNFJoinPath(
-        &data_dir,
-        tdnf.pArgs.?.pszInstallRoot,
-        tdnf.pConf.?.pszPersistDir,
-        @as(?[*:0]const u8, null),
-    );
+    var rc = common.joinPath(&data_dir, &.{ tdnf.pArgs.?.pszInstallRoot, tdnf.pConf.?.pszPersistDir });
     if (rc == 0 and data_dir != null) {
         rc = TDNFUtilsMakeDirs(data_dir);
         if (rc == errors.ERROR_TDNF_ALREADY_EXISTS) rc = 0;

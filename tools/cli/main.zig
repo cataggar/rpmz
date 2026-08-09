@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("jsondump.h");
@@ -16,7 +17,6 @@ const c = @cImport({
     @cInclude("tdnferror.h");
 });
 
-extern fn log_console(loglevel: i32, format: [*:0]const u8, ...) void;
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
 
 const LOG_INFO: c_int = 0;
@@ -149,7 +149,7 @@ fn TDNFCliPrintError(dwErrorCode: u32, doJson: c_int) u32 {
     }
 
     if (dwError != 0 or pszError == null) {
-        log_console(LOG_ERR, "Retrieving error string for %u failed with %u\n", dwErrorCode, dwError);
+        common.log(LOG_ERR, "Retrieving error string for %u failed with %u\n", .{ dwErrorCode, dwError });
         return dwError;
     }
 
@@ -181,9 +181,9 @@ fn TDNFCliPrintError(dwErrorCode: u32, doJson: c_int) u32 {
             _ = c.fputs(jd.?.buf, c.stdout);
         }
     } else if (dwPrintCode != 0) {
-        log_console(LOG_ERR, "Error(%u) : %s\n", dwPrintCode, pszError.?);
+        common.log(LOG_ERR, "Error(%u) : %s\n", .{ dwPrintCode, pszError.? });
     } else {
-        log_console(LOG_ERR, "%s\n", pszError.?);
+        common.log(LOG_ERR, "%s\n", .{pszError.?});
     }
 
     return 0;
@@ -210,7 +210,7 @@ fn TDNFCliShowVersion(pCmdArgs: ?*c.TDNF_CMD_ARGS) void {
         }
         _ = c.fputs(jd.?.buf, c.stdout);
     } else {
-        log_console(LOG_INFO, "%s: %s\n", c.TDNFGetPackageName(), c.TDNFGetVersion());
+        common.log(LOG_INFO, "%s: %s\n", .{ c.TDNFGetPackageName(), c.TDNFGetVersion() });
     }
 }
 
@@ -327,7 +327,7 @@ fn planAlterType(
 ) u32 {
     const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
     if (cmd_args.nCmdCount < 2) {
-        log_console(LOG_CRIT, "need transaction command as argument\n");
+        common.log(LOG_CRIT, "need transaction command as argument\n", .{});
         return c.ERROR_TDNF_CLI_NOT_ENOUGH_ARGS;
     }
 
@@ -365,11 +365,7 @@ fn planAlterType(
         else
             c.ALTER_AUTOERASE;
     } else {
-        log_console(
-            LOG_CRIT,
-            "unsupported transaction plan command '%s'\n",
-            pszTransaction,
-        );
+        common.log(LOG_CRIT, "unsupported transaction plan command '%s'\n", .{pszTransaction});
         return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 

@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const errors = @import("tdnf_error");
 const abi = @import("client_abi");
 const CnfNode = abi.CnfNode;
@@ -22,7 +23,6 @@ extern fn TDNFAllocateString(
     output: *?[*:0]u8,
 ) callconv(.c) u32;
 extern fn TDNFFreeStringArray(values: ?[*]?[*:0]u8) callconv(.c) void;
-extern fn log_console(level: c_int, format: [*:0]const u8, ...) callconv(.c) void;
 
 const LOG_INFO: c_int = 0;
 
@@ -75,14 +75,11 @@ fn productionFreeStringArray(
 }
 
 fn productionLogConfiguredHeader(_: ?*anyopaque) void {
-    log_console(
-        LOG_INFO,
-        "Warning: The following packages are excluded from tdnf.conf:\n",
-    );
+    common.log(LOG_INFO, "Warning: The following packages are excluded from tdnf.conf:\n", .{});
 }
 
 fn productionLogConfiguredValue(_: ?*anyopaque, value: [*:0]const u8) void {
-    log_console(LOG_INFO, "  %s\n", value);
+    common.log(LOG_INFO, "  %s\n", .{value});
 }
 
 const production_ops = Ops{

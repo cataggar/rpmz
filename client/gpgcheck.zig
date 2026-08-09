@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const abi = @import("client_abi");
 const options = @import("client_gpgcheck_options");
 const errors = @import("tdnf_error");
@@ -88,7 +89,6 @@ extern fn TDNFDownloadFile(
     progress: ?[*:0]const u8,
     require_https: c_int,
 ) callconv(.c) u32;
-extern fn log_console(level: c_int, format: [*:0]const u8, ...) callconv(.c) void;
 extern fn access(path: [*:0]const u8, mode: c_int) callconv(.c) c_int;
 extern fn unlink(path: [*:0]const u8) callconv(.c) c_int;
 extern fn basename(path: [*:0]u8) callconv(.c) [*:0]u8;
@@ -237,11 +237,7 @@ fn productionImportKey(
         data.len,
         &imported,
     ) != 0 or imported == 0) {
-        log_console(
-            LOG_ERR,
-            "Unable to import repository key: %s\n",
-            tdnf_rpmdb_last_error(),
-        );
+        common.log(LOG_ERR, "Unable to import repository key: %s\n", .{tdnf_rpmdb_last_error()});
         return ERROR_TDNF_INVALID_PUBKEY_FILE;
     }
     return 0;
@@ -391,7 +387,7 @@ fn readGpgKeyFile(
     var is_dir: c_int = 0;
     var result = ops.is_dir(ops.context, file.?, &is_dir);
     if (result != 0) {
-        log_console(LOG_ERR, "Error: Accessing gpgkey at %s\n", file.?);
+        common.log(LOG_ERR, "Error: Accessing gpgkey at %s\n", .{file.?});
         return result;
     }
     if (is_dir != 0) return ERROR_TDNF_KEYURL_INVALID;
@@ -409,11 +405,11 @@ fn readGpgKeyFile(
 fn mapDigestOutcome(outcome: c_int) u32 {
     switch (outcome) {
         @intFromEnum(rpm.Outcome.ok) => return 0,
-        @intFromEnum(rpm.Outcome.missing) => log_console(LOG_ERR, "RPM is missing required internal digest coverage\n"),
-        @intFromEnum(rpm.Outcome.bad) => log_console(LOG_ERR, "RPM internal digest verification failed\n"),
-        @intFromEnum(rpm.Outcome.unsupported) => log_console(LOG_ERR, "RPM uses an unsupported internal digest\n"),
-        @intFromEnum(rpm.Outcome.malformed) => log_console(LOG_ERR, "RPM contains malformed internal digest metadata\n"),
-        else => log_console(LOG_ERR, "RPM internal digest verification could not complete\n"),
+        @intFromEnum(rpm.Outcome.missing) => common.log(LOG_ERR, "RPM is missing required internal digest coverage\n", .{}),
+        @intFromEnum(rpm.Outcome.bad) => common.log(LOG_ERR, "RPM internal digest verification failed\n", .{}),
+        @intFromEnum(rpm.Outcome.unsupported) => common.log(LOG_ERR, "RPM uses an unsupported internal digest\n", .{}),
+        @intFromEnum(rpm.Outcome.malformed) => common.log(LOG_ERR, "RPM contains malformed internal digest metadata\n", .{}),
+        else => common.log(LOG_ERR, "RPM internal digest verification could not complete\n", .{}),
     }
     return ERROR_TDNF_RPM_CHECK;
 }
@@ -422,23 +418,23 @@ fn mapSignatureOutcome(outcome: c_int) u32 {
     switch (outcome) {
         @intFromEnum(rpm.Outcome.ok) => return 0,
         @intFromEnum(rpm.Outcome.missing) => {
-            log_console(LOG_ERR, "RPM signature has no matching trusted key\n");
+            common.log(LOG_ERR, "RPM signature has no matching trusted key\n", .{});
             return ERROR_TDNF_RPM_GPG_NO_MATCH;
         },
         @intFromEnum(rpm.Outcome.bad) => {
-            log_console(LOG_ERR, "RPM signature verification failed\n");
+            common.log(LOG_ERR, "RPM signature verification failed\n", .{});
             return ERROR_TDNF_RPM_GPG_NO_MATCH;
         },
         @intFromEnum(rpm.Outcome.unsupported) => {
-            log_console(LOG_ERR, "RPM signature uses unsupported OpenPGP metadata\n");
+            common.log(LOG_ERR, "RPM signature uses unsupported OpenPGP metadata\n", .{});
             return ERROR_TDNF_RPM_GPG_PARSE_FAILED;
         },
         @intFromEnum(rpm.Outcome.malformed) => {
-            log_console(LOG_ERR, "RPM contains malformed OpenPGP signature metadata\n");
+            common.log(LOG_ERR, "RPM contains malformed OpenPGP signature metadata\n", .{});
             return ERROR_TDNF_RPM_GPG_PARSE_FAILED;
         },
         else => {
-            log_console(LOG_ERR, "RPM signature verification could not complete\n");
+            common.log(LOG_ERR, "RPM signature verification could not complete\n", .{});
             return ERROR_TDNF_RPM_CHECK;
         },
     }
@@ -491,8 +487,7 @@ fn classifyKeyLocation(value: [*:0]const u8) error{InvalidKeyLocation}!KeyLocati
     if (!std.ascii.eqlIgnoreCase(scheme, "https"))
         return error.InvalidKeyLocation;
 
-    if (parsed.host == null or parsed.fragment != null)
-    {
+    if (parsed.host == null or parsed.fragment != null) {
         return error.InvalidKeyLocation;
     }
     return .https;
@@ -521,12 +516,7 @@ fn gpgCheckPackage(
     var outcome: c_int = @intFromEnum(rpm.Outcome.internal);
     if (conf.nSkipDigest == 0) {
         if (ops.verify_digests(ops.context, file, &outcome) != 0) {
-            log_console(
-                LOG_ERR,
-                "Unable to verify package digests for %s: %s\n",
-                path,
-                lastVerifierError(),
-            );
+            common.log(LOG_ERR, "Unable to verify package digests for %s: %s\n", .{ path, lastVerifierError() });
             return ERROR_TDNF_RPM_CHECK;
         }
         const result = mapDigestOutcome(outcome);
@@ -557,12 +547,7 @@ fn gpgCheckPackage(
         0,
         &outcome,
     ) != 0) {
-        log_console(
-            LOG_ERR,
-            "Unable to verify package signature for %s: %s\n",
-            path,
-            lastVerifierError(),
-        );
+        common.log(LOG_ERR, "Unable to verify package signature for %s: %s\n", .{ path, lastVerifierError() });
         return ERROR_TDNF_RPM_CHECK;
     }
     if (outcome == @intFromEnum(rpm.Outcome.ok)) return 0;
@@ -634,7 +619,7 @@ fn gpgCheckPackage(
             remove_remote = true;
         }
 
-        log_console(LOG_INFO, "importing key from %s\n", key_uri);
+        common.log(LOG_INFO, "importing key from %s\n", .{key_uri});
         var answer: c_int = 0;
         result = ops.yes_no(ops.context, tdnf.pArgs, "Is this ok [y/N]: ", &answer);
         if (result != 0) return result;
@@ -687,12 +672,7 @@ fn gpgCheckPackage(
         fresh_count,
         &outcome,
     ) != 0) {
-        log_console(
-            LOG_ERR,
-            "Unable to verify package signature for %s: %s\n",
-            path,
-            lastVerifierError(),
-        );
+        common.log(LOG_ERR, "Unable to verify package signature for %s: %s\n", .{ path, lastVerifierError() });
         return ERROR_TDNF_RPM_CHECK;
     }
     result = mapSignatureOutcome(outcome);
@@ -784,7 +764,7 @@ fn fetchRemoteGpgKey(
 }
 
 fn fetchError(url: [*:0]const u8, result: u32) u32 {
-    log_console(LOG_ERR, "Error processing key: %s\n", url);
+    common.log(LOG_ERR, "Error processing key: %s\n", .{url});
     return result;
 }
 
@@ -805,12 +785,7 @@ fn gpgCheckPackageEx(
     }
 
     const file = ops.open_file(ops.context, file_path.?) orelse {
-        log_console(
-            LOG_ERR,
-            "Unable to parse package %s: %s\n",
-            file_path.?,
-            lastVerifierError(),
-        );
+        common.log(LOG_ERR, "Unable to parse package %s: %s\n", .{ file_path.?, lastVerifierError() });
         return ERROR_TDNF_RPMRC_NOTFOUND;
     };
     var owned = true;

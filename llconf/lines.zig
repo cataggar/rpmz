@@ -73,7 +73,7 @@ export fn append_confline(cl_list: [*c]c.struct_confline, cl: [*c]c.struct_confl
     return cl;
 }
 
-export fn read_conflines(fptr: [*c]c.FILE) [*c]c.struct_confline {
+export fn read_conflines(fptr: ?*c.FILE) [*c]c.struct_confline {
     var line = [_:0]u8{0} ** c.MAX_CONFLINE;
     const max_chars = @as(usize, @intCast(c.MAX_CONFLINE - 2));
     var cl: [*c]c.struct_confline = null;

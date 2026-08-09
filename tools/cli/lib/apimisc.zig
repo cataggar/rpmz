@@ -6,6 +6,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const common = @import("tdnf_common");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("jsondump.h");
@@ -21,7 +22,6 @@ const c = @cImport({
 const jsonfmt = @import("jsonfmt.zig");
 const output = @import("output.zig");
 
-extern fn log_console(loglevel: i32, format: [*:0]const u8, ...) void;
 extern fn TDNFAllocateMemory(nNumElements: usize, nSize: usize, ppMemory: ?*?*anyopaque) u32;
 extern fn TDNFAllocateString(pszSrc: ?[*:0]const u8, ppszDst: ?*?[*:0]u8) u32;
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
@@ -348,12 +348,7 @@ fn formatRepoQueryString(
             const dwError = appendRepoQueryTagValue(&builder, tag, pPkgInfo);
             if (dwError != 0) {
                 if (dwError == c.ERROR_TDNF_INVALID_PARAMETER) {
-                    log_console(
-                        LOG_ERR,
-                        "Unknown tag: %.*s\n",
-                        @as(c_int, @intCast(tag.len)),
-                        tag.ptr,
-                    );
+                    common.log(LOG_ERR, "Unknown tag: %.*s\n", .{ @as(c_int, @intCast(tag.len)), tag.ptr });
                 }
                 return dwError;
             }
@@ -639,7 +634,7 @@ pub export fn TDNFCliRepoQueryCommand(
             if (dwError != 0) {
                 return dwError;
             }
-            log_console(LOG_CRIT, "%s\n", pszResult.?);
+            common.log(LOG_CRIT, "%s\n", .{pszResult.?});
             freeOwnedString(&pszResult);
         }
         return 0;
@@ -661,30 +656,17 @@ pub export fn TDNFCliRepoQueryCommand(
                     const entry = pEntry.?;
                     var szTime = [_]u8{0} ** 20;
                     if (c.strftime(&szTime, szTime.len, "%a %b %d %Y", c.localtime(&entry[0].timeTime)) != 0) {
-                        log_console(
-                            LOG_CRIT,
-                            "%s %s\n%s\n",
-                            @as([*:0]const u8, @ptrCast(&szTime)),
-                            entry[0].pszAuthor,
-                            entry[0].pszText,
-                        );
+                        common.log(LOG_CRIT, "%s %s\n%s\n", .{ @as([*:0]const u8, @ptrCast(&szTime)), entry[0].pszAuthor, entry[0].pszText });
                     } else {
                         return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
                     }
                 }
             } else if (pPkgInfo.pszSourcePkg != null) {
-                log_console(LOG_CRIT, "%s\n", pPkgInfo.pszSourcePkg);
+                common.log(LOG_CRIT, "%s\n", .{pPkgInfo.pszSourcePkg});
             } else if (pPkgInfo.pszLocation != null) {
-                log_console(LOG_CRIT, "%s\n", pPkgInfo.pszLocation);
+                common.log(LOG_CRIT, "%s\n", .{pPkgInfo.pszLocation});
             } else {
-                log_console(
-                    LOG_CRIT,
-                    "%s-%s-%s.%s\n",
-                    pPkgInfo.pszName,
-                    pPkgInfo.pszVersion,
-                    pPkgInfo.pszRelease,
-                    pPkgInfo.pszArch,
-                );
+                common.log(LOG_CRIT, "%s-%s-%s.%s\n", .{ pPkgInfo.pszName, pPkgInfo.pszVersion, pPkgInfo.pszRelease, pPkgInfo.pszArch });
             }
         } else if (pPkgInfo.ppszFileList != null) {
             nCount += countCStringArray(pPkgInfo.ppszFileList);
@@ -694,30 +676,17 @@ pub export fn TDNFCliRepoQueryCommand(
                 const entry = pEntry.?;
                 var szTime = [_]u8{0} ** 20;
                 if (c.strftime(&szTime, szTime.len, "%a %b %d %Y", c.localtime(&entry[0].timeTime)) != 0) {
-                    log_console(
-                        LOG_CRIT,
-                        "%s %s\n%s\n",
-                        @as([*:0]const u8, @ptrCast(&szTime)),
-                        entry[0].pszAuthor,
-                        entry[0].pszText,
-                    );
+                    common.log(LOG_CRIT, "%s %s\n%s\n", .{ @as([*:0]const u8, @ptrCast(&szTime)), entry[0].pszAuthor, entry[0].pszText });
                 } else {
                     return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
                 }
             }
         } else if (pPkgInfo.pszSourcePkg != null) {
-            log_console(LOG_CRIT, "%s\n", pPkgInfo.pszSourcePkg);
+            common.log(LOG_CRIT, "%s\n", .{pPkgInfo.pszSourcePkg});
         } else if (pPkgInfo.pszLocation != null) {
-            log_console(LOG_CRIT, "%s\n", pPkgInfo.pszLocation);
+            common.log(LOG_CRIT, "%s\n", .{pPkgInfo.pszLocation});
         } else {
-            log_console(
-                LOG_CRIT,
-                "%s-%s-%s.%s\n",
-                pPkgInfo.pszName,
-                pPkgInfo.pszVersion,
-                pPkgInfo.pszRelease,
-                pPkgInfo.pszArch,
-            );
+            common.log(LOG_CRIT, "%s-%s-%s.%s\n", .{ pPkgInfo.pszName, pPkgInfo.pszVersion, pPkgInfo.pszRelease, pPkgInfo.pszArch });
         }
     }
 
@@ -764,7 +733,7 @@ pub export fn TDNFCliRepoQueryCommand(
         var j: usize = 0;
         while (ppszLines[j] != null) : (j += 1) {
             if (j == 0 or c.strcmp(@ptrCast(ppszLines[j].?), @ptrCast(ppszLines[j - 1].?)) != 0) {
-                log_console(LOG_CRIT, "%s\n", ppszLines[j].?);
+                common.log(LOG_CRIT, "%s\n", .{ppszLines[j].?});
             }
         }
     }
@@ -788,7 +757,7 @@ pub export fn TDNFCliMakeCacheCommand(
         return dwError;
     }
 
-    log_console(LOG_CRIT, "Metadata cache created.\n");
+    common.log(LOG_CRIT, "Metadata cache created.\n", .{});
     return 0;
 }
 
@@ -797,14 +766,11 @@ pub export fn TDNFCliRefresh(pContext: ?*c.TDNF_CLI_CONTEXT) u32 {
 
     const dwError = tdnfRefreshHandle(context.hTdnf);
     if (dwError == c.ERROR_TDNF_SYSTEM_BASE + c.EACCES and c.geteuid() != 0) {
-        log_console(
-            LOG_ERR,
-            "\ntdnf repo cache needs to be refreshed but you have insufficient permissions\n" ++
-                "You can use one of the below methods to workaround this\n" ++
-                "1. Login as root and refresh cache\n" ++
-                "2. Use -c (--config) with a configuration file that has 'cachedir' set to a directory where you have access\n" ++
-                "3. Use -C (--cacheonly) and use the existing cache in the system\n\n",
-        );
+        common.log(LOG_ERR, "\ntdnf repo cache needs to be refreshed but you have insufficient permissions\n" ++
+            "You can use one of the below methods to workaround this\n" ++
+            "1. Login as root and refresh cache\n" ++
+            "2. Use -c (--config) with a configuration file that has 'cachedir' set to a directory where you have access\n" ++
+            "3. Use -C (--cacheonly) and use the existing cache in the system\n\n", .{});
     }
     return dwError;
 }
@@ -839,7 +805,7 @@ fn TDNFCliHistoryId(
         }
         _ = c.fputs(jd.?.buf, c.stdout);
     } else {
-        log_console(LOG_CRIT, "%d\n", nId);
+        common.log(LOG_CRIT, "%d\n", .{nId});
     }
 
     return 0;
@@ -890,18 +856,15 @@ fn TDNFCliHistoryAlter(
         return 0;
     }
 
-    log_console(LOG_CRIT, "The following packages could not be resolved:\n\n");
+    common.log(LOG_CRIT, "The following packages could not be resolved:\n\n", .{});
     var i: usize = 0;
     while (pSolvedPkgInfo.?.ppszPkgsNotResolved[i] != null) : (i += 1) {
-        log_console(LOG_CRIT, "%s\n", pSolvedPkgInfo.?.ppszPkgsNotResolved[i]);
+        common.log(LOG_CRIT, "%s\n", .{pSolvedPkgInfo.?.ppszPkgsNotResolved[i]});
     }
-    log_console(
-        LOG_CRIT,
-        "\n" ++
-            "The package(s) may have been moved out of the enabled repositories since the\n" ++
-            "last time they were installed. You may be able to resolve this by enabling\n" ++
-            "additional repositories.\n",
-    );
+    common.log(LOG_CRIT, "\n" ++
+        "The package(s) may have been moved out of the enabled repositories since the\n" ++
+        "last time they were installed. You may be able to resolve this by enabling\n" ++
+        "additional repositories.\n", .{});
     return c.ERROR_TDNF_NO_MATCH;
 }
 
@@ -933,7 +896,7 @@ fn TDNFCliHistoryList(
         }
 
         const nCmdWidth: c_int = nConsoleWidth - 4 - 21 - 9 - 7;
-        log_console(LOG_CRIT, "ID   %-*s date/time             +add  / -rem\n", nCmdWidth, "cmd line");
+        common.log(LOG_CRIT, "ID   %-*s date/time             +add  / -rem\n", .{ nCmdWidth, "cmd line" });
 
         var i: usize = 0;
         const item_count: usize = @intCast(history_info.nItemCount);
@@ -941,39 +904,30 @@ fn TDNFCliHistoryList(
             const item = &pItems[@intCast(i)];
             var szTime = [_]u8{0} ** 22;
             _ = c.strftime(&szTime, szTime.len, "%a %b %d %Y %H:%M", c.localtime(&item.timeStamp));
-            log_console(
-                LOG_CRIT,
-                "%4d %-*s %-21s +%-4d / -%-4d\n",
-                item.nId,
-                nCmdWidth,
-                item.pszCmdLine,
-                @as([*:0]const u8, @ptrCast(&szTime)),
-                item.nAddedCount,
-                item.nRemovedCount,
-            );
+            common.log(LOG_CRIT, "%4d %-*s %-21s +%-4d / -%-4d\n", .{ item.nId, nCmdWidth, item.pszCmdLine, @as([*:0]const u8, @ptrCast(&szTime)), item.nAddedCount, item.nRemovedCount });
 
             if (history_args.nInfo != 0) {
                 if (item.ppszAddedPkgs != null and item.ppszAddedPkgs[0] != null) {
                     const added_count: usize = @intCast(item.nAddedCount);
-                    log_console(LOG_CRIT, "added: ");
+                    common.log(LOG_CRIT, "added: ", .{});
                     var j: usize = 0;
                     while (j + 1 < added_count) : (j += 1) {
-                        log_console(LOG_CRIT, "%s, ", item.ppszAddedPkgs[j]);
+                        common.log(LOG_CRIT, "%s, ", .{item.ppszAddedPkgs[j]});
                     }
-                    log_console(LOG_CRIT, "%s", item.ppszAddedPkgs[added_count - 1]);
-                    log_console(LOG_CRIT, "\n");
+                    common.log(LOG_CRIT, "%s", .{item.ppszAddedPkgs[added_count - 1]});
+                    common.log(LOG_CRIT, "\n", .{});
                 }
                 if (item.ppszRemovedPkgs != null and item.ppszRemovedPkgs[0] != null) {
                     const removed_count: usize = @intCast(item.nRemovedCount);
-                    log_console(LOG_CRIT, "removed: ");
+                    common.log(LOG_CRIT, "removed: ", .{});
                     var j: usize = 0;
                     while (j + 1 < removed_count) : (j += 1) {
-                        log_console(LOG_CRIT, "%s, ", item.ppszRemovedPkgs[j]);
+                        common.log(LOG_CRIT, "%s, ", .{item.ppszRemovedPkgs[j]});
                     }
-                    log_console(LOG_CRIT, "%s", item.ppszRemovedPkgs[removed_count - 1]);
-                    log_console(LOG_CRIT, "\n");
+                    common.log(LOG_CRIT, "%s", .{item.ppszRemovedPkgs[removed_count - 1]});
+                    common.log(LOG_CRIT, "\n", .{});
                 }
-                log_console(LOG_CRIT, "\n");
+                common.log(LOG_CRIT, "\n", .{});
             }
         }
 
@@ -1116,11 +1070,11 @@ pub export fn TDNFCliMarkCommand(
         } else if (c.strcmp(cmd_args.ppszCmds[1], "remove") == 0) {
             nValue = 1;
         } else {
-            log_console(LOG_CRIT, "unknown action '%s'\n", cmd_args.ppszCmds[1]);
+            common.log(LOG_CRIT, "unknown action '%s'\n", .{cmd_args.ppszCmds[1]});
             return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
         }
     } else {
-        log_console(LOG_CRIT, "need action ('install' or 'remove') as argument\n");
+        common.log(LOG_CRIT, "need action ('install' or 'remove') as argument\n", .{});
         return c.ERROR_TDNF_INVALID_PARAMETER;
     }
 
@@ -1128,6 +1082,6 @@ pub export fn TDNFCliMarkCommand(
         return context.pFnMark.?(context, &cmd_args.ppszCmds[2], nValue);
     }
 
-    log_console(LOG_CRIT, "need package spec(s) as argument\n");
+    common.log(LOG_CRIT, "need package spec(s) as argument\n", .{});
     return c.ERROR_TDNF_INVALID_PARAMETER;
 }

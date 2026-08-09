@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
 const errors = @import("tdnf_error");
@@ -43,7 +44,6 @@ extern fn TDNFJoinPathFromArray(
     nCount: c_int,
 ) u32;
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
-extern fn log_console(nLogLevel: c_int, pszFormat: [*:0]const u8, ...) void;
 
 const rpm_cache_dir_name = "rpms";
 const repodata_dir_name = "repodata";
@@ -323,12 +323,7 @@ const production_remove_ops = RemoveOps{
 
 fn removalError(name: [*:0]const u8, value: c_int) u32 {
     if (!builtin.is_test) {
-        log_console(
-            LOG_CRIT,
-            "unable to remove %s: %s\n",
-            name,
-            libc.strerror(value),
-        );
+        common.log(LOG_CRIT, "unable to remove %s: %s\n", .{ name, libc.strerror(value) });
     }
     return systemError(value);
 }

@@ -5,6 +5,7 @@
 // are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
 const download = @import("client_download");
@@ -32,7 +33,6 @@ extern fn TDNFAllocateString(
     output: ?*?[*:0]u8,
 ) callconv(.c) u32;
 extern fn TDNFFreeMemory(memory: ?*anyopaque) callconv(.c) void;
-extern fn log_console(level: c_int, format: [*:0]const u8, ...) callconv(.c) void;
 
 const libc = struct {
     extern fn fchmod(c_int, c_uint) c_int;
@@ -496,9 +496,9 @@ fn progressCallbackImpl(
     const text: [*:0]const u8 = @ptrCast(&data.text);
     if (builtin.is_test) return 0;
     if (libc.isatty(STDERR_FILENO) == 0) {
-        log_console(LOG_NOTICE, "%s %u%% %ld\n", text, percent, download_now);
+        common.log(LOG_NOTICE, "%s %u%% %ld\n", .{ text, percent, download_now });
     } else {
-        log_console(LOG_NOTICE, "%-35s %10ld %u%%\r", text, download_now, percent);
+        common.log(LOG_NOTICE, "%-35s %10ld %u%%\r", .{ text, download_now, percent });
     }
     return 0;
 }
@@ -626,7 +626,7 @@ fn downloadToPinnedParent(
     var attempt: c_int = 0;
     while (attempt <= repo.nRetries) : (attempt += 1) {
         if (attempt > 0 and !builtin.is_test) {
-            log_console(LOG_INFO, "retrying %d/%d\n", attempt, repo.nRetries);
+            common.log(LOG_INFO, "retrying %d/%d\n", .{ attempt, repo.nRetries });
         }
         var status: c_long = 0;
         result = if (require_https)
@@ -637,29 +637,17 @@ fn downloadToPinnedParent(
 
         const safe_url = redactUrl(allocator, std.mem.span(url)) catch "download URL";
         if (status >= 400) {
-            if (!builtin.is_test) log_console(
-                LOG_ERR,
-                "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n",
-                status,
-                @as(c_int, @intCast(safe_url.len)),
-                safe_url.ptr,
-            );
+            if (!builtin.is_test) common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
             return result;
         }
         if (attempt == repo.nRetries or downloadErrorIsFatal(result, status)) {
-            if (!builtin.is_test) log_console(
-                LOG_ERR,
-                "Error: failed to download %.*s: %s\n",
-                @as(c_int, @intCast(safe_url.len)),
-                safe_url.ptr,
-                download.TDNFZigDownloadLastError(),
-            );
+            if (!builtin.is_test) common.log(LOG_ERR, "Error: failed to download %.*s: %s\n", .{ @as(c_int, @intCast(safe_url.len)), safe_url.ptr, download.TDNFZigDownloadLastError() });
             return result;
         }
         _ = c.unlinkat(parent.fd, temp_name, 0);
     }
 
-    if (!no_output and !builtin.is_test) log_console(LOG_INFO, "\n");
+    if (!no_output and !builtin.is_test) common.log(LOG_INFO, "\n", .{});
     const temp_fd = std.c.openat(parent.fd, temp_name, .{
         .ACCMODE = .RDONLY,
         .CLOEXEC = true,
@@ -702,7 +690,7 @@ fn downloadPackage(
         if (!isRegular(stat)) return systemError(@intFromEnum(std.posix.E.LOOP));
         if (stat.size != 0) {
             if (!builtin.is_test) {
-                log_console(LOG_INFO, "%s package already downloaded\n", package_name);
+                common.log(LOG_INFO, "%s package already downloaded\n", .{package_name});
             }
             return 0;
         }
@@ -761,12 +749,7 @@ fn downloadFileFromRepoPinned(
                 if (result == 0) return 0;
                 if (base_urls[index + 1] != null) {
                     const safe_url = redactUrl(allocator, url) catch "download URL";
-                    if (!builtin.is_test) log_console(
-                        LOG_ERR,
-                        "Warning: failed to download %.*s, trying next base URL\n",
-                        @as(c_int, @intCast(safe_url.len)),
-                        safe_url.ptr,
-                    );
+                    if (!builtin.is_test) common.log(LOG_ERR, "Warning: failed to download %.*s, trying next base URL\n", .{ @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
                 } else {
                     return result;
                 }

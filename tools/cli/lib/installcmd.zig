@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("jsondump.h");
@@ -16,7 +17,6 @@ const c = @cImport({
 const jsonfmt = @import("jsonfmt.zig");
 const output = @import("output.zig");
 
-extern fn log_console(loglevel: i32, format: [*:0]const u8, ...) void;
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
 extern fn TDNFFreeStringArray(ppszArray: [*c]?[*:0]u8) void;
 extern fn TDNFFreeSolvedPackageInfo(pSolvedPkgInfo: c.PTDNF_SOLVED_PKG_INFO) void;
@@ -120,16 +120,16 @@ fn addPackageEvr(
 
 fn printActionHeader(nAlterType: c.TDNF_ALTERTYPE) u32 {
     switch (nAlterType) {
-        c.ALTER_INSTALL => log_console(LOG_INFO, "\nInstalling:"),
-        c.ALTER_UPGRADE => log_console(LOG_INFO, "\nUpgrading:"),
-        c.ALTER_ERASE => log_console(LOG_INFO, "\nRemoving:"),
-        c.ALTER_DOWNGRADE => log_console(LOG_INFO, "\nDowngrading:"),
-        c.ALTER_REINSTALL => log_console(LOG_INFO, "\nReinstalling:"),
-        c.ALTER_OBSOLETED => log_console(LOG_INFO, "\nObsoleting:"),
+        c.ALTER_INSTALL => common.log(LOG_INFO, "\nInstalling:", .{}),
+        c.ALTER_UPGRADE => common.log(LOG_INFO, "\nUpgrading:", .{}),
+        c.ALTER_ERASE => common.log(LOG_INFO, "\nRemoving:", .{}),
+        c.ALTER_DOWNGRADE => common.log(LOG_INFO, "\nDowngrading:", .{}),
+        c.ALTER_REINSTALL => common.log(LOG_INFO, "\nReinstalling:", .{}),
+        c.ALTER_OBSOLETED => common.log(LOG_INFO, "\nObsoleting:", .{}),
         else => return c.ERROR_TDNF_INVALID_PARAMETER,
     }
 
-    log_console(LOG_INFO, "\n");
+    common.log(LOG_INFO, "\n", .{});
     return 0;
 }
 
@@ -309,7 +309,7 @@ pub export fn TDNFCliAskForAction(
         }
 
         if (cmd_args.nDownloadOnly != 0) {
-            log_console(LOG_INFO, "tdnf will only download packages needed for the transaction\n");
+            common.log(LOG_INFO, "tdnf will only download packages needed for the transaction\n", .{});
         }
     }
 
@@ -331,16 +331,12 @@ pub export fn TDNFCliPrintActionComplete(pCmdArgs: ?*c.TDNF_CMD_ARGS) u32 {
     const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
 
     if (cmd_args.nNoOutput == 0) {
-        log_console(LOG_INFO, "\nComplete!\n");
+        common.log(LOG_INFO, "\nComplete!\n", .{});
         if (cmd_args.nDownloadOnly != 0) {
             if (cmd_args.pszDownloadDir != null) {
-                log_console(
-                    LOG_INFO,
-                    "Packages have been downloaded to %s.\n",
-                    cmd_args.pszDownloadDir,
-                );
+                common.log(LOG_INFO, "Packages have been downloaded to %s.\n", .{cmd_args.pszDownloadDir});
             } else {
-                log_console(LOG_INFO, "Packages have been downloaded to cache.\n");
+                common.log(LOG_INFO, "Packages have been downloaded to cache.\n", .{});
             }
         }
     }
@@ -389,7 +385,7 @@ pub export fn TDNFCliAlterCommand(
 
         var i: c_int = 0;
         while (i < nCount) : (i += 1) {
-            log_console(LOG_CRIT, "%s\n", ppszUrls[@intCast(i)]);
+            common.log(LOG_CRIT, "%s\n", .{ppszUrls[@intCast(i)]});
         }
 
         return 0;
@@ -655,11 +651,7 @@ pub export fn PrintNotAvailable(ppszPkgsNotAvailable: [*c][*c]u8) u32 {
 
     var i: usize = 0;
     while (pkgs[i] != null) : (i += 1) {
-        log_console(
-            LOG_INFO,
-            "No package \x1b[1m\x1b[30m%s \x1b[0mavailable\n",
-            pkgs[i].?,
-        );
+        common.log(LOG_INFO, "No package \x1b[1m\x1b[30m%s \x1b[0mavailable\n", .{pkgs[i].?});
     }
 
     return 0;
@@ -669,14 +661,7 @@ pub export fn PrintExistingPackagesSkipped(pPkgInfos: ?*c.TDNF_PKG_INFO) u32 {
     var pPkgInfo = pPkgInfos orelse return c.ERROR_TDNF_INVALID_PARAMETER;
 
     while (true) {
-        log_console(
-            LOG_INFO,
-            "Package %s-%s-%s.%s is already installed, skipping.\n",
-            pPkgInfo.pszName,
-            pPkgInfo.pszVersion,
-            pPkgInfo.pszRelease,
-            pPkgInfo.pszArch,
-        );
+        common.log(LOG_INFO, "Package %s-%s-%s.%s is already installed, skipping.\n", .{ pPkgInfo.pszName, pPkgInfo.pszVersion, pPkgInfo.pszRelease, pPkgInfo.pszArch });
 
         if (pPkgInfo.pNext == null) {
             break;
@@ -691,7 +676,7 @@ pub export fn PrintNotAvailablePackages(pPkgInfos: ?*c.TDNF_PKG_INFO) u32 {
     var pPkgInfo = pPkgInfos orelse return c.ERROR_TDNF_INVALID_PARAMETER;
 
     while (true) {
-        log_console(LOG_INFO, "No package %s available.\n", pPkgInfo.pszName);
+        common.log(LOG_INFO, "No package %s available.\n", .{pPkgInfo.pszName});
 
         if (pPkgInfo.pNext == null) {
             break;
@@ -738,22 +723,7 @@ pub export fn PrintAction(
             return dwError;
         }
 
-        log_console(
-            LOG_INFO,
-            "%-*s %-*s %-*s %-*s %-*s %*s\n",
-            nColWidths[0],
-            nonNullString(pPkgInfo.pszName),
-            nColWidths[1],
-            nonNullString(pPkgInfo.pszArch),
-            nColWidths[2],
-            @as([*:0]const u8, @ptrCast(&szEpochVersionRelease)),
-            nColWidths[3],
-            nonNullString(pPkgInfo.pszRepoName),
-            nColWidths[4],
-            nonNullString(pPkgInfo.pszFormattedSize),
-            nColWidths[5],
-            nonNullString(pPkgInfo.pszFormattedDownloadSize),
-        );
+        common.log(LOG_INFO, "%-*s %-*s %-*s %-*s %-*s %*s\n", .{ nColWidths[0], nonNullString(pPkgInfo.pszName), nColWidths[1], nonNullString(pPkgInfo.pszArch), nColWidths[2], @as([*:0]const u8, @ptrCast(&szEpochVersionRelease)), nColWidths[3], nonNullString(pPkgInfo.pszRepoName), nColWidths[4], nonNullString(pPkgInfo.pszFormattedSize), nColWidths[5], nonNullString(pPkgInfo.pszFormattedDownloadSize) });
 
         if (pPkgInfo.pNext == null) {
             break;
@@ -765,13 +735,13 @@ pub export fn PrintAction(
     if (dwError != 0) {
         return dwError;
     }
-    log_console(LOG_INFO, "\nTotal installed size: %s\n", pszTotalInstallSize.?);
+    common.log(LOG_INFO, "\nTotal installed size: %s\n", .{pszTotalInstallSize.?});
 
     dwError = TDNFUtilsFormatSize(nTotalDownloadSize, &pszTotalDownloadSize);
     if (dwError != 0) {
         return dwError;
     }
-    log_console(LOG_INFO, "Total download size: %s\n", pszTotalDownloadSize.?);
+    common.log(LOG_INFO, "Total download size: %s\n", .{pszTotalDownloadSize.?});
 
     return 0;
 }
