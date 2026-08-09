@@ -25,6 +25,58 @@ typedef struct _TDNF_ID_LIST TDNF_ID_LIST, *PTDNF_ID_LIST;
 struct history_ctx;
 
 uint32_t
+TDNFGoal(
+    PTDNF pTdnf,
+    PTDNF_ID_LIST pQueuePkgList,
+    PTDNF_SOLVED_PKG_INFO *ppInfo,
+    TDNF_ALTERTYPE nAlterType,
+    int nUnresolved
+    );
+
+uint32_t
+TDNFGoalNoDeps(
+    PTDNF pTdnf,
+    PTDNF_ID_LIST pQueuePkgList,
+    PTDNF_SOLVED_PKG_INFO *ppInfo
+    );
+
+uint32_t
+TDNFMarkAutoInstalled(
+    PTDNF pTdnf,
+    struct history_ctx *pHistoryCtx,
+    PTDNF_SOLVED_PKG_INFO pInfo,
+    int nAutoOnly
+    );
+
+uint32_t
+TDNFPrepareAllPackages(
+    PTDNF pTdnf,
+    TDNF_ALTERTYPE *pAlterType,
+    char **ppszPkgsNotResolved,
+    PTDNF_ID_LIST pQueueGoal
+    );
+
+uint32_t
+TDNFResolveBuildDependencies(
+    PTDNF pTdnf,
+    char **ppszPackageNameSpecs,
+    char **ppszPkgsNotResolved,
+    PTDNF_ID_LIST pQueueGoal
+    );
+
+uint32_t
+TDNFAddNotResolved(
+    char **ppszPkgsNotResolved,
+    const char *pszPkgName
+    );
+
+uint32_t
+TDNFReportNativeSolverProblems(
+    void *pHandle,
+    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
+    );
+
+uint32_t
 TDNFNativeQueryBuildRepoInputs(
     PTDNF pTdnf,
     PTDNF_REPOMD_NATIVE_REPO_INPUT *ppRepos,

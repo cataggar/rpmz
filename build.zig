@@ -30,8 +30,8 @@ const vendored_libsolv_version_patch = "39";
 /// libsolv-confinement-audit step below proves by building them without
 /// libsolv's include paths. There is no longer an exception.
 const client_libsolv_free_srcs = [_][]const u8{
-    "api.c",             "goal.c",
-    "resolve.c",         "rpmtrans.c",
+    "api.c",
+    "rpmtrans.c",
     "rpmtrans_native.c",
 };
 

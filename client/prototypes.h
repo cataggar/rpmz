@@ -32,22 +32,6 @@ TDNFRefreshSack(
     int nCleanMetadata
     );
 
-//goal.c
-uint32_t
-TDNFGoal(
-    PTDNF pTdnf,
-    PTDNF_ID_LIST pkgList,
-    PTDNF_SOLVED_PKG_INFO* ppInfo,
-    TDNF_ALTERTYPE nAlterType, int nUnresolved
-    );
-
-uint32_t
-TDNFGoalNoDeps(
-    PTDNF pTdnf,
-    PTDNF_ID_LIST pQueuePkgList,
-    PTDNF_SOLVED_PKG_INFO* ppInfo
-    );
-
 uint32_t
 TDNFHistoryGoal(
     PTDNF pTdnf,
@@ -56,51 +40,6 @@ TDNFHistoryGoal(
     PTDNF_SOLVED_PKG_INFO* ppInfo
     );
 
-TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN uint32_t
-TDNFSolv(
-    PTDNF pTdnf,
-    PTDNF_ID_LIST pQueueJobs,
-    char **ppszExcludes,
-    uint32_t dwExcludeCount,
-    int nAllowErasing,
-    int nAutoErase,
-    int nReInstall,
-    int nUnresolved,
-    PTDNF_SOLVED_PKG_INFO *ppInfo
-    );
-
-uint32_t
-TDNFAddUserInstall(
-    PTDNF pTdnf,
-    const TDNF_ID_LIST *pQueueGoal,
-    PTDNF_SOLVED_PKG_INFO ppInfo
-    );
-
-uint32_t
-TDNFMarkAutoInstalledSinglePkg(
-    PTDNF pTdnf,
-    const char *pszPkgName
-);
-
-uint32_t
-TDNFMarkAutoInstalled(
-    PTDNF pTdnf,
-    struct history_ctx *pHistoryCtx,
-    PTDNF_SOLVED_PKG_INFO ppInfo,
-    int nAutoOnly
-    );
-
-uint32_t
-TDNFAddGoal(
-    PTDNF pTdnf,
-    TDNF_ALTERTYPE nAlterType,
-    PTDNF_ID_LIST pQueueJobs,
-    TDNF_PKG_ID dwId,
-    uint32_t dwCount,
-    char** ppszExcludes
-    );
-
-
 uint32_t
 TDNFPkgsToExclude(
     PTDNF pTdnf,
@@ -108,13 +47,6 @@ TDNFPkgsToExclude(
     char***  pppszExclude
     );
 
-
-
-uint32_t
-TDNFGoalAddHiddenPackages(
-    PTDNF pTdnf,
-    char **ppszExcludes
-    );
 
 
 TDNF_TRANSACTION_PLAN_REQUEST_TRACE *
@@ -299,30 +231,6 @@ TDNFConfigReplaceVars(
     );
 
 
-//resolve.c
-uint32_t
-TDNFPrepareAllPackages(
-    PTDNF pTdnf,
-    TDNF_ALTERTYPE* pAlterType,
-    char** ppszPkgsNotResolved,
-    PTDNF_ID_LIST pQueueGoal
-    );
-
-
-uint32_t
-TDNFAddNotResolved(
-    char** ppszPkgsNotResolved,
-    const char* pszPkgName
-    );
-
-uint32_t
-TDNFResolveBuildDependencies(
-    PTDNF pTdnf,
-    char **ppszPackageNameSpecs,
-    char **ppszPkgsNotResolved,
-    PTDNF_ID_LIST queueGoal
-    );
-
 //rpmtrans.c
 uint32_t
 TDNFRpmExecTransaction(
@@ -373,13 +281,6 @@ uint32_t
 TDNFGetSkipProblemOption(
     PTDNF pTdnf,
     TDNF_SKIPPROBLEM_TYPE *pdwSkipProblem
-    );
-
-/* goal.c */
-uint32_t
-TDNFReportNativeSolverProblems(
-    void *pHandle,
-    TDNF_SKIPPROBLEM_TYPE dwSkipProblem
     );
 
 /* plugins.zig */
