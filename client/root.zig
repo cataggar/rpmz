@@ -1,4 +1,6 @@
 pub const updateinfo = @import("client_updateinfo");
+pub const goal = @import("goal.zig");
+pub const resolve = @import("resolve.zig");
 
 comptime {
     _ = @import("repoutils.zig");
@@ -17,8 +19,8 @@ comptime {
     _ = @import("gpgcheck.zig");
     _ = @import("package_query.zig");
     _ = @import("repositories.zig");
-    _ = @import("goal.zig");
-    _ = @import("resolve.zig");
+    _ = goal;
+    _ = resolve;
     _ = updateinfo;
     _ = @import("client_varsdir");
 }

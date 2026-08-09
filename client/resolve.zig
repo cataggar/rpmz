@@ -3609,187 +3609,90 @@ pub extern fn TDNFLoadRepoData(pTdnf: PTDNF, ppReposAll: [*c]PTDNF_REPO_DATA) u3
 pub extern fn TDNFRepoListFinalize(pTdnf: PTDNF) u32;
 pub extern fn TDNFCloneRepo(pRepoIn: PTDNF_REPO_DATA, ppRepo: [*c]PTDNF_REPO_DATA) u32;
 pub extern fn TDNFFreeReposInternal(pRepos: PTDNF_REPO_DATA) void;
-pub export fn TDNFPrepareAllPackages(arg_pTdnf: PTDNF, arg_pAlterType: [*c]TDNF_ALTERTYPE, arg_ppszPkgsNotResolved: [*c][*c]u8, arg_queueGoal: PTDNF_ID_LIST) u32 {
-    var pTdnf = arg_pTdnf;
-    _ = &pTdnf;
-    var pAlterType = arg_pAlterType;
-    _ = &pAlterType;
-    var ppszPkgsNotResolved = arg_ppszPkgsNotResolved;
-    _ = &ppszPkgsNotResolved;
-    var queueGoal = arg_queueGoal;
-    _ = &queueGoal;
-    var dwError: u32 = 0;
-    _ = &dwError;
-    var pCmdArgs: PTDNF_CMD_ARGS = null;
-    _ = &pCmdArgs;
-    var nPkgIndex: c_int = 0;
-    _ = &nPkgIndex;
-    var pszPkgName: [*c]u8 = null;
-    _ = &pszPkgName;
-    var pszSeverity: [*c]u8 = null;
-    _ = &pszSeverity;
-    var dwSecurity: u32 = 0;
-    _ = &dwSecurity;
-    var ppszPkgArray: [*c][*c]u8 = null;
-    _ = &ppszPkgArray;
-    var dwCount: u32 = 0;
-    _ = &dwCount;
-    var dwRebootRequired: u32 = 0;
-    _ = &dwRebootRequired;
-    var dwTraceRequestRef: u32 = 0;
-    _ = &dwTraceRequestRef;
-    var nAlterType: TDNF_ALTERTYPE = 0;
-    _ = &nAlterType;
-    var nTraceStart: c_int = 0;
-    _ = &nTraceStart;
-    var pPkgInfos: PTDNF_PKG_INFO = null;
-    _ = &pPkgInfos;
-    var dwPkgInfoCount: u32 = 0;
-    _ = &dwPkgInfoCount;
-    if (((((!(pTdnf != null) or !(pTdnf.*.pSack != null)) or !(pTdnf.*.pArgs != null)) or !(ppszPkgsNotResolved != null)) or !(queueGoal != null)) or !(pAlterType != null)) {
-        dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
+pub export fn TDNFPrepareAllPackages(pTdnf: PTDNF, pAlterType: [*c]TDNF_ALTERTYPE, ppszPkgsNotResolved: [*c][*c]u8, queueGoal: PTDNF_ID_LIST) u32 {
+    var rc: u32 = 0;
+    var severity: [*c]u8 = null;
+    var pkg_infos: PTDNF_PKG_INFO = null;
+    var pkg_info_count: u32 = 0;
+    defer {
+        if (severity != null) TDNFFreeMemory(@ptrCast(severity));
+        if (pkg_infos != null) TDNFFreePackageInfoArray(pkg_infos, pkg_info_count);
     }
-    pCmdArgs = pTdnf.*.pArgs;
-    nAlterType = pAlterType.*;
-    if (nAlterType == @as(TDNF_ALTERTYPE, ALTER_DOWNGRADEALL)) {
-        dwError = TDNFFilterPackages(pTdnf, nAlterType, ppszPkgsNotResolved, queueGoal);
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
+
+    process: {
+        if (pTdnf == null or pTdnf.*.pSack == null or pTdnf.*.pArgs == null or ppszPkgsNotResolved == null or queueGoal == null or pAlterType == null) {
+            rc = ERROR_TDNF_INVALID_PARAMETER;
+            break :process;
         }
-    } else if (nAlterType == @as(TDNF_ALTERTYPE, ALTER_AUTOERASEALL)) {
-        nTraceStart = @bitCast(@as(c_uint, @truncate(queueGoal.*.dwCount)));
-        dwError = TDNFGetAutoInstalledOrphans(pTdnf, queueGoal);
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
+        const args = pTdnf.*.pArgs;
+        const alter_type = pAlterType.*;
+        if (alter_type == ALTER_DOWNGRADEALL) {
+            rc = TDNFFilterPackages(pTdnf, alter_type, ppszPkgsNotResolved, queueGoal);
+            if (rc != 0) break :process;
+        } else if (alter_type == ALTER_AUTOERASEALL) {
+            const trace_start = queueGoal.*.dwCount;
+            rc = TDNFGetAutoInstalledOrphans(pTdnf, queueGoal);
+            if (rc != 0) break :process;
+            TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf.*.pRequestTrace, queueGoal.*.pnElements, trace_start, queueGoal.*.dwCount, ALTER_AUTOERASEALL, 3, 0);
         }
-        TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf.*.pRequestTrace, queueGoal.*.pnElements, @bitCast(@as(c_int, nTraceStart)), queueGoal.*.dwCount, ALTER_AUTOERASEALL, 3, 0);
-    }
-    const extern_local_TDNFGetSecuritySeverityOption = struct {
-        extern fn TDNFGetSecuritySeverityOption(pTdnf: PTDNF, pdwSecurity: [*c]u32, ppszSeverity: [*c][*c]u8) u32;
-    };
-    _ = &extern_local_TDNFGetSecuritySeverityOption;
-    dwError = TDNFGetSecuritySeverityOption(pTdnf, &dwSecurity, &pszSeverity);
-    while (true) {
-        if (dwError != @as(u32, 0)) return dwError;
-        if (!false) break;
-    }
-    const extern_local_TDNFGetRebootRequiredOption = struct {
-        extern fn TDNFGetRebootRequiredOption(pTdnf: PTDNF, pdwRebootRequired: [*c]u32) u32;
-    };
-    _ = &extern_local_TDNFGetRebootRequiredOption;
-    dwError = TDNFGetRebootRequiredOption(pTdnf, &dwRebootRequired);
-    while (true) {
-        if (dwError != @as(u32, 0)) return dwError;
-        if (!false) break;
-    }
-    if (((nAlterType == @as(TDNF_ALTERTYPE, ALTER_UPGRADEALL)) or (nAlterType == @as(TDNF_ALTERTYPE, ALTER_UPGRADE))) and ((@as(u32, @bitCast(@as(c_int, @intFromBool((dwSecurity != 0) or (pszSeverity != null))))) != 0) or (dwRebootRequired != 0))) {
-        pAlterType.* = ALTER_UPGRADE;
-        const extern_local_TDNFGetUpdatePkgs = struct {
-            extern fn TDNFGetUpdatePkgs(pTdnf: PTDNF, pppszPkgs: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-        };
-        _ = &extern_local_TDNFGetUpdatePkgs;
-        dwError = TDNFGetUpdatePkgs(pTdnf, &ppszPkgArray, &dwCount);
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
-        {
-            nPkgIndex = 0;
-            while (@as(u32, @bitCast(@as(c_int, nPkgIndex))) < dwCount) : (nPkgIndex += 1) {
-                dwTraceRequestRef = if (nAlterType == @as(TDNF_ALTERTYPE, ALTER_UPGRADEALL)) @as(c_uint, 0) else @as(c_uint, 4294967295);
-                {
-                    var nCmdIndex: c_int = 1;
-                    _ = &nCmdIndex;
-                    while ((nAlterType == @as(TDNF_ALTERTYPE, ALTER_UPGRADE)) and (nCmdIndex < pCmdArgs.*.nCmdCount)) : (nCmdIndex += 1) {
-                        if ((dwTraceRequestRef == @as(c_uint, 4294967295)) and !(fnmatch(pCmdArgs.*.ppszCmds[@bitCast(@as(isize, @intCast(nCmdIndex)))], ppszPkgArray[@bitCast(@as(isize, @intCast(nPkgIndex)))], 0) != 0)) {
-                            dwTraceRequestRef = @bitCast(@as(c_int, nCmdIndex - @as(c_int, 1)));
-                        }
-                    }
+
+        var security: u32 = 0;
+        rc = TDNFGetSecuritySeverityOption(pTdnf, &security, &severity);
+        if (rc != 0) break :process;
+        var reboot_required: u32 = 0;
+        rc = TDNFGetRebootRequiredOption(pTdnf, &reboot_required);
+        if (rc != 0) break :process;
+        if ((alter_type == ALTER_UPGRADEALL or alter_type == ALTER_UPGRADE) and (security != 0 or severity != null or reboot_required != 0)) {
+            pAlterType.* = ALTER_UPGRADE;
+            var pkgs: [*c][*c]u8 = null;
+            var count: u32 = 0;
+            rc = TDNFGetUpdatePkgs(pTdnf, &pkgs, &count);
+            if (rc != 0) break :process;
+            var i: u32 = 0;
+            while (i < count) : (i += 1) {
+                var request_ref: u32 = if (alter_type == ALTER_UPGRADEALL) 0 else TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST;
+                var cmd_index: c_int = 1;
+                while (alter_type == ALTER_UPGRADE and cmd_index < args.*.nCmdCount) : (cmd_index += 1) {
+                    if (request_ref == TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST and fnmatch(args.*.ppszCmds[@intCast(cmd_index)], pkgs[i], 0) == 0) request_ref = @intCast(cmd_index - 1);
                 }
-                dwError = TDNFPrepareSinglePkg(pTdnf, ppszPkgArray[@bitCast(@as(isize, @intCast(nPkgIndex)))], pAlterType.*, ppszPkgsNotResolved, queueGoal, dwTraceRequestRef);
-                while (true) {
-                    if (dwError != @as(u32, 0)) return dwError;
-                    if (!false) break;
-                }
+                rc = TDNFPrepareSinglePkg(pTdnf, pkgs[i], pAlterType.*, ppszPkgsNotResolved, queueGoal, request_ref);
+                if (rc != 0) break :process;
             }
-        }
-    } else {
-        {
-            var nCmdIndex: c_int = 1;
-            _ = &nCmdIndex;
-            while (nCmdIndex < pCmdArgs.*.nCmdCount) : (nCmdIndex += 1) {
-                pszPkgName = pCmdArgs.*.ppszCmds[@bitCast(@as(isize, @intCast(nCmdIndex)))];
-                if (TDNFIsGlob(pszPkgName) != 0) {
-                    var nIsInstalled: c_int = @intFromBool(((((nAlterType == @as(TDNF_ALTERTYPE, ALTER_ERASE)) or (nAlterType == @as(TDNF_ALTERTYPE, ALTER_AUTOERASE))) or (nAlterType == @as(TDNF_ALTERTYPE, ALTER_UPGRADE))) or (nAlterType == @as(TDNF_ALTERTYPE, ALTER_DOWNGRADE))) or (nAlterType == @as(TDNF_ALTERTYPE, ALTER_REINSTALL)));
-                    _ = &nIsInstalled;
-                    var ppszPkgSpec: [2][*c]u8 = [2][*c]u8{
-                        pszPkgName,
-                        null,
-                    };
-                    _ = &ppszPkgSpec;
-                    if (pPkgInfos != null) {
-                        TDNFFreePackageInfoArray(pPkgInfos, dwPkgInfoCount);
-                        pPkgInfos = null;
-                        dwPkgInfoCount = 0;
+        } else {
+            var cmd_index: c_int = 1;
+            while (cmd_index < args.*.nCmdCount) : (cmd_index += 1) {
+                const pkg_name = args.*.ppszCmds[@intCast(cmd_index)];
+                if (TDNFIsGlob(pkg_name) != 0) {
+                    const installed = alter_type == ALTER_ERASE or alter_type == ALTER_AUTOERASE or alter_type == ALTER_UPGRADE or alter_type == ALTER_DOWNGRADE or alter_type == ALTER_REINSTALL;
+                    var spec = [_][*c]u8{ pkg_name, null };
+                    if (pkg_infos != null) {
+                        TDNFFreePackageInfoArray(pkg_infos, pkg_info_count);
+                        pkg_infos = null;
+                        pkg_info_count = 0;
                     }
-                    dwError = TDNFResolveListPackages(pTdnf, if (nIsInstalled != 0) SCOPE_INSTALLED else SCOPE_AVAILABLE, @ptrCast(@alignCast(&ppszPkgSpec)), &pPkgInfos, &dwPkgInfoCount);
-                    if (dwError == @as(u32, ERROR_TDNF_NO_MATCH)) {
-                        dwError = 0;
-                    }
-                    while (true) {
-                        if (dwError != @as(u32, 0)) return dwError;
-                        if (!false) break;
-                    }
-                    if (dwPkgInfoCount == @as(u32, 0)) {
-                        dwError = TDNFAddNotResolved(ppszPkgsNotResolved, pszPkgName);
-                        while (true) {
-                            if (dwError != @as(u32, 0)) return dwError;
-                            if (!false) break;
-                        }
-                        TDNFTransactionPlanRequestTraceRecordRequestOutcome(pTdnf.*.pRequestTrace, @bitCast(@as(c_int, nCmdIndex - @as(c_int, 1))), 3);
+                    rc = TDNFResolveListPackages(pTdnf, if (installed) SCOPE_INSTALLED else SCOPE_AVAILABLE, &spec, &pkg_infos, &pkg_info_count);
+                    if (rc == ERROR_TDNF_NO_MATCH) rc = 0;
+                    if (rc != 0) break :process;
+                    if (pkg_info_count == 0) {
+                        rc = TDNFAddNotResolved(ppszPkgsNotResolved, pkg_name);
+                        if (rc != 0) break :process;
+                        TDNFTransactionPlanRequestTraceRecordRequestOutcome(pTdnf.*.pRequestTrace, @intCast(cmd_index - 1), 3);
                     } else {
-                        nPkgIndex = 0;
-                        {
-                            nPkgIndex = 0;
-                            while (@as(u32, @bitCast(@as(c_int, nPkgIndex))) < dwPkgInfoCount) : (nPkgIndex += 1) {
-                                dwError = TDNFPrepareSinglePkg(pTdnf, pPkgInfos[@bitCast(@as(isize, @intCast(nPkgIndex)))].pszName, nAlterType, ppszPkgsNotResolved, queueGoal, @bitCast(@as(c_int, nCmdIndex - @as(c_int, 1))));
-                                while (true) {
-                                    if (dwError != @as(u32, 0)) return dwError;
-                                    if (!false) break;
-                                }
-                            }
+                        var i: u32 = 0;
+                        while (i < pkg_info_count) : (i += 1) {
+                            rc = TDNFPrepareSinglePkg(pTdnf, pkg_infos[i].pszName, alter_type, ppszPkgsNotResolved, queueGoal, @intCast(cmd_index - 1));
+                            if (rc != 0) break :process;
                         }
                     }
                 } else {
-                    if (fnmatch("*.rpm", pszPkgName, 0) == @as(c_int, 0)) {
-                        continue;
-                    }
-                    dwError = TDNFPrepareSinglePkg(pTdnf, pszPkgName, nAlterType, ppszPkgsNotResolved, queueGoal, @bitCast(@as(c_int, nCmdIndex - @as(c_int, 1))));
-                    while (true) {
-                        if (dwError != @as(u32, 0)) return dwError;
-                        if (!false) break;
-                    }
+                    if (fnmatch("*.rpm", pkg_name, 0) == 0) continue;
+                    rc = TDNFPrepareSinglePkg(pTdnf, pkg_name, alter_type, ppszPkgsNotResolved, queueGoal, @intCast(cmd_index - 1));
+                    if (rc != 0) break :process;
                 }
             }
         }
     }
-    while (true) {
-        if (pszSeverity != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszSeverity)));
-            pszSeverity = null;
-        }
-        if (!false) break;
-    }
-    if (pPkgInfos != null) {
-        TDNFFreePackageInfoArray(pPkgInfos, dwPkgInfoCount);
-    }
-    return dwError;
+    return rc;
 }
 pub export fn TDNFAddNotResolved(arg_ppszPkgsNotResolved: [*c][*c]u8, arg_pszPkgName: [*c]const u8) u32 {
     var ppszPkgsNotResolved = arg_ppszPkgsNotResolved;
@@ -3828,146 +3731,77 @@ pub export fn TDNFAddNotResolved(arg_ppszPkgsNotResolved: [*c][*c]u8, arg_pszPkg
     }
     return dwError;
 }
-pub export fn TDNFResolveBuildDependencies(arg_pTdnf: PTDNF, arg_ppszPackageNameSpecs: [*c][*c]u8, arg_ppszPkgsNotResolved: [*c][*c]u8, arg_queueGoal: PTDNF_ID_LIST) u32 {
-    var pTdnf = arg_pTdnf;
-    _ = &pTdnf;
-    var ppszPackageNameSpecs = arg_ppszPackageNameSpecs;
-    _ = &ppszPackageNameSpecs;
-    var ppszPkgsNotResolved = arg_ppszPkgsNotResolved;
-    _ = &ppszPkgsNotResolved;
-    var queueGoal = arg_queueGoal;
-    _ = &queueGoal;
-    var dwError: u32 = 0;
-    _ = &dwError;
-    var i: c_int = undefined;
-    _ = &i;
-    var pszDep: [*c]const u8 = null;
-    _ = &pszDep;
-    var pRepos: PTDNF_REPOMD_NATIVE_REPO_INPUT = null;
-    _ = &pRepos;
-    var dwRepoCount: u32 = 0;
-    _ = &dwRepoCount;
-    var pPkgInfos: PTDNF_PKG_INFO = null;
-    _ = &pPkgInfos;
-    var dwPkgCount: u32 = 0;
-    _ = &dwPkgCount;
-    var ppszGoalRefs: [*c][*c]u8 = null;
-    _ = &ppszGoalRefs;
-    var ppszGoalDeps: [*c][*c]u8 = null;
-    _ = &ppszGoalDeps;
-    var ppszPkgRefs: [*c][*c]u8 = null;
-    _ = &ppszPkgRefs;
-    var ppszPkgDeps: [*c][*c]u8 = null;
-    _ = &ppszPkgDeps;
-    var ppszCmdLineRpmPaths: [*c][*c]u8 = null;
-    _ = &ppszCmdLineRpmPaths;
-    var dwGoalRefCount: u32 = 0;
-    _ = &dwGoalRefCount;
-    var dwGoalDepCount: u32 = 0;
-    _ = &dwGoalDepCount;
-    var dwPkgRefCount: u32 = 0;
-    _ = &dwPkgRefCount;
-    var dwPkgDepCount: u32 = 0;
-    _ = &dwPkgDepCount;
-    var dwCmdLineRpmPathCount: u32 = 0;
-    _ = &dwCmdLineRpmPathCount;
-    if ((((!(pTdnf != null) or !(pTdnf.*.pSack != null)) or !(ppszPackageNameSpecs != null)) or !(ppszPkgsNotResolved != null)) or !(queueGoal != null)) {
-        dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
+pub export fn TDNFResolveBuildDependencies(pTdnf: PTDNF, ppszPackageNameSpecs: [*c][*c]u8, ppszPkgsNotResolved: [*c][*c]u8, queueGoal: PTDNF_ID_LIST) u32 {
+    var rc: u32 = 0;
+    var repos: PTDNF_REPOMD_NATIVE_REPO_INPUT = null;
+    var repo_count: u32 = 0;
+    var pkg_infos: PTDNF_PKG_INFO = null;
+    var pkg_count: u32 = 0;
+    var goal_refs: [*c][*c]u8 = null;
+    var goal_deps: [*c][*c]u8 = null;
+    var pkg_refs: [*c][*c]u8 = null;
+    var pkg_deps: [*c][*c]u8 = null;
+    var cmdline_paths: [*c][*c]u8 = null;
+    defer {
+        TDNFFreeStringArray(goal_refs);
+        TDNFFreeStringArray(goal_deps);
+        TDNFFreeStringArray(pkg_refs);
+        TDNFFreeStringArray(pkg_deps);
+        TDNFFreeStringArray(cmdline_paths);
+        TDNFNativeQueryFreeRepoInputs(repos, repo_count);
+        if (pkg_infos != null) TDNFFreePackageInfoArray(pkg_infos, pkg_count);
     }
-    if (queueGoal.*.dwCount > @as(u32, 0)) {
-        dwError = TDNFResolveCollectCmdLineRpmPaths(pTdnf, &ppszCmdLineRpmPaths, &dwCmdLineRpmPathCount);
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
+
+    process: {
+        if (pTdnf == null or pTdnf.*.pSack == null or ppszPackageNameSpecs == null or ppszPkgsNotResolved == null or queueGoal == null) {
+            rc = ERROR_TDNF_INVALID_PARAMETER;
+            break :process;
         }
-    }
-    if (((queueGoal.*.dwCount > @as(u32, 0)) and !(dwCmdLineRpmPathCount != 0)) or (ppszPackageNameSpecs[@as(c_int, 0)] != null)) {
-        dwError = TDNFNativeQueryBuildRepoInputs(pTdnf, &pRepos, &dwRepoCount);
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
+        var cmdline_count: u32 = 0;
+        if (queueGoal.*.dwCount > 0) {
+            rc = TDNFResolveCollectCmdLineRpmPaths(pTdnf, &cmdline_paths, &cmdline_count);
+            if (rc != 0) break :process;
         }
-    }
-    if (queueGoal.*.dwCount > @as(u32, 0)) {
-        if (dwCmdLineRpmPathCount != 0) {
-            dwError = TDNFRepoMdNativeRequiresForCmdLineRpmPaths(@ptrCast(@alignCast(ppszCmdLineRpmPaths)), dwCmdLineRpmPathCount, &ppszGoalDeps, &dwGoalDepCount);
-            while (true) {
-                if (dwError != @as(u32, 0)) return dwError;
-                if (!false) break;
+        if ((queueGoal.*.dwCount > 0 and cmdline_count == 0) or ppszPackageNameSpecs[0] != null) {
+            rc = TDNFNativeQueryBuildRepoInputs(pTdnf, &repos, &repo_count);
+            if (rc != 0) break :process;
+        }
+        var goal_dep_count: u32 = 0;
+        if (queueGoal.*.dwCount > 0) {
+            if (cmdline_count != 0) {
+                rc = TDNFRepoMdNativeRequiresForCmdLineRpmPaths(@ptrCast(cmdline_paths), cmdline_count, &goal_deps, &goal_dep_count);
+            } else {
+                var goal_ref_count: u32 = 0;
+                rc = TDNFNativeQuerySerializeQueuePackageRefs(pTdnf.*.pSack, queueGoal, &goal_refs, &goal_ref_count);
+                if (rc == 0) rc = TDNFRepoMdNativeRequiresForPackageRefsConfig(repos, repo_count, pTdnf.*.pRpmConfig, goal_refs, &goal_deps, &goal_dep_count);
             }
-        } else {
-            dwError = TDNFNativeQuerySerializeQueuePackageRefs(pTdnf.*.pSack, queueGoal, &ppszGoalRefs, &dwGoalRefCount);
-            while (true) {
-                if (dwError != @as(u32, 0)) return dwError;
-                if (!false) break;
-            }
-            dwError = TDNFRepoMdNativeRequiresForPackageRefsConfig(pRepos, dwRepoCount, pTdnf.*.pRpmConfig, ppszGoalRefs, &ppszGoalDeps, &dwGoalDepCount);
-            while (true) {
-                if (dwError != @as(u32, 0)) return dwError;
-                if (!false) break;
+            if (rc != 0) break :process;
+        }
+        TDNFIdListEmpty(queueGoal);
+        var pkg_dep_count: u32 = 0;
+        if (ppszPackageNameSpecs[0] != null) {
+            rc = TDNFRepoMdNativeListConfig(repos, repo_count, pTdnf.*.pRpmConfig, SCOPE_SOURCE, ppszPackageNameSpecs, DETAIL_LIST, &pkg_infos, &pkg_count);
+            if (rc != 0) break :process;
+            var pkg_ref_count: u32 = 0;
+            rc = TDNFNativeQuerySerializePackageInfoRefs(pkg_infos, pkg_count, &pkg_refs, &pkg_ref_count);
+            if (rc == 0) rc = TDNFRepoMdNativeRequiresForPackageRefsConfig(repos, repo_count, pTdnf.*.pRpmConfig, pkg_refs, &pkg_deps, &pkg_dep_count);
+            if (rc != 0) break :process;
+        }
+        var arrays = [_]struct { deps: [*c][*c]u8, count: u32 }{
+            .{ .deps = goal_deps, .count = goal_dep_count },
+            .{ .deps = pkg_deps, .count = pkg_dep_count },
+        };
+        for (&arrays) |entry| {
+            var i: u32 = 0;
+            while (i < entry.count) : (i += 1) {
+                const dep = entry.deps[i];
+                if (dep == null or strncmp(dep, "rpmlib(", 7) == 0) continue;
+                rc = TDNFPrepareSinglePkg(pTdnf, dep, ALTER_INSTALL, ppszPkgsNotResolved, queueGoal, TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST);
+                if (rc != 0) break :process;
             }
         }
     }
-    TDNFIdListEmpty(queueGoal);
-    if (ppszPackageNameSpecs[@as(c_int, 0)] != null) {
-        dwError = TDNFRepoMdNativeListConfig(pRepos, dwRepoCount, pTdnf.*.pRpmConfig, SCOPE_SOURCE, ppszPackageNameSpecs, DETAIL_LIST, &pPkgInfos, &dwPkgCount);
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
-        dwError = TDNFNativeQuerySerializePackageInfoRefs(pPkgInfos, dwPkgCount, &ppszPkgRefs, &dwPkgRefCount);
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
-        dwError = TDNFRepoMdNativeRequiresForPackageRefsConfig(pRepos, dwRepoCount, pTdnf.*.pRpmConfig, ppszPkgRefs, &ppszPkgDeps, &dwPkgDepCount);
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
-    }
-    {
-        i = 0;
-        while (i < @as(c_int, @bitCast(@as(c_uint, @truncate(dwGoalDepCount))))) : (i += 1) {
-            pszDep = ppszGoalDeps[@bitCast(@as(isize, @intCast(i)))];
-            if (!(pszDep != null) or (strncmp(pszDep, "rpmlib(", 7) == @as(c_int, 0))) {
-                continue;
-            }
-            dwError = TDNFPrepareSinglePkg(pTdnf, pszDep, ALTER_INSTALL, ppszPkgsNotResolved, queueGoal, @as(c_uint, 4294967295));
-            while (true) {
-                if (dwError != @as(u32, 0)) return dwError;
-                if (!false) break;
-            }
-        }
-    }
-    {
-        i = 0;
-        while (i < @as(c_int, @bitCast(@as(c_uint, @truncate(dwPkgDepCount))))) : (i += 1) {
-            pszDep = ppszPkgDeps[@bitCast(@as(isize, @intCast(i)))];
-            if (!(pszDep != null) or (strncmp(pszDep, "rpmlib(", 7) == @as(c_int, 0))) {
-                continue;
-            }
-            dwError = TDNFPrepareSinglePkg(pTdnf, pszDep, ALTER_INSTALL, ppszPkgsNotResolved, queueGoal, @as(c_uint, 4294967295));
-            while (true) {
-                if (dwError != @as(u32, 0)) return dwError;
-                if (!false) break;
-            }
-        }
-    }
-    TDNFFreeStringArray(ppszGoalRefs);
-    TDNFFreeStringArray(ppszGoalDeps);
-    TDNFFreeStringArray(ppszPkgRefs);
-    TDNFFreeStringArray(ppszPkgDeps);
-    TDNFFreeStringArray(ppszCmdLineRpmPaths);
-    TDNFNativeQueryFreeRepoInputs(pRepos, dwRepoCount);
-    if (pPkgInfos != null) {
-        TDNFFreePackageInfoArray(pPkgInfos, dwPkgCount);
-    }
-    return dwError;
+    return rc;
 }
 pub extern fn TDNFRpmExecTransaction(pTdnf: PTDNF, pInfo: PTDNF_SOLVED_PKG_INFO) u32;
 pub extern fn TDNFRpmExecHistoryTransaction(pTdnf: PTDNF, pSolvedInfo: PTDNF_SOLVED_PKG_INFO, pHistoryArgs: PTDNF_HISTORY_ARGS) u32;
@@ -3983,106 +3817,39 @@ pub extern fn BuiltinPluginsRepoMDDownloadStart(pTdnf: PTDNF, pszRepoId: [*c]con
 pub extern fn BuiltinPluginsRepoMDDownloadEnd(pTdnf: PTDNF, pszRepoId: [*c]const u8, pszRepoMDFile: [*c]const u8) u32;
 pub extern fn parse_varsdirs(dirs: [*c][*c]u8) [*c]struct_cnfnode;
 pub extern fn replace_vars(cn_vars: [*c]struct_cnfnode, source: [*c]const u8) [*c]u8;
-pub fn TDNFFilterPackages(arg_pTdnf: PTDNF, arg_nAlterType: TDNF_ALTERTYPE, arg_ppszPkgsNotResolved: [*c][*c]u8, arg_queueGoal: PTDNF_ID_LIST) callconv(.c) u32 {
-    var pTdnf = arg_pTdnf;
-    _ = &pTdnf;
-    var nAlterType = arg_nAlterType;
-    _ = &nAlterType;
-    var ppszPkgsNotResolved = arg_ppszPkgsNotResolved;
-    _ = &ppszPkgsNotResolved;
-    var queueGoal = arg_queueGoal;
-    _ = &queueGoal;
-    var dwError: u32 = 0;
-    _ = &dwError;
-    var dwPkgIndex: u32 = 0;
-    _ = &dwPkgIndex;
-    var dwSize: u32 = 0;
-    _ = &dwSize;
-    var pPkgInfos: PTDNF_PKG_INFO = null;
-    _ = &pPkgInfos;
-    if (((!(pTdnf != null) or !(pTdnf.*.pSack != null)) or !(queueGoal != null)) or !(ppszPkgsNotResolved != null)) {
-        dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
+pub fn TDNFFilterPackages(pTdnf: PTDNF, nAlterType: TDNF_ALTERTYPE, ppszPkgsNotResolved: [*c][*c]u8, queueGoal: PTDNF_ID_LIST) callconv(.c) u32 {
+    var infos: PTDNF_PKG_INFO = null;
+    var count: u32 = 0;
+    defer if (infos != null) TDNFFreePackageInfoArray(infos, count);
+    if (pTdnf == null or pTdnf.*.pSack == null or queueGoal == null or ppszPkgsNotResolved == null) return ERROR_TDNF_INVALID_PARAMETER;
+    var rc = TDNFResolveListPackages(pTdnf, SCOPE_INSTALLED, null, &infos, &count);
+    if (rc == ERROR_TDNF_NO_MATCH) rc = 0;
+    if (rc != 0) return rc;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        rc = TDNFPrepareSinglePkg(pTdnf, infos[i].pszName, nAlterType, ppszPkgsNotResolved, queueGoal, 0);
+        if (rc != 0) return rc;
     }
-    dwError = TDNFResolveListPackages(pTdnf, SCOPE_INSTALLED, null, &pPkgInfos, &dwSize);
-    if (dwError == @as(u32, ERROR_TDNF_NO_MATCH)) {
-        dwError = 0;
-    }
-    while (true) {
-        if (dwError != @as(u32, 0)) return dwError;
-        if (!false) break;
-    }
-    {
-        dwPkgIndex = 0;
-        while (dwPkgIndex < dwSize) : (dwPkgIndex +%= 1) {
-            dwError = TDNFPrepareSinglePkg(pTdnf, pPkgInfos[dwPkgIndex].pszName, nAlterType, ppszPkgsNotResolved, queueGoal, 0);
-            while (true) {
-                if (dwError != @as(u32, 0)) return dwError;
-                if (!false) break;
-            }
-        }
-    }
-    if (pPkgInfos != null) {
-        TDNFFreePackageInfoArray(pPkgInfos, dwSize);
-    }
-    return dwError;
+    return 0;
 }
-pub fn TDNFGetAutoInstalledOrphans(arg_pTdnf: PTDNF, arg_pQueueGoal: PTDNF_ID_LIST) callconv(.c) u32 {
-    var pTdnf = arg_pTdnf;
-    _ = &pTdnf;
-    var pQueueGoal = arg_pQueueGoal;
-    _ = &pQueueGoal;
-    var dwError: u32 = 0;
-    _ = &dwError;
-    var pHistoryCtx: ?*struct_history_ctx = null;
-    _ = &pHistoryCtx;
-    var ppszAutoRefs: [*c][*c]u8 = null;
-    _ = &ppszAutoRefs;
-    var ppszOrphanRefs: [*c][*c]u8 = null;
-    _ = &ppszOrphanRefs;
-    var dwAutoRefCount: u32 = 0;
-    _ = &dwAutoRefCount;
-    var dwOrphanCount: u32 = 0;
-    _ = &dwOrphanCount;
-    if ((!(pTdnf != null) or !(pTdnf.*.pSack != null)) or !(pQueueGoal != null)) {
-        dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
-    }
-    dwError = TDNFGetHistoryCtx(pTdnf, &pHistoryCtx, 1);
-    while (true) {
-        if (dwError != @as(u32, 0)) return dwError;
-        if (!false) break;
-    }
-    dwError = TDNFNativeQuerySerializeAutoInstalledRefs(pTdnf, pHistoryCtx, &ppszAutoRefs, &dwAutoRefCount);
-    while (true) {
-        if (dwError != @as(u32, 0)) return dwError;
-        if (!false) break;
-    }
-    if (!(dwAutoRefCount != 0)) {
-        return dwError;
-    }
-    dwError = TDNFRepoMdNativeAutoInstalledOrphanLinesConfig(pTdnf.*.pRpmConfig, ppszAutoRefs, &ppszOrphanRefs, &dwOrphanCount);
-    while (true) {
-        if (dwError != @as(u32, 0)) return dwError;
-        if (!false) break;
-    }
-    dwError = TDNFNativeQueryResolvePackageRefArrayToQueue(pTdnf.*.pSack, ppszOrphanRefs, dwOrphanCount, 1, pQueueGoal);
-    while (true) {
-        if (dwError != @as(u32, 0)) return dwError;
-        if (!false) break;
-    }
-    TDNFFreeStringArray(ppszAutoRefs);
-    TDNFFreeStringArray(ppszOrphanRefs);
-    if (pHistoryCtx != null) {
-        destroy_history_ctx(pHistoryCtx);
-    }
-    return dwError;
+pub fn TDNFGetAutoInstalledOrphans(pTdnf: PTDNF, queueGoal: PTDNF_ID_LIST) callconv(.c) u32 {
+    if (pTdnf == null or pTdnf.*.pSack == null or queueGoal == null) return ERROR_TDNF_INVALID_PARAMETER;
+    var history: ?*struct_history_ctx = null;
+    var rc = TDNFGetHistoryCtx(pTdnf, &history, 1);
+    if (rc != 0) return rc;
+    defer if (history != null) destroy_history_ctx(history);
+
+    var auto_refs: [*c][*c]u8 = null;
+    var orphan_refs: [*c][*c]u8 = null;
+    defer TDNFFreeStringArray(auto_refs);
+    defer TDNFFreeStringArray(orphan_refs);
+    var auto_count: u32 = 0;
+    rc = TDNFNativeQuerySerializeAutoInstalledRefs(pTdnf, history, &auto_refs, &auto_count);
+    if (rc != 0 or auto_count == 0) return rc;
+    var orphan_count: u32 = 0;
+    rc = TDNFRepoMdNativeAutoInstalledOrphanLinesConfig(pTdnf.*.pRpmConfig, auto_refs, &orphan_refs, &orphan_count);
+    if (rc != 0) return rc;
+    return TDNFNativeQueryResolvePackageRefArrayToQueue(pTdnf.*.pSack, orphan_refs, orphan_count, 1, queueGoal);
 }
 pub fn TDNFPrepareSinglePkg(
     pTdnf: PTDNF,
@@ -4198,197 +3965,97 @@ pub fn TDNFPrepareSinglePkg(
     return rc;
 }
 
-pub fn TDNFResolveListPackages(arg_pTdnf: PTDNF, arg_nScope: TDNF_SCOPE, arg_ppszPackageNameSpecs: [*c][*c]u8, arg_ppPkgInfos: [*c]PTDNF_PKG_INFO, arg_pdwCount: [*c]u32) callconv(.c) u32 {
-    var pTdnf = arg_pTdnf;
-    _ = &pTdnf;
-    var nScope = arg_nScope;
-    _ = &nScope;
-    var ppszPackageNameSpecs = arg_ppszPackageNameSpecs;
-    _ = &ppszPackageNameSpecs;
-    var ppPkgInfos = arg_ppPkgInfos;
-    _ = &ppPkgInfos;
-    var pdwCount = arg_pdwCount;
-    _ = &pdwCount;
-    var dwError: u32 = 0;
-    _ = &dwError;
-    var pRepos: PTDNF_REPOMD_NATIVE_REPO_INPUT = null;
-    _ = &pRepos;
-    var dwRepoCount: u32 = 0;
-    _ = &dwRepoCount;
-    var pPkgInfos: PTDNF_PKG_INFO = null;
-    _ = &pPkgInfos;
-    var dwCount: u32 = 0;
-    _ = &dwCount;
-    if ((!(pTdnf != null) or !(ppPkgInfos != null)) or !(pdwCount != null)) {
-        dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
-    }
+pub fn TDNFResolveListPackages(pTdnf: PTDNF, nScope: TDNF_SCOPE, ppszPackageNameSpecs: [*c][*c]u8, ppPkgInfos: [*c]PTDNF_PKG_INFO, pdwCount: [*c]u32) callconv(.c) u32 {
+    if (ppPkgInfos != null) ppPkgInfos.* = null;
+    if (pdwCount != null) pdwCount.* = 0;
+    if (pTdnf == null or ppPkgInfos == null or pdwCount == null) return ERROR_TDNF_INVALID_PARAMETER;
+
+    var repos: PTDNF_REPOMD_NATIVE_REPO_INPUT = null;
+    var repo_count: u32 = 0;
+    defer TDNFNativeQueryFreeRepoInputs(repos, repo_count);
+    var infos: PTDNF_PKG_INFO = null;
+    var count: u32 = 0;
+    var transferred = false;
+    defer if (!transferred and infos != null) TDNFFreePackageInfoArray(infos, count);
+
     if (nScope != SCOPE_INSTALLED) {
-        dwError = TDNFNativeQueryBuildRepoInputs(pTdnf, &pRepos, &dwRepoCount);
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
+        const rc = TDNFNativeQueryBuildRepoInputs(pTdnf, &repos, &repo_count);
+        if (rc != 0) return rc;
     }
-    dwError = TDNFRepoMdNativeListConfig(pRepos, dwRepoCount, pTdnf.*.pRpmConfig, nScope, ppszPackageNameSpecs, DETAIL_LIST, &pPkgInfos, &dwCount);
-    while (true) {
-        if (dwError != @as(u32, 0)) return dwError;
-        if (!false) break;
-    }
-    ppPkgInfos.* = pPkgInfos;
-    pdwCount.* = dwCount;
-    TDNFNativeQueryFreeRepoInputs(pRepos, dwRepoCount);
-    return dwError;
+    const rc = TDNFRepoMdNativeListConfig(repos, repo_count, pTdnf.*.pRpmConfig, nScope, ppszPackageNameSpecs, DETAIL_LIST, &infos, &count);
+    if (rc != 0) return rc;
+    ppPkgInfos.* = infos;
+    pdwCount.* = count;
+    transferred = true;
+    return 0;
 }
-pub fn TDNFResolveCollectCmdLineRpmPaths(arg_pTdnf: PTDNF, arg_pppszPaths: [*c][*c][*c]u8, arg_pdwCount: [*c]u32) callconv(.c) u32 {
-    var pTdnf = arg_pTdnf;
-    _ = &pTdnf;
-    var pppszPaths = arg_pppszPaths;
-    _ = &pppszPaths;
-    var pdwCount = arg_pdwCount;
-    _ = &pdwCount;
-    var dwError: u32 = 0;
-    _ = &dwError;
-    var pCmdArgs: PTDNF_CMD_ARGS = null;
-    _ = &pCmdArgs;
-    var ppszPaths: [*c][*c]u8 = null;
-    _ = &ppszPaths;
-    var pszRPMPath: [*c]u8 = null;
-    _ = &pszRPMPath;
-    var pszCopyOfPkgName: [*c]u8 = null;
-    _ = &pszCopyOfPkgName;
-    var dwPathCount: u32 = 0;
-    _ = &dwPathCount;
-    var dwPathIndex: u32 = 0;
-    _ = &dwPathIndex;
-    if (((!(pTdnf != null) or !(pTdnf.*.pArgs != null)) or !(pppszPaths != null)) or !(pdwCount != null)) {
-        dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
-        while (true) {
-            if (dwError != @as(u32, 0)) return dwError;
-            if (!false) break;
-        }
+pub fn TDNFResolveCollectCmdLineRpmPaths(pTdnf: PTDNF, pppszPaths: [*c][*c][*c]u8, pdwCount: [*c]u32) callconv(.c) u32 {
+    if (pppszPaths != null) pppszPaths.* = null;
+    if (pdwCount != null) pdwCount.* = 0;
+    if (pTdnf == null or pTdnf.*.pArgs == null or pppszPaths == null or pdwCount == null) return ERROR_TDNF_INVALID_PARAMETER;
+
+    const args = pTdnf.*.pArgs;
+    var count: u32 = 0;
+    var cmd_index: c_int = 1;
+    while (cmd_index < args.*.nCmdCount) : (cmd_index += 1) {
+        if (fnmatch("*.rpm", args.*.ppszCmds[@intCast(cmd_index)], 0) == 0) count += 1;
     }
-    pppszPaths.* = null;
-    pdwCount.* = 0;
-    pCmdArgs = pTdnf.*.pArgs;
-    {
-        var nCmdIndex: c_int = 1;
-        _ = &nCmdIndex;
-        while (nCmdIndex < pCmdArgs.*.nCmdCount) : (nCmdIndex += 1) {
-            if (fnmatch("*.rpm", pCmdArgs.*.ppszCmds[@bitCast(@as(isize, @intCast(nCmdIndex)))], 0) == @as(c_int, 0)) {
-                dwPathCount +%= 1;
-            }
-        }
+    if (count == 0) return 0;
+
+    var paths: [*c][*c]u8 = null;
+    var rc = TDNFAllocateMemory(count + 1, @sizeOf([*c]u8), @ptrCast(&paths));
+    if (rc != 0) return rc;
+    var transferred = false;
+    defer if (!transferred) TDNFFreeStringArray(paths);
+    var path: [*c]u8 = null;
+    var copy: [*c]u8 = null;
+    defer {
+        if (path != null) TDNFFreeMemory(@ptrCast(path));
+        if (copy != null) TDNFFreeMemory(@ptrCast(copy));
     }
-    if (!(dwPathCount != 0)) {
-        return dwError;
-    }
-    dwError = TDNFAllocateMemory(dwPathCount +% @as(u32, 1), @sizeOf([*c]u8), @ptrCast(@alignCast(&ppszPaths)));
-    while (true) {
-        if (dwError != @as(u32, 0)) return dwError;
-        if (!false) break;
-    }
-    {
-        var nCmdIndex: c_int = 1;
-        _ = &nCmdIndex;
-        while (nCmdIndex < pCmdArgs.*.nCmdCount) : (nCmdIndex += 1) {
-            var pszPkgName: [*c]u8 = pCmdArgs.*.ppszCmds[@bitCast(@as(isize, @intCast(nCmdIndex)))];
-            _ = &pszPkgName;
-            var nIsFile: c_int = 0;
-            _ = &nIsFile;
-            var nIsRemote: c_int = 0;
-            _ = &nIsRemote;
-            if (fnmatch("*.rpm", pszPkgName, 0) != @as(c_int, 0)) {
+
+    var path_index: u32 = 0;
+    cmd_index = 1;
+    while (cmd_index < args.*.nCmdCount) : (cmd_index += 1) {
+        const pkg_name = args.*.ppszCmds[@intCast(cmd_index)];
+        if (fnmatch("*.rpm", pkg_name, 0) != 0) continue;
+        var is_file: c_int = 0;
+        rc = TDNFIsFileOrSymlink(pkg_name, &is_file);
+        if (rc != 0) return rc;
+        if (is_file != 0) {
+            path = realpath(pkg_name, null);
+            if (path == null) return @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + __errno_location().*));
+        } else {
+            var is_remote: c_int = 0;
+            rc = TDNFUriIsRemote(pkg_name, &is_remote);
+            if (rc == ERROR_TDNF_URL_INVALID) {
+                rc = 0;
                 continue;
             }
-            dwError = TDNFIsFileOrSymlink(pszPkgName, &nIsFile);
-            while (true) {
-                if (dwError != @as(u32, 0)) return dwError;
-                if (!false) break;
-            }
-            if (nIsFile != 0) {
-                pszRPMPath = realpath(pszPkgName, null);
-                if (!(pszRPMPath != null)) {
-                    dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + __errno_location().*));
-                    while (true) {
-                        if (dwError != @as(u32, 0)) return dwError;
-                        if (!false) break;
-                    }
-                }
+            if (rc != 0) return rc;
+            if (is_remote == 0) {
+                rc = TDNFPathFromUri(pkg_name, &path);
+                if (rc != 0) return rc;
             } else {
-                dwError = TDNFUriIsRemote(pszPkgName, &nIsRemote);
-                if (dwError == @as(u32, ERROR_TDNF_URL_INVALID)) {
-                    dwError = 0;
-                    continue;
-                }
-                while (true) {
-                    if (dwError != @as(u32, 0)) return dwError;
-                    if (!false) break;
-                }
-                if (!(nIsRemote != 0)) {
-                    dwError = TDNFPathFromUri(pszPkgName, &pszRPMPath);
-                    while (true) {
-                        if (dwError != @as(u32, 0)) return dwError;
-                        if (!false) break;
-                    }
-                } else {
-                    var pRepo: PTDNF_REPO_DATA = null;
-                    _ = &pRepo;
-                    dwError = TDNFAllocateString(pszPkgName, &pszCopyOfPkgName);
-                    while (true) {
-                        if (dwError != @as(u32, 0)) return dwError;
-                        if (!false) break;
-                    }
-                    dwError = TDNFFindRepoById(pTdnf, "@cmdline", &pRepo);
-                    while (true) {
-                        if (dwError != @as(u32, 0)) return dwError;
-                        if (!false) break;
-                    }
-                    dwError = TDNFDownloadPackageToCache(pTdnf, pszPkgName, __xpg_basename(pszCopyOfPkgName), pRepo, &pszRPMPath);
-                    while (true) {
-                        if (dwError != @as(u32, 0)) return dwError;
-                        if (!false) break;
-                    }
-                    while (true) {
-                        if (pszCopyOfPkgName != null) {
-                            TDNFFreeMemory(@ptrCast(@alignCast(pszCopyOfPkgName)));
-                            pszCopyOfPkgName = null;
-                        }
-                        if (!false) break;
-                    }
-                }
+                var repo: PTDNF_REPO_DATA = null;
+                rc = TDNFAllocateString(pkg_name, &copy);
+                if (rc != 0) return rc;
+                rc = TDNFFindRepoById(pTdnf, "@cmdline", &repo);
+                if (rc != 0) return rc;
+                rc = TDNFDownloadPackageToCache(pTdnf, pkg_name, __xpg_basename(copy), repo, &path);
+                if (rc != 0) return rc;
+                TDNFFreeMemory(@ptrCast(copy));
+                copy = null;
             }
-            ppszPaths[
-                blk: {
-                    const ref = &dwPathIndex;
-                    const tmp = ref.*;
-                    ref.* +%= 1;
-                    break :blk tmp;
-                }
-            ] = pszRPMPath;
-            pszRPMPath = null;
         }
+        paths[path_index] = path;
+        path_index += 1;
+        path = null;
     }
-    pppszPaths.* = ppszPaths;
-    pdwCount.* = dwPathIndex;
-    while (true) {
-        if (pszRPMPath != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszRPMPath)));
-            pszRPMPath = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszCopyOfPkgName != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszCopyOfPkgName)));
-            pszCopyOfPkgName = null;
-        }
-        if (!false) break;
-    }
-    return dwError;
+    pppszPaths.* = paths;
+    pdwCount.* = path_index;
+    transferred = true;
+    return 0;
 }
 
 pub const __VERSION__ = "Aro aro-zig";

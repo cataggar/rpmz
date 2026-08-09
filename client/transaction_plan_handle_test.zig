@@ -1,4 +1,5 @@
 const std = @import("std");
+const client = @import("client_root");
 
 comptime {
     _ = @import("client_root");
@@ -83,6 +84,7 @@ const error_out_of_memory: u32 = 1612;
 const error_protected: u32 = 1030;
 const error_solv_failed: u32 = 1301;
 const error_already_installed: u32 = 1026;
+const error_no_match: u32 = 1011;
 const error_cache_disabled: u32 = 1034;
 const filter_security: u8 = 1 << 0;
 const filter_severity: u8 = 1 << 1;
@@ -101,6 +103,13 @@ extern fn TDNFRepoMdCreateRepoCacheName(
     output: ?*?[*:0]u8,
 ) u32;
 extern fn TDNFFreeMemory(memory: ?*anyopaque) void;
+extern fn TDNFFreePackageInfoArray(packages: ?*anyopaque, count: u32) void;
+const IdList = extern struct {
+    elements: ?[*]c_int = null,
+    count: u32 = 0,
+    capacity: u32 = 0,
+};
+extern fn TDNFIdListFree(queue: ?*IdList) void;
 extern fn TDNFOpenHandle(args: ?*CmdArgs, handle: ?*?*anyopaque) u32;
 extern fn TDNFCloseHandle(handle: ?*anyopaque) void;
 extern fn TDNFResolve(
@@ -921,6 +930,102 @@ fn resolve(handle: ?*anyopaque) !void {
     try std.testing.expectEqual(@as(u32, 0), result);
     defer TDNFFreeSolvedPackageInfo(solved);
     try std.testing.expect(solved != null);
+}
+
+test "resolver cleanup paths are repeatable and reset outputs" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    try fixture.enableBaseSnapshot();
+    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+        return error.OutOfMemory;
+    defer tdnf_rpm_config_destroy(rpm_config);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        TDNFTransactionPlanTestWriteFileProvider(rpm_config),
+    );
+    try fixture.tmp.dir.createDirPath(std.testing.io, "root/persist");
+    const history_path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/persist/history.db",
+        .{fixture.root},
+        0,
+    );
+    defer std.testing.allocator.free(history_path);
+    const history = create_history_ctx(history_path.ptr) orelse
+        return error.OutOfMemory;
+    destroy_history_ctx(history);
+
+    const setopts = create_cnfnode("(setopts)") orelse
+        return error.OutOfMemory;
+    defer destroy_cnftree(setopts);
+    const repoopts = create_cnfnode("(repoopts)") orelse
+        return error.OutOfMemory;
+    defer destroy_cnftree(repoopts);
+    var commands = [_]?[*:0]u8{
+        @ptrCast(@constCast("list")),
+        null,
+    };
+    var args = CmdArgs{};
+    args.nCacheOnly = 1;
+    args.nQuiet = 1;
+    args.pszArch = @ptrCast(@constCast("x86_64"));
+    args.pszInstallRoot = fixture.root.ptr;
+    args.pszConfFile = fixture.config.ptr;
+    args.pszReleaseVer = @ptrCast(@constCast("1"));
+    args.ppszCmds = &commands;
+    args.nCmdCount = 1;
+    args.cn_setopts = setopts;
+    args.cn_repoopts = repoopts;
+    var handle: ?*anyopaque = null;
+    try std.testing.expectEqual(@as(u32, 0), TDNFOpenHandle(&args, &handle));
+    defer TDNFCloseHandle(handle);
+    try std.testing.expectEqual(@as(u32, 0), TDNFRefresh(handle));
+
+    var missing_specs = [_]?[*:0]u8{
+        @ptrCast(@constCast("definitely-missing-cleanup-package")),
+        null,
+    };
+    for (0..64) |_| {
+        var packages: client.resolve.PTDNF_PKG_INFO = @ptrFromInt(8);
+        var package_count: u32 = 99;
+        try std.testing.expectEqual(
+            error_no_match,
+            client.resolve.TDNFResolveListPackages(
+                @ptrCast(@alignCast(handle)),
+                2,
+                @ptrCast(&missing_specs),
+                &packages,
+                &package_count,
+            ),
+        );
+        try std.testing.expect(packages == null);
+        try std.testing.expectEqual(@as(u32, 0), package_count);
+
+        var hidden: client.goal.PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB =
+            @ptrFromInt(8);
+        var hidden_count: u32 = 99;
+        try std.testing.expectEqual(
+            @as(u32, 0),
+            client.goal.TDNFGoalBuildNativeSolverHiddenAvailable(
+                @ptrCast(@alignCast(handle)),
+                &hidden,
+                &hidden_count,
+            ),
+        );
+        try std.testing.expect(hidden == null);
+        try std.testing.expectEqual(@as(u32, 0), hidden_count);
+
+        var queue = IdList{};
+        try std.testing.expectEqual(
+            @as(u32, 0),
+            client.resolve.TDNFGetAutoInstalledOrphans(
+                @ptrCast(@alignCast(handle)),
+                @ptrCast(&queue),
+            ),
+        );
+        try std.testing.expectEqual(@as(u32, 0), queue.count);
+        TDNFIdListFree(&queue);
+    }
 }
 
 test "repo init failures leave pool indexes queryable" {

@@ -3624,6 +3624,10 @@ pub export fn TDNFGoal(arg_pTdnf: PTDNF, arg_pQueuePkgList: PTDNF_ID_LIST, arg_p
     _ = &dwExcludeCount;
     var nTraceStart: u32 = 0;
     _ = &nTraceStart;
+    defer {
+        if (ppszExcludes != null) TDNFFreeStringArray(ppszExcludes);
+        TDNFIdListFree(&queueJobs);
+    }
     if ((!(pTdnf != null) or !(ppInfo != null)) or !(pQueuePkgList != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -3698,14 +3702,6 @@ pub export fn TDNFGoal(arg_pTdnf: PTDNF, arg_pQueuePkgList: PTDNF_ID_LIST, arg_p
             if (!false) break;
         }
     }
-    while (true) {
-        if (ppszExcludes != null) {
-            TDNFFreeStringArray(ppszExcludes);
-            ppszExcludes = null;
-        }
-        if (!false) break;
-    }
-    TDNFIdListFree(&queueJobs);
     return dwError;
 }
 pub export fn TDNFGoalNoDeps(arg_pTdnf: PTDNF, arg_pQueuePkgList: PTDNF_ID_LIST, arg_ppInfo: [*c]PTDNF_SOLVED_PKG_INFO) u32 {
@@ -3725,6 +3721,11 @@ pub export fn TDNFGoalNoDeps(arg_pTdnf: PTDNF, arg_pQueuePkgList: PTDNF_ID_LIST,
     _ = &pPkgInfo;
     var pInfo: PTDNF_SOLVED_PKG_INFO = null;
     _ = &pInfo;
+    defer {
+        TDNFFreeStringArray(ppszPackageRefs);
+        if (pPkgInfo != null) TDNFFreePackageInfo(pPkgInfo);
+        if (pInfo != null) TDNFFreeMemory(pInfo);
+    }
     if ((!(pTdnf != null) or !(ppInfo != null)) or !(pQueuePkgList != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -3762,8 +3763,9 @@ pub export fn TDNFGoalNoDeps(arg_pTdnf: PTDNF, arg_pQueuePkgList: PTDNF_ID_LIST,
         if (!false) break;
     }
     pInfo.*.pPkgsToInstall = pPkgInfo;
+    pPkgInfo = null;
     ppInfo.* = pInfo;
-    TDNFFreeStringArray(ppszPackageRefs);
+    pInfo = null;
     return dwError;
 }
 pub extern fn TDNFHistoryGoal(pTdnf: PTDNF, pqInstall: PTDNF_ID_LIST, pqErase: PTDNF_ID_LIST, ppInfo: [*c]PTDNF_SOLVED_PKG_INFO) u32;
@@ -3783,7 +3785,7 @@ fn captureSolved(
     var capture_repos: [*c]TDNF_TRANSACTION_PLAN_INTEGRATION_REPOSITORY = null;
     var repo_count: u32 = 0;
     defer {
-        if (capture_repos != null) TDNFFreeMemory(capture_repos);
+        if (capture_repos != null) TDNFFreeMemory(@ptrCast(capture_repos));
         TDNFGoalFreeNativeSolverRepoInputs(repos, repo_count);
     }
 
@@ -4016,6 +4018,7 @@ pub export fn TDNFAddUserInstall(arg_pTdnf: PTDNF, arg_pQueueGoal: [*c]const TDN
     _ = &i;
     var ppszPkgsUserInstall: [*c][*c]u8 = null;
     _ = &ppszPkgsUserInstall;
+    defer if (ppszPkgsUserInstall != null) TDNFFreeStringArray(ppszPkgsUserInstall);
     if ((!(pTdnf != null) or !(pQueueGoal != null)) or !(ppInfo != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -4039,6 +4042,7 @@ pub export fn TDNFAddUserInstall(arg_pTdnf: PTDNF, arg_pQueueGoal: [*c]const TDN
         }
     }
     ppInfo.*.ppszPkgsUserInstall = ppszPkgsUserInstall;
+    ppszPkgsUserInstall = null;
     return dwError;
 }
 pub export fn TDNFMarkAutoInstalledSinglePkg(arg_pTdnf: PTDNF, arg_pszPkgName: [*c]const u8) u32 {
@@ -4052,6 +4056,7 @@ pub export fn TDNFMarkAutoInstalledSinglePkg(arg_pTdnf: PTDNF, arg_pszPkgName: [
     _ = &rc;
     var pHistoryCtx: ?*struct_history_ctx = null;
     _ = &pHistoryCtx;
+    defer if (pHistoryCtx != null) destroy_history_ctx(pHistoryCtx);
     if (!(pTdnf != null) or !(pszPkgName != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -4071,9 +4076,6 @@ pub export fn TDNFMarkAutoInstalledSinglePkg(arg_pTdnf: PTDNF, arg_pszPkgName: [
             if (dwError != @as(u32, 0)) return dwError;
             if (!false) break;
         }
-    }
-    if (pHistoryCtx != null) {
-        destroy_history_ctx(pHistoryCtx);
     }
     return dwError;
 }
@@ -4178,6 +4180,7 @@ pub export fn TDNFAddGoal(arg_pTdnf: PTDNF, arg_nAlterType: TDNF_ALTERTYPE, arg_
     var nTraceStart: u32 = 0;
     _ = &nTraceStart;
     var excluded = false;
+    defer if (pszName != null) TDNFFreeMemory(@ptrCast(pszName));
     if ((((!(pTdnf != null) or !(pQueueJobs != null)) or (dwId == @as(c_int, 0))) or !(pTdnf.*.pSack != null)) or !(pTdnf.*.pSack != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -4232,13 +4235,6 @@ pub export fn TDNFAddGoal(arg_pTdnf: PTDNF, arg_nAlterType: TDNF_ALTERTYPE, arg_
     if (!(dwError != 0)) {
         TDNFTransactionPlanRequestTraceCommitGoal(pTdnf.*.pRequestTrace, dwId, nAlterType, pQueueJobs.*.pnElements, nTraceStart, pQueueJobs.*.dwCount);
     }
-    while (true) {
-        if (pszName != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszName)));
-            pszName = null;
-        }
-        if (!false) break;
-    }
     return dwError;
 }
 pub extern fn TDNFPkgsToExclude(pTdnf: PTDNF, pdwPkgsToExclude: [*c]u32, pppszExclude: [*c][*c][*c]u8) u32;
@@ -4267,6 +4263,12 @@ pub export fn TDNFGoalAddHiddenPackages(arg_pTdnf: PTDNF, arg_ppszExcludes: [*c]
     _ = &dwRepoCount;
     var i: u32 = 0;
     _ = &i;
+    defer {
+        if (ppszHiddenRefs != null) TDNFFreeStringArray(ppszHiddenRefs);
+        TDNFFreeStringArray(ppszExcludeLines);
+        TDNFFreeStringArray(ppszMinVersionLines);
+        TDNFNativeQueryFreeRepoInputs(pRepos, dwRepoCount);
+    }
     if (!(pTdnf != null) or !(pTdnf.*.pConf != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -4353,16 +4355,6 @@ pub export fn TDNFGoalAddHiddenPackages(arg_pTdnf: PTDNF, arg_ppszExcludes: [*c]
     pTdnf.*.ppszHiddenRefs = ppszHiddenRefs;
     pTdnf.*.dwHiddenRefCount = dwHiddenRefCount;
     ppszHiddenRefs = null;
-    while (true) {
-        if (ppszHiddenRefs != null) {
-            TDNFFreeStringArray(ppszHiddenRefs);
-            ppszHiddenRefs = null;
-        }
-        if (!false) break;
-    }
-    TDNFFreeStringArray(ppszExcludeLines);
-    TDNFFreeStringArray(ppszMinVersionLines);
-    TDNFNativeQueryFreeRepoInputs(pRepos, dwRepoCount);
     return dwError;
 }
 pub extern fn TDNFReadConfig(pTdnf: PTDNF, pszConfFile: [*c]const u8, pszConfGroup: [*c]const u8) u32;
@@ -4551,6 +4543,14 @@ pub fn GoalGetPkgNameFromHandle(arg_pTdnf: PTDNF, arg_dwPkgId: TDNF_PKG_ID, arg_
     _ = &pszRelease;
     var pszArch: [*c]u8 = null;
     _ = &pszArch;
+    defer {
+        if (pszRef != null) TDNFFreeMemory(@ptrCast(pszRef));
+        if (pszRepo != null) TDNFFreeMemory(@ptrCast(pszRepo));
+        if (pszName != null) TDNFFreeMemory(@ptrCast(pszName));
+        if (pszVersion != null) TDNFFreeMemory(@ptrCast(pszVersion));
+        if (pszRelease != null) TDNFFreeMemory(@ptrCast(pszRelease));
+        if (pszArch != null) TDNFFreeMemory(@ptrCast(pszArch));
+    }
     if (!(pTdnf != null) or !(ppszName != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -4570,48 +4570,6 @@ pub fn GoalGetPkgNameFromHandle(arg_pTdnf: PTDNF, arg_dwPkgId: TDNF_PKG_ID, arg_
     }
     ppszName.* = pszName;
     pszName = null;
-    while (true) {
-        if (pszRef != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszRef)));
-            pszRef = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszRepo != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszRepo)));
-            pszRepo = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszName != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszName)));
-            pszName = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszVersion != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszVersion)));
-            pszVersion = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszRelease != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszRelease)));
-            pszRelease = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszArch != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszArch)));
-            pszArch = null;
-        }
-        if (!false) break;
-    }
     return dwError;
 }
 pub fn TDNFFindCmdLinePkgPath(arg_pTdnf: PTDNF, arg_dwPkgId: TDNF_PKG_ID, arg_ppszPath: [*c][*c]u8) callconv(.c) u32 {
@@ -4627,6 +4585,7 @@ pub fn TDNFFindCmdLinePkgPath(arg_pTdnf: PTDNF, arg_dwPkgId: TDNF_PKG_ID, arg_pp
     _ = &dwIndex;
     var pszPath: [*c]u8 = null;
     _ = &pszPath;
+    defer if (pszPath != null) TDNFFreeMemory(@ptrCast(pszPath));
     if (!(pTdnf != null) or !(ppszPath != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -4656,6 +4615,7 @@ pub fn TDNFFindCmdLinePkgPath(arg_pTdnf: PTDNF, arg_dwPkgId: TDNF_PKG_ID, arg_pp
         }
     }
     ppszPath.* = pszPath;
+    pszPath = null;
     return dwError;
 }
 pub fn TDNFSolvAddProtectPkgs(arg_pTdnf: PTDNF, arg_pQueueJobs: PTDNF_ID_LIST) callconv(.c) u32 {
@@ -4685,6 +4645,12 @@ pub fn TDNFSolvAddProtectPkgs(arg_pTdnf: PTDNF, arg_pQueueJobs: PTDNF_ID_LIST) c
         .dwCapacity = 0,
     };
     _ = &qInstalled;
+    defer {
+        if (pszWhatName != null) TDNFFreeMemory(@ptrCast(pszWhatName));
+        if (pszAddName != null) TDNFFreeMemory(@ptrCast(pszAddName));
+        if (pszInstalledName != null) TDNFFreeMemory(@ptrCast(pszInstalledName));
+        TDNFIdListFree(&qInstalled);
+    }
     if ((!(pTdnf != null) or !(pQueueJobs != null)) or !(pTdnf.*.pConf != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -4795,28 +4761,6 @@ pub fn TDNFSolvAddProtectPkgs(arg_pTdnf: PTDNF, arg_pQueueJobs: PTDNF_ID_LIST) c
             }
         }
     }
-    while (true) {
-        if (pszWhatName != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszWhatName)));
-            pszWhatName = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszAddName != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszAddName)));
-            pszAddName = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszInstalledName != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszInstalledName)));
-            pszInstalledName = null;
-        }
-        if (!false) break;
-    }
-    TDNFIdListFree(&qInstalled);
     return dwError;
 }
 pub fn GoalFindProtectedName(arg_ppszProtectedPkgs: [*c][*c]u8, arg_pszName: [*c]const u8) callconv(.c) [*c]const u8 {
@@ -4908,6 +4852,18 @@ pub fn TDNFGoalSolveNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_L
     _ = &pInfo;
     var nSkipBrokenSolve: c_int = 0;
     _ = &nSkipBrokenSolve;
+    defer {
+        if (pInfo != null) TDNFFreeSolvedPackageInfo(pInfo);
+        if (pszNativeArchOwned != null) TDNFFreeMemory(@ptrCast(pszNativeArchOwned));
+        if (ppszLockedPkgs != null) TDNFFreeMemory(@ptrCast(ppszLockedPkgs));
+        if (pdwLockedQueuePairs != null) TDNFFreeMemory(@ptrCast(pdwLockedQueuePairs));
+        if (ppszCmdLinePaths != null) TDNFFreeStringArrayWithCount(ppszCmdLinePaths, @intCast(dwJobCount));
+        TDNFFreeStringArray(ppszUserInstalledPkgs);
+        if (ppszInstallOnlyPkgs != null) TDNFFreeMemory(@ptrCast(ppszInstallOnlyPkgs));
+        TDNFGoalFreeNativeSolverHiddenAvailable(pHiddenAvailable, dwHiddenAvailableCount);
+        TDNFGoalFreeNativeSolverJobs(pJobs, dwJobCount + dwEraseJobCount);
+        TDNFGoalFreeNativeSolverRepoInputs(pRepos, dwRepoCount);
+    }
     if (((((((!(pTdnf != null) or !(pTdnf.*.pArgs != null)) or !(pTdnf.*.pConf != null)) or !(pTdnf.*.pSack != null)) or !(pTdnf.*.pRpmConfig != null)) or !(pQueueJobs != null)) or ((!(nPrepareOnly != 0) and !(nRefuteUnsat != 0)) and !(ppInfo != null))) or (((nPrepareOnly != 0) or (nRefuteUnsat != 0)) and !(ppHandle != null))) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -4970,45 +4926,6 @@ pub fn TDNFGoalSolveNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_L
         ppInfo.* = pInfo;
         pInfo = null;
     }
-    if (pInfo != null) {
-        TDNFFreeSolvedPackageInfo(pInfo);
-    }
-    while (true) {
-        if (pszNativeArchOwned != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszNativeArchOwned)));
-            pszNativeArchOwned = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (ppszLockedPkgs != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(ppszLockedPkgs)));
-            ppszLockedPkgs = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pdwLockedQueuePairs != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pdwLockedQueuePairs)));
-            pdwLockedQueuePairs = null;
-        }
-        if (!false) break;
-    }
-    if (ppszCmdLinePaths != null) {
-        TDNFFreeStringArrayWithCount(ppszCmdLinePaths, @bitCast(@as(c_uint, @truncate(dwJobCount))));
-        ppszCmdLinePaths = null;
-    }
-    TDNFFreeStringArray(ppszUserInstalledPkgs);
-    while (true) {
-        if (ppszInstallOnlyPkgs != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(ppszInstallOnlyPkgs)));
-            ppszInstallOnlyPkgs = null;
-        }
-        if (!false) break;
-    }
-    TDNFGoalFreeNativeSolverHiddenAvailable(pHiddenAvailable, dwHiddenAvailableCount);
-    TDNFGoalFreeNativeSolverJobs(pJobs, dwJobCount +% dwEraseJobCount);
-    TDNFGoalFreeNativeSolverRepoInputs(pRepos, dwRepoCount);
     return dwError;
 }
 pub fn TDNFGoalCaptureNativeSolve(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_LIST, arg_nAllowErasing: c_int, arg_nAutoErase: c_int, arg_nStampFlags: c_int, arg_nStampedJobCount: c_int, arg_nPrepareOnly: c_int, arg_nRefuteUnsat: c_int, arg_nDropProtected: c_int, arg_ppHandle: [*c]?*anyopaque) callconv(.c) u32 {
@@ -5036,6 +4953,11 @@ pub fn TDNFGoalCaptureNativeSolve(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TD
     _ = &dwError;
     var pInfo: PTDNF_SOLVED_PKG_INFO = null;
     _ = &pInfo;
+    defer if (pInfo != null) TDNFFreeSolvedPackageInfo(pInfo);
+    defer if (dwError != 0) {
+        if (ppHandle != null) ppHandle.* = null;
+        TDNFTransactionPlanStateClear(if (pTdnf != null) pTdnf.*.pTransactionPlanState else null);
+    };
     if ((!(ppHandle != null) or (ppHandle.* != null)) or !(TDNFTransactionPlanStateIsEnabled(@ptrCast(@alignCast(if (pTdnf != null) @as(?*anyopaque, @ptrCast(@alignCast(pTdnf.*.pTransactionPlanState))) else @as(?*anyopaque, null)))) != 0)) {
         return dwError;
     }
@@ -5043,9 +4965,6 @@ pub fn TDNFGoalCaptureNativeSolve(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TD
     while (true) {
         if (dwError != @as(u32, 0)) return dwError;
         if (!false) break;
-    }
-    if (pInfo != null) {
-        TDNFFreeSolvedPackageInfo(pInfo);
     }
     return dwError;
 }
@@ -5064,6 +4983,10 @@ pub fn TDNFGoalBuildNativeSolverRepoInputs(arg_pTdnf: PTDNF, arg_ppRepos: [*c]PT
     _ = &pRepos;
     var pRepoData: PTDNF_REPO_DATA = null;
     _ = &pRepoData;
+    var transferred = false;
+    defer if (!transferred) TDNFGoalFreeNativeSolverRepoInputs(pRepos, dwCount);
+    if (ppRepos != null) ppRepos.* = null;
+    if (pdwRepoCount != null) pdwRepoCount.* = 0;
     if ((!(pTdnf != null) or !(ppRepos != null)) or !(pdwRepoCount != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -5110,6 +5033,7 @@ pub fn TDNFGoalBuildNativeSolverRepoInputs(arg_pTdnf: PTDNF, arg_ppRepos: [*c]PT
     }
     ppRepos.* = pRepos;
     pdwRepoCount.* = dwCount;
+    transferred = true;
     return dwError;
 }
 pub fn TDNFGoalFreeNativeSolverRepoInputs(arg_pRepos: PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16, arg_dwRepoCount: u32) callconv(.c) void {
@@ -5230,6 +5154,32 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
     _ = &dwGlobalQueuePair;
     var nHasGlobalQueuePair: c_int = 0;
     _ = &nHasGlobalQueuePair;
+    var transferred = false;
+    defer {
+        if (pszJobRef != null) TDNFFreeMemory(@ptrCast(pszJobRef));
+        if (pszJobRepo != null) TDNFFreeMemory(@ptrCast(pszJobRepo));
+        if (pszJobName != null) TDNFFreeMemory(@ptrCast(pszJobName));
+        if (pszJobVersion != null) TDNFFreeMemory(@ptrCast(pszJobVersion));
+        if (pszJobRelease != null) TDNFFreeMemory(@ptrCast(pszJobRelease));
+        if (pszJobArch != null) TDNFFreeMemory(@ptrCast(pszJobArch));
+        if (!transferred) {
+            if (ppszLockedPkgs != null) TDNFFreeMemory(@ptrCast(ppszLockedPkgs));
+            if (pdwLockedQueuePairs != null) TDNFFreeMemory(@ptrCast(pdwLockedQueuePairs));
+            if (ppszCmdLinePaths != null) TDNFFreeStringArrayWithCount(ppszCmdLinePaths, @intCast(dwCount));
+            TDNFFreeStringArray(ppszUserInstalledPkgs);
+            if (ppszInstallOnlyPkgs != null) TDNFFreeMemory(@ptrCast(ppszInstallOnlyPkgs));
+            TDNFGoalFreeNativeSolverJobs(pJobs, dwCount);
+        }
+    }
+    if (ppJobs != null) ppJobs.* = null;
+    if (pdwJobCount != null) pdwJobCount.* = 0;
+    if (ppEraseJobs != null) ppEraseJobs.* = null;
+    if (pdwEraseJobCount != null) pdwEraseJobCount.* = 0;
+    if (pppszInstallOnlyPkgs != null) pppszInstallOnlyPkgs.* = null;
+    if (pppszUserInstalledPkgs != null) pppszUserInstalledPkgs.* = null;
+    if (pppszLockedPkgs != null) pppszLockedPkgs.* = null;
+    if (ppdwLockedQueuePairs != null) ppdwLockedQueuePairs.* = null;
+    if (pppszCmdLinePaths != null) pppszCmdLinePaths.* = null;
     if (((((((((((((((((((((!(pTdnf != null) or !(pTdnf.*.pArgs != null)) or !(pTdnf.*.pConf != null)) or !(pTdnf.*.pSack != null)) or !(pQueueJobs != null)) or !(ppJobs != null)) or !(pdwJobCount != null)) or !(ppEraseJobs != null)) or !(pdwEraseJobCount != null)) or !(pppszInstallOnlyPkgs != null)) or !(pppszUserInstalledPkgs != null)) or !(pppszLockedPkgs != null)) or !(pppszCmdLinePaths != null)) or !(ppdwLockedQueuePairs != null)) or !(pdwGlobalQueuePair != null)) or !(pnHasGlobalQueuePair != null)) or !(pnUpdateAll != null)) or !(pnDistSyncAll != null)) or ((pQueueJobs.*.dwCount % @as(u32, 2)) != @as(u32, 0))) or (__helpers.signedRemainder(nStampedJobCount, @as(c_int, 2)) != @as(c_int, 0))) or (nStampedJobCount < @as(c_int, 0))) or (@as(u32, @bitCast(@as(c_int, nStampedJobCount))) > pQueueJobs.*.dwCount)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -5500,6 +5450,7 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
     pnDistSyncAll.* = nDistSyncAll;
     pdwGlobalQueuePair.* = dwGlobalQueuePair;
     pnHasGlobalQueuePair.* = nHasGlobalQueuePair;
+    transferred = true;
     while (true) {
         if (pszJobRef != null) {
             TDNFFreeMemory(@ptrCast(@alignCast(pszJobRef)));
@@ -5634,6 +5585,9 @@ pub fn TDNFGoalBuildNativeSolverHiddenAvailable(arg_pTdnf: PTDNF, arg_ppHiddenAv
     _ = &i;
     var pHiddenAvailable: PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB = null;
     _ = &pHiddenAvailable;
+    defer TDNFGoalFreeNativeSolverHiddenAvailable(pHiddenAvailable, dwCount);
+    if (ppHiddenAvailable != null) ppHiddenAvailable.* = null;
+    if (pdwHiddenAvailableCount != null) pdwHiddenAvailableCount.* = 0;
     if ((!(pTdnf != null) or !(ppHiddenAvailable != null)) or !(pdwHiddenAvailableCount != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -5672,7 +5626,6 @@ pub fn TDNFGoalBuildNativeSolverHiddenAvailable(arg_pTdnf: PTDNF, arg_ppHiddenAv
     ppHiddenAvailable.* = pHiddenAvailable;
     pdwHiddenAvailableCount.* = dwIndex;
     pHiddenAvailable = null;
-    TDNFGoalFreeNativeSolverHiddenAvailable(pHiddenAvailable, dwCount);
     return dwError;
 }
 pub fn TDNFGoalSplitHiddenRef(arg_pszRef: [*c]const u8, arg_pJob: PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, arg_pnSkip: [*c]c_int) callconv(.c) u32 {
@@ -5696,6 +5649,13 @@ pub fn TDNFGoalSplitHiddenRef(arg_pszRef: [*c]const u8, arg_pJob: PTDNF_REPOMD_N
     _ = &pszArch;
     var dwEpoch: u32 = 0;
     _ = &dwEpoch;
+    defer {
+        if (pszRepo != null) TDNFFreeMemory(@ptrCast(pszRepo));
+        if (pszName != null) TDNFFreeMemory(@ptrCast(pszName));
+        if (pszVersion != null) TDNFFreeMemory(@ptrCast(pszVersion));
+        if (pszRelease != null) TDNFFreeMemory(@ptrCast(pszRelease));
+        if (pszArch != null) TDNFFreeMemory(@ptrCast(pszArch));
+    }
     if (((!(pszRef != null) or !(@as(c_int, pszRef.*) != 0)) or !(pJob != null)) or !(pnSkip != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -5724,41 +5684,6 @@ pub fn TDNFGoalSplitHiddenRef(arg_pszRef: [*c]const u8, arg_pJob: PTDNF_REPOMD_N
     pszVersion = null;
     pszRelease = null;
     pszArch = null;
-    while (true) {
-        if (pszRepo != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszRepo)));
-            pszRepo = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszName != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszName)));
-            pszName = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszVersion != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszVersion)));
-            pszVersion = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszRelease != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszRelease)));
-            pszRelease = null;
-        }
-        if (!false) break;
-    }
-    while (true) {
-        if (pszArch != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszArch)));
-            pszArch = null;
-        }
-        if (!false) break;
-    }
     return dwError;
 }
 pub fn TDNFGoalFreeNativeSolverHiddenAvailable(arg_pJobs: PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, arg_dwJobCount: u32) callconv(.c) void {
@@ -5789,6 +5714,7 @@ pub fn TDNFReportProblemsNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF
     _ = &dwCount;
     var pHandle: ?*anyopaque = null;
     _ = &pHandle;
+    defer if (pHandle != null) TDNFRepoMdNativeSolverLiveSolveRelease(pHandle);
     if (!(pTdnf != null) or !(pQueueJobs != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -5827,9 +5753,6 @@ pub fn TDNFReportProblemsNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF
         if (dwError != @as(u32, 0)) return dwError;
         if (!false) break;
     }
-    if (pHandle != null) {
-        TDNFRepoMdNativeSolverLiveSolveRelease(pHandle);
-    }
     return dwError;
 }
 pub fn TDNFGoalFindProtectedInTransaction(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_LIST, arg_nAllowErasing: c_int, arg_nAutoErase: c_int, arg_nStampFlags: c_int, arg_nStampedJobCount: c_int, arg_ppszName: [*c][*c]const u8, arg_ppszAction: [*c][*c]const u8) callconv(.c) u32 {
@@ -5857,6 +5780,9 @@ pub fn TDNFGoalFindProtectedInTransaction(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]
     _ = &pszName;
     var pszAction: [*c]const u8 = null;
     _ = &pszAction;
+    defer if (pInfo != null) TDNFFreeSolvedPackageInfo(pInfo);
+    if (ppszName != null) ppszName.* = null;
+    if (ppszAction != null) ppszAction.* = null;
     if ((((!(pTdnf != null) or !(pQueueJobs != null)) or !(pTdnf.*.pConf != null)) or !(ppszName != null)) or !(ppszAction != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -5883,9 +5809,6 @@ pub fn TDNFGoalFindProtectedInTransaction(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]
     }
     if (ppszAction != null) {
         ppszAction.* = pszAction;
-    }
-    if (pInfo != null) {
-        TDNFFreeSolvedPackageInfo(pInfo);
     }
     return dwError;
 }
@@ -5985,6 +5908,11 @@ pub fn TDNFAddUserInstalledToJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: PTDNF_ID_LIS
     _ = &qInstalled;
     var k: c_int = 0;
     _ = &k;
+    defer {
+        if (pszName != null) TDNFFreeMemory(@ptrCast(pszName));
+        TDNFIdListFree(&qInstalled);
+        if (pHistoryCtx != null) destroy_history_ctx(pHistoryCtx);
+    }
     if (!(pTdnf != null) or !(pQueueJobs != null)) {
         dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + EINVAL));
         while (true) {
@@ -6041,17 +5969,6 @@ pub fn TDNFAddUserInstalledToJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: PTDNF_ID_LIS
         }
     }
     TDNFTransactionPlanRequestTraceRecordPackageJobRange(pTdnf.*.pRequestTrace, pQueueJobs.*.pnElements, nTraceStart, pQueueJobs.*.dwCount, 8, 5, @as(c_uint, 4294967295));
-    while (true) {
-        if (pszName != null) {
-            TDNFFreeMemory(@ptrCast(@alignCast(pszName)));
-            pszName = null;
-        }
-        if (!false) break;
-    }
-    TDNFIdListFree(&qInstalled);
-    if (pHistoryCtx != null) {
-        destroy_history_ctx(pHistoryCtx);
-    }
     return dwError;
 }
 
