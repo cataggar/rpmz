@@ -109,11 +109,19 @@ const PartialDownloadFailure = struct {
     triggered: usize = 0,
 };
 
+const DownloadErrorFailure = struct {
+    url: []const u8,
+    err: anyerror,
+    remaining: usize,
+    triggered: usize = 0,
+};
+
 var injected_scan_failure: ?ScanFailure = null;
 var injected_close_failure: ?CloseFailure = null;
 var injected_sync_failure: ?SyncFailure = null;
 var injected_reset_failure: ?ResetFailure = null;
 var injected_partial_download_failure: ?PartialDownloadFailure = null;
+var injected_download_error_failure: ?DownloadErrorFailure = null;
 var suppress_test_info_logs = false;
 var sync_stage_counts = [_]usize{0} ** 3;
 
@@ -266,6 +274,28 @@ fn injectPartialDownloadFailure(url: []const u8, fd: c_int) ?u32 {
         return errors.ERROR_TDNF_REPO_PERFORM;
     }
     return null;
+}
+
+fn downloadToFd(
+    io: std.Io,
+    request: DownloadToFdRequest,
+    destination_fd: c_int,
+) !u16 {
+    if (builtin.is_test) {
+        if (injected_download_error_failure) |*failure| {
+            if (failure.remaining > 0 and std.mem.eql(u8, failure.url, request.url)) {
+                failure.remaining -= 1;
+                failure.triggered += 1;
+                return failure.err;
+            }
+        }
+    }
+    return client_download.client_download_to_fd(
+        std.heap.c_allocator,
+        io,
+        request,
+        destination_fd,
+    );
 }
 
 fn freeString(slot: *?[*:0]u8) void {
@@ -1234,7 +1264,7 @@ fn downloadErrorIsFatal(result: u32, status: c_long) bool {
 fn downloadErrorIsLocal(err: anyerror) bool {
     return switch (err) {
         error.InvalidDestinationFd,
-        error.WriteFailed,
+        error.LocalOutputFailed,
         => true,
         else => false,
     };
@@ -1302,12 +1332,7 @@ fn downloadUrlToFd(
                 return result;
             continue;
         }
-        const status_value = client_download.client_download_to_fd(
-            std.heap.c_allocator,
-            io,
-            request,
-            destination_fd,
-        ) catch |err| {
+        const status_value = downloadToFd(io, request, destination_fd) catch |err| {
             result = mapDownloadError(err);
             if (downloadErrorIsLocal(err)) {
                 if (local_failure) |failure| failure.* = true;
@@ -2265,7 +2290,7 @@ test "repositories production: download temp names are high entropy and unique" 
     }
 }
 
-test "repositories production: metadata and snapshot downloads reject symlinks and reset partial retries" {
+test "repositories production: metadata and snapshot downloads reject symlinks and retry remote failures" {
     const cwd = std.Io.Dir.cwd();
     const io = std.testing.io;
     const root = try std.fmt.allocPrint(
@@ -2559,6 +2584,67 @@ test "repositories production: metadata and snapshot downloads reject symlinks a
         injected_partial_download_failure = null;
         suppress_test_info_logs = false;
     }
+
+    const remote_errors = [_]anyerror{
+        error.WriteFailed,
+        error.Unexpected,
+        error.SystemResources,
+    };
+    for (remote_errors, 0..) |remote_error, index| {
+        const directory = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}/remote-fallback-{d}",
+            .{ root, index },
+        );
+        defer std.testing.allocator.free(directory);
+        try cwd.createDirPath(io, directory);
+        const destination = try std.fmt.allocPrintSentinel(
+            std.testing.allocator,
+            "{s}/repomd.xml",
+            .{directory},
+            0,
+        );
+        defer std.testing.allocator.free(destination);
+
+        const failing_url = try std.testing.allocator.dupeZ(
+            u8,
+            "file:///remote-write-failure",
+        );
+        defer std.testing.allocator.free(failing_url);
+        var retry_urls = [_]?[*:0]u8{
+            failing_url.ptr,
+            source_parent_url.ptr,
+            null,
+        };
+        injected_download_error_failure = .{
+            .url = "file:///remote-write-failure/payload",
+            .err = remote_error,
+            .remaining = 1,
+        };
+        defer injected_download_error_failure = null;
+        repo.ppszBaseUrls = &retry_urls;
+        repo.nRetries = 0;
+        try std.testing.expectEqual(
+            @as(u32, 0),
+            secureDownload(
+                &handle,
+                &repo,
+                "payload",
+                destination.ptr,
+                null,
+                true,
+            ),
+        );
+        try std.testing.expectEqual(
+            @as(usize, 1),
+            injected_download_error_failure.?.triggered,
+        );
+        const downloaded = try readTestFile(destination);
+        defer std.testing.allocator.free(downloaded);
+        try std.testing.expectEqualStrings(clean_body, downloaded);
+        try expectNoDownloadTemps(directory);
+        injected_download_error_failure = null;
+    }
 }
 
 test "repositories production: metadata local fd and fsync failures never fall through" {
@@ -2626,6 +2712,68 @@ test "repositories production: metadata local fd and fsync failures never fall t
         .{std.mem.span(source_url.ptr)},
     );
     defer std.testing.allocator.free(fallback_url);
+    {
+        const destination = try std.fmt.allocPrintSentinel(
+            std.testing.allocator,
+            "{s}/local-output",
+            .{root},
+            0,
+        );
+        defer std.testing.allocator.free(destination);
+        injected_download_error_failure = .{
+            .url = "file:///reset-failure/repodata/repomd.xml",
+            .err = error.LocalOutputFailed,
+            .remaining = 1,
+        };
+        defer injected_download_error_failure = null;
+        injected_partial_download_failure = .{
+            .url = fallback_url,
+            .bytes = "fallback-must-not-run",
+            .remaining = 1,
+        };
+        defer injected_partial_download_failure = null;
+        var local_failure_base_urls = [_]?[*:0]u8{
+            reset_failure_url.ptr,
+            source_url.ptr,
+            null,
+        };
+        repo.ppszBaseUrls = &local_failure_base_urls;
+        try std.testing.expectEqual(
+            errors.ERROR_TDNF_REPO_PERFORM,
+            TDNFDownloadMetadata(&handle, &repo, destination.ptr, 0),
+        );
+        try std.testing.expectEqual(
+            @as(usize, 1),
+            injected_download_error_failure.?.triggered,
+        );
+        try std.testing.expectEqual(
+            @as(usize, 0),
+            injected_partial_download_failure.?.triggered,
+        );
+        try std.testing.expectEqual(
+            @as(usize, 1),
+            injected_partial_download_failure.?.remaining,
+        );
+        const destination_repomd = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}/repodata/repomd.xml",
+            .{destination},
+        );
+        defer std.testing.allocator.free(destination_repomd);
+        try std.testing.expectError(
+            error.FileNotFound,
+            cwd.access(io, destination_repomd, .{}),
+        );
+        const repodata_directory = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}/repodata",
+            .{destination},
+        );
+        defer std.testing.allocator.free(repodata_directory);
+        try expectNoDownloadTemps(repodata_directory);
+        injected_download_error_failure = null;
+        injected_partial_download_failure = null;
+    }
     const reset_stages = [_]ResetFailureStage{ .truncate, .seek };
     for (reset_stages, 0..) |stage, index| {
         const destination = try std.fmt.allocPrintSentinel(
