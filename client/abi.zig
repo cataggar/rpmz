@@ -176,6 +176,35 @@ pub const HistoryInfo = extern struct {
     pItems: ?[*]HistoryInfoItem = null,
 };
 
+pub const DownloadProgressFn = *const fn (
+    userdata: ?*anyopaque,
+    dltotal: i64,
+    dlnow: i64,
+    ultotal: i64,
+    ulnow: i64,
+) callconv(.c) c_int;
+
+pub const DownloadRequest = extern struct {
+    pszUrl: ?[*:0]const u8,
+    pszDestination: ?[*:0]const u8,
+    pfnProgress: ?DownloadProgressFn,
+    pProgressData: ?*anyopaque,
+    pszUserAgent: ?[*:0]const u8,
+    pszProxy: ?[*:0]const u8,
+    pszProxyUserPwd: ?[*:0]const u8,
+    pszUserName: ?[*:0]const u8,
+    pszPassword: ?[*:0]const u8,
+    pszSSLCaCert: ?[*:0]const u8,
+    pszSSLClientCert: ?[*:0]const u8,
+    pszSSLClientKey: ?[*:0]const u8,
+    nSSLVerify: c_int,
+    nConnectTimeout: c_long,
+    nTimeout: c_long,
+    nLowSpeedLimit: c_long,
+    nLowSpeedTime: c_long,
+    nMaxRecvSpeed: c_long,
+};
+
 fn assertLayout(comptime Zig: type, comptime Header: type, comptime fields: anytype) void {
     std.debug.assert(@sizeOf(Zig) == @sizeOf(Header));
     std.debug.assert(@alignOf(Zig) == @alignOf(Header));
@@ -342,5 +371,25 @@ comptime {
     assertLayout(HistoryInfo, C.TDNF_HISTORY_INFO, .{
         "nItemCount",
         "pItems",
+    });
+    assertLayout(DownloadRequest, C.TDNF_ZIG_DOWNLOAD_REQUEST, .{
+        "pszUrl",
+        "pszDestination",
+        "pfnProgress",
+        "pProgressData",
+        "pszUserAgent",
+        "pszProxy",
+        "pszProxyUserPwd",
+        "pszUserName",
+        "pszPassword",
+        "pszSSLCaCert",
+        "pszSSLClientCert",
+        "pszSSLClientKey",
+        "nSSLVerify",
+        "nConnectTimeout",
+        "nTimeout",
+        "nLowSpeedLimit",
+        "nLowSpeedTime",
+        "nMaxRecvSpeed",
     });
 }
