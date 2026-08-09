@@ -6,10 +6,10 @@
 # of the License are located in the COPYING file of this distribution.
 #
 """
-Targeted crosscheck for the composed rpmzig transaction executor.
+Targeted coverage for the composed rpmzig transaction executor.
 
 tdnf install/erase/upgrade always dispatch through the composed native
-executor in client/rpmtrans_native.c. The former rollback build flag was
+executor in client/transaction.zig. The former rollback build flag was
 removed after issue #117, so these tests always run.
 """
 
@@ -43,6 +43,26 @@ ORPHANS_ROOT_DIR = '/opt/tdnf-test-upgrade-orphans'
 ORDER_HELPER = 'tdnf-native-order-helper'
 ORDER_PRE = 'tdnf-native-order-pre'
 ORDER_PREUN = 'tdnf-native-order-preun'
+
+
+def _repo_arch(machine):
+    return {
+        'amd64': 'x86_64',
+        'arm64': 'aarch64',
+    }.get(machine.lower(), machine.lower())
+
+
+HOST_ARCH = _repo_arch(platform.machine())
+
+
+@pytest.mark.parametrize(('machine', 'expected'), [
+    ('x86_64', 'x86_64'),
+    ('AMD64', 'x86_64'),
+    ('aarch64', 'aarch64'),
+    ('arm64', 'aarch64'),
+])
+def test_repo_arch_normalization(machine, expected):
+    assert _repo_arch(machine) == expected
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -240,7 +260,9 @@ def test_native_transaction_execute_upgrade(utils):
     root = _fresh_root('upgrade')
     _rpm_initdb(root)
 
-    _run_tdnf(root, ['install', '{}-1.0.1'.format(PKG_MULTI)])
+    _run_tdnf(root, [
+        'install', '{}-1.0.1-1.{}'.format(PKG_MULTI, HOST_ARCH),
+    ])
     _run_tdnf(root, ['upgrade', PKG_MULTI])
 
     installed = [
@@ -344,7 +366,7 @@ def test_native_erase_handles_multiple_arch_rows(utils):
             '\n'
             '%files\n'.format(name)
         )
-    for arch in [platform.machine(), 'noarch']:
+    for arch in [HOST_ARCH, 'noarch']:
         subprocess.run([
             'rpmbuild',
             '-D', '_topdir {}'.format(build_root),
@@ -365,7 +387,7 @@ def test_native_erase_handles_multiple_arch_rows(utils):
         line for line in _rpm_qa(root) if line.startswith(name + '-')
     ]
     assert not any(line.endswith('.noarch') for line in installed)
-    assert any(line.endswith('.' + platform.machine()) for line in installed)
+    assert any(line.endswith('.' + HOST_ARCH) for line in installed)
 
     _run_tdnf(root, ['erase', name])
     assert not any(line.startswith(name + '-') for line in _rpm_qa(root))
@@ -407,7 +429,9 @@ def test_native_transaction_execute_upgrade_removes_orphan_files(utils):
     root = _fresh_root('upgrade-orphans')
     _rpm_initdb(root)
 
-    _run_tdnf(root, ['install', '{}-1.0'.format(PKG_ORPHANS)])
+    _run_tdnf(root, [
+        'install', '{}-1.0-1.{}'.format(PKG_ORPHANS, HOST_ARCH),
+    ])
 
     installed_v1 = _paths_under(root, all_paths)
     assert installed_v1[os.path.join(ORPHANS_ROOT_DIR, 'shared')], installed_v1

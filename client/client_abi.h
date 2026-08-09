@@ -77,6 +77,19 @@ TDNFReportNativeSolverProblems(
     );
 
 uint32_t
+TDNFRpmExecTransaction(
+    PTDNF pTdnf,
+    PTDNF_SOLVED_PKG_INFO pInfo
+    );
+
+uint32_t
+TDNFRpmExecHistoryTransaction(
+    PTDNF pTdnf,
+    PTDNF_SOLVED_PKG_INFO pSolvedInfo,
+    PTDNF_HISTORY_ARGS pHistoryArgs
+    );
+
+uint32_t
 TDNFNativeQueryBuildRepoInputs(
     PTDNF pTdnf,
     PTDNF_REPOMD_NATIVE_REPO_INPUT *ppRepos,
