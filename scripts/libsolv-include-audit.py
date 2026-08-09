@@ -86,6 +86,20 @@ def sources():
 
 
 def main() -> int:
+    client_c_sources = sorted(
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "client").glob("*.c")
+        if path.is_file()
+    )
+    if client_c_sources:
+        print(
+            "error: client/ must remain free of C translation units:",
+            file=sys.stderr,
+        )
+        for rel in client_c_sources:
+            print(f"  {rel}", file=sys.stderr)
+        return 1
+
     violations = []
     seen_allowed = set()
     for path in sources():
@@ -182,7 +196,8 @@ def main() -> int:
         return 1
 
     print(
-        f"libsolv include audit: {len(seen_allowed)} permitted consumers, "
+        f"libsolv include audit: zero client C sources, "
+        f"{len(seen_allowed)} permitted consumers, "
         "no other libsolv spellings in the tree"
     )
     return 0
