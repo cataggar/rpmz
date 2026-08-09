@@ -1231,6 +1231,15 @@ fn downloadErrorIsFatal(result: u32, status: c_long) bool {
     };
 }
 
+fn downloadErrorIsLocal(err: anyerror) bool {
+    return switch (err) {
+        error.InvalidDestinationFd,
+        error.WriteFailed,
+        => true,
+        else => false,
+    };
+}
+
 fn redactUrl(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
     const scheme = std.mem.indexOf(u8, value, "://") orelse
         return allocator.dupe(u8, value);
@@ -1255,7 +1264,9 @@ fn downloadUrlToFd(
     url: [*:0]const u8,
     destination_fd: c_int,
     progress_text: ?[*:0]const u8,
+    local_failure: ?*bool,
 ) u32 {
+    if (local_failure) |failure| failure.* = false;
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena_state.deinit();
     const safe_url = redactUrl(arena_state.allocator(), std.mem.span(url)) catch
@@ -1281,7 +1292,10 @@ fn downloadUrlToFd(
         if (attempt > 0 and !(builtin.is_test and suppress_test_info_logs))
             log_console(LOG_INFO, "retrying %d/%d\n", attempt, repo.nRetries);
         result = resetDownloadFd(destination_fd);
-        if (result != 0) return result;
+        if (result != 0) {
+            if (local_failure) |failure| failure.* = true;
+            return result;
+        }
         if (injectPartialDownloadFailure(request.url, destination_fd)) |injected_result| {
             result = injected_result;
             if (attempt == repo.nRetries or downloadErrorIsFatal(result, 0))
@@ -1295,6 +1309,10 @@ fn downloadUrlToFd(
             destination_fd,
         ) catch |err| {
             result = mapDownloadError(err);
+            if (downloadErrorIsLocal(err)) {
+                if (local_failure) |failure| failure.* = true;
+                return result;
+            }
             if (attempt == repo.nRetries or downloadErrorIsFatal(result, 0)) {
                 log_console(
                     LOG_ERR,
@@ -1343,14 +1361,17 @@ fn downloadFromRepoToFd(
                 defer freeString(&url);
                 var result = joinPath(&url, &.{ base_url, location });
                 if (result != 0) return result;
+                var local_failure = false;
                 result = downloadUrlToFd(
                     handle,
                     repo,
                     url.?,
                     destination_fd,
                     progress_text,
+                    &local_failure,
                 );
                 if (result == 0) return 0;
+                if (local_failure) return result;
                 if (base_urls[index + 1] == null) return result;
                 var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
                 defer arena_state.deinit();
@@ -1367,7 +1388,14 @@ fn downloadFromRepoToFd(
             }
         }
     }
-    return downloadUrlToFd(handle, repo, location, destination_fd, progress_text);
+    return downloadUrlToFd(
+        handle,
+        repo,
+        location,
+        destination_fd,
+        progress_text,
+        null,
+    );
 }
 
 fn randomTempName(buffer: *[96]u8) u32 {
@@ -1450,7 +1478,7 @@ fn secureDownload(
     result = if (from_repo)
         downloadFromRepoToFd(handle, repo, source, temp_fd, progress_text)
     else
-        downloadUrlToFd(handle, repo, source, temp_fd, progress_text);
+        downloadUrlToFd(handle, repo, source, temp_fd, progress_text, null);
     if (result != 0) return result;
     if (std.c.fchmod(temp_fd, 0o644) != 0) return systemError();
     result = syncFd(temp_fd, .file);
@@ -2533,7 +2561,7 @@ test "repositories production: metadata and snapshot downloads reject symlinks a
     }
 }
 
-test "repositories production: metadata download reports fsync failure after committed rename" {
+test "repositories production: metadata local fd and fsync failures never fall through" {
     const cwd = std.Io.Dir.cwd();
     const io = std.testing.io;
     const root = try std.fmt.allocPrint(
@@ -2587,6 +2615,17 @@ test "repositories production: metadata download reports fsync failure after com
         .nSSLVerify = 1,
     };
 
+    const reset_failure_url = try std.testing.allocator.dupeZ(
+        u8,
+        "file:///reset-failure",
+    );
+    defer std.testing.allocator.free(reset_failure_url);
+    const fallback_url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}/repodata/repomd.xml",
+        .{std.mem.span(source_url.ptr)},
+    );
+    defer std.testing.allocator.free(fallback_url);
     const reset_stages = [_]ResetFailureStage{ .truncate, .seek };
     for (reset_stages, 0..) |stage, index| {
         const destination = try std.fmt.allocPrintSentinel(
@@ -2601,11 +2640,31 @@ test "repositories production: metadata download reports fsync failure after com
             .errno_value = @intFromEnum(std.c.E.IO),
         };
         defer injected_reset_failure = null;
+        injected_partial_download_failure = .{
+            .url = fallback_url,
+            .bytes = "fallback-must-not-run",
+            .remaining = 1,
+        };
+        defer injected_partial_download_failure = null;
+        var reset_base_urls = [_]?[*:0]u8{
+            reset_failure_url.ptr,
+            source_url.ptr,
+            null,
+        };
+        repo.ppszBaseUrls = &reset_base_urls;
         try std.testing.expectEqual(
             systemErrorFrom(@intFromEnum(std.c.E.IO)),
             TDNFDownloadMetadata(&handle, &repo, destination.ptr, 0),
         );
         try std.testing.expect(injected_reset_failure.?.triggered);
+        try std.testing.expectEqual(
+            @as(usize, 0),
+            injected_partial_download_failure.?.triggered,
+        );
+        try std.testing.expectEqual(
+            @as(usize, 1),
+            injected_partial_download_failure.?.remaining,
+        );
         const destination_repomd = try std.fmt.allocPrint(
             std.testing.allocator,
             "{s}/repodata/repomd.xml",
@@ -2624,7 +2683,9 @@ test "repositories production: metadata download reports fsync failure after com
         defer std.testing.allocator.free(repodata_directory);
         try expectNoDownloadTemps(repodata_directory);
         injected_reset_failure = null;
+        injected_partial_download_failure = null;
     }
+    repo.ppszBaseUrls = &base_urls;
 
     const destinations = [_]struct {
         suffix: []const u8,
