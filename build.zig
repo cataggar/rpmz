@@ -30,10 +30,9 @@ const vendored_libsolv_version_patch = "39";
 /// libsolv-confinement-audit step below proves by building them without
 /// libsolv's include paths. There is no longer an exception.
 const client_libsolv_free_srcs = [_][]const u8{
-    "api.c",          "goal.c",
-    "packageutils.c", "querynative.c",
-    "remoterepo.c",   "resolve.c",
-    "rpmtrans.c",     "rpmtrans_native.c",
+    "api.c",             "goal.c",
+    "resolve.c",         "rpmtrans.c",
+    "rpmtrans_native.c",
 };
 
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered

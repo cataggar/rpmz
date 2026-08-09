@@ -179,35 +179,6 @@ pub const RepoMdRecord = extern struct {
     nHasDatabaseVersion: c_int = 0,
 };
 
-pub const DownloadProgressFn = *const fn (
-    user_data: ?*anyopaque,
-    download_total: i64,
-    download_now: i64,
-    upload_total: i64,
-    upload_now: i64,
-) callconv(.c) c_int;
-
-pub const DownloadRequest = extern struct {
-    pszUrl: ?[*:0]const u8 = null,
-    pszDestination: ?[*:0]const u8 = null,
-    pfnProgress: ?DownloadProgressFn = null,
-    pProgressData: ?*anyopaque = null,
-    pszUserAgent: ?[*:0]const u8 = null,
-    pszProxy: ?[*:0]const u8 = null,
-    pszProxyUserPwd: ?[*:0]const u8 = null,
-    pszUserName: ?[*:0]const u8 = null,
-    pszPassword: ?[*:0]const u8 = null,
-    pszSSLCaCert: ?[*:0]const u8 = null,
-    pszSSLClientCert: ?[*:0]const u8 = null,
-    pszSSLClientKey: ?[*:0]const u8 = null,
-    nSSLVerify: c_int = 0,
-    nConnectTimeout: c_long = 0,
-    nTimeout: c_long = 0,
-    nLowSpeedLimit: c_long = 0,
-    nLowSpeedTime: c_long = 0,
-    nMaxRecvSpeed: c_long = 0,
-};
-
 pub const Plugin = extern struct {
     pszName: ?[*:0]u8 = null,
     nEnabled: c_int = 0,
@@ -435,26 +406,6 @@ comptime {
         "nHasSize",
         "nHasOpenSize",
         "nHasDatabaseVersion",
-    });
-    assertLayout(DownloadRequest, C.TDNF_ZIG_DOWNLOAD_REQUEST, .{
-        "pszUrl",
-        "pszDestination",
-        "pfnProgress",
-        "pProgressData",
-        "pszUserAgent",
-        "pszProxy",
-        "pszProxyUserPwd",
-        "pszUserName",
-        "pszPassword",
-        "pszSSLCaCert",
-        "pszSSLClientCert",
-        "pszSSLClientKey",
-        "nSSLVerify",
-        "nConnectTimeout",
-        "nTimeout",
-        "nLowSpeedLimit",
-        "nLowSpeedTime",
-        "nMaxRecvSpeed",
     });
     assertLayout(Plugin, C.TDNF_PLUGIN, .{
         "pszName",

@@ -7,11 +7,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
+const client_download = @import("client_download");
 const errors = @import("tdnf_error");
 
 const CnfNode = abi.CnfNode;
 const Conf = abi.Conf;
-const DownloadRequest = abi.DownloadRequest;
+const DownloadToFdRequest = client_download.DownloadToFdRequest;
 const RepoData = abi.RepoData;
 const RepoMetadata = abi.RepoMetadata;
 const RepoMdRecord = abi.RepoMdRecord;
@@ -170,7 +171,6 @@ extern fn TDNFRemoveRpmCache(?*Tdnf, ?*RepoData) u32;
 extern fn TDNFRemoveTmpRepodata(?[*:0]const u8) u32;
 extern fn TDNFUtilsMakeDir(?[*:0]const u8) u32;
 extern fn TDNFUtilsMakeDirs(?[*:0]const u8) u32;
-extern fn TDNFZigDownloadFile(?*const DownloadRequest, ?*c_long) u32;
 extern fn TDNFGetErrorString(u32, *?[*:0]u8) u32;
 
 fn isNullOrEmpty(value: ?[*:0]const u8) bool {
@@ -1099,28 +1099,35 @@ fn prepareDownloadRequest(
     repo: *RepoData,
     url: [*:0]const u8,
     progress_text: ?[*:0]const u8,
-    request: *DownloadRequest,
+    request: *DownloadToFdRequest,
     no_output: *bool,
 ) u32 {
     const args = handle.pArgs orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const conf = handle.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const connect_timeout = std.math.cast(u32, conf.nConnectTimeout) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const timeout = std.math.cast(u32, repo.nTimeout) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const minrate = std.math.cast(u64, repo.nMinrate) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const throttle = std.math.cast(u64, repo.nThrottle) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
     request.* = .{
-        .pszUrl = url,
-        .pszDestination = "pinned-descriptor",
-        .pszUserAgent = conf.pszUserAgentHeader,
-        .pszProxy = conf.pszProxy,
-        .pszProxyUserPwd = conf.pszProxyUserPass,
-        .pszUserName = repo.pszUser,
-        .pszPassword = repo.pszPass,
-        .pszSSLCaCert = repo.pszSSLCaCert,
-        .pszSSLClientCert = repo.pszSSLClientCert,
-        .pszSSLClientKey = repo.pszSSLClientKey,
-        .nSSLVerify = if (repo.nSSLVerify != 0) 1 else 0,
-        .nConnectTimeout = conf.nConnectTimeout,
-        .nTimeout = repo.nTimeout,
-        .nLowSpeedLimit = repo.nMinrate,
-        .nLowSpeedTime = repo.nTimeout,
-        .nMaxRecvSpeed = repo.nThrottle,
+        .url = std.mem.span(url),
+        .user_agent = optionalSpan(conf.pszUserAgentHeader),
+        .proxy_url = optionalSpan(conf.pszProxy),
+        .proxy_userpwd = optionalSpan(conf.pszProxyUserPass),
+        .username = optionalSpan(repo.pszUser),
+        .password = optionalSpan(repo.pszPass),
+        .ca_cert = optionalSpan(repo.pszSSLCaCert),
+        .client_cert = optionalSpan(repo.pszSSLClientCert),
+        .client_key = optionalSpan(repo.pszSSLClientKey),
+        .ssl_verify = repo.nSSLVerify != 0,
+        .connect_timeout_secs = connect_timeout,
+        .total_timeout_secs = timeout,
+        .low_speed_limit = minrate,
+        .low_speed_time_secs = timeout,
+        .max_recv_speed = throttle,
     };
     no_output.* = true;
     if (args.nQuiet == 0 and progress_text != null and
@@ -1130,11 +1137,27 @@ fn prepareDownloadRequest(
         const text = std.mem.span(progress_text.?);
         const length = @min(text.len, download_progress_data.text.len - 1);
         @memcpy(download_progress_data.text[0..length], text[0..length]);
-        request.pfnProgress = downloadProgressCallback;
-        request.pProgressData = &download_progress_data;
+        request.progress_fn = downloadProgressCallback;
+        request.progress_data = &download_progress_data;
         no_output.* = false;
     }
     return 0;
+}
+
+fn optionalSpan(value: ?[*:0]const u8) ?[]const u8 {
+    return if (value) |text| std.mem.span(text) else null;
+}
+
+fn mapDownloadError(err: anyerror) u32 {
+    return switch (err) {
+        error.UnsupportedConfiguration => errors.ERROR_TDNF_CALL_NOT_SUPPORTED,
+        error.InvalidUrl, error.HttpsRequired => errors.ERROR_TDNF_URL_INVALID,
+        error.TlsConfiguration => errors.ERROR_TDNF_SET_SSL_SETTINGS,
+        error.Timeout, error.LowSpeedLimit => errors.ERROR_TDNF_TIMED_OUT,
+        error.OperationAborted => errors.ERROR_TDNF_OPERATION_ABORTED,
+        error.OutOfMemory => errors.ERROR_TDNF_OUT_OF_MEMORY,
+        else => errors.ERROR_TDNF_REPO_PERFORM,
+    };
 }
 
 fn downloadErrorIsFatal(result: u32, status: c_long) bool {
@@ -1180,7 +1203,7 @@ fn downloadUrlToFd(
     defer arena_state.deinit();
     const safe_url = redactUrl(arena_state.allocator(), std.mem.span(url)) catch
         "repository URL";
-    var request: DownloadRequest = undefined;
+    var request: DownloadToFdRequest = undefined;
     var no_output = true;
     var result = prepareDownloadRequest(
         handle,
@@ -1194,38 +1217,44 @@ fn downloadUrlToFd(
     result = systemErrorFrom(@intFromEnum(std.c.E.NOENT));
 
     var attempt: c_int = 0;
-    var destination_path_buffer: [64]u8 = undefined;
-    const destination_path = std.fmt.bufPrintZ(
-        &destination_path_buffer,
-        "/proc/self/fd/{d}",
-        .{destination_fd},
-    ) catch return errors.ERROR_TDNF_INVALID_PARAMETER;
-    request.pszDestination = destination_path;
+    var io_state: std.Io.Threaded = .init(std.heap.c_allocator, .{});
+    defer io_state.deinit();
+    const io = io_state.io();
     while (attempt <= repo.nRetries) : (attempt += 1) {
         if (attempt > 0) log_console(LOG_INFO, "retrying %d/%d\n", attempt, repo.nRetries);
-        var status: c_long = 0;
-        result = TDNFZigDownloadFile(&request, &status);
-        if (result == 0) break;
-        if (status >= 400) {
-            log_console(
-                LOG_ERR,
-                "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n",
-                status,
-                @as(c_int, @intCast(safe_url.len)),
-                safe_url.ptr,
-            );
-            return result;
+        const status_value = client_download.client_download_to_fd(
+            std.heap.c_allocator,
+            io,
+            request,
+            destination_fd,
+        ) catch |err| {
+            result = mapDownloadError(err);
+            if (attempt == repo.nRetries or downloadErrorIsFatal(result, 0)) {
+                log_console(
+                    LOG_ERR,
+                    "Error: failed to download %.*s: error %u\n",
+                    @as(c_int, @intCast(safe_url.len)),
+                    safe_url.ptr,
+                    result,
+                );
+                return result;
+            }
+            continue;
+        };
+        const status: c_long = @intCast(status_value);
+        if (status < 400) {
+            result = 0;
+            break;
         }
-        if (attempt == repo.nRetries or downloadErrorIsFatal(result, status)) {
-            log_console(
-                LOG_ERR,
-                "Error: failed to download %.*s: error %u\n",
-                @as(c_int, @intCast(safe_url.len)),
-                safe_url.ptr,
-                result,
-            );
-            return result;
-        }
+        result = errors.ERROR_TDNF_INVALID_PARAMETER;
+        log_console(
+            LOG_ERR,
+            "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n",
+            status,
+            @as(c_int, @intCast(safe_url.len)),
+            safe_url.ptr,
+        );
+        return result;
     }
     if (!no_output) log_console(LOG_INFO, "\n");
     return result;
