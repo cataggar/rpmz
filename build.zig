@@ -24,15 +24,6 @@ const default_project_semver: std.SemanticVersion = .{ .major = 4, .minor = 0, .
 /// Used only by the opt-in libsolv solver oracle.
 const vendored_libsolv_version_patch = "39";
 
-/// Every client/ C translation unit. libsolv has been pushed out of
-/// client/'s C sources entirely (issue #39): these files must keep
-/// compiling with no libsolv header anywhere in scope, which the
-/// libsolv-confinement-audit step below proves by building them without
-/// libsolv's include paths. There is no longer an exception.
-const client_libsolv_free_srcs = [_][]const u8{
-    "api.c",
-};
-
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
 /// to the strict set clang accepts. GCC-only warnings have been removed.
 const tdnf_cflags = [_][]const u8{
@@ -163,6 +154,8 @@ pub fn build(b: *Build) void {
     client_config_options.addOption([]const u8, "history_db_dir", history_db_dir);
     client_config_options.addOption([]const u8, "source_root", b.build_root.path.?);
     client_config_options.addOption([]const u8, "system_libdir", full_libdir);
+    client_config_options.addOption([]const u8, "project_name", project_name);
+    client_config_options.addOption([]const u8, "project_version", project_version);
     // Vendored sqlite backs the Zig-side history and rpmdb code paths.
     const sqlite_dep_optional = b.lazyDependency("sqlite", .{});
     const tls_dep_optional = b.lazyDependency("tls", .{});
@@ -1758,12 +1751,6 @@ pub fn build(b: *Build) void {
     // The native target may expose host headers, so this production build
     // declares only that the confinement negative control is not armed.
     tdnf_so_mod.addCMacro("TDNF_CLIENT_LIBSOLV_IN_SCOPE", "1");
-    // All client C and Zig sources are production-libsolv-free.
-    tdnf_so_mod.addCSourceFiles(.{
-        .root = b.path("client"),
-        .files = &(client_libsolv_free_srcs),
-        .flags = &tdnf_cflags,
-    });
     tdnf_so_mod.linkLibrary(common_lib);
     tdnf_so_mod.linkLibrary(history_lib);
     tdnf_so_mod.linkLibrary(llconf_lib);
@@ -1874,53 +1861,13 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
-    // Compiler-enforced libsolv confinement (issue #39). Build every C
-    // file in client/ with libsolv's headers unreachable. A regex over
-    // the sources was wrong eight times; this cannot be: if any of these
-    // files reaches for a libsolv type, macro or function -- with or
-    // without an #include -- the build fails.
-    //
-    // What makes this hermetic rather than merely convenient is the
-    // explicitly-spelled target:
-    //
-    //   * Zig only searches the host's /usr/include for a *native*
-    //     target, and libsolv-devel is a normal build dependency on the
-    //     distributions tdnf targets (Photon, Azure Linux). Naming the
-    //     triple, even the host's own, restricts the search to Zig's
-    //     bundled libc headers, so <solv/pool.h> is genuinely absent
-    //     instead of accidentally so.
-    //
-    // A separate module is still required because include paths are
-    // per-module: the audit arms client/includes.h's negative control
-    // with -DTDNF_CLIENT_LIBSOLV_OUT_OF_SCOPE, which the production
-    // module must not define.
-    const confinement_target = b.resolveTargetQuery(.{
-        .cpu_arch = target.result.cpu.arch,
-        .os_tag = .linux,
-        .abi = .gnu,
-    });
-    const client_confinement = staticLib(b, confinement_target, optimize, .{
-        .name = "client-libsolv-confinement",
-        .root = "client",
-        .files = &client_libsolv_free_srcs,
-    });
-    client_confinement.root_module.addIncludePath(b.path("rpmzig"));
-    // Arms the negative control in client/includes.h. The audit is only
-    // evidence if libsolv is genuinely unreachable; if it were reachable
-    // the audit would pass while proving nothing, which is the exact
-    // failure mode this series keeps hitting. Compiling the check inside
-    // the audited module means it sees the configuration under test by
-    // construction -- it cannot drift out of step with it, and there is
-    // no second compiler invocation to keep in sync.
-    client_confinement.root_module.addCMacro(
-        "TDNF_CLIENT_LIBSOLV_OUT_OF_SCOPE",
-        "1",
-    );
+    // client/ has no C translation units left. Keep that a hard invariant
+    // in the include audit while continuing to reject libsolv spellings
+    // outside the one pinned test-only oracle module.
     const libsolv_confinement_step = b.step(
         "libsolv-confinement-audit",
-        "Prove every C file in client/ builds without libsolv headers",
+        "Reject client C sources and unconfined libsolv headers",
     );
-    libsolv_confinement_step.dependOn(&client_confinement.step);
     // The -I pin is attached per module by addLibsolvIncludes, so a file
     // in a module that never calls it can still spell <solv/pool.h> and
     // resolve it from /usr/include with no version assert in scope --
@@ -1962,6 +1909,26 @@ pub fn build(b: *Build) void {
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         client_history_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
+    const client_api_test_step = b.step(
+        "client-api-test",
+        "Run migrated public API ownership and behavior tests",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/api_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_root", tdnf_so_mod);
+        test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        client_api_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
     }
 

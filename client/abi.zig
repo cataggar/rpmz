@@ -222,6 +222,36 @@ pub const HistoryInfo = extern struct {
     pItems: ?[*]HistoryInfoItem = null,
 };
 
+pub const HistoryCtx = opaque {};
+
+pub const HistoryDelta = extern struct {
+    added_ids: ?[*]c_int = null,
+    added_count: c_int = 0,
+    removed_ids: ?[*]c_int = null,
+    removed_count: c_int = 0,
+};
+
+pub const HistoryFlagsDelta = extern struct {
+    changed_ids: ?[*]c_int = null,
+    values: ?[*]c_int = null,
+    count: c_int = 0,
+};
+
+pub const HistoryTransaction = extern struct {
+    id: c_int = 0,
+    type: c_int = 0,
+    cmdline: ?[*:0]u8 = null,
+    timestamp: std.c.time_t = 0,
+    cookie: ?[*:0]u8 = null,
+    delta: HistoryDelta = .{},
+    flags_delta: HistoryFlagsDelta = .{},
+};
+
+pub const HistoryNevraMap = extern struct {
+    count: c_int = 0,
+    idmap: ?[*]?[*:0]u8 = null,
+};
+
 pub const DownloadProgressFn = *const fn (
     userdata: ?*anyopaque,
     dltotal: i64,
