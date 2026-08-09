@@ -5,45 +5,31 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("tdnfcli.h");
     @cInclude("tdnferror.h");
 });
 
-extern fn log_console(loglevel: i32, format: [*:0]const u8, ...) void;
-
 const LOG_CRIT: c_int = 2;
 const help_msg = @embedFile("help.txt");
 
 pub export fn TDNFCliShowUsage() void {
-    log_console(LOG_CRIT, "You need to give some command\n");
+    common.log(LOG_CRIT, "You need to give some command\n", .{});
     TDNFCliShowHelp();
 }
 
 pub export fn TDNFCliShowHelp() void {
-    log_console(
-        LOG_CRIT,
-        "%.*s\n",
-        @as(c_int, @intCast(help_msg.len)),
-        help_msg.ptr,
-    );
+    common.log(LOG_CRIT, "%.*s\n", .{ @as(c_int, @intCast(help_msg.len)), help_msg.ptr });
 }
 
 pub export fn TDNFCliShowNoSuchCommand(pszCmd: ?[*:0]const u8) void {
-    log_console(
-        LOG_CRIT,
-        "No such command: %s. Please use /usr/bin/tdnf --help\n",
-        pszCmd orelse "",
-    );
+    common.log(LOG_CRIT, "No such command: %s. Please use /usr/bin/tdnf --help\n", .{pszCmd orelse ""});
 }
 
 pub export fn TDNFCliShowNoSuchOption(pszOption: ?[*:0]const u8) void {
-    log_console(
-        LOG_CRIT,
-        "No such option: %s. Please use /usr/bin/tdnf --help\n",
-        pszOption orelse "",
-    );
+    common.log(LOG_CRIT, "No such option: %s. Please use /usr/bin/tdnf --help\n", .{pszOption orelse ""});
 }
 
 pub export fn TDNFCliHelpCommand(

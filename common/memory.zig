@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const variadic = @import("variadic.zig");
 
 const c = @cImport({
     @cInclude("errno.h");
@@ -265,6 +266,97 @@ fn allocateStringNWithOps(
     return 0;
 }
 
+fn callVsnprintf(
+    buffer: [*c]u8,
+    size: usize,
+    format: [*c]const u8,
+    args: *variadic.VaList,
+) c_int {
+    const va_list_param =
+        @typeInfo(@TypeOf(c.vsnprintf)).@"fn".params[3].type.?;
+    return c.vsnprintf(
+        buffer,
+        size,
+        format,
+        variadic.cArgument(va_list_param, args),
+    );
+}
+
+export fn commonVfprintf(
+    stream: ?*anyopaque,
+    format: [*:0]const u8,
+    args: *variadic.VaList,
+) c_int {
+    const va_list_param =
+        @typeInfo(@TypeOf(c.vfprintf)).@"fn".params[2].type.?;
+    return c.vfprintf(
+        @ptrCast(@alignCast(stream)),
+        format,
+        variadic.cArgument(va_list_param, args),
+    );
+}
+
+fn allocateStringPrintfV(
+    ppszDst: ?*?[*:0]u8,
+    pszFmtOpt: ?[*:0]const u8,
+    args: *variadic.VaList,
+) u32 {
+    if (ppszDst == null or pszFmtOpt == null) {
+        setNullOut(?[*:0]u8, ppszDst);
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    }
+
+    const pszFmt = pszFmtOpt.?;
+    var probe_args: variadic.VaList = undefined;
+    variadic.copy(&probe_args, args);
+    defer variadic.end(&probe_args);
+    var probe_byte: u8 = 0;
+    const nSizeProbe = callVsnprintf(
+        &probe_byte,
+        1,
+        pszFmt,
+        &probe_args,
+    );
+    if (nSizeProbe <= 0) {
+        ppszDst.?.* = null;
+        return @as(u32, @intCast(c.ERROR_TDNF_SYSTEM_BASE)) +
+            @as(u32, @intCast(c.__errno_location().*));
+    }
+
+    const nSize: usize = @as(usize, @intCast(nSizeProbe)) + 1;
+    if (nSize > c.TDNF_DEFAULT_MAX_STRING_LEN) {
+        ppszDst.?.* = null;
+        return c.ERROR_TDNF_STRING_TOO_LONG;
+    }
+
+    var raw: ?*anyopaque = null;
+    const alloc_error = allocateMemoryWithOps(libc_ops, 1, nSize, &raw);
+    if (alloc_error != 0) {
+        ppszDst.?.* = null;
+        return alloc_error;
+    }
+
+    const pszDst: [*:0]u8 = @ptrCast(raw.?);
+    var write_args: variadic.VaList = undefined;
+    variadic.copy(&write_args, args);
+    defer variadic.end(&write_args);
+    const nWritten = callVsnprintf(
+        pszDst,
+        nSize,
+        pszFmt,
+        &write_args,
+    );
+    if (nWritten <= 0) {
+        freeWithOps(libc_ops, @ptrCast(pszDst));
+        ppszDst.?.* = null;
+        return @as(u32, @intCast(c.ERROR_TDNF_SYSTEM_BASE)) +
+            @as(u32, @intCast(c.__errno_location().*));
+    }
+
+    ppszDst.?.* = pszDst;
+    return 0;
+}
+
 export fn TDNFAllocateMemory(
     nNumElements: usize,
     nSize: usize,
@@ -298,7 +390,6 @@ export fn TDNFSafeAllocateString(
     return safeAllocateStringWithOps(libc_ops, pszSrc, ppszDst);
 }
 
-
 export fn TDNFAllocateStringArray(
     ppszSrc: [*c]?[*:0]u8,
     pppszDst: ?*[*c]?[*:0]u8,
@@ -325,6 +416,17 @@ export fn TDNFAllocateStringN(
     return allocateStringNWithOps(libc_ops, pszSrc, dwNumElements, ppszDst);
 }
 
+export fn TDNFAllocateStringPrintf(ppszDst: ?*?[*:0]u8, pszFmt: ?[*:0]const u8, ...) callconv(.c) u32 {
+    var args: variadic.VaList = undefined;
+    if (comptime variadic.needs_manual_start) {
+        variadic.startManual(&args);
+    } else {
+        args = @cVaStart();
+    }
+    defer variadic.end(&args);
+    return allocateStringPrintfV(ppszDst, pszFmt, &args);
+}
+
 const TrackingFreeContext = struct {
     freed: bool = false,
 };
@@ -342,8 +444,6 @@ fn alwaysFailCalloc(_: ?*anyopaque, _: usize, _: usize) ?*anyopaque {
 fn alwaysFailRealloc(_: ?*anyopaque, _: ?*anyopaque, _: usize) ?*anyopaque {
     return null;
 }
-
-extern fn TDNFAllocateStringPrintf(ppszDst: ?*?[*:0]u8, pszFmt: ?[*:0]const u8, ...) u32;
 
 test "TDNFAllocateMemory zeroes allocations and clears stale output on zero-size rejection" {
     var raw: ?*anyopaque = null;
@@ -453,7 +553,7 @@ test "TDNFAllocateString and TDNFSafeAllocateString preserve output semantics" {
     try std.testing.expect(preserved_out == &preserved);
 }
 
-test "TDNFAllocateStringPrintf formats through the production C varargs entry point" {
+test "TDNFAllocateStringPrintf preserves the compatibility varargs entry point" {
     var formatted: ?[*:0]u8 = null;
     try std.testing.expectEqual(
         @as(u32, 0),
@@ -466,6 +566,28 @@ test "TDNFAllocateStringPrintf formats through the production C varargs entry po
     );
     defer TDNFFreeMemory(@ptrCast(formatted.?));
     try std.testing.expectEqualStrings("value 7", std.mem.span(formatted.?));
+
+    var null_formatted: ?[*:0]u8 = null;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFAllocateStringPrintf(
+            &null_formatted,
+            "%s",
+            @as(?[*:0]const u8, null),
+        ),
+    );
+    defer TDNFFreeMemory(@ptrCast(null_formatted.?));
+    try std.testing.expectEqualStrings(
+        "(null)",
+        std.mem.span(null_formatted.?),
+    );
+
+    var stale: ?[*:0]u8 = @ptrFromInt(1);
+    try std.testing.expectEqual(
+        @as(u32, c.ERROR_TDNF_INVALID_PARAMETER),
+        TDNFAllocateStringPrintf(&stale, null),
+    );
+    try std.testing.expect(stale == null);
 }
 
 test "TDNFAllocateStringArray duplicates each entry and TDNFFreeStringArrayWithCount frees counted arrays" {

@@ -4,6 +4,7 @@
 // you may not use this file except in compliance with the License. The terms
 // of the License are located in the COPYING file of this distribution.
 
+const common = @import("tdnf_common");
 const abi = @import("transaction_plan_capture_abi");
 const errors = @import("tdnf_error");
 const c = @import("client_init_abi").C;
@@ -31,7 +32,6 @@ extern fn TDNFRepoMdCalculateCookieForFile(
 extern fn TDNFPackageContextRootDir(
     ?*const c.TDNF_PACKAGE_CONTEXT,
 ) callconv(.c) ?[*:0]const u8;
-extern fn log_console(c_int, [*:0]const u8, ...) void;
 
 const repository_init_callbacks = abi.RepositoryInitCallbacks{
     .free_memory = &TDNFFreeMemory,
@@ -76,7 +76,7 @@ fn setRepositoryEnabled(
         raw_data orelse return,
     ));
     if (repository.nEnabled != 0 and enabled == 0) {
-        log_console(0, "Disabling Repo: '%s'\n", repository.pszName);
+        common.log(0, "Disabling Repo: '%s'\n", .{repository.pszName});
     }
     repository.nEnabled = enabled;
 }

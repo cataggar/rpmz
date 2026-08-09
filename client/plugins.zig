@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
 const errors = @import("tdnf_error");
@@ -46,11 +47,6 @@ extern fn TDNFAllocateString(
     source: ?[*:0]const u8,
     output: *?[*:0]u8,
 ) callconv(.c) u32;
-extern fn TDNFAllocateStringPrintf(
-    output: *?[*:0]u8,
-    format: [*:0]const u8,
-    ...,
-) callconv(.c) u32;
 extern fn TDNFFreeMemory(memory: ?*anyopaque) callconv(.c) void;
 extern fn TDNFFreeStringArray(values: ?[*]?[*:0]u8) callconv(.c) void;
 extern fn find_cnfmodule(name: ?[*:0]const u8) callconv(.c) ?*CnfModule;
@@ -69,11 +65,6 @@ extern fn fnmatch(
 ) callconv(.c) c_int;
 extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8;
 extern fn unlink(path: [*:0]const u8) callconv(.c) c_int;
-extern fn log_console(
-    level: c_int,
-    format: [*:0]const u8,
-    ...,
-) callconv(.c) void;
 
 const Production = if (builtin.is_test) struct {
     fn makeDirs(_: ?[*:0]const u8) u32 {
@@ -260,7 +251,7 @@ fn productionAllocatePath(
     name: [*:0]const u8,
     output: *?[*:0]u8,
 ) u32 {
-    return TDNFAllocateStringPrintf(output, "%s/%s.conf", directory, name);
+    return common.allocPrint(output, "%s/%s.conf", .{ directory, name });
 }
 
 fn productionCreateMetalink(
@@ -583,12 +574,7 @@ fn showPluginError(plugin_opt: ?*Plugin, result: u32) void {
         "metalink plugin error"
     else
         "repogpgcheck plugin error";
-    log_console(
-        LOG_ERR,
-        "Plugin error: %s: %s\n",
-        prefix,
-        pluginErrorDescription(plugin, result),
-    );
+    common.log(LOG_ERR, "Plugin error: %s: %s\n", .{ prefix, pluginErrorDescription(plugin, result) });
 }
 
 fn initPlugin(tdnf: *Tdnf, plugin: *Plugin, ops: Ops) u32 {
@@ -600,7 +586,7 @@ fn initPlugin(tdnf: *Tdnf, plugin: *Plugin, ops: Ops) u32 {
         showPluginError(plugin, result);
         return result;
     }
-    log_console(LOG_INFO, "Loaded plugin: %s\n", plugin.pszName);
+    common.log(LOG_INFO, "Loaded plugin: %s\n", .{plugin.pszName});
     return 0;
 }
 
@@ -918,7 +904,7 @@ fn testAllocatePath(
         output.* = null;
         return errors.ERROR_TDNF_OUT_OF_MEMORY;
     }
-    return TDNFAllocateStringPrintf(output, "%s/%s.conf", directory, name);
+    return common.allocPrint(output, "%s/%s.conf", .{ directory, name });
 }
 
 fn testCreate(

@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const abi = @import("client_abi");
 const errors = @import("tdnf_error");
 const options = @import("client_config_options");
@@ -67,11 +68,6 @@ extern fn TDNFAllocateString(
     source: ?[*:0]const u8,
     output: *?[*:0]u8,
 ) callconv(.c) u32;
-extern fn TDNFAllocateStringPrintf(
-    output: *?[*:0]u8,
-    format: [*:0]const u8,
-    ...,
-) callconv(.c) u32;
 extern fn TDNFFreeMemory(memory: ?*anyopaque) callconv(.c) void;
 extern fn TDNFFreeStringArray(
     values: ?[*]?[*:0]u8,
@@ -108,11 +104,6 @@ extern fn tdnfLockFree(path: ?[*:0]const u8, fd: c_int) callconv(.c) void;
 extern fn GlobalSetQuiet(value: i32) callconv(.c) void;
 extern fn GlobalSetJson(value: i32) callconv(.c) void;
 extern fn GlobalSetDnfCheckUpdateCompat(value: i32) callconv(.c) void;
-extern fn log_console(
-    level: c_int,
-    format: [*:0]const u8,
-    ...,
-) callconv(.c) void;
 
 extern fn TDNFRefresh(handle: ?*Tdnf) callconv(.c) u32;
 extern fn TDNFReadConfig(
@@ -651,7 +642,7 @@ fn acquireInstanceLock() void {
     if (gEuid != 0) return;
     instance_lock_fd = tdnfLockAcquire(instance_lock_file);
     if (instance_lock_fd < 0) {
-        log_console(LOG_ERR, "Failed to acquire tdnfInstance lock\n");
+        common.log(LOG_ERR, "Failed to acquire tdnfInstance lock\n", .{});
     }
 }
 
@@ -778,7 +769,7 @@ pub export fn TDNFCheckLocalPackages(
     if (handle.pSack == null or local_path == null)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
 
-    log_console(LOG_INFO, "Checking all packages from: %s\n", local_path.?);
+    common.log(LOG_INFO, "Checking all packages from: %s\n", .{local_path.?});
     var owned_arch: ?[*:0]u8 = null;
     defer freeString(&owned_arch);
     var arch: ?[*:0]const u8 = args.pszArch;
@@ -805,15 +796,10 @@ pub export fn TDNFCheckLocalPackages(
             @intCast(result - errors.ERROR_TDNF_SYSTEM_BASE)
         else
             0;
-        log_console(
-            LOG_ERR,
-            "ReadRpms: Error while operating on '%s', '%s'\n",
-            error_path.?,
-            strerror(errno_value),
-        );
+        common.log(LOG_ERR, "ReadRpms: Error while operating on '%s', '%s'\n", .{ error_path.?, strerror(errno_value) });
     }
     if (result != 0) return result;
-    log_console(LOG_INFO, "Found %u packages\n", count);
+    common.log(LOG_INFO, "Found %u packages\n", .{count});
 
     if (solver != null) {
         var skip: c_uint = c.SKIPPROBLEM_NONE;
@@ -848,30 +834,30 @@ pub export fn TDNFClean(
         if (current.pszId != null and
             eqlZ(current.pszId.?, std.mem.span(command_line_repo_name)))
             continue;
-        log_console(LOG_INFO, "cleaning %s:", current.pszId.?);
+        common.log(LOG_INFO, "cleaning %s:", .{current.pszId.?});
         var result: u32 = 0;
         if (clean_type & c.CLEANTYPE_METADATA != 0) {
-            log_console(LOG_INFO, " metadata");
+            common.log(LOG_INFO, " metadata", .{});
             result = TDNFRepoRemoveCache(handle, current);
             if (result != 0) return result;
         }
         if (clean_type & c.CLEANTYPE_DBCACHE != 0) {
-            log_console(LOG_INFO, " dbcache");
+            common.log(LOG_INFO, " dbcache", .{});
             result = TDNFRemoveSolvCache(handle, current);
             if (result != 0) return result;
         }
         if (clean_type & c.CLEANTYPE_PACKAGES != 0) {
-            log_console(LOG_INFO, " packages");
+            common.log(LOG_INFO, " packages", .{});
             result = TDNFRemoveRpmCache(handle, current);
             if (result != 0) return result;
         }
         if (clean_type & c.CLEANTYPE_KEYS != 0) {
-            log_console(LOG_INFO, " keys");
+            common.log(LOG_INFO, " keys", .{});
             result = TDNFRemoveKeysCache(handle, current);
             if (result != 0) return result;
         }
         if (clean_type & c.CLEANTYPE_EXPIRE_CACHE != 0) {
-            log_console(LOG_INFO, " expire-cache");
+            common.log(LOG_INFO, " expire-cache", .{});
             result = TDNFRemoveLastRefreshMarker(handle, current);
             if (result != 0) return result;
             result = TDNFRemoveMirrorList(handle, current);
@@ -882,16 +868,12 @@ pub export fn TDNFClean(
         result = TDNFRepoRemoveCacheDir(handle, current);
         if (result == errors.fromErrno(.NOTEMPTY)) {
             if (clean_type == c.CLEANTYPE_ALL) {
-                log_console(
-                    LOG_ERR,
-                    "Cache directory for %s not removed because it's not empty.\n",
-                    current.pszId.?,
-                );
+                common.log(LOG_ERR, "Cache directory for %s not removed because it's not empty.\n", .{current.pszId.?});
             }
             result = 0;
         }
         if (result != 0) return result;
-        log_console(LOG_INFO, "\n");
+        common.log(LOG_INFO, "\n", .{});
     }
     return 0;
 }
@@ -1036,11 +1018,7 @@ pub export fn TDNFOpenHandle(
 
     handle.pRpmConfig = tdnf_rpm_config_create(args.pszInstallRoot);
     if (handle.pRpmConfig == null) {
-        log_console(
-            LOG_ERR,
-            "Failed to initialize native rpm configuration: %s\n",
-            tdnf_rpm_config_last_error(),
-        );
+        common.log(LOG_ERR, "Failed to initialize native rpm configuration: %s\n", .{tdnf_rpm_config_last_error()});
         result = errors.ERROR_TDNF_RPMRC_FAIL;
     }
 
@@ -1113,12 +1091,7 @@ fn applyRpmDefine(handle_opt: ?*Tdnf, value: ?[*:0]const u8) u32 {
     if (handle.pRpmConfig == null or isNullOrEmpty(value))
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (tdnf_rpm_config_apply_define(handle.pRpmConfig, value) != 0) {
-        log_console(
-            LOG_ERR,
-            "Invalid rpmdefine '%s': %s\n",
-            value.?,
-            tdnf_rpm_config_last_error(),
-        );
+        common.log(LOG_ERR, "Invalid rpmdefine '%s': %s\n", .{ value.?, tdnf_rpm_config_last_error() });
         return errors.ERROR_TDNF_RPMRC_FAIL;
     }
     return 0;
@@ -1156,19 +1129,11 @@ fn addCmdLinePackages(
             fnmatch("*.nosrc.rpm", package_name, 0) == 0)
         {
             if (args.nSource == 0 and args.nBuildDeps == 0) {
-                log_console(
-                    LOG_ERR,
-                    "package '%s' appears to be a source rpm - use --source to install, or --builddeps to install its build depenfdencies\n",
-                    package_name,
-                );
+                common.log(LOG_ERR, "package '%s' appears to be a source rpm - use --source to install, or --builddeps to install its build depenfdencies\n", .{package_name});
                 return errors.ERROR_TDNF_INVALID_PARAMETER;
             }
         } else if (args.nSource != 0 or args.nBuildDeps != 0) {
-            log_console(
-                LOG_ERR,
-                "package '%s' appears not to be a source rpm but --source or --builddeps was used\n",
-                package_name,
-            );
+            common.log(LOG_ERR, "package '%s' appears not to be a source rpm but --source or --builddeps was used\n", .{package_name});
             return errors.ERROR_TDNF_INVALID_PARAMETER;
         }
 
@@ -1324,36 +1289,22 @@ fn removeUnkeptRpm(
     if (!std.mem.endsWith(u8, std.mem.span(path), ".rpm")) return 0;
     var marker: ?[*:0]u8 = null;
     defer freeString(&marker);
-    var result = TDNFAllocateStringPrintf(
-        &marker,
-        "%s.reposync-keep",
-        path,
-    );
+    var result = common.allocPrint(&marker, "%s.reposync-keep", .{path});
     if (result != 0) return @intCast(result);
 
     var marker_stat = std.mem.zeroes(std.c.Stat);
     if (stat(marker.?, &marker_stat) != 0) {
         if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT)) {
-            log_console(LOG_INFO, "deleting %s\n", path);
+            common.log(LOG_INFO, "deleting %s\n", .{path});
             if (remove(path) < 0) {
-                log_console(
-                    LOG_CRIT,
-                    "unable to remove %s: %s\n",
-                    path,
-                    strerror(std.c._errno().*),
-                );
+                common.log(LOG_CRIT, "unable to remove %s: %s\n", .{ path, strerror(std.c._errno().*) });
             }
         } else {
             result = systemError();
             return @intCast(result);
         }
     } else if (remove(marker.?) < 0) {
-        log_console(
-            LOG_CRIT,
-            "unable to remove %s: %s\n",
-            marker.?,
-            strerror(std.c._errno().*),
-        );
+        common.log(LOG_CRIT, "unable to remove %s: %s\n", .{ marker.?, strerror(std.c._errno().*) });
     }
     return 0;
 }
@@ -1386,15 +1337,15 @@ fn repoSync(
         if (current.nEnabled != 0) enabled_count += 1;
     }
     if (enabled_count > 1 and args.nNoRepoPath != 0) {
-        log_console(LOG_CRIT, "cannot use norepopath with multiple repos\n");
+        common.log(LOG_CRIT, "cannot use norepopath with multiple repos\n", .{});
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
     if (args.nDelete != 0 and args.nNoRepoPath != 0) {
-        log_console(LOG_CRIT, "cannot use the delete option with norepopath\n");
+        common.log(LOG_CRIT, "cannot use the delete option with norepopath\n", .{});
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
     if (args.nSourceOnly != 0 and args.ppszArchs != null) {
-        log_console(LOG_CRIT, "cannot use the source option with arch\n");
+        common.log(LOG_CRIT, "cannot use the source option with arch\n", .{});
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
 
@@ -1511,20 +1462,10 @@ fn repoSync(
                 tdnf_rpm_file_close(rpm_file);
                 rpm_file = null;
                 if (policy_rejected != 0) {
-                    log_console(
-                        LOG_CRIT,
-                        "checking package %s failed: %d, deleting\n",
-                        file_path.?,
-                        result,
-                    );
+                    common.log(LOG_CRIT, "checking package %s failed: %d, deleting\n", .{ file_path.?, result });
                     if (remove(file_path.?) < 0) {
                         const errno_value = std.c._errno().*;
-                        log_console(
-                            LOG_CRIT,
-                            "unable to remove %s: %s\n",
-                            file_path.?,
-                            strerror(errno_value),
-                        );
+                        common.log(LOG_CRIT, "unable to remove %s: %s\n", .{ file_path.?, strerror(errno_value) });
                         return errors.ERROR_TDNF_SYSTEM_BASE +
                             @as(u32, @intCast(errno_value));
                     }
@@ -1536,11 +1477,7 @@ fn repoSync(
             }
 
             if (args.nDelete != 0 and keep_package) {
-                result = TDNFAllocateStringPrintf(
-                    &marker,
-                    "%s.reposync-keep",
-                    file_path.?,
-                );
+                result = common.allocPrint(&marker, "%s.reposync-keep", .{file_path.?});
                 if (result != 0) return result;
                 result = TDNFTouchFile(marker);
                 if (result != 0) return result;
@@ -1562,7 +1499,7 @@ fn repoSync(
                 &url,
             );
             if (result != 0) return result;
-            log_console(LOG_INFO, "%s\n", url.?);
+            common.log(LOG_INFO, "%s\n", .{url.?});
             freeString(&url);
         }
     }
@@ -1940,7 +1877,7 @@ pub export fn TDNFUpdateInfo(
             &line_count,
         );
         if (result == errors.ERROR_TDNF_NO_DATA)
-            log_console(LOG_INFO, "\n0 updates.\n");
+            common.log(LOG_INFO, "\n0 updates.\n", .{});
     }
     if (result == 0)
         result = TDNFNativeQueryBuildUpdateInfo(lines, line_count, &infos);
@@ -2491,12 +2428,7 @@ pub export fn TDNFMark(
     var index: u32 = 0;
     while (index < count) : (index += 1) {
         const info = &@as([*]PackageInfo, @ptrCast(infos.?))[index];
-        log_console(
-            LOG_INFO,
-            "marking %s as %sinstalled\n",
-            info.pszName.?,
-            if (value != 0) "auto" else "user",
-        );
+        common.log(LOG_INFO, "marking %s as %sinstalled\n", .{ info.pszName.?, if (value != 0) "auto" else "user" });
         if (history_set_auto_flag(ctx, info.pszName, @bitCast(value)) != 0)
             return errors.ERROR_TDNF_HISTORY_ERROR;
     }

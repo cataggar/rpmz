@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("api.zig");
 
 const c = @cImport({
     @cInclude("errno.h");
@@ -12,7 +13,6 @@ const c = @cImport({
     @cInclude("string.h");
 });
 
-extern fn log_console(nLogLevel: c_int, pszFormat: [*:0]const u8, ...) void;
 extern fn flock(nFd: c_int, nOperation: c_int) c_int;
 extern fn close(nFd: c_int) c_int;
 extern fn sleep(nSeconds: c_uint) c_uint;
@@ -38,13 +38,7 @@ fn tdnfCreateLockFile(pszLockPath: [*:0]const u8) c_int {
 
     if (nLockFd < 0) {
         const nErrNo = c.__errno_location().*;
-        log_console(
-            LOG_ERR,
-            "%s: open failed for %s (%s)\n",
-            "tdnfCreateLockFile",
-            pszLockPath,
-            c.strerror(nErrNo),
-        );
+        common.log(LOG_ERR, "%s: open failed for %s (%s)\n", .{ "tdnfCreateLockFile", pszLockPath, c.strerror(nErrNo) });
         return -1;
     }
 
@@ -56,13 +50,13 @@ export fn tdnfLockAcquire(pszLockPathOpt: ?[*:0]const u8) c_int {
     const pszLockPath = pszLockPathOpt orelse "";
 
     if (isNullOrEmptyString(pszLockPathOpt)) {
-        log_console(LOG_ERR, "%s: lockPath is empty\n", "tdnfLockAcquire");
+        common.log(LOG_ERR, "%s: lockPath is empty\n", .{"tdnfLockAcquire"});
         return -1;
     }
 
     nLockFd = tdnfCreateLockFile(pszLockPath);
     if (nLockFd < 0) {
-        log_console(LOG_ERR, "%s: tdnfCreateLockFile failed\n", "tdnfLockAcquire");
+        common.log(LOG_ERR, "%s: tdnfCreateLockFile failed\n", .{"tdnfLockAcquire"});
         return -1;
     }
 
@@ -70,11 +64,7 @@ export fn tdnfLockAcquire(pszLockPathOpt: ?[*:0]const u8) c_int {
         if (flock(nLockFd, LOCK_EX | LOCK_NB) == 0) {
             break;
         }
-        log_console(
-            LOG_ERR,
-            "WARNING: failed to acquire lock on: %s, retrying ...\n",
-            pszLockPath,
-        );
+        common.log(LOG_ERR, "WARNING: failed to acquire lock on: %s, retrying ...\n", .{pszLockPath});
         _ = sleep(1);
     }
 
@@ -106,7 +96,7 @@ export fn tdnfLockFree(pszLockPathOpt: ?[*:0]const u8, nLockFd: c_int) void {
 
     if (nLockFd >= 0) {
         if (flock(nLockFd, LOCK_UN) != 0) {
-            log_console(LOG_ERR, "ERROR: failed to unlock: '%s'\n", pszLockPath);
+            common.log(LOG_ERR, "ERROR: failed to unlock: '%s'\n", .{pszLockPath});
         }
         _ = close(nLockFd);
     }

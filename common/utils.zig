@@ -5,6 +5,8 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("api.zig");
+const variadic = @import("variadic.zig");
 const c = @cImport({
     @cDefine("_XOPEN_SOURCE", "500");
     @cDefine("_DEFAULT_SOURCE", "1");
@@ -37,8 +39,7 @@ extern fn TDNFAllocateString(pszSrc: ?[*:0]const u8, ppszDst: ?*?[*:0]u8) u32;
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
 extern fn TDNFFreeStringArray(ppszArray: [*c]?[*:0]u8) void;
 extern fn TDNFSplitStringToArray(pszBuf: ?[*:0]const u8, pszSep: ?[*:0]const u8, pppszTokens: ?*[*c]?[*:0]u8) u32;
-extern fn log_console(nLogLevel: c_int, pszFormat: [*:0]const u8, ...) void;
-extern fn fgets(s: [*c]u8, n: c_int, stream: [*c]c.FILE) [*c]u8;
+extern fn fgets(s: [*c]u8, n: c_int, stream: ?*c.FILE) [*c]u8;
 extern fn realpath(name: [*c]const u8, resolved: [*c]u8) [*c]u8;
 
 const hash_sentinel: usize = @intCast(c.TDNF_HASH_SENTINEL);
@@ -120,6 +121,27 @@ fn allocateCStringCapacity(nCapacity: usize, ppszDst: ?*?[*:0]u8) u32 {
     return 0;
 }
 
+const PathAllocOps = struct {
+    ctx: ?*anyopaque = null,
+    allocateFn: *const fn (
+        ctx: ?*anyopaque,
+        size: usize,
+        out: *?*anyopaque,
+    ) u32,
+};
+
+fn allocatePathMemory(
+    _: ?*anyopaque,
+    size: usize,
+    out: *?*anyopaque,
+) u32 {
+    return TDNFAllocateMemory(1, size, out);
+}
+
+const path_alloc_ops = PathAllocOps{
+    .allocateFn = allocatePathMemory,
+};
+
 fn copyCString(pszSrc: [*:0]const u8, ppszDst: ?*?[*:0]u8) u32 {
     return TDNFAllocateString(@ptrCast(pszSrc), ppszDst);
 }
@@ -141,7 +163,7 @@ fn rmFile(path: [*c]const u8, sbuf: [*c]const c.struct_stat, file_type: c_int, f
     _ = ftwb;
 
     if (c.remove(path) < 0) {
-        log_console(c.LOG_CRIT, "unable to remove %s: %s\n", path, c.strerror(getErrno()));
+        common.log(c.LOG_CRIT, "unable to remove %s: %s\n", .{ path, c.strerror(getErrno()) });
     }
     return 0;
 }
@@ -188,7 +210,7 @@ fn tdnfGetDigestForFileRpmzig(
     hash_type: c_int,
     digest: ?[*]u8,
 ) u32 {
-    var fp: [*c]c.FILE = null;
+    var fp: ?*c.FILE = null;
     var ctx: ?*c.tdnf_rpmzig_digest_ctx = null;
     var buf = [_]u8{0} ** c.BUFSIZ;
 
@@ -201,20 +223,14 @@ fn tdnfGetDigestForFileRpmzig(
 
     fp = c.fopen(@ptrCast(filename), "r");
     if (fp == null) {
-        log_console(c.LOG_ERR, "ERROR: Checksum validating (%s) FAILED\n", filename);
+        common.log(c.LOG_ERR, "ERROR: Checksum validating (%s) FAILED\n", .{filename});
         return systemError(getErrno());
     }
     defer _ = c.fclose(fp);
 
     ctx = c.tdnf_rpmzig_digest_open(hash_type);
     if (ctx == null) {
-        log_console(
-            c.LOG_ERR,
-            "rpmzig digest open failed for %s (%s): %s\n",
-            filename,
-            hash.hash_type,
-            rpmzigErrorOrUnknown(),
-        );
+        common.log(c.LOG_ERR, "rpmzig digest open failed for %s (%s): %s\n", .{ filename, hash.hash_type, rpmzigErrorOrUnknown() });
         return c.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
     }
     defer c.tdnf_rpmzig_digest_close(ctx);
@@ -223,13 +239,7 @@ fn tdnfGetDigestForFileRpmzig(
         if (length > 0) {
             const chunk_len: usize = length;
             if (c.tdnf_rpmzig_digest_update(ctx, &buf[0], chunk_len) != 0) {
-                log_console(
-                    c.LOG_ERR,
-                    "rpmzig digest update failed for %s (%s): %s\n",
-                    filename,
-                    hash.hash_type,
-                    rpmzigErrorOrUnknown(),
-                );
+                common.log(c.LOG_ERR, "rpmzig digest update failed for %s (%s): %s\n", .{ filename, hash.hash_type, rpmzigErrorOrUnknown() });
                 return c.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
             }
             @memset(buf[0..], 0);
@@ -237,7 +247,7 @@ fn tdnfGetDigestForFileRpmzig(
         }
 
         if (c.ferror(fp) != 0) {
-            log_console(c.LOG_ERR, "Error: Checksum validating (%s) FAILED\n", filename);
+            common.log(c.LOG_ERR, "Error: Checksum validating (%s) FAILED\n", .{filename});
             return systemError(getErrno());
         }
 
@@ -245,13 +255,7 @@ fn tdnfGetDigestForFileRpmzig(
     }
 
     if (c.tdnf_rpmzig_digest_final(ctx, digest, hash.length) != 0) {
-        log_console(
-            c.LOG_ERR,
-            "rpmzig digest final failed for %s (%s): %s\n",
-            filename,
-            hash.hash_type,
-            rpmzigErrorOrUnknown(),
-        );
+        common.log(c.LOG_ERR, "rpmzig digest final failed for %s (%s): %s\n", .{ filename, hash.hash_type, rpmzigErrorOrUnknown() });
         return c.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
     }
 
@@ -263,7 +267,7 @@ export fn TDNFFileReadAllText(
     ppszText: ?*?[*:0]u8,
     pnLength: ?*c_int,
 ) u32 {
-    var fp: [*c]c.FILE = null;
+    var fp: ?*c.FILE = null;
     var pszText: ?[*:0]u8 = null;
     var nLength: c_long = 0;
 
@@ -368,7 +372,7 @@ export fn TDNFRightTrim(pszStartOpt: ?[*:0]const u8, pszEndOpt: ?[*:0]const u8) 
 }
 
 export fn TDNFCreateAndWriteToFile(pszFileOpt: ?[*:0]const u8, pszDataOpt: ?[*:0]const u8) u32 {
-    var fp: [*c]c.FILE = null;
+    var fp: ?*c.FILE = null;
 
     if (isNullOrEmptyString(pszFileOpt) or isNullOrEmptyString(pszDataOpt)) {
         return c.ERROR_TDNF_INVALID_PARAMETER;
@@ -622,7 +626,7 @@ export fn TDNFYesOrNo(pArgs: c.PTDNF_CMD_ARGS, pszQuestionOpt: ?[*:0]const u8, p
     if (pArgs[0].nAssumeYes == 0 and pArgs[0].nAssumeNo == 0) {
         while (true) {
             var buf = [_]u8{0} ** 256;
-            log_console(c.LOG_CRIT, "%s", pszQuestionOpt.?);
+            common.log(c.LOG_CRIT, "%s", .{pszQuestionOpt.?});
 
             const ret = fgets(@ptrCast(&buf[0]), @intCast(buf.len - 1), c.stdin);
             if (ret != &buf[0] or buf[0] == 0) {
@@ -897,12 +901,19 @@ export fn TDNFStringMatchesOneOf(pszSearchOpt: ?[*:0]const u8, ppszList: [*c]?[*
     return 0;
 }
 
-export fn TDNFJoinPathFromArray(ppszPath: ?*?[*:0]u8, ppszNodes: [*c]?[*:0]u8, nCount: c_int) u32 {
+fn joinPathFromArrayWithOps(
+    ops: PathAllocOps,
+    ppszPath: ?*?[*:0]u8,
+    ppszNodes: [*c]?[*:0]u8,
+    nCount: c_int,
+) u32 {
     var pszResult: ?[*:0]u8 = null;
     var total_len: usize = 1;
     var i: usize = 0;
 
-    if (ppszPath == null or nCount < 0) {
+    if (ppszPath == null or nCount < 0 or
+        (nCount > 0 and ppszNodes == null))
+    {
         setNullOut(?[*:0]u8, ppszPath);
         return c.ERROR_TDNF_INVALID_PARAMETER;
     }
@@ -933,13 +944,13 @@ export fn TDNFJoinPathFromArray(ppszPath: ?*?[*:0]u8, ppszNodes: [*c]?[*:0]u8, n
         }
     }
 
-    {
-        const dwError = allocateCStringCapacity(total_len, &pszResult);
-        if (dwError != 0) {
-            setNullOut(?[*:0]u8, ppszPath);
-            return dwError;
-        }
+    var raw: ?*anyopaque = null;
+    const dwError = ops.allocateFn(ops.ctx, total_len, &raw);
+    if (dwError != 0) {
+        setNullOut(?[*:0]u8, ppszPath);
+        return dwError;
     }
+    pszResult = @ptrCast(raw.?);
 
     const bytes: [*]u8 = @ptrCast(pszResult.?);
     var write_index: usize = 0;
@@ -974,6 +985,76 @@ export fn TDNFJoinPathFromArray(ppszPath: ?*?[*:0]u8, ppszNodes: [*c]?[*:0]u8, n
 
     ppszPath.?.* = pszResult;
     return 0;
+}
+
+export fn TDNFJoinPathFromArray(
+    ppszPath: ?*?[*:0]u8,
+    ppszNodes: [*c]?[*:0]u8,
+    nCount: c_int,
+) u32 {
+    return joinPathFromArrayWithOps(
+        path_alloc_ops,
+        ppszPath,
+        ppszNodes,
+        nCount,
+    );
+}
+
+export fn TDNFJoinPath(ppszPath: ?*?[*:0]u8, ...) callconv(.c) u32 {
+    if (ppszPath == null) {
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    }
+
+    var args: variadic.VaList = undefined;
+    if (comptime variadic.needs_manual_start) {
+        variadic.startManual(&args);
+    } else {
+        args = @cVaStart();
+    }
+    defer variadic.end(&args);
+
+    var count_args: variadic.VaList = undefined;
+    variadic.copy(&count_args, &args);
+    defer variadic.end(&count_args);
+    var count: usize = 0;
+    while (variadic.nextPointer(&count_args) != null) {
+        count += 1;
+    }
+    if (count > std.math.maxInt(c_int)) {
+        ppszPath.?.* = null;
+        return c.ERROR_TDNF_INVALID_PARAMETER;
+    }
+
+    var raw: ?*anyopaque = null;
+    var result = TDNFAllocateMemory(
+        count + 1,
+        @sizeOf(?[*:0]u8),
+        &raw,
+    );
+    if (result != 0) {
+        ppszPath.?.* = null;
+        return result;
+    }
+    defer TDNFFreeMemory(raw);
+
+    const nodes: [*c]?[*:0]u8 = @ptrCast(@alignCast(raw.?));
+    var write_args: variadic.VaList = undefined;
+    variadic.copy(&write_args, &args);
+    defer variadic.end(&write_args);
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        nodes[i] = @ptrCast(variadic.nextPointer(&write_args).?);
+    }
+
+    result = TDNFJoinPathFromArray(
+        ppszPath,
+        nodes,
+        @intCast(count),
+    );
+    if (result != 0) {
+        ppszPath.?.* = null;
+    }
+    return result;
 }
 
 export fn TDNFReadFileToStringArray(pszFileOpt: ?[*:0]const u8, pppszArray: ?*[*c]?[*:0]u8) u32 {
@@ -1056,7 +1137,7 @@ export fn strtoi(ptrOpt: ?[*:0]const u8) i32 {
     var p: [*c]u8 = null;
     const tmp = c.strtol(@ptrCast(ptrOpt.?), &p, 10);
     if (p[0] != 0 or tmp > c.INT_MAX or tmp < c.INT_MIN) {
-        log_console(c.LOG_CRIT, "WARNING: invalid arg to %s: '%s'\n", "strtoi", ptrOpt.?);
+        common.log(c.LOG_CRIT, "WARNING: invalid arg to %s: '%s'\n", .{ "strtoi", ptrOpt.? });
         return 0;
     }
 
@@ -1102,7 +1183,7 @@ export fn TDNFGetDigestForFile(
     }
 
     if (hash_type == c.TDNF_HASH_MD5 and tdnfIsFipsModeEnabled() != 0) {
-        log_console(c.LOG_ERR, "Digest Init Failed\n");
+        common.log(c.LOG_ERR, "Digest Init Failed\n", .{});
         return c.ERROR_TDNF_FIPS_MODE_FORBIDDEN;
     }
 
@@ -1130,7 +1211,7 @@ export fn TDNFCheckHash(
     }
 
     if (!std.mem.eql(u8, digest_from_file[0..hash_len], digest.?[0..hash_len])) {
-        log_console(c.LOG_ERR, "Error: Validating Checksum (%s) FAILED (digest mismatch)\n", filename);
+        common.log(c.LOG_ERR, "Error: Validating Checksum (%s) FAILED (digest mismatch)\n", .{filename});
         return c.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
     }
 
@@ -1172,7 +1253,7 @@ export fn TDNFHexToUint(
     c.__errno_location().* = 0;
     const value = c.strtoul(@ptrCast(&buf), null, 16);
     if (getErrno() != 0) {
-        log_console(c.LOG_ERR, "Error: strtoul call failed\n");
+        common.log(c.LOG_ERR, "Error: strtoul call failed\n", .{});
         return systemError(getErrno());
     }
 
@@ -1217,6 +1298,84 @@ fn expectedDigestBytes(comptime expected_hex: []const u8) [c.TDNF_MAX_DIGEST_LEN
     var expected = [_]u8{0} ** c.TDNF_MAX_DIGEST_LEN;
     _ = std.fmt.hexToBytes(expected[0 .. expected_hex.len / 2], expected_hex) catch unreachable;
     return expected;
+}
+
+fn alwaysFailPathAllocate(
+    _: ?*anyopaque,
+    _: usize,
+    _: *?*anyopaque,
+) u32 {
+    return c.ERROR_TDNF_OUT_OF_MEMORY;
+}
+
+test "path joining preserves compatibility ABI and clears outputs on errors" {
+    var first = [_:0]u8{ '/', 'v', 'a', 'r', '/', 0 };
+    var second = [_:0]u8{ '/', 'l', 'i', 'b', '/', 0 };
+    var output: ?[*:0]u8 = null;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFJoinPath(
+            &output,
+            @as(?[*:0]u8, &first),
+            @as(?[*:0]u8, &second),
+            @as(?[*:0]u8, null),
+        ),
+    );
+    defer TDNFFreeMemory(@ptrCast(output.?));
+    try std.testing.expectEqualStrings("/var/lib", std.mem.span(output.?));
+
+    var third = [_:0]u8{ 'a', 0 };
+    var fourth = [_:0]u8{ 'b', 0 };
+    var fifth = [_:0]u8{ 'c', 0 };
+    var sixth = [_:0]u8{ 'd', 0 };
+    var seventh = [_:0]u8{ 'e', 0 };
+    var eighth = [_:0]u8{ 'f', 0 };
+    var ninth = [_:0]u8{ 'g', 0 };
+    var overflow_output: ?[*:0]u8 = null;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFJoinPath(
+            &overflow_output,
+            @as(?[*:0]u8, &first),
+            @as(?[*:0]u8, &second),
+            @as(?[*:0]u8, &third),
+            @as(?[*:0]u8, &fourth),
+            @as(?[*:0]u8, &fifth),
+            @as(?[*:0]u8, &sixth),
+            @as(?[*:0]u8, &seventh),
+            @as(?[*:0]u8, &eighth),
+            @as(?[*:0]u8, &ninth),
+            @as(?[*:0]u8, null),
+        ),
+    );
+    defer TDNFFreeMemory(@ptrCast(overflow_output.?));
+    try std.testing.expectEqualStrings(
+        "/var/lib/a/b/c/d/e/f/g",
+        std.mem.span(overflow_output.?),
+    );
+
+    const fail_ops = PathAllocOps{
+        .allocateFn = alwaysFailPathAllocate,
+    };
+    var nodes = [_]?[*:0]u8{ &first, &second };
+    var stale: ?[*:0]u8 = @ptrFromInt(1);
+    try std.testing.expectEqual(
+        @as(u32, c.ERROR_TDNF_OUT_OF_MEMORY),
+        joinPathFromArrayWithOps(
+            fail_ops,
+            &stale,
+            &nodes,
+            @intCast(nodes.len),
+        ),
+    );
+    try std.testing.expect(stale == null);
+
+    stale = @ptrFromInt(1);
+    try std.testing.expectEqual(
+        @as(u32, c.ERROR_TDNF_INVALID_PARAMETER),
+        TDNFJoinPathFromArray(&stale, null, 1),
+    );
+    try std.testing.expect(stale == null);
 }
 
 fn expectFileDigest(filename: [*:0]const u8, hash_type: c_int, comptime expected_hex: []const u8) !void {

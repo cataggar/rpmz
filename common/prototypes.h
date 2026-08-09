@@ -81,14 +81,6 @@ TDNFJoinArrayToStringSorted(
     char **ppszResult
 );
 
-__attribute__((format(printf, 2, 3)))
-uint32_t
-TDNFAllocateStringPrintf(
-    char** ppszDst,
-    const char* pszFmt,
-    ...
-    );
-
 uint32_t
 TDNFAllocateStringArray(
     char** ppszSrc,
@@ -239,10 +231,6 @@ TDNFStringMatchesOneOf(
     int *pRet);
 
 uint32_t
-TDNFJoinPath(
-    char **ppszPath, ...);
-
-uint32_t
 TDNFReadFileToStringArray(
     const char *pszFile,
     char ***pppszArray
@@ -283,14 +271,6 @@ GlobalSetDnfCheckUpdateCompat(
 bool
 GlobalGetDnfCheckUpdateCompat(
     void
-    );
-
-__attribute__((format(printf, 2, 3)))
-void
-log_console(
-    int32_t loglevel,
-    const char *format,
-    ...
     );
 
 int tdnfLockAcquire(const char *lockPath);

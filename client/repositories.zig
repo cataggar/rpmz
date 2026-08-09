@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
 const client_download = @import("client_download");
@@ -150,7 +151,6 @@ const DownloadProgressData = struct {
 
 extern fn TDNFAllocateMemory(usize, usize, *?*anyopaque) u32;
 extern fn TDNFAllocateString(?[*:0]const u8, *?[*:0]u8) u32;
-extern fn TDNFAllocateStringPrintf(*?[*:0]u8, [*:0]const u8, ...) u32;
 extern fn TDNFFreeMemory(?*anyopaque) void;
 extern fn TDNFFreeStringArray(?[*]?[*:0]u8) void;
 extern fn TDNFAllocateStringArray(?[*]?[*:0]u8, *?[*]?[*:0]u8) u32;
@@ -179,7 +179,6 @@ extern fn mknod([*:0]const u8, std.c.mode_t, std.c.dev_t) c_int;
 extern fn fnmatch([*:0]const u8, [*:0]const u8, c_int) c_int;
 extern fn isatty(c_int) c_int;
 extern fn time(?*std.c.time_t) std.c.time_t;
-extern fn log_console(c_int, [*:0]const u8, ...) void;
 
 extern fn BuiltinPluginsRepoConfig(?*Tdnf, ?*const CnfNode) u32;
 extern fn BuiltinPluginsRepoMDDownloadStart(?*Tdnf, ?[*:0]const u8, ?[*:0]const u8) u32;
@@ -445,11 +444,11 @@ fn createRepoFromPath(handle: *Tdnf, id: [*:0]const u8, path: [*:0]const u8, out
         var is_dir: c_int = 0;
         result = TDNFIsDir(path, &is_dir);
         if (result != 0) {
-            log_console(LOG_ERR, "CreateRepoFromPath: Error while operating on '%s'\n", path);
+            common.log(LOG_ERR, "CreateRepoFromPath: Error while operating on '%s'\n", .{path});
             return result;
         }
         if (is_dir == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
-        result = TDNFAllocateStringPrintf(&repo.?.ppszBaseUrls.?[0], "file://%s", path);
+        result = common.allocPrint(&repo.?.ppszBaseUrls.?[0], "file://%s", .{path});
     } else {
         var remote: c_int = 0;
         result = TDNFUriIsRemote(path, &remote);
@@ -467,11 +466,11 @@ fn createRepoFromDirectory(handle: *Tdnf, id: [*:0]const u8, path: [*:0]const u8
     var is_dir: c_int = 0;
     var result = TDNFIsDir(path, &is_dir);
     if (result != 0) {
-        log_console(LOG_ERR, "CreateRepoFromDir: Error while operating on '%s'\n", path);
+        common.log(LOG_ERR, "CreateRepoFromDir: Error while operating on '%s'\n", .{path});
         return result;
     }
     if (is_dir == 0) {
-        log_console(LOG_ERR, "%s is not a directory\n", path);
+        common.log(LOG_ERR, "%s is not a directory\n", .{path});
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
 
@@ -873,7 +872,7 @@ pub export fn TDNFLoadRepoData(handle_opt: ?*Tdnf, output_opt: ?*?*RepoData) u32
             if (left.pszId != null and right.pszId != null and
                 std.mem.eql(u8, std.mem.span(left.pszId.?), std.mem.span(right.pszId.?)))
             {
-                log_console(LOG_ERR, "ERROR: duplicate repo id: %s\n", left.pszId.?);
+                common.log(LOG_ERR, "ERROR: duplicate repo id: %s\n", .{left.pszId.?});
                 return errors.ERROR_TDNF_DUPLICATE_REPO_ID;
             }
         }
@@ -1111,7 +1110,7 @@ fn parseRepoMdDoc(path: [*:0]const u8, output: *?*RepoMdDoc) u32 {
     output.* = null;
     var result = TDNFRepoMdParseFile(path, output);
     if (result == errors.ERROR_TDNF_INVALID_REPO_FILE) {
-        log_console(LOG_CRIT, "Error(%u) parsing repomd: %s\n", result, TDNFRepoMdLastError());
+        common.log(LOG_CRIT, "Error(%u) parsing repomd: %s\n", .{ result, TDNFRepoMdLastError() });
         const empty = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><repomd xmlns=\"http://linux.duke.edu/metadata/repo\"></repomd>";
         result = TDNFRepoMdParseBuffer(empty.ptr, empty.len, output);
     }
@@ -1162,21 +1161,9 @@ fn downloadProgressCallback(
         data.previous_time = 0;
     }
     if (isatty(2) == 0) {
-        log_console(
-            LOG_NOTICE,
-            "%s %u%% %ld\n",
-            @as([*:0]const u8, @ptrCast(&data.text)),
-            percent,
-            @as(c_long, @intCast(download_now)),
-        );
+        common.log(LOG_NOTICE, "%s %u%% %ld\n", .{ @as([*:0]const u8, @ptrCast(&data.text)), percent, @as(c_long, @intCast(download_now)) });
     } else {
-        log_console(
-            LOG_NOTICE,
-            "%-35s %10ld %u%%\r",
-            @as([*:0]const u8, @ptrCast(&data.text)),
-            @as(c_long, @intCast(download_now)),
-            percent,
-        );
+        common.log(LOG_NOTICE, "%-35s %10ld %u%%\r", .{ @as([*:0]const u8, @ptrCast(&data.text)), @as(c_long, @intCast(download_now)), percent });
     }
     return 0;
 }
@@ -1320,7 +1307,7 @@ fn downloadUrlToFd(
     const io = io_state.io();
     while (attempt <= repo.nRetries) : (attempt += 1) {
         if (attempt > 0 and !(builtin.is_test and suppress_test_info_logs))
-            log_console(LOG_INFO, "retrying %d/%d\n", attempt, repo.nRetries);
+            common.log(LOG_INFO, "retrying %d/%d\n", .{ attempt, repo.nRetries });
         result = resetDownloadFd(destination_fd);
         if (result != 0) {
             if (local_failure) |failure| failure.* = true;
@@ -1339,13 +1326,7 @@ fn downloadUrlToFd(
                 return result;
             }
             if (attempt == repo.nRetries or downloadErrorIsFatal(result, 0)) {
-                log_console(
-                    LOG_ERR,
-                    "Error: failed to download %.*s: error %u\n",
-                    @as(c_int, @intCast(safe_url.len)),
-                    safe_url.ptr,
-                    result,
-                );
+                common.log(LOG_ERR, "Error: failed to download %.*s: error %u\n", .{ @as(c_int, @intCast(safe_url.len)), safe_url.ptr, result });
                 return result;
             }
             continue;
@@ -1356,16 +1337,10 @@ fn downloadUrlToFd(
             break;
         }
         result = errors.ERROR_TDNF_INVALID_PARAMETER;
-        log_console(
-            LOG_ERR,
-            "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n",
-            status,
-            @as(c_int, @intCast(safe_url.len)),
-            safe_url.ptr,
-        );
+        common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
         return result;
     }
-    if (!no_output) log_console(LOG_INFO, "\n");
+    if (!no_output) common.log(LOG_INFO, "\n", .{});
     return result;
 }
 
@@ -1404,12 +1379,7 @@ fn downloadFromRepoToFd(
                     arena_state.allocator(),
                     std.mem.span(url.?),
                 ) catch "repository URL";
-                log_console(
-                    LOG_ERR,
-                    "Warning: failed to download %.*s, trying next base URL\n",
-                    @as(c_int, @intCast(safe_url.len)),
-                    safe_url.ptr,
-                );
+                common.log(LOG_ERR, "Warning: failed to download %.*s, trying next base URL\n", .{ @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
             }
         }
     }
@@ -1546,7 +1516,7 @@ fn downloadRepoMdPart(
     if (exists) return 0;
     var info: ?[*:0]u8 = null;
     defer freeString(&info);
-    result = TDNFAllocateStringPrintf(&info, "%s (%s)", repo.pszId, name);
+    result = common.allocPrint(&info, "%s (%s)", .{ repo.pszId, name });
     if (result != 0) return result;
     result = secureDownload(handle, repo, location, destination, info, true);
     return result;
@@ -1784,7 +1754,7 @@ fn getRepoMD(
         filterMirrorComments(repo.ppszBaseUrls);
     }
     if (repo.ppszBaseUrls == null or isNullOrEmpty(repo.ppszBaseUrls.?[0])) {
-        log_console(LOG_ERR, "Error: Cannot find a valid base URL for repo: %s\n", repo.pszName);
+        common.log(LOG_ERR, "Error: Cannot find a valid base URL for repo: %s\n", .{repo.pszName});
         return errors.ERROR_TDNF_BASEURL_DOES_NOT_EXISTS;
     }
 
@@ -1828,7 +1798,7 @@ fn getRepoMD(
     var replace_repomd = false;
     var new_repomd = false;
     if (need_download and handle.pArgs.?.nCacheOnly == 0) {
-        log_console(LOG_NOTICE, "Refreshing metadata for: '%s'\n", repo.pszName);
+        common.log(LOG_NOTICE, "Refreshing metadata for: '%s'\n", .{repo.pszName});
         result = TDNFGetCachePath(handle, repo, "tmp", null, &temp_dir);
         if (result != 0) return result;
         result = TDNFUtilsMakeDirs(temp_dir);
@@ -1900,7 +1870,7 @@ pub export fn TDNFGetRepoMD(
         defer freeString(&message);
         _ = TDNFGetErrorString(result, &message);
         if (!isNullOrEmpty(message)) {
-            log_console(LOG_ERR, "Error(%u) : %s\n", result, message);
+            common.log(LOG_ERR, "Error(%u) : %s\n", .{ result, message });
         }
     }
     return result;
@@ -1948,7 +1918,7 @@ pub export fn TDNFDownloadMetadata(
         if (result != 0) return result;
         result = TDNFGetCachePath(handle, repo, repomd_file_path, null, &repomd_path);
         if (result != 0) return result;
-        log_console(LOG_INFO, "%s\n", url);
+        common.log(LOG_INFO, "%s\n", .{url});
     }
     var repomd_stat = std.mem.zeroes(Stat);
     result = statPinned(repomd_path.?, &repomd_stat);
@@ -1982,7 +1952,7 @@ pub export fn TDNFDownloadMetadata(
             defer freeString(&url);
             result = joinPath(&url, &.{ repo.ppszBaseUrls.?[0], location });
             if (result != 0) return result;
-            log_console(LOG_INFO, "%s\n", url);
+            common.log(LOG_INFO, "%s\n", .{url});
         }
     }
     return 0;

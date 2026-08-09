@@ -4,6 +4,7 @@
 // you may not use this file except in compliance with the License. The terms
 // of the License are located in the COPYING file of this distribution.
 
+const common = @import("tdnf_common");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("jsondump.h");
@@ -14,7 +15,6 @@ const c = @cImport({
 });
 const output = @import("output.zig");
 
-extern fn log_console(loglevel: i32, format: [*:0]const u8, ...) void;
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
 extern fn TDNFFreeStringArray(ppszArray: [*c]?[*:0]u8) void;
 extern fn TDNFUtilsFormatSize(unSize: u64, ppszFormattedSize: ?*?[*:0]u8) u32;
@@ -135,16 +135,7 @@ fn TDNFCliListPackagesPrint(
             return @as(u32, @intCast(getErrno()));
         }
 
-        log_console(
-            LOG_CRIT,
-            "%-*s %-*s %*s\n",
-            nColWidths[0],
-            @as([*:0]const u8, @ptrCast(&szNameAndArch)),
-            nColWidths[1],
-            @as([*:0]const u8, @ptrCast(&szVersionAndRelease)),
-            nColWidths[2],
-            pPkg.pszRepoName,
-        );
+        common.log(LOG_CRIT, "%-*s %-*s %*s\n", .{ nColWidths[0], @as([*:0]const u8, @ptrCast(&szNameAndArch)), nColWidths[1], @as([*:0]const u8, @ptrCast(&szVersionAndRelease)), nColWidths[2], pPkg.pszRepoName });
     }
 
     return 0;
@@ -172,7 +163,7 @@ pub export fn TDNFCliCleanCommand(
         return dwError;
     }
 
-    log_console(LOG_INFO, "Done.\n");
+    common.log(LOG_INFO, "Done.\n", .{});
     return 0;
 }
 
@@ -196,7 +187,7 @@ pub export fn TDNFCliCountCommand(
     if (cmd_args.nJsonOutput != 0) {
         _ = c.fprintf(c.stdout, "%u", dwCount);
     } else {
-        log_console(LOG_CRIT, "Package count = %u\n", dwCount);
+        common.log(LOG_CRIT, "Package count = %u\n", .{dwCount});
     }
 
     return 0;
@@ -340,31 +331,21 @@ pub export fn TDNFCliInfoCommand(
     while (dwIndex < dwCount) : (dwIndex += 1) {
         const pPkg = &pPkgInfo[@intCast(dwIndex)];
 
-        log_console(LOG_CRIT, "Name          : %s\n", pPkg.pszName);
-        log_console(LOG_CRIT, "Arch          : %s\n", pPkg.pszArch);
-        log_console(LOG_CRIT, "Epoch         : %d\n", @as(c_int, @intCast(pPkg.dwEpoch)));
-        log_console(LOG_CRIT, "Version       : %s\n", pPkg.pszVersion);
-        log_console(LOG_CRIT, "Release       : %s\n", pPkg.pszRelease);
-        log_console(
-            LOG_CRIT,
-            "Install Size  : %s (%u)\n",
-            pPkg.pszFormattedSize,
-            pPkg.dwInstallSizeBytes,
-        );
+        common.log(LOG_CRIT, "Name          : %s\n", .{pPkg.pszName});
+        common.log(LOG_CRIT, "Arch          : %s\n", .{pPkg.pszArch});
+        common.log(LOG_CRIT, "Epoch         : %d\n", .{@as(c_int, @intCast(pPkg.dwEpoch))});
+        common.log(LOG_CRIT, "Version       : %s\n", .{pPkg.pszVersion});
+        common.log(LOG_CRIT, "Release       : %s\n", .{pPkg.pszRelease});
+        common.log(LOG_CRIT, "Install Size  : %s (%u)\n", .{ pPkg.pszFormattedSize, pPkg.dwInstallSizeBytes });
         if (pPkg.dwDownloadSizeBytes != 0) {
-            log_console(
-                LOG_CRIT,
-                "Download Size  : %s (%u)\n",
-                pPkg.pszFormattedDownloadSize,
-                pPkg.dwDownloadSizeBytes,
-            );
+            common.log(LOG_CRIT, "Download Size  : %s (%u)\n", .{ pPkg.pszFormattedDownloadSize, pPkg.dwDownloadSizeBytes });
         }
-        log_console(LOG_CRIT, "Repo          : %s\n", pPkg.pszRepoName);
-        log_console(LOG_CRIT, "Summary       : %s\n", pPkg.pszSummary);
-        log_console(LOG_CRIT, "URL           : %s\n", pPkg.pszURL);
-        log_console(LOG_CRIT, "License       : %s\n", pPkg.pszLicense);
-        log_console(LOG_CRIT, "Description   : %s\n", pPkg.pszDescription);
-        log_console(LOG_CRIT, "\n");
+        common.log(LOG_CRIT, "Repo          : %s\n", .{pPkg.pszRepoName});
+        common.log(LOG_CRIT, "Summary       : %s\n", .{pPkg.pszSummary});
+        common.log(LOG_CRIT, "URL           : %s\n", .{pPkg.pszURL});
+        common.log(LOG_CRIT, "License       : %s\n", .{pPkg.pszLicense});
+        common.log(LOG_CRIT, "Description   : %s\n", .{pPkg.pszDescription});
+        common.log(LOG_CRIT, "\n", .{});
 
         dwTotalSize += pPkg.dwInstallSizeBytes;
     }
@@ -375,12 +356,7 @@ pub export fn TDNFCliInfoCommand(
     }
 
     if (dwCount > 0) {
-        log_console(
-            LOG_CRIT,
-            "\nTotal Size: %s (%lu)\n",
-            pszFormattedSize.?,
-            @as(c_ulong, @intCast(dwTotalSize)),
-        );
+        common.log(LOG_CRIT, "\nTotal Size: %s (%lu)\n", .{ pszFormattedSize.?, @as(c_ulong, @intCast(dwTotalSize)) });
     }
 
     return 0;
@@ -447,21 +423,15 @@ pub export fn TDNFCliRepoListCommand(
     }
 
     if (pRepoList != null) {
-        log_console(LOG_CRIT, "%-20s%-41s%-9s\n", "repo id", "repo name", "status");
+        common.log(LOG_CRIT, "%-20s%-41s%-9s\n", .{ "repo id", "repo name", "status" });
     }
 
     var pRepo = pRepoList;
     while (pRepo) |repo| : (pRepo = repo.pNext) {
-        log_console(
-            LOG_CRIT,
-            "%-19s %-40s %-9s\n",
-            repo.pszId,
-            repo.pszName,
-            if (repo.nEnabled != 0)
-                @as([*:0]const u8, "enabled")
-            else
-                @as([*:0]const u8, "disabled"),
-        );
+        common.log(LOG_CRIT, "%-19s %-40s %-9s\n", .{ repo.pszId, repo.pszName, if (repo.nEnabled != 0)
+            @as([*:0]const u8, "enabled")
+        else
+            @as([*:0]const u8, "disabled") });
     }
 
     return 0;
@@ -530,7 +500,7 @@ pub export fn TDNFCliSearchCommand(
     var dwIndex: u32 = 0;
     while (dwIndex < dwCount) : (dwIndex += 1) {
         const pPkg = &pPkgInfo[@intCast(dwIndex)];
-        log_console(LOG_CRIT, "%s : %s\n", pPkg.pszName, pPkg.pszSummary);
+        common.log(LOG_CRIT, "%s : %s\n", .{ pPkg.pszName, pPkg.pszSummary });
     }
 
     return 0;
@@ -556,7 +526,7 @@ pub export fn TDNFCliCheckLocalCommand(
         return dwError;
     }
 
-    log_console(LOG_CRIT, "Check completed without issues\n");
+    common.log(LOG_CRIT, "Check completed without issues\n", .{});
     return 0;
 }
 
@@ -622,8 +592,8 @@ pub export fn TDNFCliProvidesCommand(
 
     var pPkg = pPkgInfos;
     while (pPkg) |pkg| : (pPkg = pkg.pNext) {
-        log_console(LOG_CRIT, "%s-%s.%s : %s\n", pkg.pszName, pkg.pszEVR, pkg.pszArch, pkg.pszSummary);
-        log_console(LOG_CRIT, "Repo\t : %s\n", pkg.pszRepoName);
+        common.log(LOG_CRIT, "%s-%s.%s : %s\n", .{ pkg.pszName, pkg.pszEVR, pkg.pszArch, pkg.pszSummary });
+        common.log(LOG_CRIT, "Repo\t : %s\n", .{pkg.pszRepoName});
     }
 
     return 0;
@@ -662,10 +632,10 @@ pub export fn TDNFCliCheckUpdateCommand(
         var dwIndex: u32 = 0;
         while (dwIndex < dwCount) : (dwIndex += 1) {
             const pPkg = &pPkgInfo[@intCast(dwIndex)];
-            log_console(LOG_CRIT, "%*s\r", @as(c_int, 80), pPkg.pszRepoName);
-            log_console(LOG_CRIT, "%*s\r", @as(c_int, 50), pPkg.pszEVR);
-            log_console(LOG_CRIT, "%s.%s", pPkg.pszName, pPkg.pszArch);
-            log_console(LOG_CRIT, "\n");
+            common.log(LOG_CRIT, "%*s\r", .{ @as(c_int, 80), pPkg.pszRepoName });
+            common.log(LOG_CRIT, "%*s\r", .{ @as(c_int, 50), pPkg.pszEVR });
+            common.log(LOG_CRIT, "%s.%s", .{ pPkg.pszName, pPkg.pszArch });
+            common.log(LOG_CRIT, "\n", .{});
         }
     } else {
         dwError = TDNFCliListPackagesPrint(pPkgInfo, dwCount, cmd_args.nJsonOutput);
@@ -697,6 +667,6 @@ pub export fn TDNFCliCheckCommand(
         return dwError;
     }
 
-    log_console(LOG_CRIT, "Check completed without issues\n");
+    common.log(LOG_CRIT, "Check completed without issues\n", .{});
     return 0;
 }

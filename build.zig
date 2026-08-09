@@ -353,6 +353,13 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const common_api_mod = b.createModule(.{
+        .root_source_file = b.path("common/api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    common_api_mod.addImport("tdnf_error", tdnf_error_mod);
     const client_abi_mod = b.createModule(.{
         .root_source_file = b.path("client/abi.zig"),
         .target = target,
@@ -703,6 +710,10 @@ pub fn build(b: *Build) void {
         "transaction_plan_request_trace",
         transaction_plan_request_trace_mod,
     );
+    transaction_plan_integration_mod.addImport(
+        "tdnf_common",
+        common_api_mod,
+    );
     transaction_plan_integration_mod.addImport("tdnf_error", tdnf_error_mod);
 
     // ----- static libraries ----- //
@@ -718,11 +729,6 @@ pub fn build(b: *Build) void {
         mod.addIncludePath(b.path("include"));
         mod.addIncludePath(b.path("common"));
         mod.addImport("tdnf_error", tdnf_error_mod);
-        mod.addCSourceFiles(.{
-            .root = b.path("common"),
-            .files = &.{ "memory_printf_shim.c", "log_shim.c", "joinpath_shim.c" },
-            .flags = &tdnf_cflags,
-        });
         const lib = b.addLibrary(.{
             .name = "common",
             .linkage = .static,
@@ -893,6 +899,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addIncludePath(b.path("include"));
         test_mod.addIncludePath(b.path("client"));
@@ -918,6 +925,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
         test_mod.addIncludePath(b.path("include"));
@@ -945,6 +953,7 @@ pub fn build(b: *Build) void {
             .imports = &.{
                 .{ .name = "client_abi", .module = client_abi_mod },
                 .{ .name = "client_download", .module = client_download_mod },
+                .{ .name = "tdnf_common", .module = common_api_mod },
                 .{ .name = "tdnf_error", .module = tdnf_error_mod },
             },
         });
@@ -996,6 +1005,7 @@ pub fn build(b: *Build) void {
             transaction_plan_request_trace_mod,
         );
         test_mod.addImport("rpm_header", rpmzig_header_mod);
+        test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         const test_options = b.addOptions();
         test_options.addOption(bool, "standalone_test", true);
@@ -1024,11 +1034,6 @@ pub fn build(b: *Build) void {
         test_mod.addIncludePath(b.path("include"));
         test_mod.addIncludePath(b.path("common"));
         test_mod.addImport("tdnf_error", tdnf_error_mod);
-        test_mod.addCSourceFiles(.{
-            .root = b.path("common"),
-            .files = &.{ "memory_printf_shim.c", "log_shim.c", "joinpath_shim.c" },
-            .flags = &tdnf_cflags,
-        });
         test_mod.linkLibrary(llconf_lib);
         test_mod.linkLibrary(rpmzig_lib);
         const tests = b.addTest(.{ .root_module = test_mod });
@@ -1088,6 +1093,7 @@ pub fn build(b: *Build) void {
         test_mod.addIncludePath(b.path("llconf"));
         test_mod.addIncludePath(b.path("tools/cli"));
         test_mod.addIncludePath(b.path("tools/cli/lib"));
+        test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(jsondump_lib);
         test_mod.linkLibrary(llconf_lib);
@@ -1108,6 +1114,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("client_config_options", client_config_options.createModule());
         test_mod.addImport("client_varsdir", client_varsdir_mod);
         test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
+        test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(llconf_lib);
@@ -1132,6 +1139,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(llconf_lib);
@@ -1665,6 +1673,7 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     client_plugins_mod.addImport("client_abi", client_abi_mod);
+    client_plugins_mod.addImport("tdnf_common", common_api_mod);
     client_plugins_mod.addImport("tdnf_error", tdnf_error_mod);
     client_plugins_mod.addImport("builtin_plugins", builtin_plugins_mod);
 
@@ -1703,6 +1712,7 @@ pub fn build(b: *Build) void {
         transaction_plan_capture_abi_mod,
     );
     client_init_mod.addImport("client_init_abi", client_abi_mod);
+    client_init_mod.addImport("tdnf_common", common_api_mod);
     client_init_mod.addImport("tdnf_error", tdnf_error_mod);
 
     const tdnf_so_mod = b.createModule(.{
@@ -1736,6 +1746,7 @@ pub fn build(b: *Build) void {
     tdnf_so_mod.addImport("client_config_options", client_config_options.createModule());
     tdnf_so_mod.addImport("client_varsdir", client_varsdir_mod);
     tdnf_so_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
+    tdnf_so_mod.addImport("tdnf_common", common_api_mod);
     tdnf_so_mod.addImport("tdnf_error", tdnf_error_mod);
     tdnf_so_mod.addImport("client_updateinfo", client_updateinfo_mod);
     tdnf_so_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
@@ -1775,6 +1786,7 @@ pub fn build(b: *Build) void {
         client_transaction_test_options.createModule(),
     );
     transaction_test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
+    transaction_test_mod.addImport("tdnf_common", common_api_mod);
     transaction_test_mod.addImport("tdnf_error", tdnf_error_mod);
     transaction_test_mod.addIncludePath(b.path("include"));
     transaction_test_mod.addIncludePath(b.path("client"));
@@ -1842,6 +1854,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
         const test_options = b.addOptions();
@@ -1969,6 +1982,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addImport("builtin_plugins", test_backend_mod);
         test_mod.linkLibrary(common_lib);
@@ -2054,6 +2068,7 @@ pub fn build(b: *Build) void {
     cli_so_mod.addIncludePath(b.path("llconf"));
     cli_so_mod.addIncludePath(b.path("tools/cli"));
     cli_so_mod.addIncludePath(b.path("tools/cli/lib"));
+    cli_so_mod.addImport("tdnf_common", common_api_mod);
     cli_so_mod.linkLibrary(jsondump_lib);
 
     const libtdnfcli = b.addLibrary(.{
@@ -2077,6 +2092,7 @@ pub fn build(b: *Build) void {
     tdnf_mod.addIncludePath(b.path("include"));
     tdnf_mod.addIncludePath(b.path("jsondump"));
     tdnf_mod.addIncludePath(b.path("tools/cli"));
+    tdnf_mod.addImport("tdnf_common", common_api_mod);
     tdnf_mod.linkLibrary(jsondump_lib);
     tdnf_mod.linkLibrary(libtdnfcli);
     tdnf_mod.linkLibrary(libtdnf);

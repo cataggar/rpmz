@@ -211,7 +211,7 @@ fn parseIniSection(cl_root: [*c]c.struct_confline, cn_root: [*c]c.struct_cnfnode
     return cl;
 }
 
-export fn parse_ini(cm: [*c]c.struct_cnfmodule, fptr: [*c]c.FILE) [*c]c.struct_cnfnode {
+export fn parse_ini(cm: [*c]c.struct_cnfmodule, fptr: ?*c.FILE) [*c]c.struct_cnfnode {
     const cl_root = c.read_conflines(fptr);
     const cn_top = c.create_cnfnode("(root)");
     var cmt_char: c_int = '#';
@@ -302,7 +302,7 @@ fn unparseIniSubsection(cn: [*c]c.struct_cnfnode, cl_list: [*c]c.struct_confline
     return out_list;
 }
 
-export fn unparse_ini(_: [*c]c.struct_cnfmodule, fptr: [*c]c.FILE, cn_root: [*c]c.struct_cnfnode) c_int {
+export fn unparse_ini(_: [*c]c.struct_cnfmodule, fptr: ?*c.FILE, cn_root: [*c]c.struct_cnfnode) c_int {
     var cl_list: [*c]c.struct_confline = null;
     var cn_section = cn_root[0].first_child;
     var buf = [_:0]u8{0} ** 1024;

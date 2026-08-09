@@ -201,9 +201,10 @@ codes are `ERROR_TDNFCLI_*` in `include/tdnfclierror.h`. Tests assert
 on these numeric codes directly (e.g. `assert ret['retval'] == 1001`),
 so don't renumber existing ones.
 
-**Memory.** Allocate with `TDNFAllocateMemory` / `TDNFAllocateString` /
-`TDNFAllocateStringPrintf` (from `common/`), free with `TDNFFreeMemory`
-— and prefer the `TDNF_SAFE_FREE_MEMORY(p)` /
+**Memory.** Allocate with `TDNFAllocateMemory` / `TDNFAllocateString`;
+typed Zig formatting uses `common.allocPrint`. The variadic
+`TDNFAllocateStringPrintf` symbol remains ABI compatibility only. Free
+with `TDNFFreeMemory` — and prefer the `TDNF_SAFE_FREE_MEMORY(p)` /
 `TDNF_SAFE_FREE_STRINGARRAY(pp)` macros, which null the pointer after
 free. All allocations are zero-initialized (calloc-style).
 

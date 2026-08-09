@@ -7,6 +7,7 @@
 // Pull the Zig-backed common component slices into one root module so their
 // `export fn` declarations are reachable from C.
 comptime {
+    _ = @import("api.zig");
     _ = @import("memory.zig");
     _ = @import("log.zig");
     _ = @import("lock.zig");

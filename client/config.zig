@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const common = @import("tdnf_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
 const errors = @import("tdnf_error");
@@ -115,7 +116,6 @@ extern fn getline(
     stream: *FILE,
 ) callconv(.c) isize;
 extern fn strerror(value: c_int) callconv(.c) [*:0]const u8;
-extern fn log_console(level: c_int, format: [*:0]const u8, ...) callconv(.c) void;
 
 const Ops = struct {
     context: ?*anyopaque = null,
@@ -305,11 +305,7 @@ fn joinPath(
 
 fn parseOsInfo(conf: *Conf, path: [*:0]const u8, ops: Ops) u32 {
     const stream = fopen(path, "r") orelse {
-        log_console(
-            LOG_NOTICE,
-            "Warning: '%s' file is not present in the system\n",
-            path,
-        );
+        common.log(LOG_NOTICE, "Warning: '%s' file is not present in the system\n", .{path});
         return 0;
     };
     defer _ = fclose(stream);
@@ -387,17 +383,12 @@ fn parseTransFlags(conf: *Conf, value: [*:0]const u8) u32 {
             }
         }
         const entry = found orelse {
-            log_console(LOG_ERR, "unknown tsflag '%.*s'\n", @as(c_int, @intCast(token.len)), token.ptr);
+            common.log(LOG_ERR, "unknown tsflag '%.*s'\n", .{ @as(c_int, @intCast(token.len)), token.ptr });
             return errors.ERROR_TDNF_INVALID_PARAMETER;
         };
         conf.rpmTransFlags |= entry.flag;
         if (entry.nCompatibilityNoOp != 0) {
-            log_console(
-                LOG_INFO,
-                "tsflag '%.*s' is a recognized compatibility no-op in the native transaction engine\n",
-                @as(c_int, @intCast(token.len)),
-                token.ptr,
-            );
+            common.log(LOG_INFO, "tsflag '%.*s' is a recognized compatibility no-op in the native transaction engine\n", .{ @as(c_int, @intCast(token.len)), token.ptr });
         }
     }
     return 0;
@@ -928,12 +919,7 @@ export fn TDNFConfigReplaceVars(
 
     const vars = varsdir.parse_varsdirs(@ptrCast(conf.ppszVarsDirs)) orelse {
         const errno_value = std.c._errno().*;
-        log_console(
-            LOG_ERR,
-            "parsing vars failed: %s (%d)\n",
-            strerror(errno_value),
-            errno_value,
-        );
+        common.log(LOG_ERR, "parsing vars failed: %s (%d)\n", .{ strerror(errno_value), errno_value });
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     };
     defer destroy_cnftree(vars);
@@ -946,7 +932,7 @@ export fn TDNFConfigReplaceVars(
     append_node(vars, arch);
 
     const replaced = varsdir.replace_vars(vars, source) orelse {
-        log_console(LOG_ERR, "replacing vars in %s failed\n", source);
+        common.log(LOG_ERR, "replacing vars in %s failed\n", .{source});
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     };
     TDNFFreeMemory(@ptrCast(source));

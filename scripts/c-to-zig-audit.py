@@ -41,8 +41,13 @@ METRIC_LABELS = {
     "build_pkg_config_literals": "build.zig pkg-config command literals",
 }
 
+ZERO_ONLY_METRICS = {
+    "tracked_c_files",
+    "tracked_c_lines",
+}
 
-def tracked_files():
+
+def repository_files():
     result = subprocess.run(
         [
             "git",
@@ -61,10 +66,9 @@ def tracked_files():
         if not encoded:
             continue
         relative = Path(encoded.decode())
-        if len(relative.parts) == 1 or relative.parts[0] in SOURCE_ROOTS:
-            path = ROOT / relative
-            if path.is_file():
-                paths.append(path)
+        path = ROOT / relative
+        if path.is_file():
+            paths.append(path)
     return paths
 
 
@@ -73,8 +77,13 @@ def count_lines(paths):
 
 
 def collect_metrics():
-    files = tracked_files()
-    c_files = [path for path in files if path.suffix == ".c"]
+    repository = repository_files()
+    files = [
+        path for path in repository
+        if len(path.relative_to(ROOT).parts) == 1 or
+        path.relative_to(ROOT).parts[0] in SOURCE_ROOTS
+    ]
+    c_files = [path for path in repository if path.suffix == ".c"]
     h_files = [path for path in files if path.suffix == ".h"]
     h_in_files = [path for path in files if path.name.endswith(".h.in")]
     zig_files = [path for path in files if path.suffix == ".zig"]
@@ -120,6 +129,16 @@ def load_maximums(path):
         raise ValueError(
             f"{path}: metric mismatch; missing={sorted(missing)}, "
             f"extra={sorted(extra)}"
+        )
+    nonzero = {
+        key: maximums[key]
+        for key in ZERO_ONLY_METRICS
+        if maximums[key] != 0
+    }
+    if nonzero:
+        raise ValueError(
+            f"{path}: zero-only migration metrics must remain zero: "
+            f"{nonzero}"
         )
     return maximums
 

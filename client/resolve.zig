@@ -3,6 +3,7 @@
 // Licensed under the GNU Lesser General Public License v2.1.
 
 const __root = @This();
+const common = @import("tdnf_common");
 const canonical_abi = @import("client_abi");
 pub const __builtin = @import("std").zig.c_translation.builtins;
 pub const __helpers = @import("std").zig.c_translation.helpers;
@@ -3460,7 +3461,6 @@ pub extern fn TDNFMergeStringArrays(pppszArray0: [*c][*c][*c]u8, ppszArray1: [*c
 pub extern fn TDNFAddStringArray(pppszArray: [*c][*c][*c]u8, pszValue: [*c]u8) u32;
 pub extern fn TDNFJoinArrayToString(ppszArray: [*c][*c]u8, pszSep: [*c]const u8, count: c_int, ppszResult: [*c][*c]u8) u32;
 pub extern fn TDNFJoinArrayToStringSorted(ppszDependencies: [*c][*c]u8, pszSep: [*c]const u8, ppszResult: [*c][*c]u8) u32;
-pub extern fn TDNFAllocateStringPrintf(ppszDst: [*c][*c]u8, pszFmt: [*c]const u8, ...) u32;
 pub extern fn TDNFAllocateStringArray(ppszSrc: [*c][*c]u8, pppszDst: [*c][*c][*c]u8) u32;
 pub extern fn TDNFAllocateStringN(pszSrc: [*c]const u8, dwNumElements: u32, ppszDst: [*c][*c]u8) u32;
 pub extern fn TDNFReplaceString(pszSource: [*c]const u8, pszSearch: [*c]const u8, pszReplace: [*c]const u8, ppszDst: [*c][*c]u8) u32;
@@ -3486,7 +3486,6 @@ pub extern fn TDNFYesOrNo(pArgs: PTDNF_CMD_ARGS, pszQuestion: [*c]const u8, pAns
 pub extern fn TDNFNormalizePath(pszPath: [*c]const u8, ppszNormalPath: [*c][*c]u8) u32;
 pub extern fn TDNFRecursivelyRemoveDir(pszPath: [*c]const u8) u32;
 pub extern fn TDNFStringMatchesOneOf(pszSearch: [*c]const u8, ppszList: [*c][*c]u8, pRet: [*c]c_int) u32;
-pub extern fn TDNFJoinPath(ppszPath: [*c][*c]u8, ...) u32;
 pub extern fn TDNFReadFileToStringArray(pszFile: [*c]const u8, pppszArray: [*c][*c][*c]u8) u32;
 pub extern fn TDNFIsDir(pszPath: [*c]const u8, pnPathIsDir: [*c]c_int) u32;
 pub extern fn TDNFDirName(pszPath: [*c]const u8, ppszDirName: [*c][*c]u8) u32;
@@ -3495,7 +3494,6 @@ pub extern fn GlobalSetQuiet(val: i32) void;
 pub extern fn GlobalSetJson(val: i32) void;
 pub extern fn GlobalSetDnfCheckUpdateCompat(val: i32) void;
 pub extern fn GlobalGetDnfCheckUpdateCompat() bool;
-pub extern fn log_console(loglevel: i32, format: [*c]const u8, ...) void;
 pub extern fn tdnfLockAcquire(lockPath: [*c]const u8) c_int;
 pub extern fn tdnfLockFree(lockPath: [*c]const u8, lockFd: c_int) void;
 pub extern fn strtoi(ptr: [*c]const u8) i32;
@@ -3902,7 +3900,7 @@ pub fn TDNFPrepareSinglePkg(
         trace_start = @bitCast(queueGoal.*.dwCount);
         rc = TDNFResolveListPackages(pTdnf, if (pTdnf.*.pArgs.*.nSource != 0) SCOPE_SOURCE else SCOPE_ALL, &pkg_spec, &pkg_infos, &count);
         if (rc == ERROR_TDNF_NO_MATCH) {
-            log_console(LOG_ERR, "%s package not found or not installed\n", pszPkgName);
+            common.log(LOG_ERR, "%s package not found or not installed\n", .{pszPkgName});
             if (pTdnf.*.pArgs.*.nSkipBroken != 0) rc = 0;
         }
         if (rc != 0) break :process;
@@ -3962,19 +3960,19 @@ pub fn TDNFPrepareSinglePkg(
         if (pTdnf != null and pTdnf.*.pArgs != null and strcmp(pTdnf.*.pArgs.*.ppszCmds[0], "check") == 0) show = 0;
         rc = 0;
         if (dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST) TDNFTransactionPlanRequestTraceRecordRequestOutcome(pTdnf.*.pRequestTrace, dwRequestRef, TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED);
-        if (show != 0) log_console(LOG_ERR, "Package %s is already installed.\n", pszPkgName);
+        if (show != 0) common.log(LOG_ERR, "Package %s is already installed.\n", .{pszPkgName});
     } else if (rc == ERROR_TDNF_NO_UPGRADE_PATH) {
         rc = 0;
         if (dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST) TDNFTransactionPlanRequestTraceRecordRequestOutcome(pTdnf.*.pRequestTrace, dwRequestRef, TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED);
-        log_console(LOG_ERR, "There is no upgrade path for %s.\n", pszPkgName);
+        common.log(LOG_ERR, "There is no upgrade path for %s.\n", .{pszPkgName});
     } else if (rc == ERROR_TDNF_NO_DOWNGRADE_PATH) {
         rc = 0;
         if (dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST) TDNFTransactionPlanRequestTraceRecordRequestOutcome(pTdnf.*.pRequestTrace, dwRequestRef, TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED);
-        log_console(LOG_ERR, "There is no downgrade path for %s.\n", pszPkgName);
+        common.log(LOG_ERR, "There is no downgrade path for %s.\n", .{pszPkgName});
     } else if (rc == ERROR_TDNF_NO_SEARCH_RESULTS) {
         rc = TDNFAddNotResolved(ppszPkgsNotResolved, pszPkgName);
         if (rc != 0) {
-            log_console(LOG_ERR, "Error while adding not resolved packages: '%s'\n", pszPkgName);
+            common.log(LOG_ERR, "Error while adding not resolved packages: '%s'\n", .{pszPkgName});
         } else if (dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST) {
             TDNFTransactionPlanRequestTraceRecordRequestOutcome(pTdnf.*.pRequestTrace, dwRequestRef, TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_NO_CANDIDATE);
         }
@@ -3982,13 +3980,13 @@ pub fn TDNFPrepareSinglePkg(
         rc = 0;
         if (dwRequestRef != TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST) TDNFTransactionPlanRequestTraceRecordRequestOutcome(pTdnf.*.pRequestTrace, dwRequestRef, TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED);
     } else if (rc == ERROR_TDNF_NO_MATCH) {
-        log_console(LOG_ERR, "Package '%s' not found\n", pszPkgName);
+        common.log(LOG_ERR, "Package '%s' not found\n", .{pszPkgName});
     }
 
     if (rc == 0) {
         TDNFTransactionPlanRequestTraceRecordGoalRange(pTdnf.*.pRequestTrace, queueGoal.*.pnElements, @bitCast(trace_start), queueGoal.*.dwCount, nAlterType, TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER, dwRequestRef);
     } else {
-        log_console(LOG_ERR, "Error while processing package: '%s'\n", pszPkgName);
+        common.log(LOG_ERR, "Error while processing package: '%s'\n", .{pszPkgName});
     }
     return rc;
 }

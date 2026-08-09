@@ -1,9 +1,9 @@
 # tdnf - tiny dandified yum
 
-A C implementation of a dnf/yum-compatible package manager built on
-vendored `libsolv` and the native Zig RPM implementation in `rpmzig/`,
-with downloads handled by Zig's HTTP/TLS stack. Production binaries and
-public headers have no dependency on system RPM libraries or headers.
+A Zig implementation of a dnf/yum-compatible package manager built on
+vendored `libsolv`, with native RPM handling in `rpmzig/` and downloads
+through Zig's HTTP/TLS stack. The transitional public C libraries and
+headers have no dependency on system RPM libraries or headers.
 
 ## Build
 
