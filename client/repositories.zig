@@ -91,9 +91,30 @@ const SyncFailure = struct {
     triggered: bool = false,
 };
 
+const ResetFailureStage = enum {
+    truncate,
+    seek,
+};
+
+const ResetFailure = struct {
+    stage: ResetFailureStage,
+    errno_value: c_int,
+    triggered: bool = false,
+};
+
+const PartialDownloadFailure = struct {
+    url: []const u8,
+    bytes: []const u8,
+    remaining: usize,
+    triggered: usize = 0,
+};
+
 var injected_scan_failure: ?ScanFailure = null;
 var injected_close_failure: ?CloseFailure = null;
 var injected_sync_failure: ?SyncFailure = null;
+var injected_reset_failure: ?ResetFailure = null;
+var injected_partial_download_failure: ?PartialDownloadFailure = null;
+var suppress_test_info_logs = false;
 var sync_stage_counts = [_]usize{0} ** 3;
 
 const repomd_primary = "primary";
@@ -209,6 +230,42 @@ fn syncFd(fd: c_int, stage: SyncFailureStage) u32 {
     }
     if (std.c.fsync(fd) != 0) return systemError();
     return 0;
+}
+
+fn injectResetFailure(stage: ResetFailureStage) bool {
+    if (!builtin.is_test) return false;
+    if (injected_reset_failure) |*failure| {
+        if (!failure.triggered and failure.stage == stage) {
+            failure.triggered = true;
+            std.c._errno().* = failure.errno_value;
+            return true;
+        }
+    }
+    return false;
+}
+
+fn resetDownloadFd(fd: c_int) u32 {
+    if (injectResetFailure(.truncate)) return systemError();
+    if (std.c.ftruncate(fd, 0) != 0) return systemError();
+    if (injectResetFailure(.seek)) return systemError();
+    if (std.c.lseek(fd, 0, 0) < 0) return systemError();
+    return 0;
+}
+
+fn injectPartialDownloadFailure(url: []const u8, fd: c_int) ?u32 {
+    if (!builtin.is_test) return null;
+    if (injected_partial_download_failure) |*failure| {
+        if (failure.remaining == 0 or !std.mem.eql(u8, failure.url, url))
+            return null;
+        const written = std.c.write(fd, failure.bytes.ptr, failure.bytes.len);
+        if (written < 0) return systemError();
+        if (written != failure.bytes.len)
+            return systemErrorFrom(@intFromEnum(std.c.E.IO));
+        failure.remaining -= 1;
+        failure.triggered += 1;
+        return errors.ERROR_TDNF_REPO_PERFORM;
+    }
+    return null;
 }
 
 fn freeString(slot: *?[*:0]u8) void {
@@ -1221,7 +1278,16 @@ fn downloadUrlToFd(
     defer io_state.deinit();
     const io = io_state.io();
     while (attempt <= repo.nRetries) : (attempt += 1) {
-        if (attempt > 0) log_console(LOG_INFO, "retrying %d/%d\n", attempt, repo.nRetries);
+        if (attempt > 0 and !(builtin.is_test and suppress_test_info_logs))
+            log_console(LOG_INFO, "retrying %d/%d\n", attempt, repo.nRetries);
+        result = resetDownloadFd(destination_fd);
+        if (result != 0) return result;
+        if (injectPartialDownloadFailure(request.url, destination_fd)) |injected_result| {
+            result = injected_result;
+            if (attempt == repo.nRetries or downloadErrorIsFatal(result, 0))
+                return result;
+            continue;
+        }
         const status_value = client_download.client_download_to_fd(
             std.heap.c_allocator,
             io,
@@ -1891,6 +1957,20 @@ fn readTestFile(path: []const u8) ![]u8 {
     return reader.interface.allocRemaining(std.testing.allocator, .limited(4096));
 }
 
+fn expectNoDownloadTemps(directory: []const u8) !void {
+    const io = std.testing.io;
+    var dir = try std.Io.Dir.cwd().openDir(io, directory, .{ .iterate = true });
+    defer dir.close(io);
+    var iterator = dir.iterateAssumeFirstIteration();
+    while (try iterator.next(io)) |entry| {
+        try std.testing.expect(!std.mem.startsWith(
+            u8,
+            entry.name,
+            ".tdnf-repository-",
+        ));
+    }
+}
+
 const TestRepoFixture = struct {
     args: abi.CmdArgs,
     conf: Conf,
@@ -2157,7 +2237,7 @@ test "repositories production: download temp names are high entropy and unique" 
     }
 }
 
-test "repositories production: metadata and snapshot downloads reject temp and destination symlinks" {
+test "repositories production: metadata and snapshot downloads reject symlinks and reset partial retries" {
     const cwd = std.Io.Dir.cwd();
     const io = std.testing.io;
     const root = try std.fmt.allocPrint(
@@ -2341,6 +2421,116 @@ test "repositories production: metadata and snapshot downloads reject temp and d
         error.FileNotFound,
         cwd.access(io, escaped_destination, .{}),
     );
+
+    const clean_body = "payload";
+    const stale_prefix = "stale-partial-prefix:";
+    {
+        const directory = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}/metadata-fallback",
+            .{root},
+        );
+        defer std.testing.allocator.free(directory);
+        try cwd.createDirPath(io, directory);
+        const destination = try std.fmt.allocPrintSentinel(
+            std.testing.allocator,
+            "{s}/repomd.xml",
+            .{directory},
+            0,
+        );
+        defer std.testing.allocator.free(destination);
+
+        const partial_url = try std.testing.allocator.dupeZ(
+            u8,
+            "file:///injected-partial",
+        );
+        defer std.testing.allocator.free(partial_url);
+        var retry_urls = [_]?[*:0]u8{
+            partial_url.ptr,
+            source_parent_url.ptr,
+            null,
+        };
+        injected_partial_download_failure = .{
+            .url = "file:///injected-partial/payload",
+            .bytes = stale_prefix,
+            .remaining = 1,
+        };
+        defer injected_partial_download_failure = null;
+        repo.ppszBaseUrls = &retry_urls;
+        repo.nRetries = 0;
+        const result = secureDownload(
+            &handle,
+            &repo,
+            "payload",
+            destination.ptr,
+            null,
+            true,
+        );
+        try std.testing.expectEqual(@as(u32, 0), result);
+        try std.testing.expectEqual(
+            @as(usize, 1),
+            injected_partial_download_failure.?.triggered,
+        );
+        try std.testing.expectEqual(
+            @as(usize, 0),
+            injected_partial_download_failure.?.remaining,
+        );
+        const downloaded = try readTestFile(destination);
+        defer std.testing.allocator.free(downloaded);
+        try std.testing.expectEqualStrings(clean_body, downloaded);
+        try expectNoDownloadTemps(directory);
+        injected_partial_download_failure = null;
+    }
+
+    {
+        const directory = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}/snapshot-retry",
+            .{root},
+        );
+        defer std.testing.allocator.free(directory);
+        try cwd.createDirPath(io, directory);
+        const destination = try std.fmt.allocPrintSentinel(
+            std.testing.allocator,
+            "{s}/snapshot.list",
+            .{directory},
+            0,
+        );
+        defer std.testing.allocator.free(destination);
+
+        injected_partial_download_failure = .{
+            .url = std.mem.span(source_url.ptr),
+            .bytes = stale_prefix,
+            .remaining = 1,
+        };
+        defer injected_partial_download_failure = null;
+        suppress_test_info_logs = true;
+        defer suppress_test_info_logs = false;
+        repo.nRetries = 1;
+        const result = secureDownload(
+            &handle,
+            &repo,
+            source_url.ptr,
+            destination.ptr,
+            null,
+            false,
+        );
+        try std.testing.expectEqual(@as(u32, 0), result);
+        try std.testing.expectEqual(
+            @as(usize, 1),
+            injected_partial_download_failure.?.triggered,
+        );
+        try std.testing.expectEqual(
+            @as(usize, 0),
+            injected_partial_download_failure.?.remaining,
+        );
+        const downloaded = try readTestFile(destination);
+        defer std.testing.allocator.free(downloaded);
+        try std.testing.expectEqualStrings(clean_body, downloaded);
+        try expectNoDownloadTemps(directory);
+        injected_partial_download_failure = null;
+        suppress_test_info_logs = false;
+    }
 }
 
 test "repositories production: metadata download reports fsync failure after committed rename" {
@@ -2396,6 +2586,45 @@ test "repositories production: metadata download reports fsync failure after com
         .nRetries = 0,
         .nSSLVerify = 1,
     };
+
+    const reset_stages = [_]ResetFailureStage{ .truncate, .seek };
+    for (reset_stages, 0..) |stage, index| {
+        const destination = try std.fmt.allocPrintSentinel(
+            std.testing.allocator,
+            "{s}/reset-{d}",
+            .{ root, index },
+            0,
+        );
+        defer std.testing.allocator.free(destination);
+        injected_reset_failure = .{
+            .stage = stage,
+            .errno_value = @intFromEnum(std.c.E.IO),
+        };
+        defer injected_reset_failure = null;
+        try std.testing.expectEqual(
+            systemErrorFrom(@intFromEnum(std.c.E.IO)),
+            TDNFDownloadMetadata(&handle, &repo, destination.ptr, 0),
+        );
+        try std.testing.expect(injected_reset_failure.?.triggered);
+        const destination_repomd = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}/repodata/repomd.xml",
+            .{destination},
+        );
+        defer std.testing.allocator.free(destination_repomd);
+        try std.testing.expectError(
+            error.FileNotFound,
+            cwd.access(io, destination_repomd, .{}),
+        );
+        const repodata_directory = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{s}/repodata",
+            .{destination},
+        );
+        defer std.testing.allocator.free(repodata_directory);
+        try expectNoDownloadTemps(repodata_directory);
+        injected_reset_failure = null;
+    }
 
     const destinations = [_]struct {
         suffix: []const u8,
