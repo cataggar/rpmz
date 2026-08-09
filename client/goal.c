@@ -1577,9 +1577,9 @@ TDNFGoalBuildNativeSolverJobs(
                that is the only thing that ever puts a solvable in this
                repo -- so the table describes exactly the current
                generation of it. Nothing else can be named "cmdline"
-               either: all three repo-creation paths
-               (client/repolist.c:376, :466 and :692) reject that id as
-               reserved. So a miss is reported rather than papered over.
+               either: every repository-creation path in
+               client/repositories.zig rejects that id as reserved. So a
+               miss is reported rather than papered over.
 
                This error is deliberately NOT remapped to
                ERROR_TDNF_CALL_NOT_SUPPORTED. A handle that names no

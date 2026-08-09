@@ -1074,6 +1074,7 @@ fn parseRequest(
 /// truncated. Writing starts at its current offset and honors existing flags
 /// such as `O_APPEND`. On failure, the caller remains responsible for closing
 /// the descriptor and removing or otherwise handling any partial content.
+/// Destination write and flush failures are reported as `error.LocalOutputFailed`.
 pub fn client_download_to_fd(
     backing_allocator: Allocator,
     io: Io,
@@ -1719,11 +1720,13 @@ fn streamReaderToFile(
             error.EndOfStream => break,
             else => return err,
         };
-        try file_writer.interface.writeAll(bytes);
+        file_writer.interface.writeAll(bytes) catch
+            return error.LocalOutputFailed;
         try control.noteBytes(bytes.len);
         reader.toss(bytes.len);
     }
-    try file_writer.interface.flush();
+    file_writer.interface.flush() catch
+        return error.LocalOutputFailed;
 }
 
 fn writeRequestTarget(writer: *Io.Writer, uri: Uri) !void {

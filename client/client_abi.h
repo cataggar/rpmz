@@ -238,3 +238,53 @@ TDNFFetchRemoteGPGKey(
     const char *pszUrlGPGKey,
     char **ppszKeyLocation
     );
+
+uint32_t
+TDNFGetGPGKeys(
+    PTDNF pTdnf,
+    PTDNF_REPO_DATA pRepo,
+    char*** pppszUrlGPGKeys
+    );
+
+uint32_t
+TDNFGetRepoMD(
+    PTDNF pTdnf,
+    PTDNF_REPO_DATA pRepoData,
+    const char *pszRepoDataDir,
+    PTDNF_REPO_METADATA *ppRepoMD
+    );
+
+void
+TDNFFreeRepoMetadata(
+    PTDNF_REPO_METADATA pRepoMD
+    );
+
+uint32_t
+TDNFDownloadMetadata(
+    PTDNF pTdnf,
+    PTDNF_REPO_DATA pRepo,
+    const char *pszRepoDir,
+    int nPrintOnly
+    );
+
+uint32_t
+TDNFLoadRepoData(
+    PTDNF pTdnf,
+    PTDNF_REPO_DATA* ppReposAll
+    );
+
+uint32_t
+TDNFRepoListFinalize(
+    PTDNF pTdnf
+    );
+
+uint32_t
+TDNFCloneRepo(
+    PTDNF_REPO_DATA pRepoIn,
+    PTDNF_REPO_DATA* ppRepo
+    );
+
+void
+TDNFFreeReposInternal(
+    PTDNF_REPO_DATA pRepos
+    );

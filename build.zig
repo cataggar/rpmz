@@ -31,7 +31,6 @@ const vendored_libsolv_version_patch = "39";
 /// libsolv's include paths. There is no longer an exception.
 const client_libsolv_free_srcs = [_][]const u8{
     "api.c",             "goal.c",
-    "repo.c",            "repolist.c",
     "resolve.c",         "rpmtrans.c",
     "rpmtrans_native.c",
 };
@@ -1783,6 +1782,39 @@ pub fn build(b: *Build) void {
     // libsolv.so or libsqlite3.so in the same process.
     libtdnf.setVersionScript(b.path("client/libtdnf.map"));
     b.installArtifact(libtdnf);
+
+    const client_repositories_test_step = b.step(
+        "client-repositories-test",
+        "Run direct repository management production tests",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/repositories_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_root", tdnf_so_mod);
+        test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        const tests = b.addTest(.{
+            .name = "client-repositories-integration-test",
+            .root_module = test_mod,
+        });
+        const run_tests = b.addRunArtifact(tests);
+        client_repositories_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const tests = b.addTest(.{
+            .name = "client-repositories-production-test",
+            .root_module = tdnf_so_mod,
+            .filters = &.{"repositories production:"},
+        });
+        const run_tests = b.addRunArtifact(tests);
+        client_repositories_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
 
     const client_gpgcheck_test_step = b.step(
         "client-gpgcheck-test",
