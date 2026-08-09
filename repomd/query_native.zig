@@ -17,6 +17,7 @@ const available_loader = @import("available_loader.zig");
 const directory_repository = @import("directory_repository.zig");
 const installed_repository = @import("installed_repository.zig");
 const model = @import("model.zig");
+const package_context = @import("package_context.zig");
 const pkgquery = @import("pkgquery.zig");
 const query_index = @import("index.zig");
 const repomd_xml = @import("repomd.zig");
@@ -44,7 +45,7 @@ threadlocal var query_alloc_fail_after: ?usize = null;
 threadlocal var query_alloc_call_count: usize = 0;
 threadlocal var query_alloc_active_count: usize = 0;
 
-const NativeQueryError = error{
+pub const NativeQueryError = error{
     OutOfMemory,
     InvalidParameter,
     NoMatch,
@@ -62,9 +63,76 @@ const NativeQueryError = error{
     FileSystemIo,
     UnsupportedCompressor,
     DecompressFailed,
+    InvalidUri,
     RpmDbOpenFailed,
     RpmDbReadFailed,
 };
+
+pub fn buildPackageInfoForContext(
+    context: *const package_context.Context,
+    package_ids: []const i32,
+    detail: c_int,
+    fill_queryformat: bool,
+    dep_key_set: c_uint,
+    fill_file_list: bool,
+    fill_checksum: bool,
+) NativeQueryError!c.PTDNF_PKG_INFO {
+    const raw = c.calloc(
+        package_ids.len,
+        @sizeOf(c.TDNF_PKG_INFO),
+    ) orelse return error.OutOfMemory;
+    const array: c.PTDNF_PKG_INFO = @ptrCast(@alignCast(raw));
+    errdefer c.TDNFFreePackageInfoArray(array, @intCast(package_ids.len));
+
+    for (package_ids, 0..) |package_id, index| {
+        const pkg = package_context.packageModel(context, package_id) orelse
+            return error.InvalidParameter;
+        const repository = package_context.packageRepository(
+            context,
+            package_id,
+        ) orelse return error.InvalidParameter;
+        const item: c.PTDNF_PKG_INFO = @ptrCast(array + index);
+        const explicit_epoch = repository.kind == .available;
+
+        try fillBasicPkgIdentity(item, repository.id, pkg.*, false);
+        if (fill_queryformat) {
+            try fillInfoFields(item, pkg.*);
+            try fillSourceField(item, pkg.*, explicit_epoch);
+            try fillLocationField(item, pkg.*);
+        } else switch (detail) {
+            detail_info => try fillInfoFields(item, pkg.*),
+            detail_changelog => try fillContextChangelogFields(
+                item,
+                pkg.*,
+                repository,
+            ),
+            detail_sourcepkg => try fillSourceField(
+                item,
+                pkg.*,
+                explicit_epoch,
+            ),
+            detail_location => try fillLocationField(item, pkg.*),
+            else => {},
+        }
+
+        if (fill_file_list) {
+            try fillContextFileListField(item, pkg.*, repository);
+        } else if (dep_key_set != 0) {
+            try fillContextDependencyFields(
+                item,
+                pkg.*,
+                repository,
+                dep_key_set,
+            );
+        }
+        if (fill_checksum) try fillChecksumField(item, pkg.*);
+
+        if (index + 1 < package_ids.len) {
+            item[0].pNext = @ptrCast(array + index + 1);
+        }
+    }
+    return array;
+}
 
 const DatasetKind = enum {
     installed,
@@ -3771,6 +3839,21 @@ fn fillFileListField(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRe
     item[0].ppszFileList = (try buildOwnedCStringArray(files.items)) orelse null;
 }
 
+fn fillContextFileListField(
+    item: c.PTDNF_PKG_INFO,
+    pkg: model.Package,
+    repository: *const package_context.Repository,
+) !void {
+    const files = try pkgquery.filePaths(
+        std.heap.c_allocator,
+        pkg,
+        repository.model.files,
+    );
+    defer files.deinit();
+    item[0].ppszFileList =
+        (try buildOwnedCStringArray(files.items)) orelse null;
+}
+
 fn fillDependencyFields(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRef, dep_key_set: c_uint) !void {
     const raw = c.calloc(c.REPOQUERY_DEP_KEY_COUNT, @sizeOf([*c][*c]u8)) orelse return error.OutOfMemory;
     item[0].pppszDependencies = @ptrCast(@alignCast(raw));
@@ -3785,6 +3868,33 @@ fn fillDependencyFields(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: Packag
         const strings = try dependencyStringsForKey(ctx, ref, dep_key);
         defer strings.deinit();
         item[0].pppszDependencies[dep_key] = (try buildOwnedCStringArray(strings.items)) orelse null;
+    }
+}
+
+fn fillContextDependencyFields(
+    item: c.PTDNF_PKG_INFO,
+    pkg: model.Package,
+    repository: *const package_context.Repository,
+    dep_key_set: c_uint,
+) !void {
+    const raw = c.calloc(
+        c.REPOQUERY_DEP_KEY_COUNT,
+        @sizeOf([*c][*c]u8),
+    ) orelse return error.OutOfMemory;
+    item[0].pppszDependencies = @ptrCast(@alignCast(raw));
+
+    var dep_key: usize = 0;
+    while (dep_key < c.REPOQUERY_DEP_KEY_COUNT) : (dep_key += 1) {
+        const mask: c_uint = @as(c_uint, 1) << @intCast(dep_key);
+        if ((dep_key_set & mask) == 0) continue;
+        const strings = try dependencyStringsForPackage(
+            pkg,
+            repository.model.relations,
+            dep_key,
+        );
+        defer strings.deinit();
+        item[0].pppszDependencies[dep_key] =
+            (try buildOwnedCStringArray(strings.items)) orelse null;
     }
 }
 
@@ -3819,6 +3929,42 @@ fn fillChangelogFields(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: Package
     item[0].pChangeLogEntries = head;
 }
 
+fn fillContextChangelogFields(
+    item: c.PTDNF_PKG_INFO,
+    pkg: model.Package,
+    repository: *const package_context.Repository,
+) !void {
+    const entries = pkgquery.changelogEntries(
+        pkg,
+        repository.model.changelogs,
+    );
+    var head: c.PTDNF_PKG_CHANGELOG_ENTRY = null;
+    var tail: c.PTDNF_PKG_CHANGELOG_ENTRY = null;
+    errdefer freeTrackedChangeLogEntries(head);
+
+    var index: usize = entries.len;
+    while (index > 0) {
+        index -= 1;
+        const entry = entries[index];
+        const node: c.PTDNF_PKG_CHANGELOG_ENTRY =
+            @ptrCast(@alignCast(queryCalloc(
+                1,
+                @sizeOf(c.TDNF_PKG_CHANGELOG_ENTRY),
+            ) orelse return error.OutOfMemory));
+        errdefer freeTrackedChangeLogEntries(node);
+        node[0].timeTime = @intCast(entry.timestamp);
+        node[0].pszAuthor = try dupCString(entry.author);
+        node[0].pszText = try dupCString(entry.text);
+        if (head == null) {
+            head = node;
+        } else {
+            tail[0].pNext = node;
+        }
+        tail = node;
+    }
+    item[0].pChangeLogEntries = head;
+}
+
 fn ensureExplicitEpochString(allocator: std.mem.Allocator, epoch: u32, evr: []const u8) ![]const u8 {
     if (std.mem.indexOfScalar(u8, evr, ':') != null) {
         return allocator.dupe(u8, evr);
@@ -3841,6 +3987,66 @@ fn dependencyStringsForKey(ctx: *NativeContext, ref: PackageRef, dep_key: usize)
         c.REPOQUERY_DEP_KEY_DEPENDS => pkgquery.dependsStrings(std.heap.c_allocator, pkg, relations),
         c.REPOQUERY_DEP_KEY_REQUIRES_PRE => pkgquery.requiresPreStrings(std.heap.c_allocator, pkg, relations),
         else => pkgquery.OwnedStrings{ .allocator = std.heap.c_allocator, .items = try std.heap.c_allocator.alloc([]const u8, 0) },
+    };
+}
+
+fn dependencyStringsForPackage(
+    pkg: model.Package,
+    relations: []const model.Relation,
+    dep_key: usize,
+) !pkgquery.OwnedStrings {
+    return switch (dep_key) {
+        c.REPOQUERY_DEP_KEY_PROVIDES => pkgquery.providesStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        c.REPOQUERY_DEP_KEY_OBSOLETES => pkgquery.obsoletesStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        c.REPOQUERY_DEP_KEY_CONFLICTS => pkgquery.conflictsStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        c.REPOQUERY_DEP_KEY_REQUIRES => pkgquery.requiresStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        c.REPOQUERY_DEP_KEY_RECOMMENDS => pkgquery.recommendsStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        c.REPOQUERY_DEP_KEY_SUGGESTS => pkgquery.suggestsStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        c.REPOQUERY_DEP_KEY_SUPPLEMENTS => pkgquery.supplementsStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        c.REPOQUERY_DEP_KEY_ENHANCES => pkgquery.enhancesStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        c.REPOQUERY_DEP_KEY_DEPENDS => pkgquery.dependsStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        c.REPOQUERY_DEP_KEY_REQUIRES_PRE => pkgquery.requiresPreStrings(
+            std.heap.c_allocator,
+            pkg,
+            relations,
+        ),
+        else => error.InvalidParameter,
     };
 }
 

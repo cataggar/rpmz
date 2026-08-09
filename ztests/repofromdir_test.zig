@@ -17,7 +17,7 @@
 //! The interesting property is that a directory-backed repository has to reach
 //! **two** independent consumers, and the bug hit both:
 //!
-//!   * the query layer (`client/querynative.c`, `client/packageutils.c`),
+//!   * the query layer (`client/package_query.zig`),
 //!     which serves `list`, `repoquery`, `info`, `search` and — through
 //!     `TDNFResolveListPackages` — turns `install <name>` into a package;
 //!   * the solver universe (`client/goal.c`), which was already correct
@@ -223,7 +223,7 @@ test "an unsatisfiable package from a directory-backed repository reaches the so
 
 // A directory-backed repository has no metadata to cache, so the code path
 // that builds a cache directory for it must not run. Before the fix the
-// sack-based builder in `client/packageutils.c` unconditionally required
+// legacy sack-based builder unconditionally required
 // `pSack->pszCacheDir`; a run with no metadata repository at all would have
 // tripped that.
 test "a directory-backed repository works as the only enabled repository" {

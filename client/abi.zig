@@ -7,8 +7,23 @@
 const std = @import("std");
 
 pub const C = @cImport({
+    @cInclude("sys/vfs.h");
     @cInclude("client_abi.h");
 });
+
+pub const PackageInfo = C.TDNF_PKG_INFO;
+pub const PackageChangeLogEntry = C.TDNF_PKG_CHANGELOG_ENTRY;
+pub const SolvedPackageInfo = C.TDNF_SOLVED_PKG_INFO;
+pub const UpdateInfo = C.TDNF_UPDATEINFO;
+pub const UpdateInfoPackage = C.TDNF_UPDATEINFO_PKG;
+pub const UpdateInfoSummary = C.TDNF_UPDATEINFO_SUMMARY;
+pub const NativeRepoInput = C.TDNF_REPOMD_NATIVE_REPO_INPUT;
+
+pub const IdList = extern struct {
+    pnElements: ?[*]i32 = null,
+    dwCount: u32 = 0,
+    dwCapacity: u32 = 0,
+};
 
 pub const CnfNode = extern struct {
     next: ?*CnfNode = null,

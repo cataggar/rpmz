@@ -43,6 +43,7 @@
 #include "repoutils_abi.h"
 #include "remoterepo_abi.h"
 #include "utils_abi.h"
+#include "client_abi.h"
 
 /* Every C file in client/ uses the native package context. The
    libsolv-confinement-audit build step proves libsolv headers are
