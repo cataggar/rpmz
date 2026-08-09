@@ -17,6 +17,8 @@ comptime {
     _ = @import("gpgcheck.zig");
     _ = @import("package_query.zig");
     _ = @import("repositories.zig");
+    _ = @import("goal.zig");
+    _ = @import("resolve.zig");
     _ = updateinfo;
     _ = @import("client_varsdir");
 }
