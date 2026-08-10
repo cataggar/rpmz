@@ -1,15 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
     @cInclude("string.h");
     @cInclude("time.h");
-    @cInclude("tdnferror.h");
-    @cInclude("tdnf.h");
-    @cInclude("tdnfrepomd.h");
-    @cInclude("tdnftypes.h");
     @cInclude("rpmdb.h");
 });
 
@@ -76,13 +73,13 @@ pub fn buildPackageInfoForContext(
     dep_key_set: c_uint,
     fill_file_list: bool,
     fill_checksum: bool,
-) NativeQueryError!c.PTDNF_PKG_INFO {
+) NativeQueryError!abi.PTDNF_PKG_INFO {
     const raw = c.calloc(
         package_ids.len,
-        @sizeOf(c.TDNF_PKG_INFO),
+        @sizeOf(abi.TDNF_PKG_INFO),
     ) orelse return error.OutOfMemory;
-    const array: c.PTDNF_PKG_INFO = @ptrCast(@alignCast(raw));
-    errdefer c.TDNFFreePackageInfoArray(array, @intCast(package_ids.len));
+    const array: abi.PTDNF_PKG_INFO = @ptrCast(@alignCast(raw));
+    errdefer abi.TDNFFreePackageInfoArray(array, @intCast(package_ids.len));
 
     for (package_ids, 0..) |package_id, index| {
         const pkg = package_context.packageModel(context, package_id) orelse
@@ -91,7 +88,7 @@ pub fn buildPackageInfoForContext(
             context,
             package_id,
         ) orelse return error.InvalidParameter;
-        const item: c.PTDNF_PKG_INFO = @ptrCast(array + index);
+        const item: abi.PTDNF_PKG_INFO = @ptrCast(array + index);
         const explicit_epoch = repository.kind == .available;
 
         try fillBasicPkgIdentity(item, repository.id, pkg.*, false);
@@ -266,10 +263,10 @@ const NativeContext = struct {
 
     fn load(
         self: *NativeContext,
-        raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+        raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
         repo_count: u32,
         root_dir: ?[*:0]const u8,
-        config: ?*const c.tdnf_rpm_config,
+        config: ?*const abi.tdnf_rpm_config,
         load_installed: bool,
         available_options: AvailableLoadOptions,
         installed_options: InstalledLoadOptions,
@@ -281,7 +278,7 @@ const NativeContext = struct {
         const repos = if (raw_repos) |repos|
             repos[0..repo_count]
         else
-            &[_]c.TDNF_REPOMD_NATIVE_REPO_INPUT{};
+            &[_]abi.TDNF_REPOMD_NATIVE_REPO_INPUT{};
         for (repos) |repo| {
             try self.datasets.append(try loadAvailableDataset(repo, available_options));
         }
@@ -331,101 +328,101 @@ pub export fn TDNFRepoMdNativeQueryLastError() [*:0]const u8 {
 }
 
 pub export fn TDNFRepoMdNativeList(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     scope_int: c_int,
     specs: [*c][*c]u8,
     detail_int: c_int,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     return nativeList(raw_repos, repo_count, root_dir, null, false, scope_int, specs, detail_int, out_pkg_info, out_count);
 }
 
 pub export fn TDNFRepoMdNativeListConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     scope_int: c_int,
     specs: [*c][*c]u8,
     detail_int: c_int,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     return nativeList(raw_repos, repo_count, null, config, true, scope_int, specs, detail_int, out_pkg_info, out_count);
 }
 
 pub export fn TDNFRepoMdNativeSearch(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     search_strings: [*c][*c]u8,
     start_index: c_int,
     end_index: c_int,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     return nativeSearch(raw_repos, repo_count, root_dir, null, false, search_strings, start_index, end_index, out_pkg_info, out_count);
 }
 
 pub export fn TDNFRepoMdNativeSearchConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     search_strings: [*c][*c]u8,
     start_index: c_int,
     end_index: c_int,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     return nativeSearch(raw_repos, repo_count, null, config, true, search_strings, start_index, end_index, out_pkg_info, out_count);
 }
 
 pub export fn TDNFRepoMdNativeProvides(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     raw_spec: ?[*:0]const u8,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
 ) u32 {
     return nativeProvides(raw_repos, repo_count, root_dir, null, false, raw_spec, out_pkg_info);
 }
 
 pub export fn TDNFRepoMdNativeProvidesConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     raw_spec: ?[*:0]const u8,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
 ) u32 {
     return nativeProvides(raw_repos, repo_count, null, config, true, raw_spec, out_pkg_info);
 }
 
 pub export fn TDNFRepoMdNativeRepoQuery(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    repoquery_args: ?*const c.TDNF_REPOQUERY_ARGS,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    repoquery_args: ?*const abi.TDNF_REPOQUERY_ARGS,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     return nativeRepoQuery(raw_repos, repo_count, root_dir, null, false, repoquery_args, out_pkg_info, out_count);
 }
 
 pub export fn TDNFRepoMdNativeRepoQueryConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
-    repoquery_args: ?*const c.TDNF_REPOQUERY_ARGS,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    config: ?*const abi.tdnf_rpm_config,
+    repoquery_args: ?*const abi.TDNF_REPOQUERY_ARGS,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     return nativeRepoQuery(raw_repos, repo_count, null, config, true, repoquery_args, out_pkg_info, out_count);
 }
 
 pub export fn TDNFRepoMdNativeFindNevraMatches(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     raw_nevra: ?[*:0]const u8,
@@ -437,9 +434,9 @@ pub export fn TDNFRepoMdNativeFindNevraMatches(
 }
 
 pub export fn TDNFRepoMdNativeFindNevraMatchesConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     raw_nevra: ?[*:0]const u8,
     installed_only: c_int,
     out_matches: ?*[*c][*c]u8,
@@ -449,9 +446,9 @@ pub export fn TDNFRepoMdNativeFindNevraMatchesConfig(
 }
 
 pub export fn TDNFRepoMdNativePackageRefLinesConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     scope_int: c_int,
     raw_spec: ?[*:0]const u8,
     out_lines: ?*[*c][*c]u8,
@@ -461,7 +458,7 @@ pub export fn TDNFRepoMdNativePackageRefLinesConfig(
     if (out_lines) |out| out.* = null;
     if (out_count) |out| out.* = 0;
     const rpm_config = config orelse return invalidParameter("null rpm config", .{});
-    const spec = spanRequired(raw_spec, "package spec") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const spec = spanRequired(raw_spec, "package spec") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const lines_out = out_lines orelse return invalidParameter("null package-ref output", .{});
     const count_out = out_count orelse return invalidParameter("null package-ref count", .{});
 
@@ -477,7 +474,7 @@ pub export fn TDNFRepoMdNativePackageRefLinesConfig(
         return mapQueryError(err);
     };
     defer std.heap.c_allocator.free(refs);
-    if (refs.len == 0) return c.ERROR_TDNF_NO_MATCH;
+    if (refs.len == 0) return abi.ERROR_TDNF_NO_MATCH;
 
     const lines = serializePackageRefs(&ctx, refs) catch |err| {
         return mapQueryError(err);
@@ -493,9 +490,9 @@ pub export fn TDNFRepoMdNativePackageRefLinesConfig(
 }
 
 pub export fn TDNFRepoMdNativeBestPackageRefConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     scope_int: c_int,
     raw_spec: ?[*:0]const u8,
     source_only: c_int,
@@ -505,7 +502,7 @@ pub export fn TDNFRepoMdNativeBestPackageRefConfig(
     clearError();
     if (out_line) |out| out.* = null;
     const rpm_config = config orelse return invalidParameter("null rpm config", .{});
-    const spec = spanRequired(raw_spec, "package spec") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const spec = spanRequired(raw_spec, "package spec") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const line_out = out_line orelse return invalidParameter("null best package-ref output", .{});
 
     var ctx = NativeContext.init(std.heap.c_allocator);
@@ -520,7 +517,7 @@ pub export fn TDNFRepoMdNativeBestPackageRefConfig(
         return mapQueryError(err);
     };
     defer std.heap.c_allocator.free(refs);
-    if (refs.len == 0) return c.ERROR_TDNF_NO_MATCH;
+    if (refs.len == 0) return abi.ERROR_TDNF_NO_MATCH;
 
     const selected = selectBestPackageRef(
         &ctx,
@@ -529,7 +526,7 @@ pub export fn TDNFRepoMdNativeBestPackageRefConfig(
         source_only != 0,
         highest != 0,
         scopePrefersObsoleting(scope_int, source_only != 0, highest != 0),
-    ) orelse return c.ERROR_TDNF_NO_MATCH;
+    ) orelse return abi.ERROR_TDNF_NO_MATCH;
     const line = packageMatchLine(&ctx, selected) catch |err| {
         return mapQueryError(err);
     };
@@ -548,7 +545,7 @@ pub export fn TDNFRepoMdNativeBestPackageRefConfig(
 /// EVR. Applying the obsoletes step everywhere would let an unrelated
 /// obsoleting package hijack an installed-package lookup.
 fn scopePrefersObsoleting(scope: c_int, source_only: bool, highest: bool) bool {
-    return scope == c.SCOPE_AVAILABLE and !source_only and highest;
+    return scope == abi.SCOPE_AVAILABLE and !source_only and highest;
 }
 
 /// Replicates `SolvFindBestAvailable`: pick the best exact-name match, then let
@@ -640,7 +637,7 @@ fn packageObsoletesPackage(ctx: *NativeContext, candidate_ref: PackageRef, targe
 }
 
 pub export fn TDNFRepoMdNativeUpdateInfoSummaryLines(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     package_specs: [*c][*c]u8,
@@ -653,9 +650,9 @@ pub export fn TDNFRepoMdNativeUpdateInfoSummaryLines(
 }
 
 pub export fn TDNFRepoMdNativeUpdateInfoSummaryLinesConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     package_specs: [*c][*c]u8,
     security_only: u32,
     raw_severity: ?[*:0]const u8,
@@ -666,7 +663,7 @@ pub export fn TDNFRepoMdNativeUpdateInfoSummaryLinesConfig(
 }
 
 pub export fn TDNFRepoMdNativeUpdateInfoLines(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     package_specs: [*c][*c]u8,
@@ -680,9 +677,9 @@ pub export fn TDNFRepoMdNativeUpdateInfoLines(
 }
 
 pub export fn TDNFRepoMdNativeUpdateInfoLinesConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     package_specs: [*c][*c]u8,
     security_only: u32,
     raw_severity: ?[*:0]const u8,
@@ -694,7 +691,7 @@ pub export fn TDNFRepoMdNativeUpdateInfoLinesConfig(
 }
 
 pub export fn TDNFRepoMdNativeMinVersionExcludeLines(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     raw_minversions: [*c][*c]u8,
@@ -705,9 +702,9 @@ pub export fn TDNFRepoMdNativeMinVersionExcludeLines(
 }
 
 pub export fn TDNFRepoMdNativeMinVersionExcludeLinesConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     raw_minversions: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
     out_count: ?*u32,
@@ -716,7 +713,7 @@ pub export fn TDNFRepoMdNativeMinVersionExcludeLinesConfig(
 }
 
 pub export fn TDNFRepoMdNativeRequiresForPackageRefs(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     raw_package_refs: [*c][*c]u8,
@@ -727,9 +724,9 @@ pub export fn TDNFRepoMdNativeRequiresForPackageRefs(
 }
 
 pub export fn TDNFRepoMdNativeRequiresForPackageRefsConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     raw_package_refs: [*c][*c]u8,
     out_deps: ?*[*c][*c]u8,
     out_count: ?*u32,
@@ -738,7 +735,7 @@ pub export fn TDNFRepoMdNativeRequiresForPackageRefsConfig(
 }
 
 pub export fn TDNFRepoMdNativePackageInfoForRefs(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     raw_package_refs: [*c][*c]u8,
@@ -747,23 +744,23 @@ pub export fn TDNFRepoMdNativePackageInfoForRefs(
     dep_key_set: c_uint,
     file_list: c_int,
     checksum: c_int,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     return nativePackageInfoForRefs(raw_repos, repo_count, root_dir, null, false, raw_package_refs, detail_int, queryformat, dep_key_set, file_list, checksum, out_pkg_info, out_count);
 }
 
 pub export fn TDNFRepoMdNativePackageInfoForRefsConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     raw_package_refs: [*c][*c]u8,
     detail_int: c_int,
     queryformat: c_int,
     dep_key_set: c_uint,
     file_list: c_int,
     checksum: c_int,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     return nativePackageInfoForRefs(raw_repos, repo_count, null, config, true, raw_package_refs, detail_int, queryformat, dep_key_set, file_list, checksum, out_pkg_info, out_count);
@@ -777,8 +774,8 @@ pub export fn TDNFRepoMdNativeCompareEvr(
     clearError();
     const result_out = out_result orelse return invalidParameter("null compare output", .{});
     result_out.* = 0;
-    const left = spanRequired(raw_left, "left EVR") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const right = spanRequired(raw_right, "right EVR") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const left = spanRequired(raw_left, "left EVR") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const right = spanRequired(raw_right, "right EVR") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const left_parts = model.splitEvrQuery(left);
     const right_parts = model.splitEvrQuery(right);
     result_out.* = query_index.compareEvr(
@@ -802,7 +799,7 @@ pub export fn TDNFRepoMdNativeAutoInstalledOrphanLines(
 }
 
 pub export fn TDNFRepoMdNativeAutoInstalledOrphanLinesConfig(
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     raw_auto_installed_refs: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
     out_count: ?*u32,
@@ -811,15 +808,15 @@ pub export fn TDNFRepoMdNativeAutoInstalledOrphanLinesConfig(
 }
 
 fn nativeList(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     scope_int: c_int,
     specs: [*c][*c]u8,
     detail_int: c_int,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     clearError();
@@ -835,7 +832,7 @@ fn nativeList(
     var ctx = NativeContext.init(std.heap.c_allocator);
     defer ctx.deinit();
 
-    const scope: c_int = if (scope_int == c.SCOPE_NONE) c.SCOPE_ALL else scope_int;
+    const scope: c_int = if (scope_int == abi.SCOPE_NONE) abi.SCOPE_ALL else scope_int;
     const need_installed = scopeNeedsInstalled(scope);
     const need_available = scopeNeedsAvailable(scope);
 
@@ -857,7 +854,7 @@ fn nativeList(
         if (!has_specs) {
             return 0;
         }
-        return c.ERROR_TDNF_NO_MATCH;
+        return abi.ERROR_TDNF_NO_MATCH;
     }
 
     const pkg_infos = buildPackageInfoArray(&ctx, refs, detail_int, false, 0, false, false) catch |err| {
@@ -869,15 +866,15 @@ fn nativeList(
 }
 
 fn nativeSearch(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     search_strings: [*c][*c]u8,
     start_index: c_int,
     end_index: c_int,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     clearError();
@@ -918,7 +915,7 @@ fn nativeSearch(
     defer std.heap.c_allocator.free(refs);
 
     if (refs.len == 0) {
-        return c.ERROR_TDNF_NO_MATCH;
+        return abi.ERROR_TDNF_NO_MATCH;
     }
 
     const pkg_infos = buildSearchInfoArray(&ctx, refs) catch |err| {
@@ -930,13 +927,13 @@ fn nativeSearch(
 }
 
 fn nativeProvides(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     raw_spec: ?[*:0]const u8,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
 ) u32 {
     clearError();
     if (out_pkg_info) |out| out.* = null;
@@ -945,7 +942,7 @@ fn nativeProvides(
     }
 
     const out_items = out_pkg_info orelse return invalidParameter("null provides output", .{});
-    const spec = spanRequired(raw_spec, "provides spec") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const spec = spanRequired(raw_spec, "provides spec") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     var ctx = NativeContext.init(std.heap.c_allocator);
     defer ctx.deinit();
@@ -971,7 +968,7 @@ fn nativeProvides(
     defer std.heap.c_allocator.free(refs);
 
     if (refs.len == 0) {
-        return c.ERROR_TDNF_NO_MATCH;
+        return abi.ERROR_TDNF_NO_MATCH;
     }
 
     out_items.* = buildProvidesInfoList(&ctx, refs) catch |err| {
@@ -981,13 +978,13 @@ fn nativeProvides(
 }
 
 fn nativeRepoQuery(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
-    repoquery_args: ?*const c.TDNF_REPOQUERY_ARGS,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    repoquery_args: ?*const abi.TDNF_REPOQUERY_ARGS,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     clearError();
@@ -1025,7 +1022,7 @@ fn nativeRepoQuery(
     defer std.heap.c_allocator.free(refs);
 
     if (refs.len == 0) {
-        return c.ERROR_TDNF_NO_MATCH;
+        return abi.ERROR_TDNF_NO_MATCH;
     }
 
     const fill_queryformat = args.pszQueryFormat != null;
@@ -1039,7 +1036,7 @@ fn nativeRepoQuery(
 }
 
 pub export fn TDNFRepoMdNativeUpdateAdvisoryIds(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     raw_name: ?[*:0]const u8,
     raw_arch: ?[*:0]const u8,
@@ -1051,9 +1048,9 @@ pub export fn TDNFRepoMdNativeUpdateAdvisoryIds(
     if (out_ids) |out| out.* = null;
     if (out_count) |out| out.* = 0;
 
-    const name = spanRequired(raw_name, "package name") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const arch = spanRequired(raw_arch, "package arch") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const evr = spanRequired(raw_evr, "package evr") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const name = spanRequired(raw_name, "package name") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const arch = spanRequired(raw_arch, "package arch") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const evr = spanRequired(raw_evr, "package evr") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const ids_out = out_ids orelse return invalidParameter("null advisory id output", .{});
     const count_out = out_count orelse return invalidParameter("null advisory count output", .{});
 
@@ -1078,7 +1075,7 @@ pub export fn TDNFRepoMdNativeUpdateAdvisoryIds(
     defer std.heap.c_allocator.free(ids);
 
     if (ids.len == 0) {
-        return c.ERROR_TDNF_NO_DATA;
+        return abi.ERROR_TDNF_NO_DATA;
     }
 
     ids_out.* = (tryBuildCStringArray(ids) catch |err| {
@@ -1089,10 +1086,10 @@ pub export fn TDNFRepoMdNativeUpdateAdvisoryIds(
 }
 
 fn nativeFindNevraMatches(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     raw_nevra: ?[*:0]const u8,
     installed_only: c_int,
@@ -1106,7 +1103,7 @@ fn nativeFindNevraMatches(
         return invalidParameter("null rpm config", .{});
     }
 
-    const nevra = spanRequired(raw_nevra, "nevra") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const nevra = spanRequired(raw_nevra, "nevra") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const matches_out = out_matches orelse return invalidParameter("null match output", .{});
     const count_out = out_count orelse return invalidParameter("null count output", .{});
 
@@ -1143,7 +1140,7 @@ fn nativeFindNevraMatches(
 }
 
 pub export fn TDNFRepoMdNativeFindNameEvrMatches(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     raw_name_evr: ?[*:0]const u8,
     out_matches: ?*[*c][*c]u8,
@@ -1153,7 +1150,7 @@ pub export fn TDNFRepoMdNativeFindNameEvrMatches(
     if (out_matches) |out| out.* = null;
     if (out_count) |out| out.* = 0;
 
-    const name_evr = spanRequired(raw_name_evr, "name=evr") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const name_evr = spanRequired(raw_name_evr, "name=evr") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const matches_out = out_matches orelse return invalidParameter("null match output", .{});
     const count_out = out_count orelse return invalidParameter("null count output", .{});
 
@@ -1190,10 +1187,10 @@ pub export fn TDNFRepoMdNativeFindNameEvrMatches(
 }
 
 fn nativeUpdateInfoSummaryLines(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     package_specs: [*c][*c]u8,
     security_only: u32,
@@ -1240,10 +1237,10 @@ fn nativeUpdateInfoSummaryLines(
 }
 
 fn nativeUpdateInfoLines(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     package_specs: [*c][*c]u8,
     security_only: u32,
@@ -1291,9 +1288,9 @@ fn nativeUpdateInfoLines(
 }
 
 pub export fn TDNFRepoMdNativeExcludeLinesConfig(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     raw_excludes: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
     out_count: ?*u32,
@@ -1351,10 +1348,10 @@ fn parsePatternArray(raw_values: [*c][*c]u8) ![][]const u8 {
 }
 
 fn nativeMinVersionExcludeLines(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     raw_minversions: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
@@ -1403,7 +1400,7 @@ fn nativeMinVersionExcludeLines(
 }
 
 pub export fn TDNFRepoMdNativeDowngradeCandidateLines(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
     raw_minversions: [*c][*c]u8,
@@ -1415,7 +1412,7 @@ pub export fn TDNFRepoMdNativeDowngradeCandidateLines(
     if (out_lines) |out| out.* = null;
     if (out_count) |out| out.* = 0;
 
-    const installed_ref = spanRequired(raw_installed_ref, "installed package ref") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const installed_ref = spanRequired(raw_installed_ref, "installed package ref") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const lines_out = out_lines orelse return invalidParameter("null downgrade output", .{});
     const count_out = out_count orelse return invalidParameter("null downgrade count output", .{});
 
@@ -1452,10 +1449,10 @@ pub export fn TDNFRepoMdNativeDowngradeCandidateLines(
 }
 
 fn nativeRequiresForPackageRefs(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     raw_package_refs: [*c][*c]u8,
     out_deps: ?*[*c][*c]u8,
@@ -1503,7 +1500,7 @@ fn nativeRequiresForPackageRefs(
 
 fn nativeAutoInstalledOrphanLines(
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     raw_auto_installed_refs: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
@@ -1553,10 +1550,10 @@ fn nativeAutoInstalledOrphanLines(
 }
 
 fn nativePackageInfoForRefs(
-    raw_repos: ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     raw_package_refs: [*c][*c]u8,
     detail_int: c_int,
@@ -1564,7 +1561,7 @@ fn nativePackageInfoForRefs(
     dep_key_set: c_uint,
     file_list: c_int,
     checksum: c_int,
-    out_pkg_info: ?*c.PTDNF_PKG_INFO,
+    out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
 ) u32 {
     clearError();
@@ -1611,7 +1608,7 @@ fn nativePackageInfoForRefs(
     defer std.heap.c_allocator.free(refs);
 
     if (refs.len == 0) {
-        return c.ERROR_TDNF_NO_MATCH;
+        return abi.ERROR_TDNF_NO_MATCH;
     }
 
     const infos = buildPackageInfoArray(
@@ -1707,83 +1704,83 @@ fn setErrorDefault(comptime fmt: []const u8, args: anytype) void {
 
 fn invalidParameter(comptime fmt: []const u8, args: anytype) u32 {
     setError(fmt, args);
-    return c.ERROR_TDNF_INVALID_PARAMETER;
+    return abi.ERROR_TDNF_INVALID_PARAMETER;
 }
 
 fn mapQueryError(err: anyerror) u32 {
     return switch (err) {
         error.OutOfMemory => blk: {
             setErrorDefault("out of memory", .{});
-            break :blk c.ERROR_TDNF_OUT_OF_MEMORY;
+            break :blk abi.ERROR_TDNF_OUT_OF_MEMORY;
         },
         error.InvalidParameter => blk: {
             setErrorDefault("invalid parameter", .{});
-            break :blk c.ERROR_TDNF_INVALID_PARAMETER;
+            break :blk abi.ERROR_TDNF_INVALID_PARAMETER;
         },
         error.NoMatch => blk: {
             setErrorDefault("no matching packages", .{});
-            break :blk c.ERROR_TDNF_NO_MATCH;
+            break :blk abi.ERROR_TDNF_NO_MATCH;
         },
         error.NoData => blk: {
             setErrorDefault("no advisory data", .{});
-            break :blk c.ERROR_TDNF_NO_DATA;
+            break :blk abi.ERROR_TDNF_NO_DATA;
         },
         error.InvalidRepoMetadata => blk: {
             setErrorDefault("invalid repository metadata", .{});
-            break :blk c.ERROR_TDNF_INVALID_REPO_FILE;
+            break :blk abi.ERROR_TDNF_INVALID_REPO_FILE;
         },
         error.InvalidRpmHeader => blk: {
             setErrorDefault("invalid rpm header", .{});
-            break :blk c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED;
+            break :blk abi.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED;
         },
         error.FileNotFound => blk: {
             setErrorDefault("file not found", .{});
-            break :blk c.ERROR_TDNF_FILE_NOT_FOUND;
+            break :blk abi.ERROR_TDNF_FILE_NOT_FOUND;
         },
         error.AccessDenied => blk: {
             setErrorDefault("access denied", .{});
-            break :blk c.ERROR_TDNF_ACCESS_DENIED;
+            break :blk abi.ERROR_TDNF_ACCESS_DENIED;
         },
         error.NameTooLong => blk: {
             setErrorDefault("path too long", .{});
-            break :blk c.ERROR_TDNF_NAME_TOO_LONG;
+            break :blk abi.ERROR_TDNF_NAME_TOO_LONG;
         },
         error.BadPathName => blk: {
             setErrorDefault("bad path", .{});
-            break :blk c.ERROR_TDNF_INVALID_PARAMETER;
+            break :blk abi.ERROR_TDNF_INVALID_PARAMETER;
         },
         error.NotDir, error.IsDir => blk: {
             setErrorDefault("invalid directory", .{});
-            break :blk c.ERROR_TDNF_INVALID_DIR;
+            break :blk abi.ERROR_TDNF_INVALID_DIR;
         },
         error.FileTooBig, error.StreamTooLong => blk: {
             setErrorDefault("metadata too large", .{});
-            break :blk c.ERROR_TDNF_OVERFLOW;
+            break :blk abi.ERROR_TDNF_OVERFLOW;
         },
         error.UnsupportedCompressor, error.DecompressFailed => blk: {
             setErrorDefault("failed to decompress repository metadata", .{});
-            break :blk c.ERROR_TDNF_INVALID_REPO_FILE;
+            break :blk abi.ERROR_TDNF_INVALID_REPO_FILE;
         },
         error.FileSystemIo => blk: {
             setErrorDefault("filesystem io error", .{});
-            break :blk c.ERROR_TDNF_FILESYS_IO;
+            break :blk abi.ERROR_TDNF_FILESYS_IO;
         },
         error.RpmDbOpenFailed => blk: {
-            setErrorDefault("failed to open rpmdb: {s}", .{std.mem.span(c.tdnf_rpmdb_last_error())});
-            break :blk c.ERROR_TDNF_RPMTS_OPENDB_FAILED;
+            setErrorDefault("failed to open rpmdb: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
+            break :blk abi.ERROR_TDNF_RPMTS_OPENDB_FAILED;
         },
         error.RpmDbReadFailed => blk: {
-            setErrorDefault("failed to read rpmdb: {s}", .{std.mem.span(c.tdnf_rpmdb_last_error())});
-            break :blk c.ERROR_TDNF_SOLV_IO;
+            setErrorDefault("failed to read rpmdb: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
+            break :blk abi.ERROR_TDNF_SOLV_IO;
         },
         else => blk: {
             setErrorDefault("native query failure: {t}", .{err});
-            break :blk c.ERROR_TDNF_SOLV_IO;
+            break :blk abi.ERROR_TDNF_SOLV_IO;
         },
     };
 }
 
-fn loadAvailableDataset(raw_repo: c.TDNF_REPOMD_NATIVE_REPO_INPUT, options: AvailableLoadOptions) !LoadedDataset {
+fn loadAvailableDataset(raw_repo: abi.TDNF_REPOMD_NATIVE_REPO_INPUT, options: AvailableLoadOptions) !LoadedDataset {
     const repo_id = spanRequired(raw_repo.pszId, "repo id") orelse return error.InvalidParameter;
     const snapshot_file = if (raw_repo.pszSnapshotFile != null)
         std.mem.span(raw_repo.pszSnapshotFile)
@@ -1934,7 +1931,7 @@ fn loadDirectoryDataset(
     };
 }
 
-fn loadInstalledDataset(root_dir: ?[*:0]const u8, config: ?*const c.tdnf_rpm_config, options: InstalledLoadOptions) !LoadedDataset {
+fn loadInstalledDataset(root_dir: ?[*:0]const u8, config: ?*const abi.tdnf_rpm_config, options: InstalledLoadOptions) !LoadedDataset {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1978,33 +1975,33 @@ fn readSmallFile(allocator: std.mem.Allocator, path: []const u8, max_len: usize)
 
 fn scopeNeedsInstalled(scope: c_int) bool {
     return switch (scope) {
-        c.SCOPE_AVAILABLE => false,
+        abi.SCOPE_AVAILABLE => false,
         else => true,
     };
 }
 
 fn scopeNeedsAvailable(scope: c_int) bool {
     return switch (scope) {
-        c.SCOPE_INSTALLED => false,
+        abi.SCOPE_INSTALLED => false,
         else => true,
     };
 }
 
-fn repoQueryNeedsInstalled(args: *const c.TDNF_REPOQUERY_ARGS, scope: c_int) bool {
+fn repoQueryNeedsInstalled(args: *const abi.TDNF_REPOQUERY_ARGS, scope: c_int) bool {
     if (args.nExtras != 0 or args.nDuplicates != 0 or args.nUserInstalled != 0) {
         return true;
     }
     return scopeNeedsInstalled(scope);
 }
 
-fn repoQueryAvailableLoadOptions(args: *const c.TDNF_REPOQUERY_ARGS) AvailableLoadOptions {
+fn repoQueryAvailableLoadOptions(args: *const abi.TDNF_REPOQUERY_ARGS) AvailableLoadOptions {
     return .{
         .need_filelists = args.nList != 0 or args.pszFile != null,
         .need_other = args.nChangeLogs != 0,
     };
 }
 
-fn repoQueryInstalledLoadOptions(args: *const c.TDNF_REPOQUERY_ARGS) InstalledLoadOptions {
+fn repoQueryInstalledLoadOptions(args: *const abi.TDNF_REPOQUERY_ARGS) InstalledLoadOptions {
     return .{
         .need_relations = args.pppszWhatKeys != null or args.depKeySet != 0,
         .need_files = args.nList != 0 or args.pszFile != null,
@@ -2012,26 +2009,26 @@ fn repoQueryInstalledLoadOptions(args: *const c.TDNF_REPOQUERY_ARGS) InstalledLo
     };
 }
 
-fn repoQueryScope(args: *const c.TDNF_REPOQUERY_ARGS) c_int {
+fn repoQueryScope(args: *const abi.TDNF_REPOQUERY_ARGS) c_int {
     if (args.nExtras != 0) {
-        return c.SCOPE_ALL;
+        return abi.SCOPE_ALL;
     }
     if (args.nUpgrades != 0) {
-        return c.SCOPE_UPGRADES;
+        return abi.SCOPE_UPGRADES;
     }
     if (args.nDowngrades != 0) {
-        return c.SCOPE_DOWNGRADES;
+        return abi.SCOPE_DOWNGRADES;
     }
     if (args.nInstalled == 0 or args.nAvailable != 0) {
-        return c.SCOPE_AVAILABLE;
+        return abi.SCOPE_AVAILABLE;
     }
     if (args.nInstalled != 0 or args.nDuplicates != 0) {
-        return c.SCOPE_INSTALLED;
+        return abi.SCOPE_INSTALLED;
     }
-    return c.SCOPE_ALL;
+    return abi.SCOPE_ALL;
 }
 
-fn repoQueryDetail(args: *const c.TDNF_REPOQUERY_ARGS) c_int {
+fn repoQueryDetail(args: *const abi.TDNF_REPOQUERY_ARGS) c_int {
     if (args.nChangeLogs != 0) return detail_changelog;
     if (args.nSource != 0) return detail_sourcepkg;
     if (args.nLocation != 0) return detail_location;
@@ -2039,8 +2036,8 @@ fn repoQueryDetail(args: *const c.TDNF_REPOQUERY_ARGS) c_int {
 }
 
 fn selectListPackages(ctx: *NativeContext, scope: c_int, specs: ?[*c][*c]u8) ![]PackageRef {
-    if (scope == c.SCOPE_UPGRADES or scope == c.SCOPE_DOWNGRADES) {
-        return try selectUpDownCandidates(ctx, specs, scope == c.SCOPE_UPGRADES);
+    if (scope == abi.SCOPE_UPGRADES or scope == abi.SCOPE_DOWNGRADES) {
+        return try selectUpDownCandidates(ctx, specs, scope == abi.SCOPE_UPGRADES);
     }
 
     var results = std.array_list.Managed(PackageRef).init(std.heap.c_allocator);
@@ -2182,7 +2179,7 @@ fn selectProvidesPackages(ctx: *NativeContext, spec: []const u8) ![]PackageRef {
     return try dedupeOwnedPackageRefs(try results.toOwnedSlice());
 }
 
-fn runRepoQuery(ctx: *NativeContext, args: *const c.TDNF_REPOQUERY_ARGS, scope: c_int) ![]PackageRef {
+fn runRepoQuery(ctx: *NativeContext, args: *const abi.TDNF_REPOQUERY_ARGS, scope: c_int) ![]PackageRef {
     var spec_array = [_][*c]u8{ null, null };
     const spec_ptr: ?[*c][*c]u8 = if (args.pszSpec != null) blk: {
         spec_array[0] = args.pszSpec;
@@ -2202,7 +2199,7 @@ fn runRepoQuery(ctx: *NativeContext, args: *const c.TDNF_REPOQUERY_ARGS, scope: 
 
     if (args.pppszWhatKeys != null) {
         var what_key: usize = 0;
-        while (what_key < c.REPOQUERY_WHAT_KEY_COUNT) : (what_key += 1) {
+        while (what_key < abi.REPOQUERY_WHAT_KEY_COUNT) : (what_key += 1) {
             if (args.pppszWhatKeys[what_key] != null) {
                 refs = try filterWhatKey(ctx, refs, @intCast(what_key), args.pppszWhatKeys[what_key]);
             }
@@ -2253,15 +2250,15 @@ fn appendScopePackages(list: *std.array_list.Managed(PackageRef), ctx: *NativeCo
 
 fn datasetInScope(kind: DatasetKind, scope: c_int) bool {
     return switch (scope) {
-        c.SCOPE_INSTALLED => kind == .installed,
-        c.SCOPE_AVAILABLE => kind == .available,
+        abi.SCOPE_INSTALLED => kind == .installed,
+        abi.SCOPE_AVAILABLE => kind == .available,
         else => true,
     };
 }
 
 fn selectRepoQueryPackages(ctx: *NativeContext, scope: c_int, specs: ?[*c][*c]u8) ![]PackageRef {
-    if (scope == c.SCOPE_UPGRADES or scope == c.SCOPE_DOWNGRADES) {
-        return try selectUpDownCandidates(ctx, specs, scope == c.SCOPE_UPGRADES);
+    if (scope == abi.SCOPE_UPGRADES or scope == abi.SCOPE_DOWNGRADES) {
+        return try selectUpDownCandidates(ctx, specs, scope == abi.SCOPE_UPGRADES);
     }
 
     var results = std.array_list.Managed(PackageRef).init(std.heap.c_allocator);
@@ -2597,7 +2594,7 @@ fn packageMatchesWhatKey(ctx: *NativeContext, ref: PackageRef, what_key: usize, 
     while (raw_deps[dep_index] != null) : (dep_index += 1) {
         const raw_dep = std.mem.span(raw_deps[dep_index]);
         const query = query_index.DependencyQuery.parse(raw_dep) catch continue;
-        if (what_key == c.REPOQUERY_WHAT_KEY_DEPENDS) {
+        if (what_key == abi.REPOQUERY_WHAT_KEY_DEPENDS) {
             const depends_kinds = [_]model.DependencyKind{ .requires, .recommends, .suggests, .supplements, .enhances };
             for (depends_kinds) |kind| {
                 for (pkg.relationsFor(kind, relations)) |relation| {
@@ -2621,14 +2618,14 @@ fn packageMatchesWhatKey(ctx: *NativeContext, ref: PackageRef, what_key: usize, 
 
 fn relationKindForWhatKey(what_key: usize) ?model.DependencyKind {
     return switch (what_key) {
-        c.REPOQUERY_WHAT_KEY_PROVIDES => .provides,
-        c.REPOQUERY_WHAT_KEY_OBSOLETES => .obsoletes,
-        c.REPOQUERY_WHAT_KEY_CONFLICTS => .conflicts,
-        c.REPOQUERY_WHAT_KEY_REQUIRES => .requires,
-        c.REPOQUERY_WHAT_KEY_RECOMMENDS => .recommends,
-        c.REPOQUERY_WHAT_KEY_SUGGESTS => .suggests,
-        c.REPOQUERY_WHAT_KEY_SUPPLEMENTS => .supplements,
-        c.REPOQUERY_WHAT_KEY_ENHANCES => .enhances,
+        abi.REPOQUERY_WHAT_KEY_PROVIDES => .provides,
+        abi.REPOQUERY_WHAT_KEY_OBSOLETES => .obsoletes,
+        abi.REPOQUERY_WHAT_KEY_CONFLICTS => .conflicts,
+        abi.REPOQUERY_WHAT_KEY_REQUIRES => .requires,
+        abi.REPOQUERY_WHAT_KEY_RECOMMENDS => .recommends,
+        abi.REPOQUERY_WHAT_KEY_SUGGESTS => .suggests,
+        abi.REPOQUERY_WHAT_KEY_SUPPLEMENTS => .supplements,
+        abi.REPOQUERY_WHAT_KEY_ENHANCES => .enhances,
         else => null,
     };
 }
@@ -3378,10 +3375,10 @@ fn selectInstalledUpdateInfoPackageRefs(ctx: *NativeContext, package_specs: [*c]
 
 fn advisoryTypeValue(advisory: model.Advisory) u32 {
     return switch (advisory.kind) {
-        .security => c.UPDATE_SECURITY,
-        .bugfix => c.UPDATE_BUGFIX,
-        .enhancement => c.UPDATE_ENHANCEMENT,
-        else => c.UPDATE_UNKNOWN,
+        .security => abi.UPDATE_SECURITY,
+        .bugfix => abi.UPDATE_BUGFIX,
+        .enhancement => abi.UPDATE_ENHANCEMENT,
+        else => abi.UPDATE_UNKNOWN,
     };
 }
 
@@ -3588,13 +3585,13 @@ fn tryBuildCStringArray(items: []const []const u8) !?[*c][*c]u8 {
     return out;
 }
 
-fn buildSearchInfoArray(ctx: *NativeContext, refs: []const SearchRef) !c.PTDNF_PKG_INFO {
-    const raw = c.calloc(refs.len, @sizeOf(c.TDNF_PKG_INFO)) orelse return error.OutOfMemory;
-    const array: c.PTDNF_PKG_INFO = @ptrCast(@alignCast(raw));
-    errdefer c.TDNFFreePackageInfoArray(array, @intCast(refs.len));
+fn buildSearchInfoArray(ctx: *NativeContext, refs: []const SearchRef) !abi.PTDNF_PKG_INFO {
+    const raw = c.calloc(refs.len, @sizeOf(abi.TDNF_PKG_INFO)) orelse return error.OutOfMemory;
+    const array: abi.PTDNF_PKG_INFO = @ptrCast(@alignCast(raw));
+    errdefer abi.TDNFFreePackageInfoArray(array, @intCast(refs.len));
 
     for (refs, 0..) |ref, index| {
-        const item: c.PTDNF_PKG_INFO = @ptrCast(array + index);
+        const item: abi.PTDNF_PKG_INFO = @ptrCast(array + index);
         switch (ref) {
             .package => |pkg_ref| {
                 const pkg = ctx.package(pkg_ref);
@@ -3624,7 +3621,7 @@ fn freeTrackedCString(text: ?[*:0]u8) void {
     }
 }
 
-fn freeTrackedPackageInfoList(head: c.PTDNF_PKG_INFO) void {
+fn freeTrackedPackageInfoList(head: abi.PTDNF_PKG_INFO) void {
     var node = head;
     while (node != null) {
         const next = node[0].pNext;
@@ -3640,7 +3637,7 @@ fn freeTrackedPackageInfoList(head: c.PTDNF_PKG_INFO) void {
     }
 }
 
-fn freeTrackedChangeLogEntries(head: c.PTDNF_PKG_CHANGELOG_ENTRY) void {
+fn freeTrackedChangeLogEntries(head: abi.PTDNF_PKG_CHANGELOG_ENTRY) void {
     var node = head;
     while (node != null) {
         const next = node[0].pNext;
@@ -3651,13 +3648,13 @@ fn freeTrackedChangeLogEntries(head: c.PTDNF_PKG_CHANGELOG_ENTRY) void {
     }
 }
 
-fn buildProvidesInfoList(ctx: *NativeContext, refs: []const PackageRef) !c.PTDNF_PKG_INFO {
-    var head: c.PTDNF_PKG_INFO = null;
+fn buildProvidesInfoList(ctx: *NativeContext, refs: []const PackageRef) !abi.PTDNF_PKG_INFO {
+    var head: abi.PTDNF_PKG_INFO = null;
     errdefer freeTrackedPackageInfoList(head);
 
     for (refs) |ref| {
         const node = blk: {
-            const allocated = @as(c.PTDNF_PKG_INFO, @ptrCast(@alignCast(queryCalloc(1, @sizeOf(c.TDNF_PKG_INFO)) orelse return error.OutOfMemory)));
+            const allocated = @as(abi.PTDNF_PKG_INFO, @ptrCast(@alignCast(queryCalloc(1, @sizeOf(abi.TDNF_PKG_INFO)) orelse return error.OutOfMemory)));
             errdefer freeTrackedPackageInfoList(allocated);
 
             const pkg = ctx.package(ref);
@@ -3672,13 +3669,13 @@ fn buildProvidesInfoList(ctx: *NativeContext, refs: []const PackageRef) !c.PTDNF
     return head;
 }
 
-fn buildPackageInfoArray(ctx: *NativeContext, refs: []const PackageRef, detail: c_int, fill_queryformat: bool, dep_key_set: c_uint, fill_file_list: bool, fill_checksum: bool) !c.PTDNF_PKG_INFO {
-    const raw = c.calloc(refs.len, @sizeOf(c.TDNF_PKG_INFO)) orelse return error.OutOfMemory;
-    const array: c.PTDNF_PKG_INFO = @ptrCast(@alignCast(raw));
-    errdefer c.TDNFFreePackageInfoArray(array, @intCast(refs.len));
+fn buildPackageInfoArray(ctx: *NativeContext, refs: []const PackageRef, detail: c_int, fill_queryformat: bool, dep_key_set: c_uint, fill_file_list: bool, fill_checksum: bool) !abi.PTDNF_PKG_INFO {
+    const raw = c.calloc(refs.len, @sizeOf(abi.TDNF_PKG_INFO)) orelse return error.OutOfMemory;
+    const array: abi.PTDNF_PKG_INFO = @ptrCast(@alignCast(raw));
+    errdefer abi.TDNFFreePackageInfoArray(array, @intCast(refs.len));
 
     for (refs, 0..) |ref, index| {
-        const item: c.PTDNF_PKG_INFO = @ptrCast(array + index);
+        const item: abi.PTDNF_PKG_INFO = @ptrCast(array + index);
         const pkg = ctx.package(ref);
         const explicit_epoch = ctx.datasets.items[ref.dataset_index].kind == .available;
         try fillBasicPkgIdentity(item, ctx.repoId(ref), pkg, false);
@@ -3710,7 +3707,7 @@ fn buildPackageInfoArray(ctx: *NativeContext, refs: []const PackageRef, detail: 
     return array;
 }
 
-fn fillBasicPkgIdentity(item: c.PTDNF_PKG_INFO, repo_id: []const u8, pkg: model.Package, explicit_zero_epoch: bool) !void {
+fn fillBasicPkgIdentity(item: abi.PTDNF_PKG_INFO, repo_id: []const u8, pkg: model.Package, explicit_zero_epoch: bool) !void {
     item[0].dwEpoch = pkgquery.epoch(pkg) orelse 0;
     item[0].pszName = try dupCString(pkgquery.name(pkg));
     item[0].pszRepoName = try dupCString(repo_id);
@@ -3728,7 +3725,7 @@ fn fillBasicPkgIdentity(item: c.PTDNF_PKG_INFO, repo_id: []const u8, pkg: model.
     }
 }
 
-fn fillInfoFields(item: c.PTDNF_PKG_INFO, pkg: model.Package) !void {
+fn fillInfoFields(item: abi.PTDNF_PKG_INFO, pkg: model.Package) !void {
     try fillSizeFields(item, pkg);
     item[0].pszSummary = try dupOptionalCString(pkgquery.summary(pkg));
     item[0].pszURL = try dupOptionalCString(pkgquery.url(pkg));
@@ -3736,14 +3733,14 @@ fn fillInfoFields(item: c.PTDNF_PKG_INFO, pkg: model.Package) !void {
     item[0].pszDescription = try dupOptionalCString(pkgquery.description(pkg));
 }
 
-fn fillQueryFormatFields(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRef, explicit_zero_epoch: bool) !void {
+fn fillQueryFormatFields(item: abi.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRef, explicit_zero_epoch: bool) !void {
     const pkg = ctx.package(ref);
     try fillInfoFields(item, pkg);
     try fillSourceField(item, pkg, explicit_zero_epoch);
     try fillLocationField(item, pkg);
 }
 
-fn fillSizeFields(item: c.PTDNF_PKG_INFO, pkg: model.Package) !void {
+fn fillSizeFields(item: abi.PTDNF_PKG_INFO, pkg: model.Package) !void {
     const install_size = pkgquery.installSize(pkg) orelse 0;
     const download_size = pkgquery.downloadSize(pkg) orelse 0;
     item[0].dwInstallSizeBytes = truncateU64ToU32(install_size);
@@ -3761,7 +3758,7 @@ fn truncateU64ToU32(value: u64) u32 {
     return if (value > std.math.maxInt(u32)) std.math.maxInt(u32) else @intCast(value);
 }
 
-fn fillChecksumField(item: c.PTDNF_PKG_INFO, pkg: model.Package) !void {
+fn fillChecksumField(item: abi.PTDNF_PKG_INFO, pkg: model.Package) !void {
     if (pkg.checksum.header_only) return;
     const digest = pkg.checksum.value;
     if (digest.len == 0 or digest.len % 2 != 0) return;
@@ -3805,7 +3802,7 @@ fn hexDigit(character: u8) ?u8 {
     };
 }
 
-fn fillSourceField(item: c.PTDNF_PKG_INFO, pkg: model.Package, explicit_zero_epoch: bool) !void {
+fn fillSourceField(item: abi.PTDNF_PKG_INFO, pkg: model.Package, explicit_zero_epoch: bool) !void {
     const src_name = pkgquery.sourceName(pkg) orelse return;
     const src_arch = pkgquery.sourceArch(pkg) orelse return;
     const source_evr = (try pkgquery.sourceEvrString(std.heap.c_allocator, pkg)) orelse return;
@@ -3822,7 +3819,7 @@ fn fillSourceField(item: c.PTDNF_PKG_INFO, pkg: model.Package, explicit_zero_epo
     item[0].pszSourcePkg = try dupCString(text);
 }
 
-fn fillLocationField(item: c.PTDNF_PKG_INFO, pkg: model.Package) !void {
+fn fillLocationField(item: abi.PTDNF_PKG_INFO, pkg: model.Package) !void {
     const href = pkgquery.locationHref(pkg);
     if (href.len == 0) {
         return;
@@ -3832,7 +3829,7 @@ fn fillLocationField(item: c.PTDNF_PKG_INFO, pkg: model.Package) !void {
     item[0].pszLocation = try dupCString(resolved);
 }
 
-fn fillFileListField(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRef) !void {
+fn fillFileListField(item: abi.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRef) !void {
     const pkg = ctx.package(ref);
     const files = try pkgquery.filePaths(std.heap.c_allocator, pkg, ctx.files(ref));
     defer files.deinit();
@@ -3840,7 +3837,7 @@ fn fillFileListField(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRe
 }
 
 fn fillContextFileListField(
-    item: c.PTDNF_PKG_INFO,
+    item: abi.PTDNF_PKG_INFO,
     pkg: model.Package,
     repository: *const package_context.Repository,
 ) !void {
@@ -3854,12 +3851,12 @@ fn fillContextFileListField(
         (try buildOwnedCStringArray(files.items)) orelse null;
 }
 
-fn fillDependencyFields(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRef, dep_key_set: c_uint) !void {
-    const raw = c.calloc(c.REPOQUERY_DEP_KEY_COUNT, @sizeOf([*c][*c]u8)) orelse return error.OutOfMemory;
+fn fillDependencyFields(item: abi.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRef, dep_key_set: c_uint) !void {
+    const raw = c.calloc(abi.REPOQUERY_DEP_KEY_COUNT, @sizeOf([*c][*c]u8)) orelse return error.OutOfMemory;
     item[0].pppszDependencies = @ptrCast(@alignCast(raw));
 
     var dep_key: usize = 0;
-    while (dep_key < c.REPOQUERY_DEP_KEY_COUNT) : (dep_key += 1) {
+    while (dep_key < abi.REPOQUERY_DEP_KEY_COUNT) : (dep_key += 1) {
         const mask: c_uint = @as(c_uint, 1) << @intCast(dep_key);
         if ((dep_key_set & mask) == 0) {
             continue;
@@ -3872,19 +3869,19 @@ fn fillDependencyFields(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: Packag
 }
 
 fn fillContextDependencyFields(
-    item: c.PTDNF_PKG_INFO,
+    item: abi.PTDNF_PKG_INFO,
     pkg: model.Package,
     repository: *const package_context.Repository,
     dep_key_set: c_uint,
 ) !void {
     const raw = c.calloc(
-        c.REPOQUERY_DEP_KEY_COUNT,
+        abi.REPOQUERY_DEP_KEY_COUNT,
         @sizeOf([*c][*c]u8),
     ) orelse return error.OutOfMemory;
     item[0].pppszDependencies = @ptrCast(@alignCast(raw));
 
     var dep_key: usize = 0;
-    while (dep_key < c.REPOQUERY_DEP_KEY_COUNT) : (dep_key += 1) {
+    while (dep_key < abi.REPOQUERY_DEP_KEY_COUNT) : (dep_key += 1) {
         const mask: c_uint = @as(c_uint, 1) << @intCast(dep_key);
         if ((dep_key_set & mask) == 0) continue;
         const strings = try dependencyStringsForPackage(
@@ -3898,11 +3895,11 @@ fn fillContextDependencyFields(
     }
 }
 
-fn fillChangelogFields(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRef) !void {
+fn fillChangelogFields(item: abi.PTDNF_PKG_INFO, ctx: *NativeContext, ref: PackageRef) !void {
     const pkg = ctx.package(ref);
     const entries = pkgquery.changelogEntries(pkg, ctx.changelogs(ref));
-    var head: c.PTDNF_PKG_CHANGELOG_ENTRY = null;
-    var tail: c.PTDNF_PKG_CHANGELOG_ENTRY = null;
+    var head: abi.PTDNF_PKG_CHANGELOG_ENTRY = null;
+    var tail: abi.PTDNF_PKG_CHANGELOG_ENTRY = null;
     errdefer freeTrackedChangeLogEntries(head);
 
     var index: usize = entries.len;
@@ -3910,7 +3907,7 @@ fn fillChangelogFields(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: Package
         index -= 1;
         const entry = entries[index];
         const node = blk: {
-            const allocated = @as(c.PTDNF_PKG_CHANGELOG_ENTRY, @ptrCast(@alignCast(queryCalloc(1, @sizeOf(c.TDNF_PKG_CHANGELOG_ENTRY)) orelse return error.OutOfMemory)));
+            const allocated = @as(abi.PTDNF_PKG_CHANGELOG_ENTRY, @ptrCast(@alignCast(queryCalloc(1, @sizeOf(abi.TDNF_PKG_CHANGELOG_ENTRY)) orelse return error.OutOfMemory)));
             errdefer freeTrackedChangeLogEntries(allocated);
 
             allocated[0].timeTime = @intCast(entry.timestamp);
@@ -3930,7 +3927,7 @@ fn fillChangelogFields(item: c.PTDNF_PKG_INFO, ctx: *NativeContext, ref: Package
 }
 
 fn fillContextChangelogFields(
-    item: c.PTDNF_PKG_INFO,
+    item: abi.PTDNF_PKG_INFO,
     pkg: model.Package,
     repository: *const package_context.Repository,
 ) !void {
@@ -3938,18 +3935,18 @@ fn fillContextChangelogFields(
         pkg,
         repository.model.changelogs,
     );
-    var head: c.PTDNF_PKG_CHANGELOG_ENTRY = null;
-    var tail: c.PTDNF_PKG_CHANGELOG_ENTRY = null;
+    var head: abi.PTDNF_PKG_CHANGELOG_ENTRY = null;
+    var tail: abi.PTDNF_PKG_CHANGELOG_ENTRY = null;
     errdefer freeTrackedChangeLogEntries(head);
 
     var index: usize = entries.len;
     while (index > 0) {
         index -= 1;
         const entry = entries[index];
-        const node: c.PTDNF_PKG_CHANGELOG_ENTRY =
+        const node: abi.PTDNF_PKG_CHANGELOG_ENTRY =
             @ptrCast(@alignCast(queryCalloc(
                 1,
-                @sizeOf(c.TDNF_PKG_CHANGELOG_ENTRY),
+                @sizeOf(abi.TDNF_PKG_CHANGELOG_ENTRY),
             ) orelse return error.OutOfMemory));
         errdefer freeTrackedChangeLogEntries(node);
         node[0].timeTime = @intCast(entry.timestamp);
@@ -3976,16 +3973,16 @@ fn dependencyStringsForKey(ctx: *NativeContext, ref: PackageRef, dep_key: usize)
     const pkg = ctx.package(ref);
     const relations = ctx.relations(ref);
     return switch (dep_key) {
-        c.REPOQUERY_DEP_KEY_PROVIDES => pkgquery.providesStrings(std.heap.c_allocator, pkg, relations),
-        c.REPOQUERY_DEP_KEY_OBSOLETES => pkgquery.obsoletesStrings(std.heap.c_allocator, pkg, relations),
-        c.REPOQUERY_DEP_KEY_CONFLICTS => pkgquery.conflictsStrings(std.heap.c_allocator, pkg, relations),
-        c.REPOQUERY_DEP_KEY_REQUIRES => pkgquery.requiresStrings(std.heap.c_allocator, pkg, relations),
-        c.REPOQUERY_DEP_KEY_RECOMMENDS => pkgquery.recommendsStrings(std.heap.c_allocator, pkg, relations),
-        c.REPOQUERY_DEP_KEY_SUGGESTS => pkgquery.suggestsStrings(std.heap.c_allocator, pkg, relations),
-        c.REPOQUERY_DEP_KEY_SUPPLEMENTS => pkgquery.supplementsStrings(std.heap.c_allocator, pkg, relations),
-        c.REPOQUERY_DEP_KEY_ENHANCES => pkgquery.enhancesStrings(std.heap.c_allocator, pkg, relations),
-        c.REPOQUERY_DEP_KEY_DEPENDS => pkgquery.dependsStrings(std.heap.c_allocator, pkg, relations),
-        c.REPOQUERY_DEP_KEY_REQUIRES_PRE => pkgquery.requiresPreStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_PROVIDES => pkgquery.providesStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_OBSOLETES => pkgquery.obsoletesStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_CONFLICTS => pkgquery.conflictsStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_REQUIRES => pkgquery.requiresStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_RECOMMENDS => pkgquery.recommendsStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_SUGGESTS => pkgquery.suggestsStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_SUPPLEMENTS => pkgquery.supplementsStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_ENHANCES => pkgquery.enhancesStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_DEPENDS => pkgquery.dependsStrings(std.heap.c_allocator, pkg, relations),
+        abi.REPOQUERY_DEP_KEY_REQUIRES_PRE => pkgquery.requiresPreStrings(std.heap.c_allocator, pkg, relations),
         else => pkgquery.OwnedStrings{ .allocator = std.heap.c_allocator, .items = try std.heap.c_allocator.alloc([]const u8, 0) },
     };
 }
@@ -3996,52 +3993,52 @@ fn dependencyStringsForPackage(
     dep_key: usize,
 ) !pkgquery.OwnedStrings {
     return switch (dep_key) {
-        c.REPOQUERY_DEP_KEY_PROVIDES => pkgquery.providesStrings(
+        abi.REPOQUERY_DEP_KEY_PROVIDES => pkgquery.providesStrings(
             std.heap.c_allocator,
             pkg,
             relations,
         ),
-        c.REPOQUERY_DEP_KEY_OBSOLETES => pkgquery.obsoletesStrings(
+        abi.REPOQUERY_DEP_KEY_OBSOLETES => pkgquery.obsoletesStrings(
             std.heap.c_allocator,
             pkg,
             relations,
         ),
-        c.REPOQUERY_DEP_KEY_CONFLICTS => pkgquery.conflictsStrings(
+        abi.REPOQUERY_DEP_KEY_CONFLICTS => pkgquery.conflictsStrings(
             std.heap.c_allocator,
             pkg,
             relations,
         ),
-        c.REPOQUERY_DEP_KEY_REQUIRES => pkgquery.requiresStrings(
+        abi.REPOQUERY_DEP_KEY_REQUIRES => pkgquery.requiresStrings(
             std.heap.c_allocator,
             pkg,
             relations,
         ),
-        c.REPOQUERY_DEP_KEY_RECOMMENDS => pkgquery.recommendsStrings(
+        abi.REPOQUERY_DEP_KEY_RECOMMENDS => pkgquery.recommendsStrings(
             std.heap.c_allocator,
             pkg,
             relations,
         ),
-        c.REPOQUERY_DEP_KEY_SUGGESTS => pkgquery.suggestsStrings(
+        abi.REPOQUERY_DEP_KEY_SUGGESTS => pkgquery.suggestsStrings(
             std.heap.c_allocator,
             pkg,
             relations,
         ),
-        c.REPOQUERY_DEP_KEY_SUPPLEMENTS => pkgquery.supplementsStrings(
+        abi.REPOQUERY_DEP_KEY_SUPPLEMENTS => pkgquery.supplementsStrings(
             std.heap.c_allocator,
             pkg,
             relations,
         ),
-        c.REPOQUERY_DEP_KEY_ENHANCES => pkgquery.enhancesStrings(
+        abi.REPOQUERY_DEP_KEY_ENHANCES => pkgquery.enhancesStrings(
             std.heap.c_allocator,
             pkg,
             relations,
         ),
-        c.REPOQUERY_DEP_KEY_DEPENDS => pkgquery.dependsStrings(
+        abi.REPOQUERY_DEP_KEY_DEPENDS => pkgquery.dependsStrings(
             std.heap.c_allocator,
             pkg,
             relations,
         ),
-        c.REPOQUERY_DEP_KEY_REQUIRES_PRE => pkgquery.requiresPreStrings(
+        abi.REPOQUERY_DEP_KEY_REQUIRES_PRE => pkgquery.requiresPreStrings(
             std.heap.c_allocator,
             pkg,
             relations,
@@ -4213,7 +4210,7 @@ test "native autoremove orphan detection keeps packages required by name file an
 test "repoquery changelog detail requests installed changelogs and populates entries" {
     const testing = std.testing;
 
-    var args = std.mem.zeroes(c.TDNF_REPOQUERY_ARGS);
+    var args = std.mem.zeroes(abi.TDNF_REPOQUERY_ARGS);
     args.nChangeLogs = 1;
 
     const installed_options = repoQueryInstalledLoadOptions(&args);
@@ -4225,7 +4222,7 @@ test "repoquery changelog detail requests installed changelogs and populates ent
 
     const refs = [_]PackageRef{.{ .dataset_index = 0, .package_index = 0 }};
     const infos = try buildPackageInfoArray(&ctx, refs[0..], detail_changelog, false, 0, false, false);
-    defer c.TDNFFreePackageInfoArray(infos, 1);
+    defer abi.TDNFFreePackageInfoArray(infos, 1);
 
     var entry = infos[0].pChangeLogEntries;
     var count: usize = 0;
@@ -4296,9 +4293,9 @@ test "package info refs populate dependencies and checksums" {
     const refs = try resolvePackageRefs(&ctx, @constCast(&refs_in));
     defer std.heap.c_allocator.free(refs);
 
-    const dep_mask: c_uint = @as(c_uint, 1) << @intCast(c.REPOQUERY_DEP_KEY_REQUIRES);
+    const dep_mask: c_uint = @as(c_uint, 1) << @intCast(abi.REPOQUERY_DEP_KEY_REQUIRES);
     const infos = try buildPackageInfoArray(&ctx, refs, detail_list, false, dep_mask, false, true);
-    defer c.TDNFFreePackageInfoArray(infos, 1);
+    defer abi.TDNFFreePackageInfoArray(infos, 1);
 
     try testing.expectEqual(@as(u32, 1), @as(u32, @intCast(refs.len)));
     try testing.expectEqual(hash_sha256, infos[0].nChecksumType);
@@ -4306,10 +4303,10 @@ test "package info refs populate dependencies and checksums" {
     try testing.expectEqual(@as(u8, 0x0a), infos[0].pbChecksum[0]);
     try testing.expectEqual(@as(u8, 0x1b), infos[0].pbChecksum[1]);
     try testing.expect(infos[0].pppszDependencies != null);
-    try testing.expect(infos[0].pppszDependencies[c.REPOQUERY_DEP_KEY_REQUIRES] != null);
+    try testing.expect(infos[0].pppszDependencies[abi.REPOQUERY_DEP_KEY_REQUIRES] != null);
     try testing.expectEqualStrings(
         "dep >= 2.0-1",
-        std.mem.span(infos[0].pppszDependencies[c.REPOQUERY_DEP_KEY_REQUIRES][0]),
+        std.mem.span(infos[0].pppszDependencies[abi.REPOQUERY_DEP_KEY_REQUIRES][0]),
     );
 }
 
@@ -4343,7 +4340,7 @@ test "native updateinfo summary and detail return legacy no-match and no-data er
         error.NoMatch,
         computeUpdateInfoLines(&ctx, @constCast(&missing_specs), false, null, false),
     );
-    try testing.expectEqual(@as(u32, @intCast(c.ERROR_TDNF_NO_MATCH)), mapQueryError(error.NoMatch));
+    try testing.expectEqual(@as(u32, @intCast(abi.ERROR_TDNF_NO_MATCH)), mapQueryError(error.NoMatch));
 
     const summary_lines = try computeUpdateInfoSummaryLines(&ctx, null, false, "9.0");
     defer freeOwnedSlices(summary_lines);
@@ -4358,7 +4355,7 @@ test "native updateinfo summary and detail return legacy no-match and no-data er
         error.NoData,
         computeUpdateInfoLines(&ctx, null, false, "9.0", false),
     );
-    try testing.expectEqual(@as(u32, @intCast(c.ERROR_TDNF_NO_DATA)), mapQueryError(error.NoData));
+    try testing.expectEqual(@as(u32, @intCast(abi.ERROR_TDNF_NO_DATA)), mapQueryError(error.NoData));
 }
 
 test "provides and changelog builders free partial tracked allocations on oom" {
@@ -4397,7 +4394,7 @@ test "provides and changelog builders free partial tracked allocations on oom" {
 
     fail_after = 0;
     while (true) : (fail_after += 1) {
-        var info = std.mem.zeroes(c.TDNF_PKG_INFO);
+        var info = std.mem.zeroes(abi.TDNF_PKG_INFO);
 
         queryAllocTestEnable(fail_after);
         fillChangelogFields(&info, &changelog_ctx, .{ .dataset_index = 0, .package_index = 0 }) catch |err| {
@@ -4734,8 +4731,8 @@ test "an obsoleting package wins an EVR tie against the package it obsoletes" {
 test "obsoletes preference only applies to non-source available lookups" {
     const testing = std.testing;
 
-    try testing.expect(scopePrefersObsoleting(c.SCOPE_AVAILABLE, false, true));
-    try testing.expect(!scopePrefersObsoleting(c.SCOPE_AVAILABLE, true, true));
-    try testing.expect(!scopePrefersObsoleting(c.SCOPE_AVAILABLE, false, false));
-    try testing.expect(!scopePrefersObsoleting(c.SCOPE_INSTALLED, false, true));
+    try testing.expect(scopePrefersObsoleting(abi.SCOPE_AVAILABLE, false, true));
+    try testing.expect(!scopePrefersObsoleting(abi.SCOPE_AVAILABLE, true, true));
+    try testing.expect(!scopePrefersObsoleting(abi.SCOPE_AVAILABLE, false, false));
+    try testing.expect(!scopePrefersObsoleting(abi.SCOPE_INSTALLED, false, true));
 }

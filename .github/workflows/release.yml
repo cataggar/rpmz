@@ -26,12 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install C build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config
-
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
@@ -56,7 +50,7 @@ jobs:
       - name: Verify CLI version
         shell: bash
         run: |
-          VERSION_OUTPUT="$(LD_LIBRARY_PATH=./out/lib ./out/bin/tdnf --version 2>&1)"
+          VERSION_OUTPUT="$(./out/bin/tdnf --version 2>&1)"
           EXPECTED="tdnf: ${{ steps.version.outputs.version }}"
           if [ "$VERSION_OUTPUT" != "$EXPECTED" ]; then
             echo "Expected: $EXPECTED"
@@ -143,8 +137,12 @@ jobs:
 
             Each archive contains the same install layout produced by
             `zig build install --prefix ./out`:
-            `bin/`, `lib/`, `libexec/`, `etc/`,
-            `include/`, plus the project `COPYING` and `README.md`.
+            `bin/`, `lib/`, `libexec/`, and `etc/`, plus the project
+            `COPYING` and `README.md`.
+
+            `libexec/tdnf/tdnf-test-support` is intentionally included so a
+            source checkout can use the documented install-then-pytest
+            workflow. It is a private command bridge, not a public API.
 
             See the source tarball (`tdnf-*.tar.xz`) for a reproducible source snapshot.
           files: |

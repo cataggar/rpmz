@@ -1,6 +1,7 @@
 # Built-in tdnf plugins
 
-tdnf includes two plugins in `libtdnf`; no plugin shared objects are loaded:
+tdnf composes two plugins directly into the executable; no plugin shared
+objects are loaded:
 
 - `tdnfmetalink` downloads metalink metadata, selects mirrors by preference,
   and validates `repomd.xml` with the strongest supported metalink checksum.

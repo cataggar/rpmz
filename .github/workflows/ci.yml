@@ -31,7 +31,6 @@ jobs:
             createrepo-c \
             gcc \
             gnupg \
-            pkg-config \
             rpm
 
       - name: Install Zig
@@ -52,7 +51,7 @@ jobs:
 
       - name: Smoke test (Debug)
         run: |
-          LD_LIBRARY_PATH=./out/lib ./out/bin/tdnf --version
+          ./out/bin/tdnf --version
           sudo ./scripts/smoke-rpmzig.sh ./out
 
       - name: Zig unit tests
@@ -74,19 +73,17 @@ jobs:
 
       - name: Smoke test (ReleaseSafe)
         run: |
-          LD_LIBRARY_PATH=./out/lib ./out/bin/tdnf --version
+          ./out/bin/tdnf --version
           sudo ./scripts/smoke-rpmzig.sh ./out
 
-      - name: Public ABI audit
+      - name: Migration audits
         run: |
-          zig build -Doptimize=ReleaseSafe abi-audit --prefix ./out
           zig build migration-audit --prefix ./out
           zig build dead-errdefer-audit --prefix ./out
 
-      - name: Native dependency and public API audits
+      - name: Native dependency and public Zig API audits
         run: |
           zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
-          zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
 
@@ -111,17 +108,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             binutils \
             flake8 \
-            gcc \
-            pkg-config
+            gcc
           legacy_dev="lib$(printf 'r%sm' 'p')-dev"
           if dpkg-query -W -f='${Status}' "${legacy_dev}" 2>/dev/null |
               grep -Fq 'install ok installed'; then
             echo "::error::legacy development files must not be installed"
-            exit 1
-          fi
-          legacy_module="$(printf 'r%sm' 'p')"
-          if pkg-config --exists "${legacy_module}"; then
-            echo "::error::legacy package metadata must not be visible"
             exit 1
           fi
 
@@ -145,13 +136,11 @@ jobs:
           zig build lint --prefix ./out
           zig build -Doptimize=ReleaseSafe install --prefix ./out
 
-      - name: Audit ABI, migration, dependencies, and public API
+      - name: Audit migration, dependencies, and public Zig API
         run: |
           zig build migration-audit --prefix ./out
           zig build dead-errdefer-audit --prefix ./out
-          zig build -Doptimize=ReleaseSafe abi-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
-          zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
 

@@ -289,6 +289,8 @@ class TestUtils(object):
             self.config['repo_path'] = os.path.join(test_prefix, 'repo')
             self.config['history_util_binary'] = os.path.join(
                 test_prefix, 'libexec', 'tdnf', 'tdnf-history-util')
+            self.config['test_support_binary'] = os.path.join(
+                test_prefix, 'libexec', 'tdnf', 'tdnf-test-support')
         self.config['distribution'] = os.environ.get('DIST', 'photon')
         self.config['repo_seed_path'] = self.config['repo_path']
         self.config['repo_path'] = _prepare_session_repo(self.config)

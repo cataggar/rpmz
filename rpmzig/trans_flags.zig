@@ -25,7 +25,7 @@ pub const TDNF_RPMTRANS_FLAG_NOARTIFACTS: u32 = 0x20000000;
 pub const TDNF_RPMTRANS_FLAG_NOCONFIGS: u32 = 0x40000000;
 pub const TDNF_RPMTRANS_FLAG_DEPLOOPS: u32 = 0x80000000;
 
-test "public transaction flag values match the C ABI" {
+test "private transaction flag values match the internal ABI" {
     const std = @import("std");
     try std.testing.expectEqual(@as(u32, 1 << 0), TDNF_RPMTRANS_FLAG_TEST);
     try std.testing.expectEqual(@as(u32, 1 << 7), TDNF_RPMTRANS_FLAG_NOPLUGINS);

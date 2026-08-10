@@ -32,6 +32,8 @@ METRIC_LABELS = {
     "tracked_h_files": "Tracked .h files",
     "tracked_h_in_files": "Tracked .h.in templates",
     "tracked_c_lines": "Tracked C lines",
+    "public_c_header_files": "Public C header files",
+    "public_c_surface_files": "Retired public C surface files",
     "zig_cimport_files": "Zig files using @cImport",
     "zig_cinclude_directives": "@cInclude directives",
     "build_add_c_source_calls": "build.zig C-source declarations",
@@ -39,11 +41,45 @@ METRIC_LABELS = {
     "build_link_system_library_calls": "build.zig linkSystemLibrary calls",
     "build_link_system_helper_calls": "build.zig linkSystem helper calls",
     "build_pkg_config_literals": "build.zig pkg-config command literals",
+    "build_dynamic_library_declarations": "build.zig dynamic libraries",
+    "build_install_header_calls": "build.zig header install declarations",
+    "public_zig_module_declarations": "Public tdnf Zig modules",
+    "public_zig_api_audit_steps": "Public Zig API audit steps",
 }
 
 ZERO_ONLY_METRICS = {
     "tracked_c_files",
     "tracked_c_lines",
+    "public_c_header_files",
+    "public_c_surface_files",
+    "build_dynamic_library_declarations",
+    "build_install_header_calls",
+}
+
+EXACT_METRICS = {
+    "public_zig_module_declarations": 1,
+    "public_zig_api_audit_steps": 1,
+}
+
+RETIRED_PUBLIC_C_FILES = {
+    "client/libtdnf.map",
+    "client/tdnf.pc.in",
+    "client/history_abi.inc",
+    "client/transaction_plan_capture_abi.inc",
+    "scripts/abi-audit.py",
+    "scripts/abi-baseline.json",
+    "scripts/public-api-audit.py",
+    "tools/cli/lib/tdnf-cli-libs.pc.in",
+}
+
+ALLOWED_PRIVATE_HEADERS = {
+    "llconf/entry.h",
+    "llconf/ini.h",
+    "llconf/lines.h",
+    "llconf/modules.h",
+    "llconf/nodes.h",
+    "llconf/strutils.h",
+    "rpmzig/rpmdb.h",
 }
 
 
@@ -84,6 +120,15 @@ def collect_metrics():
         path.relative_to(ROOT).parts[0] in SOURCE_ROOTS
     ]
     c_files = [path for path in repository if path.suffix == ".c"]
+    public_c_headers = [
+        path for path in repository
+        if path.relative_to(ROOT).parts[:1] == ("include",) and
+        path.suffix == ".h"
+    ]
+    public_c_surface = [
+        path for path in repository
+        if path.relative_to(ROOT).as_posix() in RETIRED_PUBLIC_C_FILES
+    ]
     h_files = [path for path in files if path.suffix == ".h"]
     h_in_files = [path for path in files if path.name.endswith(".h.in")]
     zig_files = [path for path in files if path.suffix == ".zig"]
@@ -95,6 +140,8 @@ def collect_metrics():
         "tracked_h_files": len(h_files),
         "tracked_h_in_files": len(h_in_files),
         "tracked_c_lines": count_lines(c_files),
+        "public_c_header_files": len(public_c_headers),
+        "public_c_surface_files": len(public_c_surface),
         "zig_cimport_files": sum(
             "@cImport" in source for source in zig_sources
         ),
@@ -114,7 +161,32 @@ def collect_metrics():
             re.findall(r"\blinkSystem\s*\(", build_source)
         ),
         "build_pkg_config_literals": build_source.count('"pkg-config"'),
+        "build_dynamic_library_declarations": len(
+            re.findall(r"\.linkage\s*=\s*\.dynamic\b", build_source)
+        ),
+        "build_install_header_calls": len(
+            re.findall(
+                r"\b(?:installDirectory|installHeader|"
+                r"installHeadersDirectory|addInstallHeaderFile)\s*\(",
+                build_source,
+            )
+        ),
+        "public_zig_module_declarations": len(
+            re.findall(r'\baddModule\s*\(\s*"tdnf"', build_source)
+        ),
+        "public_zig_api_audit_steps": build_source.count(
+            '"public-zig-api-audit"'
+        ),
     }
+
+
+def unexpected_private_headers():
+    return sorted(
+        path.relative_to(ROOT).as_posix()
+        for path in repository_files()
+        if path.suffix == ".h" and
+        path.relative_to(ROOT).as_posix() not in ALLOWED_PRIVATE_HEADERS
+    )
 
 
 def load_maximums(path):
@@ -205,6 +277,26 @@ def main():
             print(
                 f"migration regression: {METRIC_LABELS[key]} is "
                 f"{metrics[key]}, maximum is {maximums[key]}",
+                file=sys.stderr,
+            )
+        return 1
+    mismatches = [
+        key for key, expected in EXACT_METRICS.items()
+        if metrics[key] != expected
+    ]
+    if mismatches:
+        for key in mismatches:
+            print(
+                f"migration regression: {METRIC_LABELS[key]} is "
+                f"{metrics[key]}, required is {EXACT_METRICS[key]}",
+                file=sys.stderr,
+            )
+        return 1
+    unexpected_headers = unexpected_private_headers()
+    if unexpected_headers:
+        for path in unexpected_headers:
+            print(
+                f"migration regression: unapproved private header {path}",
                 file=sys.stderr,
             )
         return 1

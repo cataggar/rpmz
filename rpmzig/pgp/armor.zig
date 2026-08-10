@@ -9,7 +9,7 @@
 //! This is PR #1 of the pure-Zig OpenPGP verifier plan (see
 //! plan-pure-zig-pgp.md, section 5 Phase A). It is intentionally
 //! self-contained — no other rpmzig module imports it yet. PR #5 will
-//! wire it into libtdnf's package-signature verify path.
+//! wire it into the package-signature verify path.
 
 const std = @import("std");
 const packet = @import("packet.zig");

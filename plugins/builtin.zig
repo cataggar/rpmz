@@ -2,11 +2,47 @@ const std = @import("std");
 const metalink_xml = @import("metalink_xml");
 
 const c = @cImport({
-    @cInclude("builtin_plugins.h");
+    @cInclude("stddef.h");
     @cInclude("nodes.h");
 });
 
+extern fn TDNFAllocateMemory(usize, usize, [*c]?*anyopaque) u32;
+extern fn TDNFAllocateString([*c]const u8, [*c][*c]u8) u32;
+extern fn TDNFFreeStringArray([*c][*c]u8) void;
+extern fn TDNFCheckHexDigest([*c]const u8, c_int) u32;
+extern fn TDNFChecksumFromHexDigest([*c]const u8, [*c]u8) u32;
+extern fn TDNFCheckHash([*c]const u8, [*c]const u8, c_int) u32;
+extern fn BuiltinRefreshRequested(?*anyopaque) c_int;
+extern fn BuiltinGetEnv([*c]const u8) [*c]const u8;
+extern fn BuiltinFileExists([*c]const u8) c_int;
+extern fn BuiltinUnlink([*c]const u8) void;
+extern fn BuiltinMakeDirs([*c]const u8) u32;
+extern fn BuiltinFindRepo(?*anyopaque, [*c]const u8, [*c]?*anyopaque) u32;
+extern fn BuiltinDownloadMetalink(?*anyopaque, ?*anyopaque, [*c]const u8) u32;
+extern fn BuiltinDownloadRepoFile(
+    ?*anyopaque,
+    ?*anyopaque,
+    [*c]const u8,
+    [*c]const u8,
+    [*c]const u8,
+) u32;
+extern fn BuiltinReplaceBaseUrls(?*anyopaque, [*c][*c]u8) void;
+extern fn rpmzig_verify_detached_armored(
+    [*c]const u8,
+    usize,
+    [*c]const u8,
+    usize,
+    [*c]const [*c]const u8,
+    [*c]const usize,
+    usize,
+) c_int;
+
 const allocator = std.heap.c_allocator;
+
+const TDNF_HASH_MD5: c_int = 0;
+const TDNF_HASH_SHA1: c_int = 1;
+const TDNF_HASH_SHA256: c_int = 2;
+const TDNF_HASH_SHA512: c_int = 3;
 
 const ERROR_TDNF_INVALID_PARAMETER: u32 = 1622;
 const ERROR_TDNF_OUT_OF_MEMORY: u32 = 1612;
@@ -211,7 +247,7 @@ pub export fn BuiltinMetalinkRepoMDDownloadStart(
     const entry = state.find(repo_id) orelse return 0;
 
     var repo: ?*anyopaque = null;
-    var rc = c.BuiltinFindRepo(state.tdnf, repo_id_z, &repo);
+    var rc = BuiltinFindRepo(state.tdnf, repo_id_z, &repo);
     if (rc != 0) return rc;
     if (repo == null) return ERROR_TDNF_INVALID_PARAMETER;
 
@@ -223,12 +259,12 @@ pub export fn BuiltinMetalinkRepoMDDownloadStart(
     ) catch return ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(metalink_path);
 
-    if (c.BuiltinRefreshRequested(state.tdnf) != 0 or
-        c.BuiltinFileExists(metalink_path.ptr) == 0)
+    if (BuiltinRefreshRequested(state.tdnf) != 0 or
+        BuiltinFileExists(metalink_path.ptr) == 0)
     {
-        rc = c.BuiltinMakeDirs(repo_data_dir_z);
+        rc = BuiltinMakeDirs(repo_data_dir_z);
         if (rc != 0 and rc != ERROR_TDNF_ALREADY_EXISTS) return rc;
-        rc = c.BuiltinDownloadMetalink(
+        rc = BuiltinDownloadMetalink(
             state.tdnf,
             repo,
             metalink_path.ptr,
@@ -381,7 +417,7 @@ fn metalinkOnUrl(
 
 fn installBaseUrls(repo: ?*anyopaque, urls: []const MetalinkUrl) u32 {
     var raw: ?*anyopaque = null;
-    var rc = c.TDNFAllocateMemory(
+    var rc = TDNFAllocateMemory(
         urls.len + 1,
         @sizeOf(?[*:0]u8),
         &raw,
@@ -393,40 +429,40 @@ fn installBaseUrls(repo: ?*anyopaque, urls: []const MetalinkUrl) u32 {
     var count: usize = 0;
     for (urls) |url| {
         if (!std.mem.endsWith(u8, url.value, repomd_path)) {
-            c.TDNFFreeStringArray(@ptrCast(array));
+            TDNFFreeStringArray(@ptrCast(array));
             return ERROR_TDNF_INVALID_REPO_FILE;
         }
         const base = url.value[0 .. url.value.len - repomd_path.len];
         const base_z = allocator.dupeZ(u8, base) catch {
-            c.TDNFFreeStringArray(@ptrCast(array));
+            TDNFFreeStringArray(@ptrCast(array));
             return ERROR_TDNF_OUT_OF_MEMORY;
         };
         defer allocator.free(base_z);
         var destination: [*c]u8 = null;
-        rc = c.TDNFAllocateString(base_z.ptr, &destination);
+        rc = TDNFAllocateString(base_z.ptr, &destination);
         if (rc != 0) {
-            c.TDNFFreeStringArray(@ptrCast(array));
+            TDNFFreeStringArray(@ptrCast(array));
             return rc;
         }
         array[count] = destination;
         count += 1;
     }
-    c.BuiltinReplaceBaseUrls(repo, @ptrCast(array));
+    BuiltinReplaceBaseUrls(repo, @ptrCast(array));
     return 0;
 }
 
 fn hashKind(kind: []const u8) ?struct { rank: u8, c_kind: c_int, len: usize } {
     if (std.ascii.eqlIgnoreCase(kind, "md5"))
-        return .{ .rank = 0, .c_kind = c.TDNF_HASH_MD5, .len = 16 };
+        return .{ .rank = 0, .c_kind = TDNF_HASH_MD5, .len = 16 };
     if (std.ascii.eqlIgnoreCase(kind, "sha1") or
         std.ascii.eqlIgnoreCase(kind, "sha-1"))
-        return .{ .rank = 1, .c_kind = c.TDNF_HASH_SHA1, .len = 20 };
+        return .{ .rank = 1, .c_kind = TDNF_HASH_SHA1, .len = 20 };
     if (std.ascii.eqlIgnoreCase(kind, "sha256") or
         std.ascii.eqlIgnoreCase(kind, "sha-256"))
-        return .{ .rank = 2, .c_kind = c.TDNF_HASH_SHA256, .len = 32 };
+        return .{ .rank = 2, .c_kind = TDNF_HASH_SHA256, .len = 32 };
     if (std.ascii.eqlIgnoreCase(kind, "sha512") or
         std.ascii.eqlIgnoreCase(kind, "sha-512"))
-        return .{ .rank = 3, .c_kind = c.TDNF_HASH_SHA512, .len = 64 };
+        return .{ .rank = 3, .c_kind = TDNF_HASH_SHA512, .len = 64 };
     return null;
 }
 
@@ -445,10 +481,10 @@ fn checkMetalinkHashes(path: [*:0]const u8, hashes: []const MetalinkHash) u32 {
         const value_z = allocator.dupeZ(u8, hash.value) catch
             return ERROR_TDNF_OUT_OF_MEMORY;
         defer allocator.free(value_z);
-        if (c.TDNFCheckHexDigest(value_z.ptr, @intCast(kind.len)) == 0) continue;
-        var rc = c.TDNFChecksumFromHexDigest(value_z.ptr, &digest);
+        if (TDNFCheckHexDigest(value_z.ptr, @intCast(kind.len)) == 0) continue;
+        var rc = TDNFChecksumFromHexDigest(value_z.ptr, &digest);
         if (rc != 0) return rc;
-        rc = c.TDNFCheckHash(path, &digest, kind.c_kind);
+        rc = TDNFCheckHash(path, &digest, kind.c_kind);
         if (rc == 0) return 0;
         if (rc != ERROR_TDNF_CHECKSUM_VALIDATION_FAILED) return rc;
     }
@@ -506,7 +542,7 @@ pub export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
     if (!state.has(std.mem.span(repo_id_z))) return 0;
 
     var repo: ?*anyopaque = null;
-    var rc = c.BuiltinFindRepo(state.tdnf, repo_id_z, &repo);
+    var rc = BuiltinFindRepo(state.tdnf, repo_id_z, &repo);
     if (rc != 0) return rc;
     if (repo == null) return ERROR_TDNF_INVALID_PARAMETER;
 
@@ -518,7 +554,7 @@ pub export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
     ) catch return ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(signature_path);
     const signature_location: [:0]const u8 = repomd_path ++ ".asc";
-    rc = c.BuiltinDownloadRepoFile(
+    rc = BuiltinDownloadRepoFile(
         state.tdnf,
         repo,
         signature_location.ptr,
@@ -526,7 +562,7 @@ pub export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
         repo_id_z,
     );
     if (rc != 0) return rc;
-    defer c.BuiltinUnlink(signature_path.ptr);
+    defer BuiltinUnlink(signature_path.ptr);
 
     const signed_data = readFile(std.mem.span(repomd_file_z)) catch
         return ERROR_TDNF_GPG_SIGNATURE_CHECK;
@@ -547,7 +583,7 @@ pub export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
         key_ptrs[i] = key.ptr;
         key_lens[i] = key.len;
     }
-    const status = c.rpmzig_verify_detached_armored(
+    const status = rpmzig_verify_detached_armored(
         armored_signature.ptr,
         armored_signature.len,
         signed_data.ptr,
@@ -576,8 +612,8 @@ fn loadAmbientKeys() !KeySet {
     var keys = KeySet.init();
     errdefer keys.deinit();
 
-    const gnupg_home = c.BuiltinGetEnv("GNUPGHOME");
-    const user_home = c.BuiltinGetEnv("HOME");
+    const gnupg_home = BuiltinGetEnv("GNUPGHOME");
+    const user_home = BuiltinGetEnv("HOME");
     const home = if (gnupg_home != null)
         cSpan(gnupg_home)
     else if (user_home != null)

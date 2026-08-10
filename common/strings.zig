@@ -5,11 +5,11 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("string.h");
     @cInclude("stdlib.h");
-    @cInclude("tdnferror.h");
 });
 
 extern fn TDNFAllocateMemory(nNumElements: usize, nSize: usize, ppMemory: ?*?*anyopaque) u32;
@@ -38,7 +38,7 @@ fn allocateCStringCapacity(nCapacity: usize, ppszDst: ?*?[*:0]u8) u32 {
     var raw: ?*anyopaque = null;
 
     if (ppszDst == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const dwError = TDNFAllocateMemory(nCapacity, 1, &raw);
@@ -55,7 +55,7 @@ fn allocateOwnedString(pszValue: []const u8, ppszDst: ?*?[*:0]u8) u32 {
     var pszDst: ?[*:0]u8 = null;
 
     if (ppszDst == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const dwError = allocateCStringCapacity(pszValue.len + 1, &pszDst);
@@ -100,7 +100,7 @@ export fn TDNFStringSepCount(
     var i: usize = 0;
 
     if (pszBufOpt == null or isNullOrEmptyString(pszSepOpt) or nSepCount == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pszBuf = pszBufOpt.?;
@@ -133,7 +133,7 @@ export fn TDNFSplitStringToArray(
 
     if (pszBufOpt == null or isNullOrEmptyString(pszSepOpt) or pppszTokens == null) {
         setNullOut([*c]?[*:0]u8, pppszTokens);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pszBuf = pszBufOpt.?;
@@ -188,7 +188,7 @@ export fn TDNFMergeStringArrays(
     var raw: ?*anyopaque = null;
 
     if (pppszArray0 == null or ppszArray1 == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     dwError = TDNFStringArrayCount(pppszArray0.?.*, &n0);
@@ -226,7 +226,7 @@ export fn TDNFAddStringArray(
     var ppszArrayToAdd: [*c]?[*:0]u8 = null;
 
     if (pppszArray == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     if (isNullOrEmptyString(pszValueOpt)) {
@@ -268,7 +268,7 @@ export fn TDNFJoinArrayToString(
 
     if (ppszArray == null or pszSepOpt == null or ppszResult == null or count < 0) {
         setNullOut(?[*:0]u8, ppszResult);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pszSep = pszSepOpt.?;
@@ -317,7 +317,7 @@ export fn TDNFJoinArrayToStringSorted(
 
     if (pszSepOpt == null or ppszResult == null) {
         setNullOut(?[*:0]u8, ppszResult);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     if (ppszDependencies != null) {
@@ -401,7 +401,7 @@ export fn TDNFReplaceString(
 
     if (isNullOrEmptyString(pszSourceOpt) or isNullOrEmptyString(pszSearchOpt) or pszReplaceOpt == null or ppszDst == null) {
         setNullOut(?[*:0]u8, ppszDst);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const source = std.mem.span(pszSourceOpt.?);
@@ -417,8 +417,8 @@ export fn TDNFReplaceString(
 
     var nLength = source.len;
     if (replace.len >= search.len) {
-        const nExtra = std.math.mul(usize, nOccurrences, replace.len - search.len) catch return c.ERROR_TDNF_INVALID_ALLOCSIZE;
-        nLength = std.math.add(usize, nLength, nExtra) catch return c.ERROR_TDNF_INVALID_ALLOCSIZE;
+        const nExtra = std.math.mul(usize, nOccurrences, replace.len - search.len) catch return abi.ERROR_TDNF_INVALID_ALLOCSIZE;
+        nLength = std.math.add(usize, nLength, nExtra) catch return abi.ERROR_TDNF_INVALID_ALLOCSIZE;
     } else {
         nLength -= nOccurrences * (search.len - replace.len);
     }
@@ -453,13 +453,13 @@ export fn TDNFReplaceString(
 
 export fn TDNFTrimSuffix(pszSourceOpt: ?[*:0]u8, pszSuffixOpt: ?[*:0]const u8) u32 {
     if (isNullOrEmptyString(pszSourceOpt) or isNullOrEmptyString(pszSuffixOpt)) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pszSuffix = pszSuffixOpt.?;
     const pszIndex = c.strstr(@ptrCast(pszSourceOpt.?), @ptrCast(pszSuffix));
     if (pszIndex == null or c.strcmp(pszIndex, @ptrCast(pszSuffix)) != 0) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     pszIndex[0] = 0;
@@ -468,17 +468,17 @@ export fn TDNFTrimSuffix(pszSourceOpt: ?[*:0]u8, pszSuffixOpt: ?[*:0]const u8) u
 
 export fn TDNFStringEndsWith(pszSourceOpt: ?[*:0]const u8, pszSuffixOpt: ?[*:0]const u8) u32 {
     if (isNullOrEmptyString(pszSourceOpt) or isNullOrEmptyString(pszSuffixOpt)) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const source = std.mem.span(pszSourceOpt.?);
     const suffix = std.mem.span(pszSuffixOpt.?);
     if (suffix.len > source.len) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     if (!std.mem.eql(u8, source[source.len - suffix.len ..], suffix)) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     return 0;
@@ -488,7 +488,7 @@ export fn TDNFStringArrayCount(ppszStringArray: [*c]?[*:0]u8, pnCount: ?*c_int) 
     var nCount: c_int = 0;
 
     if (ppszStringArray == null or pnCount == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     while (ppszStringArray[@intCast(nCount)] != null) : (nCount += 1) {}
@@ -500,7 +500,7 @@ export fn TDNFStringArraySort(ppszArray: [*c]?[*:0]u8) u32 {
     var nCount: c_int = 0;
 
     if (ppszArray == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     while (ppszArray[@intCast(nCount)] != null) : (nCount += 1) {}
@@ -589,10 +589,10 @@ test "TDNFReplaceString, TDNFTrimSuffix, and TDNFStringEndsWith preserve string 
     try std.testing.expectEqualStrings("name", std.mem.span(@as([*:0]u8, @ptrCast(&szFile))));
 
     var szTricky = [_:0]u8{ 'a', 'b', 'c', 'a', 'b', 'c', 0 };
-    try std.testing.expectEqual(@as(u32, c.ERROR_TDNF_INVALID_PARAMETER), TDNFTrimSuffix(&szTricky, "abc"));
+    try std.testing.expectEqual(@as(u32, abi.ERROR_TDNF_INVALID_PARAMETER), TDNFTrimSuffix(&szTricky, "abc"));
 
     try std.testing.expectEqual(@as(u32, 0), TDNFStringEndsWith("package.rpm", ".rpm"));
-    try std.testing.expectEqual(@as(u32, c.ERROR_TDNF_INVALID_PARAMETER), TDNFStringEndsWith("package.rpm", ".deb"));
+    try std.testing.expectEqual(@as(u32, abi.ERROR_TDNF_INVALID_PARAMETER), TDNFStringEndsWith("package.rpm", ".deb"));
 }
 
 test "TDNFStringArrayCount and TDNFStringArraySort order arrays lexicographically" {

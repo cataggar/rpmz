@@ -6,11 +6,12 @@
 # of the License are located in the COPYING file of this distribution.
 #
 
-import ctypes
+import json
 import os
 import shutil
 import sqlite3
 import struct
+import subprocess
 
 import pytest
 
@@ -99,27 +100,20 @@ def distrover_case(utils, monkeypatch, request):
 
 @pytest.fixture(scope='module')
 def release_version_api(utils):
-    library = ctypes.CDLL(os.path.join(utils.config['build_dir'], 'lib',
-                                       'libtdnf.so'))
-    library.TDNFGetReleaseVersion.argtypes = [
-        ctypes.c_char_p,
-        ctypes.c_char_p,
-        ctypes.POINTER(ctypes.c_void_p),
-    ]
-    library.TDNFGetReleaseVersion.restype = ctypes.c_uint32
-    library.TDNFFreeMemory.argtypes = [ctypes.c_void_p]
-    library.TDNFFreeMemory.restype = None
-
     def resolve(root, provide_name='test-distrover'):
-        value = ctypes.c_void_p()
-        result = library.TDNFGetReleaseVersion(
-            root.encode(), provide_name.encode(), ctypes.byref(value))
-        if not value.value:
-            return result, None
-        try:
-            return result, ctypes.string_at(value).decode()
-        finally:
-            library.TDNFFreeMemory(value)
+        completed = subprocess.run(
+            [
+                utils.config['test_support_binary'],
+                'release-version',
+                root,
+                provide_name,
+            ],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        )
+        result = json.loads(completed.stdout)
+        return result['rc'], result['value']
 
     return resolve
 

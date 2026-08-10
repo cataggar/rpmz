@@ -1,15 +1,21 @@
 {
   "maximums": {
     "tracked_c_files": 0,
-    "tracked_h_files": 42,
-    "tracked_h_in_files": 2,
+    "tracked_h_files": 7,
+    "tracked_h_in_files": 0,
     "tracked_c_lines": 0,
-    "zig_cimport_files": 47,
-    "zig_cinclude_directives": 274,
+    "public_c_header_files": 0,
+    "public_c_surface_files": 0,
+    "zig_cimport_files": 41,
+    "zig_cinclude_directives": 198,
     "build_add_c_source_calls": 1,
     "build_add_system_include_calls": 0,
     "build_link_system_library_calls": 1,
     "build_link_system_helper_calls": 3,
-    "build_pkg_config_literals": 0
+    "build_pkg_config_literals": 0,
+    "build_dynamic_library_declarations": 0,
+    "build_install_header_calls": 0,
+    "public_zig_module_declarations": 1,
+    "public_zig_api_audit_steps": 1
   }
 }

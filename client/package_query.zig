@@ -8,6 +8,9 @@ const errors = @import("tdnf_error");
 const repomd = @import("repomd_client_exports");
 
 const c = abi.C;
+const libc = @cImport({
+    @cInclude("sys/vfs.h");
+});
 const package_context = repomd.package_context;
 const pkgquery = repomd.package_query;
 const query_index = repomd.query_index;
@@ -1584,8 +1587,8 @@ pub export fn TDNFGetAvailableCacheBytes(
     var make_rc = TDNFUtilsMakeDirs(cache_dir);
     if (make_rc == errors.ERROR_TDNF_ALREADY_EXISTS) make_rc = 0;
     if (make_rc != 0) return make_rc;
-    var stat: c.struct_statfs = undefined;
-    if (c.statfs(cache_dir, &stat) != 0) {
+    var stat: libc.struct_statfs = undefined;
+    if (libc.statfs(cache_dir, &stat) != 0) {
         const errno_value = std.posix.errno(-1);
         return errors.fromErrno(errno_value);
     }

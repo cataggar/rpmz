@@ -11,6 +11,7 @@
     "native_file_install_binary": "@NATIVE_FILE_INSTALL_BINARY@",
     "native_file_erase_binary": "@NATIVE_FILE_ERASE_BINARY@",
     "history_util_binary": "@HISTORY_UTIL_BINARY@",
+    "test_support_binary": "@TEST_SUPPORT_BINARY@",
     "automatic_script": "@AUTOMATIC_SCRIPT@",
     "automatic_conf": "@CMAKE_SOURCE_DIR@/etc/tdnf/automatic.conf",
     "sglversion_pkgname": "tdnf-test-one",

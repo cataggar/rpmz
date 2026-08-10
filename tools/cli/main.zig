@@ -5,68 +5,73 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const jsondump = @import("jsondump_abi");
 const common = @import("tdnf_common");
+const client = @import("tdnf_client");
+const cli = @import("tdnf_cli");
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
-    @cInclude("jsondump.h");
     @cInclude("stdio.h");
     @cInclude("string.h");
     @cInclude("unistd.h");
-    @cInclude("tdnf.h");
-    @cInclude("tdnfcli.h");
-    @cInclude("tdnferror.h");
 });
 
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
+
+comptime {
+    _ = client;
+    _ = cli;
+}
 
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
 
-const command_map = [_]c.TDNF_CLI_CMD_MAP{
-    .{ .pszCmdName = "autoerase", .pFnCmd = c.TDNFCliAutoEraseCommand, .ReqRoot = true },
-    .{ .pszCmdName = "autoremove", .pFnCmd = c.TDNFCliAutoEraseCommand, .ReqRoot = true },
-    .{ .pszCmdName = "check", .pFnCmd = c.TDNFCliCheckCommand, .ReqRoot = false },
-    .{ .pszCmdName = "check-local", .pFnCmd = c.TDNFCliCheckLocalCommand, .ReqRoot = false },
-    .{ .pszCmdName = "check-update", .pFnCmd = c.TDNFCliCheckUpdateCommand, .ReqRoot = false },
-    .{ .pszCmdName = "clean", .pFnCmd = c.TDNFCliCleanCommand, .ReqRoot = false },
-    .{ .pszCmdName = "count", .pFnCmd = c.TDNFCliCountCommand, .ReqRoot = false },
-    .{ .pszCmdName = "distro-sync", .pFnCmd = c.TDNFCliDistroSyncCommand, .ReqRoot = true },
-    .{ .pszCmdName = "downgrade", .pFnCmd = c.TDNFCliDowngradeCommand, .ReqRoot = true },
-    .{ .pszCmdName = "erase", .pFnCmd = c.TDNFCliEraseCommand, .ReqRoot = true },
-    .{ .pszCmdName = "help", .pFnCmd = c.TDNFCliHelpCommand, .ReqRoot = false },
-    .{ .pszCmdName = "history", .pFnCmd = c.TDNFCliHistoryCommand, .ReqRoot = true },
-    .{ .pszCmdName = "info", .pFnCmd = c.TDNFCliInfoCommand, .ReqRoot = false },
-    .{ .pszCmdName = "install", .pFnCmd = c.TDNFCliInstallCommand, .ReqRoot = true },
-    .{ .pszCmdName = "list", .pFnCmd = c.TDNFCliListCommand, .ReqRoot = false },
-    .{ .pszCmdName = "makecache", .pFnCmd = c.TDNFCliMakeCacheCommand, .ReqRoot = false },
-    .{ .pszCmdName = "mark", .pFnCmd = c.TDNFCliMarkCommand, .ReqRoot = false },
+const command_map = [_]abi.TDNF_CLI_CMD_MAP{
+    .{ .pszCmdName = "autoerase", .pFnCmd = abi.TDNFCliAutoEraseCommand, .ReqRoot = true },
+    .{ .pszCmdName = "autoremove", .pFnCmd = abi.TDNFCliAutoEraseCommand, .ReqRoot = true },
+    .{ .pszCmdName = "check", .pFnCmd = abi.TDNFCliCheckCommand, .ReqRoot = false },
+    .{ .pszCmdName = "check-local", .pFnCmd = abi.TDNFCliCheckLocalCommand, .ReqRoot = false },
+    .{ .pszCmdName = "check-update", .pFnCmd = abi.TDNFCliCheckUpdateCommand, .ReqRoot = false },
+    .{ .pszCmdName = "clean", .pFnCmd = abi.TDNFCliCleanCommand, .ReqRoot = false },
+    .{ .pszCmdName = "count", .pFnCmd = abi.TDNFCliCountCommand, .ReqRoot = false },
+    .{ .pszCmdName = "distro-sync", .pFnCmd = abi.TDNFCliDistroSyncCommand, .ReqRoot = true },
+    .{ .pszCmdName = "downgrade", .pFnCmd = abi.TDNFCliDowngradeCommand, .ReqRoot = true },
+    .{ .pszCmdName = "erase", .pFnCmd = abi.TDNFCliEraseCommand, .ReqRoot = true },
+    .{ .pszCmdName = "help", .pFnCmd = abi.TDNFCliHelpCommand, .ReqRoot = false },
+    .{ .pszCmdName = "history", .pFnCmd = abi.TDNFCliHistoryCommand, .ReqRoot = true },
+    .{ .pszCmdName = "info", .pFnCmd = abi.TDNFCliInfoCommand, .ReqRoot = false },
+    .{ .pszCmdName = "install", .pFnCmd = abi.TDNFCliInstallCommand, .ReqRoot = true },
+    .{ .pszCmdName = "list", .pFnCmd = abi.TDNFCliListCommand, .ReqRoot = false },
+    .{ .pszCmdName = "makecache", .pFnCmd = abi.TDNFCliMakeCacheCommand, .ReqRoot = false },
+    .{ .pszCmdName = "mark", .pFnCmd = abi.TDNFCliMarkCommand, .ReqRoot = false },
     .{ .pszCmdName = "plan", .pFnCmd = TDNFCliPlanCommand, .ReqRoot = false },
-    .{ .pszCmdName = "provides", .pFnCmd = c.TDNFCliProvidesCommand, .ReqRoot = false },
-    .{ .pszCmdName = "whatprovides", .pFnCmd = c.TDNFCliProvidesCommand, .ReqRoot = false },
-    .{ .pszCmdName = "reinstall", .pFnCmd = c.TDNFCliReinstallCommand, .ReqRoot = true },
-    .{ .pszCmdName = "remove", .pFnCmd = c.TDNFCliEraseCommand, .ReqRoot = true },
-    .{ .pszCmdName = "repolist", .pFnCmd = c.TDNFCliRepoListCommand, .ReqRoot = false },
-    .{ .pszCmdName = "reposync", .pFnCmd = c.TDNFCliRepoSyncCommand, .ReqRoot = false },
-    .{ .pszCmdName = "repoquery", .pFnCmd = c.TDNFCliRepoQueryCommand, .ReqRoot = false },
-    .{ .pszCmdName = "search", .pFnCmd = c.TDNFCliSearchCommand, .ReqRoot = false },
-    .{ .pszCmdName = "update", .pFnCmd = c.TDNFCliUpgradeCommand, .ReqRoot = true },
-    .{ .pszCmdName = "update-to", .pFnCmd = c.TDNFCliUpgradeCommand, .ReqRoot = true },
-    .{ .pszCmdName = "upgrade", .pFnCmd = c.TDNFCliUpgradeCommand, .ReqRoot = true },
-    .{ .pszCmdName = "upgrade-to", .pFnCmd = c.TDNFCliUpgradeCommand, .ReqRoot = true },
-    .{ .pszCmdName = "updateinfo", .pFnCmd = c.TDNFCliUpdateInfoCommand, .ReqRoot = false },
+    .{ .pszCmdName = "provides", .pFnCmd = abi.TDNFCliProvidesCommand, .ReqRoot = false },
+    .{ .pszCmdName = "whatprovides", .pFnCmd = abi.TDNFCliProvidesCommand, .ReqRoot = false },
+    .{ .pszCmdName = "reinstall", .pFnCmd = abi.TDNFCliReinstallCommand, .ReqRoot = true },
+    .{ .pszCmdName = "remove", .pFnCmd = abi.TDNFCliEraseCommand, .ReqRoot = true },
+    .{ .pszCmdName = "repolist", .pFnCmd = abi.TDNFCliRepoListCommand, .ReqRoot = false },
+    .{ .pszCmdName = "reposync", .pFnCmd = abi.TDNFCliRepoSyncCommand, .ReqRoot = false },
+    .{ .pszCmdName = "repoquery", .pFnCmd = abi.TDNFCliRepoQueryCommand, .ReqRoot = false },
+    .{ .pszCmdName = "search", .pFnCmd = abi.TDNFCliSearchCommand, .ReqRoot = false },
+    .{ .pszCmdName = "update", .pFnCmd = abi.TDNFCliUpgradeCommand, .ReqRoot = true },
+    .{ .pszCmdName = "update-to", .pFnCmd = abi.TDNFCliUpgradeCommand, .ReqRoot = true },
+    .{ .pszCmdName = "upgrade", .pFnCmd = abi.TDNFCliUpgradeCommand, .ReqRoot = true },
+    .{ .pszCmdName = "upgrade-to", .pFnCmd = abi.TDNFCliUpgradeCommand, .ReqRoot = true },
+    .{ .pszCmdName = "updateinfo", .pFnCmd = abi.TDNFCliUpdateInfoCommand, .ReqRoot = false },
 };
 
-fn destroyJsonDump(ppDump: *?*c.struct_json_dump) void {
+fn destroyJsonDump(ppDump: *?*jsondump.JsonDump) void {
     if (ppDump.*) |pDump| {
-        c.jd_destroy(pDump);
+        jsondump.jd_destroy(pDump);
         ppDump.* = null;
     }
 }
 
 fn checkJsonResult(nResult: c_int) u32 {
     if (nResult != 0) {
-        return c.ERROR_TDNF_JSONDUMP;
+        return abi.ERROR_TDNF_JSONDUMP;
     }
     return 0;
 }
@@ -79,23 +84,23 @@ fn freeOwnedString(ppValue: *?[*:0]u8) void {
 }
 
 fn getErrno() c_int {
-    return c.__errno_location().*;
+    return abi.__errno_location().*;
 }
 
 fn systemOutputError() u32 {
     const nErrNo = getErrno();
     if (nErrNo <= 0) {
-        return c.ERROR_TDNF_FILESYS_IO;
+        return abi.ERROR_TDNF_FILESYS_IO;
     }
-    return @as(u32, @intCast(c.ERROR_TDNF_SYSTEM_BASE)) +
+    return @as(u32, @intCast(abi.ERROR_TDNF_SYSTEM_BASE)) +
         @as(u32, @intCast(nErrNo));
 }
 
-fn cliHandle(pContext: ?*c.TDNF_CLI_CONTEXT) c.PTDNF {
-    return @ptrCast(pContext.?.hTdnf);
+fn cliHandle(pContext: ?*abi.TDNF_CLI_CONTEXT) abi.PTDNF {
+    return @ptrCast(@alignCast(pContext.?.hTdnf));
 }
 
-fn findCommand(pszCmd: [*c]const u8) ?*const c.TDNF_CLI_CMD_MAP {
+fn findCommand(pszCmd: [*c]const u8) ?*const abi.TDNF_CLI_CMD_MAP {
     for (&command_map) |*cmd| {
         if (c.strcmp(pszCmd, cmd.pszCmdName) == 0) {
             return cmd;
@@ -104,8 +109,8 @@ fn findCommand(pszCmd: [*c]const u8) ?*const c.TDNF_CLI_CMD_MAP {
     return null;
 }
 
-fn initializeContext() c.TDNF_CLI_CONTEXT {
-    var context: c.TDNF_CLI_CONTEXT = std.mem.zeroes(c.TDNF_CLI_CONTEXT);
+fn initializeContext() abi.TDNF_CLI_CONTEXT {
+    var context: abi.TDNF_CLI_CONTEXT = std.mem.zeroes(abi.TDNF_CLI_CONTEXT);
 
     context.pFnCheck = TDNFCliInvokeCheck;
     context.pFnCheckLocal = TDNFCliInvokeCheckLocal;
@@ -134,7 +139,7 @@ fn initializeContext() c.TDNF_CLI_CONTEXT {
 }
 
 fn TDNFCliPrintError(dwErrorCode: u32, doJson: c_int) u32 {
-    if (dwErrorCode == 0 or dwErrorCode == c.ERROR_TDNF_CLI_CHECK_UPDATES_AVAILABLE) {
+    if (dwErrorCode == 0 or dwErrorCode == abi.ERROR_TDNF_CLI_CHECK_UPDATES_AVAILABLE) {
         return 0;
     }
 
@@ -142,10 +147,10 @@ fn TDNFCliPrintError(dwErrorCode: u32, doJson: c_int) u32 {
     var pszError: ?[*:0]u8 = null;
     defer freeOwnedString(&pszError);
 
-    if (dwErrorCode < c.ERROR_TDNF_BASE) {
-        dwError = c.TDNFCliGetErrorString(dwErrorCode, @ptrCast(&pszError));
+    if (dwErrorCode < abi.ERROR_TDNF_BASE) {
+        dwError = abi.TDNFCliGetErrorString(dwErrorCode, @ptrCast(&pszError));
     } else {
-        dwError = c.TDNFGetErrorString(dwErrorCode, @ptrCast(&pszError));
+        dwError = abi.TDNFGetErrorString(dwErrorCode, @ptrCast(&pszError));
     }
 
     if (dwError != 0 or pszError == null) {
@@ -154,27 +159,27 @@ fn TDNFCliPrintError(dwErrorCode: u32, doJson: c_int) u32 {
     }
 
     var dwPrintCode = dwErrorCode;
-    if (dwPrintCode == c.ERROR_TDNF_CLI_NOTHING_TO_DO or dwPrintCode == c.ERROR_TDNF_NO_DATA) {
+    if (dwPrintCode == abi.ERROR_TDNF_CLI_NOTHING_TO_DO or dwPrintCode == abi.ERROR_TDNF_NO_DATA) {
         dwPrintCode = 0;
     }
 
     if (doJson != 0) {
         if (dwPrintCode != 0) {
-            var jd: ?*c.struct_json_dump = c.jd_create(0);
+            var jd: ?*jsondump.JsonDump = jsondump.jd_create(0);
             if (jd == null) {
-                return c.ERROR_TDNF_JSONDUMP;
+                return abi.ERROR_TDNF_JSONDUMP;
             }
             defer destroyJsonDump(&jd);
 
-            dwError = checkJsonResult(c.jd_map_start(jd));
+            dwError = checkJsonResult(jsondump.jd_map_start(jd));
             if (dwError != 0) {
                 return dwError;
             }
-            dwError = checkJsonResult(c.jd_map_add_int(jd, "Error", @as(c_int, @intCast(dwPrintCode))));
+            dwError = checkJsonResult(jsondump.jd_map_add_int(jd, "Error", @as(c_int, @intCast(dwPrintCode))));
             if (dwError != 0) {
                 return dwError;
             }
-            dwError = checkJsonResult(c.jd_map_add_string(jd, "ErrorMessage", pszError));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd, "ErrorMessage", pszError));
             if (dwError != 0) {
                 return dwError;
             }
@@ -189,207 +194,207 @@ fn TDNFCliPrintError(dwErrorCode: u32, doJson: c_int) u32 {
     return 0;
 }
 
-fn TDNFCliShowVersion(pCmdArgs: ?*c.TDNF_CMD_ARGS) void {
+fn TDNFCliShowVersion(pCmdArgs: ?*abi.TDNF_CMD_ARGS) void {
     const cmd_args = pCmdArgs orelse return;
 
     if (cmd_args.nJsonOutput != 0) {
-        var jd: ?*c.struct_json_dump = c.jd_create(0);
+        var jd: ?*jsondump.JsonDump = jsondump.jd_create(0);
         if (jd == null) {
             return;
         }
         defer destroyJsonDump(&jd);
 
-        if (checkJsonResult(c.jd_map_start(jd)) != 0) {
+        if (checkJsonResult(jsondump.jd_map_start(jd)) != 0) {
             return;
         }
-        if (checkJsonResult(c.jd_map_add_string(jd, "Name", c.TDNFGetPackageName())) != 0) {
+        if (checkJsonResult(jsondump.jd_map_add_string(jd, "Name", abi.TDNFGetPackageName())) != 0) {
             return;
         }
-        if (checkJsonResult(c.jd_map_add_string(jd, "Version", c.TDNFGetVersion())) != 0) {
+        if (checkJsonResult(jsondump.jd_map_add_string(jd, "Version", abi.TDNFGetVersion())) != 0) {
             return;
         }
         _ = c.fputs(jd.?.buf, c.stdout);
     } else {
-        common.log(LOG_INFO, "%s: %s\n", .{ c.TDNFGetPackageName(), c.TDNFGetVersion() });
+        common.log(LOG_INFO, "%s: %s\n", .{ abi.TDNFGetPackageName(), abi.TDNFGetVersion() });
     }
 }
 
-fn TDNFCliInvokeCheck(pContext: ?*c.TDNF_CLI_CONTEXT) callconv(.c) u32 {
-    return c.TDNFCheckPackages(cliHandle(pContext));
+fn TDNFCliInvokeCheck(pContext: ?*abi.TDNF_CLI_CONTEXT) callconv(.c) u32 {
+    return abi.TDNFCheckPackages(cliHandle(pContext));
 }
 
 fn TDNFCliInvokeCheckLocal(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
     pszFolder: [*c]const u8,
 ) callconv(.c) u32 {
-    return c.TDNFCheckLocalPackages(cliHandle(pContext), pszFolder);
+    return abi.TDNFCheckLocalPackages(cliHandle(pContext), pszFolder);
 }
 
 fn TDNFCliInvokeCheckUpdate(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
     ppszPackageArgs: [*c][*c]u8,
-    ppPkgInfo: ?*[*c]c.TDNF_PKG_INFO,
+    ppPkgInfo: ?*[*c]abi.TDNF_PKG_INFO,
     pdwCount: ?*u32,
 ) callconv(.c) u32 {
-    return c.TDNFCheckUpdates(cliHandle(pContext), ppszPackageArgs, ppPkgInfo, pdwCount);
+    return abi.TDNFCheckUpdates(cliHandle(pContext), ppszPackageArgs, ppPkgInfo, pdwCount);
 }
 
 fn TDNFCliInvokeClean(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
     nCleanType: u32,
 ) callconv(.c) u32 {
-    return c.TDNFClean(cliHandle(pContext), nCleanType);
+    return abi.TDNFClean(cliHandle(pContext), nCleanType);
 }
 
 fn TDNFCliInvokeCount(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
     pnCount: ?*u32,
 ) callconv(.c) u32 {
-    return c.TDNFCountCommand(cliHandle(pContext), pnCount);
+    return abi.TDNFCountCommand(cliHandle(pContext), pnCount);
 }
 
 fn TDNFCliInvokeAlter(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO,
 ) callconv(.c) u32 {
-    return c.TDNFAlterCommand(cliHandle(pContext), pSolvedPkgInfo);
+    return abi.TDNFAlterCommand(cliHandle(pContext), pSolvedPkgInfo);
 }
 
 fn TDNFCliInvokeAlterHistory(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO,
-    pHistoryArgs: ?*c.TDNF_HISTORY_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO,
+    pHistoryArgs: ?*abi.TDNF_HISTORY_ARGS,
 ) callconv(.c) u32 {
-    return c.TDNFAlterHistoryCommand(cliHandle(pContext), pSolvedPkgInfo, pHistoryArgs);
+    return abi.TDNFAlterHistoryCommand(cliHandle(pContext), pSolvedPkgInfo, pHistoryArgs);
 }
 
 fn TDNFCliInvokeInfo(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pInfoArgs: ?*c.TDNF_LIST_ARGS,
-    ppPkgInfo: ?*[*c]c.TDNF_PKG_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pInfoArgs: ?*abi.TDNF_LIST_ARGS,
+    ppPkgInfo: ?*[*c]abi.TDNF_PKG_INFO,
     pdwCount: ?*u32,
 ) callconv(.c) u32 {
-    return c.TDNFInfo(cliHandle(pContext), pInfoArgs.?.nScope, pInfoArgs.?.ppszPackageNameSpecs, ppPkgInfo, pdwCount);
+    return abi.TDNFInfo(cliHandle(pContext), pInfoArgs.?.nScope, pInfoArgs.?.ppszPackageNameSpecs, ppPkgInfo, pdwCount);
 }
 
 fn TDNFCliInvokeList(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pListArgs: ?*c.TDNF_LIST_ARGS,
-    ppPkgInfo: ?*[*c]c.TDNF_PKG_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pListArgs: ?*abi.TDNF_LIST_ARGS,
+    ppPkgInfo: ?*[*c]abi.TDNF_PKG_INFO,
     pdwCount: ?*u32,
 ) callconv(.c) u32 {
-    return c.TDNFList(cliHandle(pContext), pListArgs.?.nScope, pListArgs.?.ppszPackageNameSpecs, ppPkgInfo, pdwCount);
+    return abi.TDNFList(cliHandle(pContext), pListArgs.?.nScope, pListArgs.?.ppszPackageNameSpecs, ppPkgInfo, pdwCount);
 }
 
 fn TDNFCliInvokeProvides(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
     pszProvides: [*c]const u8,
-    ppPkgInfos: ?*?*c.TDNF_PKG_INFO,
+    ppPkgInfos: ?*?*abi.TDNF_PKG_INFO,
 ) callconv(.c) u32 {
-    return c.TDNFProvides(cliHandle(pContext), pszProvides, ppPkgInfos);
+    return abi.TDNFProvides(cliHandle(pContext), pszProvides, ppPkgInfos);
 }
 
 fn TDNFCliInvokeRepoList(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    nFilter: c.TDNF_REPOLISTFILTER,
-    ppRepos: ?*?*c.TDNF_REPO_DATA,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    nFilter: abi.TDNF_REPOLISTFILTER,
+    ppRepos: ?*?*abi.TDNF_REPO_DATA,
 ) callconv(.c) u32 {
-    return c.TDNFRepoList(cliHandle(pContext), nFilter, ppRepos);
+    return abi.TDNFRepoList(cliHandle(pContext), nFilter, ppRepos);
 }
 
 fn TDNFCliInvokeRepoSync(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pRepoSyncArgs: ?*c.TDNF_REPOSYNC_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pRepoSyncArgs: ?*abi.TDNF_REPOSYNC_ARGS,
 ) callconv(.c) u32 {
-    return c.TDNFRepoSync(cliHandle(pContext), pRepoSyncArgs);
+    return abi.TDNFRepoSync(cliHandle(pContext), pRepoSyncArgs);
 }
 
 fn TDNFCliInvokeRepoQuery(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pRepoQueryArgs: ?*c.TDNF_REPOQUERY_ARGS,
-    ppPkgInfos: ?*[*c]c.TDNF_PKG_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pRepoQueryArgs: ?*abi.TDNF_REPOQUERY_ARGS,
+    ppPkgInfos: ?*[*c]abi.TDNF_PKG_INFO,
     pdwCount: ?*u32,
 ) callconv(.c) u32 {
-    return c.TDNFRepoQuery(cliHandle(pContext), pRepoQueryArgs, ppPkgInfos, pdwCount);
+    return abi.TDNFRepoQuery(cliHandle(pContext), pRepoQueryArgs, ppPkgInfos, pdwCount);
 }
 
 fn TDNFCliInvokeResolve(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    nAlterType: c.TDNF_ALTERTYPE,
-    ppSolvedPkgInfo: ?*?*c.TDNF_SOLVED_PKG_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    nAlterType: abi.TDNF_ALTERTYPE,
+    ppSolvedPkgInfo: ?*?*abi.TDNF_SOLVED_PKG_INFO,
 ) callconv(.c) u32 {
-    return c.TDNFResolve(cliHandle(pContext), nAlterType, ppSolvedPkgInfo);
+    return abi.TDNFResolve(cliHandle(pContext), nAlterType, ppSolvedPkgInfo);
 }
 
 fn planAlterType(
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
-    pnAlterType: *c.TDNF_ALTERTYPE,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
+    pnAlterType: *abi.TDNF_ALTERTYPE,
 ) u32 {
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     if (cmd_args.nCmdCount < 2) {
         common.log(LOG_CRIT, "need transaction command as argument\n", .{});
-        return c.ERROR_TDNF_CLI_NOT_ENOUGH_ARGS;
+        return abi.ERROR_TDNF_CLI_NOT_ENOUGH_ARGS;
     }
 
     const transaction_count = cmd_args.nCmdCount - 1;
     const pszTransaction = cmd_args.ppszCmds[1];
     if (c.strcmp(pszTransaction, "install") == 0) {
-        pnAlterType.* = c.ALTER_INSTALL;
+        pnAlterType.* = abi.ALTER_INSTALL;
     } else if (c.strcmp(pszTransaction, "erase") == 0 or
         c.strcmp(pszTransaction, "remove") == 0)
     {
-        pnAlterType.* = c.ALTER_ERASE;
+        pnAlterType.* = abi.ALTER_ERASE;
     } else if (c.strcmp(pszTransaction, "upgrade") == 0 or
         c.strcmp(pszTransaction, "update") == 0 or
         c.strcmp(pszTransaction, "upgrade-to") == 0 or
         c.strcmp(pszTransaction, "update-to") == 0)
     {
         pnAlterType.* = if (transaction_count == 1)
-            c.ALTER_UPGRADEALL
+            abi.ALTER_UPGRADEALL
         else
-            c.ALTER_UPGRADE;
+            abi.ALTER_UPGRADE;
     } else if (c.strcmp(pszTransaction, "downgrade") == 0) {
         pnAlterType.* = if (transaction_count == 1)
-            c.ALTER_DOWNGRADEALL
+            abi.ALTER_DOWNGRADEALL
         else
-            c.ALTER_DOWNGRADE;
+            abi.ALTER_DOWNGRADE;
     } else if (c.strcmp(pszTransaction, "distro-sync") == 0) {
-        pnAlterType.* = c.ALTER_DISTRO_SYNC;
+        pnAlterType.* = abi.ALTER_DISTRO_SYNC;
     } else if (c.strcmp(pszTransaction, "reinstall") == 0) {
-        pnAlterType.* = c.ALTER_REINSTALL;
+        pnAlterType.* = abi.ALTER_REINSTALL;
     } else if (c.strcmp(pszTransaction, "autoerase") == 0 or
         c.strcmp(pszTransaction, "autoremove") == 0)
     {
         pnAlterType.* = if (transaction_count == 1)
-            c.ALTER_AUTOERASEALL
+            abi.ALTER_AUTOERASEALL
         else
-            c.ALTER_AUTOERASE;
+            abi.ALTER_AUTOERASE;
     } else {
         common.log(LOG_CRIT, "unsupported transaction plan command '%s'\n", .{pszTransaction});
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     return 0;
 }
 
 fn TDNFCliPlanCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) callconv(.c) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const context = pContext orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const handle = cliHandle(context);
     if (handle == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    var nAlterType: c.TDNF_ALTERTYPE = undefined;
+    var nAlterType: abi.TDNF_ALTERTYPE = undefined;
     var dwError = planAlterType(cmd_args, &nAlterType);
     if (dwError != 0) {
         return dwError;
     }
 
-    dwError = c.TDNFTransactionPlanSetEnabled(handle, 1);
+    dwError = abi.TDNFTransactionPlanSetEnabled(handle, 1);
     if (dwError != 0) {
         return dwError;
     }
@@ -403,19 +408,19 @@ fn TDNFCliPlanCommand(
         cmd_args.nCmdCount = nSavedCmdCount;
     }
 
-    var pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO = null;
-    defer c.TDNFFreeSolvedPackageInfo(pSolvedPkgInfo);
+    var pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO = null;
+    defer abi.TDNFFreeSolvedPackageInfo(pSolvedPkgInfo);
 
     const dwResolveError = context.pFnResolve.?(context, nAlterType, &pSolvedPkgInfo);
     var pszJson: [*c]u8 = null;
-    const dwPlanError = c.TDNFTransactionPlanGetCanonicalJson(handle, &pszJson);
-    defer c.TDNFTransactionPlanFreeCanonicalJson(pszJson);
+    const dwPlanError = abi.TDNFTransactionPlanGetCanonicalJson(handle, &pszJson);
+    defer abi.TDNFTransactionPlanFreeCanonicalJson(pszJson);
 
     if (dwPlanError != 0) {
         return if (dwResolveError != 0) dwResolveError else dwPlanError;
     }
     if (pszJson == null) {
-        return c.ERROR_TDNF_NO_DATA;
+        return abi.ERROR_TDNF_NO_DATA;
     }
 
     // Unsatisfied and conflicting requests are reported as structured problem
@@ -430,70 +435,70 @@ fn TDNFCliPlanCommand(
 }
 
 fn TDNFCliInvokeSearch(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
-    ppPkgInfo: ?*[*c]c.TDNF_PKG_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
+    ppPkgInfo: ?*[*c]abi.TDNF_PKG_INFO,
     pdwCount: ?*u32,
 ) callconv(.c) u32 {
-    return c.TDNFSearchCommand(cliHandle(pContext), pCmdArgs, ppPkgInfo, pdwCount);
+    return abi.TDNFSearchCommand(cliHandle(pContext), pCmdArgs, ppPkgInfo, pdwCount);
 }
 
 fn TDNFCliInvokeUpdateInfo(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pInfoArgs: ?*c.TDNF_UPDATEINFO_ARGS,
-    ppUpdateInfo: ?*?*c.TDNF_UPDATEINFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pInfoArgs: ?*abi.TDNF_UPDATEINFO_ARGS,
+    ppUpdateInfo: ?*?*abi.TDNF_UPDATEINFO,
 ) callconv(.c) u32 {
-    return c.TDNFUpdateInfo(cliHandle(pContext), pInfoArgs.?.ppszPackageNameSpecs, ppUpdateInfo);
+    return abi.TDNFUpdateInfo(cliHandle(pContext), pInfoArgs.?.ppszPackageNameSpecs, ppUpdateInfo);
 }
 
 fn TDNFCliInvokeUpdateInfoSummary(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    nAvail: c.TDNF_AVAIL,
-    pInfoArgs: ?*c.TDNF_UPDATEINFO_ARGS,
-    ppSummary: ?*?*c.TDNF_UPDATEINFO_SUMMARY,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    nAvail: abi.TDNF_AVAIL,
+    pInfoArgs: ?*abi.TDNF_UPDATEINFO_ARGS,
+    ppSummary: ?*?*abi.TDNF_UPDATEINFO_SUMMARY,
 ) callconv(.c) u32 {
     _ = nAvail;
-    return c.TDNFUpdateInfoSummary(cliHandle(pContext), pInfoArgs.?.ppszPackageNameSpecs, ppSummary);
+    return abi.TDNFUpdateInfoSummary(cliHandle(pContext), pInfoArgs.?.ppszPackageNameSpecs, ppSummary);
 }
 
 fn TDNFCliInvokeHistoryList(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pHistoryArgs: ?*c.TDNF_HISTORY_ARGS,
-    ppHistoryInfo: ?*?*c.TDNF_HISTORY_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pHistoryArgs: ?*abi.TDNF_HISTORY_ARGS,
+    ppHistoryInfo: ?*?*abi.TDNF_HISTORY_INFO,
 ) callconv(.c) u32 {
-    return c.TDNFHistoryList(cliHandle(pContext), pHistoryArgs, ppHistoryInfo);
+    return abi.TDNFHistoryList(cliHandle(pContext), pHistoryArgs, ppHistoryInfo);
 }
 
 fn TDNFCliInvokeHistoryResolve(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pHistoryArgs: ?*c.TDNF_HISTORY_ARGS,
-    ppSolvedPkgInfo: ?*?*c.TDNF_SOLVED_PKG_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pHistoryArgs: ?*abi.TDNF_HISTORY_ARGS,
+    ppSolvedPkgInfo: ?*?*abi.TDNF_SOLVED_PKG_INFO,
 ) callconv(.c) u32 {
-    return c.TDNFHistoryResolve(cliHandle(pContext), pHistoryArgs, ppSolvedPkgInfo);
+    return abi.TDNFHistoryResolve(cliHandle(pContext), pHistoryArgs, ppSolvedPkgInfo);
 }
 
 fn TDNFCliInvokeGetPackageUrls(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO,
     pppszUrls: [*c][*c][*c]u8,
     pnCount: [*c]c_int,
 ) callconv(.c) u32 {
-    return c.TDNFGetPackageUrls(cliHandle(pContext), pSolvedPkgInfo, pppszUrls, pnCount);
+    return abi.TDNFGetPackageUrls(cliHandle(pContext), pSolvedPkgInfo, pppszUrls, pnCount);
 }
 
 fn TDNFCliInvokeHistoryGetId(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
     pnId: ?*c_int,
 ) callconv(.c) u32 {
-    return c.TDNFHistoryGetId(cliHandle(pContext), pnId);
+    return abi.TDNFHistoryGetId(cliHandle(pContext), pnId);
 }
 
 fn TDNFCliInvokeMark(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
     ppszPkgNameSpecs: [*c][*c]u8,
     nValue: u32,
 ) callconv(.c) u32 {
-    return c.TDNFMark(cliHandle(pContext), ppszPkgNameSpecs, nValue);
+    return abi.TDNFMark(cliHandle(pContext), ppszPkgNameSpecs, nValue);
 }
 
 pub fn main(init: std.process.Init.Minimal) u8 {
@@ -502,42 +507,42 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const argv_ptr: [*c]?[*:0]u8 = @ptrCast(@constCast(argv.ptr));
 
     var dwError: u32 = 0;
-    var pTdnf: c.PTDNF = null;
-    var pCmdArgs: ?*c.TDNF_CMD_ARGS = null;
+    var pTdnf: abi.PTDNF = null;
+    var pCmdArgs: ?*abi.TDNF_CMD_ARGS = null;
 
     defer {
         if (pTdnf != null) {
-            c.TDNFCloseHandle(pTdnf);
+            abi.TDNFCloseHandle(pTdnf);
         }
         if (pCmdArgs != null) {
-            c.TDNFFreeCmdArgs(pCmdArgs);
+            abi.TDNFFreeCmdArgs(pCmdArgs);
         }
-        c.TDNFUninit();
+        abi.TDNFUninit();
     }
 
-    dwError = c.TDNFCliParseArgs(argc, @ptrCast(argv_ptr), &pCmdArgs);
+    dwError = abi.TDNFCliParseArgs(argc, @ptrCast(argv_ptr), &pCmdArgs);
     if (dwError == 0) {
         const cmd_args = pCmdArgs.?;
 
         if (cmd_args.nShowVersion != 0) {
             TDNFCliShowVersion(cmd_args);
         } else if (cmd_args.nShowHelp != 0) {
-            c.TDNFCliShowHelp();
+            abi.TDNFCliShowHelp();
         } else if (cmd_args.nCmdCount > 0) {
             const pszCmd: [*c]const u8 = cmd_args.ppszCmds[0];
             var context = initializeContext();
 
             if (findCommand(pszCmd)) |pCmd| {
                 if (pCmd.ReqRoot and c.geteuid() != 0) {
-                    dwError = c.ERROR_TDNF_PERM;
+                    dwError = abi.ERROR_TDNF_PERM;
                 } else {
                     if (c.strcmp(pszCmd, "makecache") == 0) {
                         cmd_args.nRefresh = 1;
                     }
 
-                    dwError = c.TDNFInit();
+                    dwError = abi.TDNFInit();
                     if (dwError == 0) {
-                        dwError = c.TDNFOpenHandle(cmd_args, &pTdnf);
+                        dwError = abi.TDNFOpenHandle(cmd_args, &pTdnf);
                     }
                     if (dwError == 0) {
                         context.hTdnf = @ptrCast(pTdnf);
@@ -546,21 +551,21 @@ pub fn main(init: std.process.Init.Minimal) u8 {
                 }
             } else {
                 if (cmd_args.nJsonOutput == 0) {
-                    c.TDNFCliShowNoSuchCommand(pszCmd);
+                    abi.TDNFCliShowNoSuchCommand(pszCmd);
                 }
-                dwError = c.ERROR_TDNF_CLI_NO_SUCH_CMD;
+                dwError = abi.ERROR_TDNF_CLI_NO_SUCH_CMD;
             }
         } else {
             if (cmd_args.nJsonOutput == 0) {
-                c.TDNFCliShowUsage();
+                abi.TDNFCliShowUsage();
             }
-            dwError = c.ERROR_TDNF_CLI_NO_SUCH_CMD;
+            dwError = abi.ERROR_TDNF_CLI_NO_SUCH_CMD;
         }
     }
 
     if (dwError != 0) {
         _ = TDNFCliPrintError(dwError, if (pCmdArgs) |args| args.nJsonOutput else 0);
-        if (dwError == c.ERROR_TDNF_CLI_NOTHING_TO_DO or dwError == c.ERROR_TDNF_NO_DATA) {
+        if (dwError == abi.ERROR_TDNF_CLI_NOTHING_TO_DO or dwError == abi.ERROR_TDNF_NO_DATA) {
             dwError = 0;
         }
     }

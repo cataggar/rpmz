@@ -13,10 +13,6 @@ import tempfile
 
 
 GENERATED_SOURCE_FILES = (
-    "client/config.h",
-    "history/config.h",
-    "plugins/metalink/config.h",
-    "plugins/repogpgcheck/config.h",
     "pytests/config.json",
     "pytests/mount-small-cache",
 )
@@ -25,6 +21,16 @@ REQUIRED_PUBLIC_FILES = (
     "build.zig.zon",
     "tdnf.zig",
     "client/transaction_plan.zig",
+)
+RETIRED_PUBLIC_C_FILES = (
+    "client/libtdnf.map",
+    "client/tdnf.pc.in",
+    "client/history_abi.inc",
+    "client/transaction_plan_capture_abi.inc",
+    "scripts/abi-audit.py",
+    "scripts/abi-baseline.json",
+    "scripts/public-api-audit.py",
+    "tools/cli/lib/tdnf-cli-libs.pc.in",
 )
 
 
@@ -49,7 +55,16 @@ def package_name(manifest: Path) -> str:
 
 def tracked_files(source_root: Path, paths: list[str]) -> list[Path]:
     result = subprocess.run(
-        ["git", "ls-files", "-z", "--", *paths],
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            *paths,
+        ],
         cwd=source_root,
         check=True,
         stdout=subprocess.PIPE,
@@ -57,7 +72,7 @@ def tracked_files(source_root: Path, paths: list[str]) -> list[Path]:
     files = [
         Path(value.decode("utf-8"))
         for value in result.stdout.split(b"\0")
-        if value
+        if value and (source_root / Path(value.decode("utf-8"))).is_file()
     ]
     for package_path in paths:
         prefix = Path(package_path)
@@ -117,8 +132,21 @@ def main() -> None:
         package_root = audit_root / "package"
         package_root.mkdir()
         paths = package_paths(source_root / "build.zig.zon")
-        for relative in tracked_files(source_root, paths):
+        if "include" in paths:
+            raise RuntimeError(
+                "distributable package still exposes the retired include tree"
+            )
+        packaged_files = tracked_files(source_root, paths)
+        for relative in packaged_files:
             copy_file(source_root / relative, package_root / relative)
+
+        packaged_names = {path.as_posix() for path in packaged_files}
+        forbidden = sorted(set(RETIRED_PUBLIC_C_FILES) & packaged_names)
+        if forbidden:
+            raise RuntimeError(
+                "distributable package contains retired public C files: "
+                + ", ".join(forbidden)
+            )
 
         for relative in REQUIRED_PUBLIC_FILES:
             if not (package_root / relative).is_file():

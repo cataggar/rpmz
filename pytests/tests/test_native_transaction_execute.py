@@ -30,7 +30,6 @@ with open(CONFIG_PATH) as _cf:
 REPO_ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 TDNF_BIN = os.path.join(REPO_ROOT, 'out', 'bin', 'tdnf')
 TDNF_CONF = os.path.join(REPO_ROOT, 'out', 'repo', 'tdnf.conf')
-LD_LIBRARY_PATH = os.path.join(REPO_ROOT, 'out', 'lib')
 CASE_ROOT = os.path.join(REPO_ROOT, 'out', 'native-transaction-execute')
 RPMDB_WRITE = os.path.join(
     REPO_ROOT, 'out', 'libexec', 'tdnf', 'tdnf-rpmdb-write')
@@ -171,8 +170,6 @@ def _repo_rpm(name, evr):
 
 
 def _run_tdnf(root, extra_args, check=True):
-    env = os.environ.copy()
-    env['LD_LIBRARY_PATH'] = LD_LIBRARY_PATH
     cmd = _unshare_wrapper() + [
         TDNF_BIN,
         '-c', TDNF_CONF,
@@ -185,7 +182,6 @@ def _run_tdnf(root, extra_args, check=True):
     ] + extra_args
     result = subprocess.run(
         cmd,
-        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

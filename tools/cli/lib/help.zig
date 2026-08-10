@@ -6,11 +6,7 @@
 
 const std = @import("std");
 const common = @import("tdnf_common");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("tdnfcli.h");
-    @cInclude("tdnferror.h");
-});
+const abi = @import("tdnf_internal_abi");
 
 const LOG_CRIT: c_int = 2;
 const help_msg = @embedFile("help.txt");
@@ -33,11 +29,11 @@ pub export fn TDNFCliShowNoSuchOption(pszOption: ?[*:0]const u8) void {
 }
 
 pub export fn TDNFCliHelpCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
     if (pCmdArgs == null or pContext == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     TDNFCliShowHelp();

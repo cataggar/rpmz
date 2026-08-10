@@ -5,14 +5,13 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("string.h");
     @cInclude("strings.h");
     @cInclude("stdlib.h");
     @cInclude("nodes.h");
-    @cInclude("tdnfcli.h");
-    @cInclude("tdnferror.h");
 });
 
 const dep_keys = [_][*:0]const u8{
@@ -46,16 +45,16 @@ fn equalsIgnoreCase(pszValue: ?[*:0]const u8, pszExpected: [*:0]const u8) bool {
 
 fn duplicateString(pszValue: [*c]const u8, ppOut: *allowzero [*c]u8) u32 {
     if (pszValue == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    const pszDup = c.strdup(pszValue) orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
+    const pszDup = c.strdup(pszValue) orelse return abi.ERROR_TDNF_OUT_OF_MEMORY;
     ppOut.* = @ptrCast(pszDup);
     return 0;
 }
 
 fn duplicateBytes(pszValue: []const u8, ppOut: *allowzero [*c]u8) u32 {
-    const pAllocated = c.calloc(pszValue.len + 1, 1) orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
+    const pAllocated = c.calloc(pszValue.len + 1, 1) orelse return abi.ERROR_TDNF_OUT_OF_MEMORY;
     const pBytes: [*]u8 = @ptrCast(pAllocated);
     @memcpy(pBytes[0..pszValue.len], pszValue);
     pBytes[pszValue.len] = 0;
@@ -105,14 +104,14 @@ fn countCommaTokens(pszValue: []const u8) usize {
 fn splitCommaList(pszValue: [*c]const u8, ppOut: *allowzero [*c][*c]u8) u32 {
     if (pszValue == null) {
         ppOut.* = null;
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const value = std.mem.span(pszValue);
     const nCount = countCommaTokens(value);
     const pAllocated = c.calloc(nCount + 1, @sizeOf([*c]u8)) orelse {
         ppOut.* = null;
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
     const ppszValues: [*c][*c]u8 = @ptrCast(@alignCast(pAllocated));
 
@@ -146,37 +145,37 @@ fn replaceStringArray(pppszField: *allowzero [*c][*c]u8, pszValue: [*c]const u8)
     return splitCommaList(pszValue, pppszField);
 }
 
-fn ensureArchArray(pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS) u32 {
+fn ensureArchArray(pRepoqueryArgs: *abi.TDNF_REPOQUERY_ARGS) u32 {
     if (pRepoqueryArgs.ppszArchs == null) {
-        const nArchSlots: usize = @as(usize, c.TDNF_REPOQUERY_MAXARCHS) + 1;
+        const nArchSlots: usize = @as(usize, abi.TDNF_REPOQUERY_MAXARCHS) + 1;
         const pAllocated = c.calloc(nArchSlots, @sizeOf([*c]u8)) orelse
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         pRepoqueryArgs.ppszArchs = @ptrCast(@alignCast(pAllocated));
     }
 
     return 0;
 }
 
-fn ensureWhatKeyArray(pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS) u32 {
+fn ensureWhatKeyArray(pRepoqueryArgs: *abi.TDNF_REPOQUERY_ARGS) u32 {
     if (pRepoqueryArgs.pppszWhatKeys == null) {
-        const nWhatKeys: usize = @intCast(c.REPOQUERY_WHAT_KEY_COUNT);
+        const nWhatKeys: usize = @intCast(abi.REPOQUERY_WHAT_KEY_COUNT);
         const pAllocated = c.calloc(nWhatKeys, @sizeOf([*c][*c]u8)) orelse
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         pRepoqueryArgs.pppszWhatKeys = @ptrCast(@alignCast(pAllocated));
     }
 
     return 0;
 }
 
-fn appendArch(pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS, pszArch: [*c]const u8) u32 {
+fn appendArch(pRepoqueryArgs: *abi.TDNF_REPOQUERY_ARGS, pszArch: [*c]const u8) u32 {
     var dwError = ensureArchArray(pRepoqueryArgs);
     if (dwError != 0) {
         return dwError;
     }
 
     var i: usize = 0;
-    while (i < c.TDNF_REPOQUERY_MAXARCHS and pRepoqueryArgs.ppszArchs[i] != null) : (i += 1) {}
-    if (i >= c.TDNF_REPOQUERY_MAXARCHS) {
+    while (i < abi.TDNF_REPOQUERY_MAXARCHS and pRepoqueryArgs.ppszArchs[i] != null) : (i += 1) {}
+    if (i >= abi.TDNF_REPOQUERY_MAXARCHS) {
         return 0;
     }
 
@@ -188,27 +187,27 @@ fn hasLocationTag(pszQueryFormat: [*c]const u8) bool {
     return pszQueryFormat != null and c.strstr(pszQueryFormat, "%{location}") != null;
 }
 
-fn parseDepKey(pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS, pNode: [*c]c.struct_cnfnode) ?u32 {
+fn parseDepKey(pRepoqueryArgs: *abi.TDNF_REPOQUERY_ARGS, pNode: [*c]abi.struct_cnfnode) ?u32 {
     for (dep_keys, 0..) |dep_key, dep_index| {
         if (equalsIgnoreCase(pNode[0].name, dep_key)) {
             const nMask: c_uint = @as(c_uint, 1) << @intCast(dep_index);
             if ((pRepoqueryArgs.depKeySet & nMask) == 0) {
                 if (pNode[0].next != null) {
-                    return c.ERROR_TDNF_CLI_INVALID_MIXED_QUERY_QUERYFORMAT;
+                    return abi.ERROR_TDNF_CLI_INVALID_MIXED_QUERY_QUERYFORMAT;
                 }
 
                 pRepoqueryArgs.depKeySet |= nMask;
                 return 0;
             }
 
-            return c.ERROR_TDNF_CLI_ONE_DEP_ONLY;
+            return abi.ERROR_TDNF_CLI_ONE_DEP_ONLY;
         }
     }
 
     return null;
 }
 
-fn parseWhatKey(pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS, pNode: [*c]c.struct_cnfnode) ?u32 {
+fn parseWhatKey(pRepoqueryArgs: *abi.TDNF_REPOQUERY_ARGS, pNode: [*c]abi.struct_cnfnode) ?u32 {
     for (what_keys, 0..) |what_key, what_index| {
         if (equalsIgnoreCase(pNode[0].name, what_key)) {
             const dwError = replaceStringArray(&pRepoqueryArgs.pppszWhatKeys[what_index], pNode[0].value);
@@ -219,7 +218,7 @@ fn parseWhatKey(pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS, pNode: [*c]c.struct_cnfn
     return null;
 }
 
-fn parseSetOpt(pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS, pNode: [*c]c.struct_cnfnode) u32 {
+fn parseSetOpt(pRepoqueryArgs: *abi.TDNF_REPOQUERY_ARGS, pNode: [*c]abi.struct_cnfnode) u32 {
     if (equalsIgnoreCase(pNode[0].name, "arch")) {
         return appendArch(pRepoqueryArgs, pNode[0].value);
     } else if (equalsIgnoreCase(pNode[0].name, "file")) {
@@ -240,7 +239,7 @@ fn parseSetOpt(pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS, pNode: [*c]c.struct_cnfno
         pRepoqueryArgs.nList = 1;
     } else if (equalsIgnoreCase(pNode[0].name, "qf")) {
         if (pNode[0].next != null) {
-            return c.ERROR_TDNF_CLI_INVALID_MIXED_QUERY_QUERYFORMAT;
+            return abi.ERROR_TDNF_CLI_INVALID_MIXED_QUERY_QUERYFORMAT;
         }
 
         const dwError = replaceString(&pRepoqueryArgs.pszQueryFormat, pNode[0].value);
@@ -269,17 +268,17 @@ fn parseSetOpt(pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS, pNode: [*c]c.struct_cnfno
 }
 
 pub export fn TDNFCliParseRepoQueryArgs(
-    pArgs: ?*c.TDNF_CMD_ARGS,
-    ppRepoqueryArgs: ?*?*c.TDNF_REPOQUERY_ARGS,
+    pArgs: ?*abi.TDNF_CMD_ARGS,
+    ppRepoqueryArgs: ?*?*abi.TDNF_REPOQUERY_ARGS,
 ) u32 {
-    const cmd_args = pArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const out = ppRepoqueryArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const out = ppRepoqueryArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     out.* = null;
 
-    const pAllocated = c.calloc(1, @sizeOf(c.TDNF_REPOQUERY_ARGS)) orelse
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
-    const pRepoqueryArgs: *c.TDNF_REPOQUERY_ARGS = @ptrCast(@alignCast(pAllocated));
+    const pAllocated = c.calloc(1, @sizeOf(abi.TDNF_REPOQUERY_ARGS)) orelse
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
+    const pRepoqueryArgs: *abi.TDNF_REPOQUERY_ARGS = @ptrCast(@alignCast(pAllocated));
 
     var dwError = ensureWhatKeyArray(pRepoqueryArgs);
     if (dwError != 0) {
@@ -287,7 +286,7 @@ pub export fn TDNFCliParseRepoQueryArgs(
         return dwError;
     }
 
-    var pNode: [*c]c.struct_cnfnode = if (cmd_args.cn_setopts != null) cmd_args.cn_setopts[0].first_child else null;
+    var pNode: [*c]abi.struct_cnfnode = if (cmd_args.cn_setopts != null) cmd_args.cn_setopts[0].first_child else null;
     while (pNode != null) : (pNode = pNode[0].next) {
         dwError = parseSetOpt(pRepoqueryArgs, pNode);
         if (dwError != 0) {
@@ -298,7 +297,7 @@ pub export fn TDNFCliParseRepoQueryArgs(
 
     if (cmd_args.nCmdCount > 2) {
         TDNFCliFreeRepoQueryArgs(pRepoqueryArgs);
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     if (cmd_args.nCmdCount > 1) {
@@ -313,12 +312,12 @@ pub export fn TDNFCliParseRepoQueryArgs(
     return 0;
 }
 
-pub export fn TDNFCliFreeRepoQueryArgs(pRepoqueryArgs: ?*c.TDNF_REPOQUERY_ARGS) void {
+pub export fn TDNFCliFreeRepoQueryArgs(pRepoqueryArgs: ?*abi.TDNF_REPOQUERY_ARGS) void {
     if (pRepoqueryArgs) |repoquery_args| {
         freeStringArray(repoquery_args.ppszArchs);
         if (repoquery_args.pppszWhatKeys != null) {
             var i: usize = 0;
-            const nWhatKeys: usize = @intCast(c.REPOQUERY_WHAT_KEY_COUNT);
+            const nWhatKeys: usize = @intCast(abi.REPOQUERY_WHAT_KEY_COUNT);
             while (i < nWhatKeys) : (i += 1) {
                 freeStringArray(repoquery_args.pppszWhatKeys[i]);
             }
@@ -332,11 +331,11 @@ pub export fn TDNFCliFreeRepoQueryArgs(pRepoqueryArgs: ?*c.TDNF_REPOQUERY_ARGS) 
 }
 
 test "TDNFCliParseRepoQueryArgs preserves repoquery selectors" {
-    var setopt_root: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var arch0_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var arch1_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var available_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var whatrequires_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
+    var setopt_root: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var arch0_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var arch1_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var available_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var whatrequires_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
 
     arch0_node.name = @constCast("arch");
     arch0_node.value = @constCast("x86_64");
@@ -355,12 +354,12 @@ test "TDNFCliParseRepoQueryArgs preserves repoquery selectors" {
         @constCast("repoquery"),
         @constCast("tdnf-repoquery-requires"),
     };
-    var cmd_args: c.TDNF_CMD_ARGS = std.mem.zeroes(c.TDNF_CMD_ARGS);
+    var cmd_args: abi.TDNF_CMD_ARGS = std.mem.zeroes(abi.TDNF_CMD_ARGS);
     cmd_args.ppszCmds = @ptrCast(&ppszCmds);
     cmd_args.nCmdCount = 2;
     cmd_args.cn_setopts = &setopt_root;
 
-    var pRepoqueryArgs: ?*c.TDNF_REPOQUERY_ARGS = null;
+    var pRepoqueryArgs: ?*abi.TDNF_REPOQUERY_ARGS = null;
     defer TDNFCliFreeRepoQueryArgs(pRepoqueryArgs);
 
     try std.testing.expectEqual(@as(u32, 0), TDNFCliParseRepoQueryArgs(&cmd_args, &pRepoqueryArgs));
@@ -372,20 +371,20 @@ test "TDNFCliParseRepoQueryArgs preserves repoquery selectors" {
     );
     try std.testing.expectEqualStrings("x86_64", std.mem.span(pRepoqueryArgs.?.ppszArchs[0].?));
     try std.testing.expectEqualStrings("noarch", std.mem.span(pRepoqueryArgs.?.ppszArchs[1].?));
-    try std.testing.expect(pRepoqueryArgs.?.pppszWhatKeys[c.REPOQUERY_WHAT_KEY_REQUIRES] != null);
+    try std.testing.expect(pRepoqueryArgs.?.pppszWhatKeys[abi.REPOQUERY_WHAT_KEY_REQUIRES] != null);
     try std.testing.expectEqualStrings(
         "doesnotexist",
-        std.mem.span(pRepoqueryArgs.?.pppszWhatKeys[c.REPOQUERY_WHAT_KEY_REQUIRES][0].?),
+        std.mem.span(pRepoqueryArgs.?.pppszWhatKeys[abi.REPOQUERY_WHAT_KEY_REQUIRES][0].?),
     );
     try std.testing.expectEqualStrings(
         "tdnf-repoquery-base",
-        std.mem.span(pRepoqueryArgs.?.pppszWhatKeys[c.REPOQUERY_WHAT_KEY_REQUIRES][1].?),
+        std.mem.span(pRepoqueryArgs.?.pppszWhatKeys[abi.REPOQUERY_WHAT_KEY_REQUIRES][1].?),
     );
 }
 
 test "TDNFCliParseRepoQueryArgs preserves qf location handling" {
-    var setopt_root: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var qf_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
+    var setopt_root: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var qf_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
 
     qf_node.name = @constCast("qf");
     qf_node.value = @constCast("%{location}");
@@ -395,12 +394,12 @@ test "TDNFCliParseRepoQueryArgs preserves qf location handling" {
         @constCast("repoquery"),
         @constCast("tdnf-repoquery-base"),
     };
-    var cmd_args: c.TDNF_CMD_ARGS = std.mem.zeroes(c.TDNF_CMD_ARGS);
+    var cmd_args: abi.TDNF_CMD_ARGS = std.mem.zeroes(abi.TDNF_CMD_ARGS);
     cmd_args.ppszCmds = @ptrCast(&ppszCmds);
     cmd_args.nCmdCount = 2;
     cmd_args.cn_setopts = &setopt_root;
 
-    var pRepoqueryArgs: ?*c.TDNF_REPOQUERY_ARGS = null;
+    var pRepoqueryArgs: ?*abi.TDNF_REPOQUERY_ARGS = null;
     defer TDNFCliFreeRepoQueryArgs(pRepoqueryArgs);
 
     try std.testing.expectEqual(@as(u32, 0), TDNFCliParseRepoQueryArgs(&cmd_args, &pRepoqueryArgs));
@@ -409,9 +408,9 @@ test "TDNFCliParseRepoQueryArgs preserves qf location handling" {
 }
 
 test "TDNFCliParseRepoQueryArgs rejects mixed qf queries" {
-    var setopt_root: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var qf_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var file_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
+    var setopt_root: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var qf_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var file_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
 
     qf_node.name = @constCast("qf");
     qf_node.value = @constCast("%{name}");
@@ -421,12 +420,12 @@ test "TDNFCliParseRepoQueryArgs rejects mixed qf queries" {
     qf_node.next = &file_node;
     setopt_root.first_child = &qf_node;
 
-    var cmd_args: c.TDNF_CMD_ARGS = std.mem.zeroes(c.TDNF_CMD_ARGS);
+    var cmd_args: abi.TDNF_CMD_ARGS = std.mem.zeroes(abi.TDNF_CMD_ARGS);
     cmd_args.cn_setopts = &setopt_root;
 
-    var pRepoqueryArgs: ?*c.TDNF_REPOQUERY_ARGS = @ptrFromInt(@alignOf(c.TDNF_REPOQUERY_ARGS));
+    var pRepoqueryArgs: ?*abi.TDNF_REPOQUERY_ARGS = @ptrFromInt(@alignOf(abi.TDNF_REPOQUERY_ARGS));
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_CLI_INVALID_MIXED_QUERY_QUERYFORMAT),
+        @as(u32, abi.ERROR_TDNF_CLI_INVALID_MIXED_QUERY_QUERYFORMAT),
         TDNFCliParseRepoQueryArgs(&cmd_args, &pRepoqueryArgs),
     );
     try std.testing.expect(pRepoqueryArgs == null);

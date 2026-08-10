@@ -1,5 +1,5 @@
 //! Pure dependency composition root for transaction-plan repository capture.
-//! It deliberately does not import repomd/root.zig, whose C ABI exports are
+//! It deliberately does not import repomd/root.zig, whose internal ABI exports are
 //! unrelated to this private enrichment path.
 
 pub const available_repository_loader = @import("available_loader.zig");

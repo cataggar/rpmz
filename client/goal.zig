@@ -5,6 +5,7 @@
 const __root = @This();
 const common = @import("tdnf_common");
 const canonical_abi = @import("client_abi");
+const transaction_plan_abi = @import("transaction_plan_capture_abi");
 pub const __builtin = @import("std").zig.c_translation.builtins;
 pub const __helpers = @import("std").zig.c_translation.helpers;
 pub const ptrdiff_t = c_long;
@@ -2853,245 +2854,10 @@ pub extern fn TDNFPackageContextGetRepoNevra(pContext: PTDNF_PACKAGE_CONTEXT, dw
 pub extern fn TDNFPackageContextGetInstalledPkgIds(pContext: PTDNF_PACKAGE_CONTEXT, pIdList: PTDNF_ID_LIST) u32;
 pub extern fn TDNFPackageContextGetAllPkgIds(pContext: PTDNF_PACKAGE_CONTEXT, pIdList: PTDNF_ID_LIST) u32;
 pub extern fn TDNFPackageContextGetRepoDataList(pContext: PTDNF_PACKAGE_CONTEXT, pppRepoData: [*c][*c]PTDNF_REPO_DATA, pdwCount: [*c]u32) u32;
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = extern struct {
-    data: [*c]const u8 = null,
-    length: usize = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM = extern struct {
-    kind: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    value: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    is_pkgid: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_LOCATION = extern struct {
-    href: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    xml_base: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    has_xml_base: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY = extern struct {
-    name: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    flags: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    version: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    release: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    epoch: u64 = 0,
-    comparison: u32 = 0,
-    sense: u32 = 0,
-    has_epoch: u32 = 0,
-    has_flags: u32 = 0,
-    has_version: u32 = 0,
-    has_release: u32 = 0,
-    pre: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_MIN_VERSION = extern struct {
-    arch: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    name: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    release: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    version: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    epoch: u64 = 0,
-    has_arch: u32 = 0,
-    has_epoch: u32 = 0,
-    has_release: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_POLICY = extern struct {
-    excludes: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = null,
-    installonly_names: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = null,
-    locked_names: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = null,
-    min_versions: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_MIN_VERSION = null,
-    protected_names: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = null,
-    force_architecture: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    exclude_count: u32 = 0,
-    installonly_name_count: u32 = 0,
-    locked_name_count: u32 = 0,
-    min_version_count: u32 = 0,
-    protected_name_count: u32 = 0,
-    allow_erasing: u32 = 0,
-    allow_multilib: u32 = 0,
-    all_deps: u32 = 0,
-    best: u32 = 0,
-    clean_requirements_on_remove: u32 = 0,
-    has_force_architecture: u32 = 0,
-    include_installed: u32 = 0,
-    installonly_limit: u32 = 0,
-    install_weak_dependencies: u32 = 0,
-    keep_orphans: u32 = 0,
-    skip_broken: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB = extern struct {
-    cookie_sha256: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    package_set_sha256: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    backend: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ENVIRONMENT = extern struct {
-    architecture: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    distro: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    policy: TDNF_TRANSACTION_PLAN_CAPTURE_POLICY = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_POLICY),
-    releasever: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    rpmdb: TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB),
-    resolution_status: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_METADATA_RECORD = extern struct {
-    checksum: TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM),
-    location: TDNF_TRANSACTION_PLAN_CAPTURE_LOCATION = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_LOCATION),
-    open_checksum: TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM),
-    record_type: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    database_version: u64 = 0,
-    open_size: u64 = 0,
-    size: u64 = 0,
-    timestamp: u64 = 0,
-    has_checksum: u32 = 0,
-    has_database_version: u32 = 0,
-    has_open_checksum: u32 = 0,
-    has_open_size: u32 = 0,
-    has_size: u32 = 0,
-    has_timestamp: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REPOMD = extern struct {
-    checksum_sha256: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    records: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_METADATA_RECORD = null,
-    revision: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    timestamp: u64 = 0,
-    record_count: u32 = 0,
-    has_revision: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_SNAPSHOT = extern struct {
-    id: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    metadata_sha256: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY = extern struct {
-    id: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    repomd: TDNF_TRANSACTION_PLAN_CAPTURE_REPOMD = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_REPOMD),
-    snapshot: TDNF_TRANSACTION_PLAN_CAPTURE_SNAPSHOT = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_SNAPSHOT),
-    priority: i32 = 0,
-    cost: u32 = 0,
-    kind: u32 = 0,
-    has_repomd: u32 = 0,
-    has_snapshot: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST = extern struct {
-    id: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    subject: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    kind: u32 = 0,
-    has_subject: u32 = 0,
-    outcome: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB = extern struct {
-    capability: TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY),
-    selection_value: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    action: u32 = 0,
-    selection_kind: u32 = 0,
-    selection_package_ref: u32 = 0,
-    reason: u32 = 0,
-    request_ref: u32 = 0,
-    has_request_ref: u32 = 0,
-    clean_deps: u32 = 0,
-    force_best: u32 = 0,
-    targeted: u32 = 0,
-    not_by_user: u32 = 0,
-    weak: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_IDENTITY = extern struct {
-    arch: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    name: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    release: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    version: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    epoch: u32 = 0,
-    has_epoch: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_SOURCE = extern struct {
-    checksum: TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM),
-    location: TDNF_TRANSACTION_PLAN_CAPTURE_LOCATION = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_LOCATION),
-    size: u64 = 0,
-    has_location: u32 = 0,
-    has_size: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE = extern struct {
-    identity: TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_IDENTITY = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_IDENTITY),
-    source: TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_SOURCE = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_SOURCE),
-    repository_ref: u32 = 0,
-    rpmdb_hnum: u32 = 0,
-    state: u32 = 0,
-    has_rpmdb_hnum: u32 = 0,
-    has_source: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION = extern struct {
-    target_package_ref: u32 = 0,
-    kind: u32 = 0,
-    reason: u32 = 0,
-    requested_job_ref: u32 = 0,
-    has_requested_job_ref: u32 = 0,
-    prior_offset: u32 = 0,
-    prior_count: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM = extern struct {
-    capability: TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY),
-    count: u32 = 0,
-    kind: u32 = 0,
-    job_ref: u32 = 0,
-    package_ref: u32 = 0,
-    related_package_ref: u32 = 0,
-    has_capability: u32 = 0,
-    has_job_ref: u32 = 0,
-    has_package_ref: u32 = 0,
-    has_related_package_ref: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_CAPTURE = extern struct {
-    abi_version: u32 = 0,
-    struct_size: u32 = 0,
-    environment: TDNF_TRANSACTION_PLAN_CAPTURE_ENVIRONMENT = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_ENVIRONMENT),
-    repositories: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY = null,
-    requests: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST = null,
-    jobs: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_JOB = null,
-    packages: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE = null,
-    actions: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION = null,
-    prior_package_refs: [*c]const u32 = null,
-    selected_package_refs: [*c]const u32 = null,
-    skipped_job_refs: [*c]const u32 = null,
-    hidden_package_refs: [*c]const u32 = null,
-    problems: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM = null,
-    repository_count: u32 = 0,
-    request_count: u32 = 0,
-    job_count: u32 = 0,
-    package_count: u32 = 0,
-    action_count: u32 = 0,
-    prior_package_ref_count: u32 = 0,
-    selected_package_ref_count: u32 = 0,
-    skipped_job_ref_count: u32 = 0,
-    hidden_package_ref_count: u32 = 0,
-    problem_count: u32 = 0,
-    pub const TDNFTransactionPlanCaptureCreate = __root.TDNFTransactionPlanCaptureCreate;
-};
 pub const struct_TDNF_TRANSACTION_PLAN_CAPTURE_OWNER = opaque {
     pub const TDNFTransactionPlanCaptureDestroy = __root.TDNFTransactionPlanCaptureDestroy;
 };
 pub const TDNF_TRANSACTION_PLAN_CAPTURE_OWNER = struct_TDNF_TRANSACTION_PLAN_CAPTURE_OWNER;
-pub const TDNF_TRANSACTION_PLAN_INTEGRATION_REPOSITORY = extern struct {
-    repository: ?*anyopaque = null,
-    id: [*c]const u8 = null,
-    cache_dir: [*c]const u8 = null,
-    priority: i32 = 0,
-    cost: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_INTEGRATION_ENVIRONMENT = extern struct {
-    architecture: [*c]const u8 = null,
-    distro: [*c]const u8 = null,
-    releasever: [*c]const u8 = null,
-    force_architecture: [*c]const u8 = null,
-    excludes: [*c]const [*c]const u8 = null,
-    installonly_names: [*c]const [*c]const u8 = null,
-    locked_names: [*c]const [*c]const u8 = null,
-    min_versions: [*c]const [*c]const u8 = null,
-    protected_names: [*c]const [*c]const u8 = null,
-    rpm_config: ?*const anyopaque = null,
-    installonly_limit: u32 = 0,
-    allow_erasing: u32 = 0,
-    allow_multilib: u32 = 0,
-    all_deps: u32 = 0,
-    best: u32 = 0,
-    clean_requirements_on_remove: u32 = 0,
-    include_installed: u32 = 0,
-    install_weak_dependencies: u32 = 0,
-    keep_orphans: u32 = 0,
-    skip_broken: u32 = 0,
-};
 pub const struct__TDNF_REPO_METADATA = extern struct {
     pszRepoCacheDir: [*c]u8 = null,
     pszRepo: [*c]u8 = null,
@@ -3102,134 +2868,18 @@ pub const struct__TDNF_REPO_METADATA = extern struct {
     pszOther: [*c]u8 = null,
     pub const TDNFFreeRepoMetadata = __root.TDNFFreeRepoMetadata;
 };
-pub const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS = extern struct {
-    free_memory: ?*const fn (?*anyopaque) callconv(.c) void = null,
-    make_dirs: ?*const fn ([*c]const u8) callconv(.c) u32 = null,
-    get_cache_path: ?*const fn ([*c]struct__TDNF_, PTDNF_REPO_DATA, [*c]const u8, [*c]const u8, [*c][*c]u8) callconv(.c) u32 = null,
-    get_repo_md: ?*const fn ([*c]struct__TDNF_, PTDNF_REPO_DATA, [*c]const u8, [*c][*c]struct__TDNF_REPO_METADATA) callconv(.c) u32 = null,
-    free_repo_metadata: ?*const fn ([*c]struct__TDNF_REPO_METADATA) callconv(.c) void = null,
-    calculate_cookie: ?*const fn ([*c]const u8, [*c]u8) callconv(.c) u32 = null,
-};
-pub const TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_VIEW = extern struct {
-    next: ?*anyopaque = null,
-    live_repository: ?*anyopaque = null,
-    live_repository_slot: [*c]?*anyopaque = null,
-    id: [*c]const u8 = null,
-    name: [*c]const u8 = null,
-    base_url: [*c]const u8 = null,
-    metadata_expire: c_long = 0,
-    priority: c_int = 0,
-    enabled: c_int = 0,
-    skip_if_unavailable: c_int = 0,
-    has_metadata: c_int = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT = extern struct {
-    tdnf_handle: ?*anyopaque = null,
-    sack: ?*anyopaque = null,
-    live_sack: ?*anyopaque = null,
-    repository_head: ?*anyopaque = null,
-    command_line_repository_slot: [*c]?*anyopaque = null,
-    state_slot: [*c]?*anyopaque = null,
-    failure_stage: [*c]u32 = null,
-    refresh_flag: [*c]c_int = null,
-    cache_dir: [*c]const u8 = null,
-    root_dir: [*c]const u8 = null,
-    architecture: [*c]const u8 = null,
-    rpm_config: ?*const anyopaque = null,
-    cache_only: c_int = 0,
-    all_deps: c_int = 0,
-    repository_init_callbacks: [*c]const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS = null,
-    describe_repository: ?*const fn (?*anyopaque, [*c]TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_VIEW) callconv(.c) void = null,
-    set_repository_enabled: ?*const fn (?*anyopaque, c_int) callconv(.c) void = null,
-    pub const TDNFTransactionPlanRefreshSack = __root.TDNFTransactionPlanRefreshSack;
-};
-pub const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT = extern struct {
-    tdnf_handle: ?*anyopaque = null,
-    repo_data: ?*anyopaque = null,
-    context: ?*anyopaque = null,
-    callbacks: [*c]const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS = null,
-    refresh_input: [*c]const TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT = null,
-    state_slot: [*c]?*anyopaque = null,
-    command_line_repository: ?*anyopaque = null,
-    live_repository_slot: [*c]?*anyopaque = null,
-    failure_stage: [*c]u32 = null,
-    repository_id: [*c]const u8 = null,
-    base_url: [*c]const u8 = null,
-    priority: i32 = 0,
-    has_metadata: u32 = 0,
-    reuse_empty_repository: u32 = 0,
-    pub const TDNFTransactionPlanInitRepository = __root.TDNFTransactionPlanInitRepository;
-    pub const TDNFTransactionPlanReloadRepository = __root.TDNFTransactionPlanReloadRepository;
-};
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_JOB = extern struct {
-    capability: TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY),
-    selection_value: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    selection_id: i32 = 0,
-    action: u32 = 0,
-    selection_kind: u32 = 0,
-    raw_how: u32 = 0,
-    effective_how: u32 = 0,
-    raw_flags: u32 = 0,
-    effective_flags: u32 = 0,
-    reason: u32 = 0,
-    request_ref: u32 = 0,
-    has_request_ref: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_QUEUE_ORIGIN = extern struct {
-    queue_pair_index: u32 = 0,
-    job_ref: u32 = 0,
-    request_ref: u32 = 0,
-    has_request_ref: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_FACT = extern struct {
-    value: TDNF_TRANSACTION_PLAN_CAPTURE_BYTES = @import("std").mem.zeroes(TDNF_TRANSACTION_PLAN_CAPTURE_BYTES),
-    kind: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_SATISFIED_SELECTION = extern struct {
-    request_ref: u32 = 0,
-    selection_id: i32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW = extern struct {
-    requests: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST = null,
-    jobs: [*c]const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_JOB = null,
-    queue_origins: [*c]const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_QUEUE_ORIGIN = null,
-    policy_facts: [*c]const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_FACT = null,
-    request_count: u32 = 0,
-    job_count: u32 = 0,
-    queue_origin_count: u32 = 0,
-    policy_fact_count: u32 = 0,
-    allow_erasing: u32 = 0,
-    satisfied_selections: [*c]const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_SATISFIED_SELECTION = null,
-    satisfied_selection_count: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_PACKAGE_REF = extern struct {
-    selection_id: i32 = 0,
-    package_ref: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_SATISFIED_PACKAGE = extern struct {
-    request_ref: u32 = 0,
-    package_ref: u32 = 0,
-};
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_FACTS = extern struct {
-    requests: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST = null,
-    jobs: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_JOB = null,
-    satisfied_packages: [*c]const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_SATISFIED_PACKAGE = null,
-    request_count: u32 = 0,
-    job_count: u32 = 0,
-    satisfied_package_count: u32 = 0,
-};
 pub const struct_TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER = opaque {
     pub const TDNFTransactionPlanRequestTraceCaptureFactsDestroy = __root.TDNFTransactionPlanRequestTraceCaptureFactsDestroy;
 };
 pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER = struct_TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER;
-pub extern fn TDNFTransactionPlanCaptureCreate(input: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE, owner: [*c]?*TDNF_TRANSACTION_PLAN_CAPTURE_OWNER) u32;
+pub extern fn TDNFTransactionPlanCaptureCreate(input: [*c]const transaction_plan_abi.Capture, owner: [*c]?*TDNF_TRANSACTION_PLAN_CAPTURE_OWNER) u32;
 pub extern fn TDNFTransactionPlanCaptureDestroy(owner: ?*TDNF_TRANSACTION_PLAN_CAPTURE_OWNER) void;
 pub extern fn TDNFTransactionPlanStateSetEnabled(state: [*c]?*TDNF_TRANSACTION_PLAN_STATE, enabled: u32) u32;
 pub extern fn TDNFTransactionPlanStateIsEnabled(state: ?*const TDNF_TRANSACTION_PLAN_STATE) u32;
-pub extern fn TDNFTransactionPlanInitRepository(input: [*c]const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT, loaded_repo: [*c]?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanInitRepository(input: [*c]const transaction_plan_abi.RepositoryInitInput, loaded_repo: [*c]?*anyopaque) u32;
 pub extern fn TDNFTransactionPlanInitCommandLineRepository(sack: ?*anyopaque, command_line_repository_slot: [*c]?*anyopaque) u32;
-pub extern fn TDNFTransactionPlanReloadRepository(input: [*c]const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT, loaded_repo: [*c]?*anyopaque) u32;
-pub extern fn TDNFTransactionPlanRefreshSack(input: [*c]const TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT, clean_metadata: c_int) u32;
+pub extern fn TDNFTransactionPlanReloadRepository(input: [*c]const transaction_plan_abi.RepositoryInitInput, loaded_repo: [*c]?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanRefreshSack(input: [*c]const transaction_plan_abi.RepositoryRefreshInput, clean_metadata: c_int) u32;
 pub extern fn TDNFTransactionPlanStateRecordRepository(state: [*c]?*TDNF_TRANSACTION_PLAN_STATE, repository: ?*anyopaque, cookie_sha256: [*c]const u8, include_filelists: u32, include_updateinfo: u32, include_other: u32) u32;
 pub extern fn TDNFTransactionPlanStateRepositoryRecordCount(state: ?*const TDNF_TRANSACTION_PLAN_STATE, repository: ?*anyopaque) u32;
 pub extern fn TDNFTransactionPlanStateFailNextRepositoryRecord(state: ?*TDNF_TRANSACTION_PLAN_STATE) void;
@@ -3243,7 +2893,7 @@ pub extern fn TDNFTransactionPlanStatePublishProblem(state: ?*TDNF_TRANSACTION_P
 pub extern fn TDNFTransactionPlanStateDestroy(state: ?*TDNF_TRANSACTION_PLAN_STATE) void;
 pub extern fn TDNFTransactionPlanStateGetCanonicalJson(state: ?*const TDNF_TRANSACTION_PLAN_STATE, data: [*c][*c]const u8, length: [*c]usize) u32;
 pub extern fn TDNFTransactionPlanStateFreeCanonicalJson(data: [*c]const u8, length: usize) void;
-pub extern fn TDNFTransactionPlanIntegrationCapturePending(state: ?*TDNF_TRANSACTION_PLAN_STATE, pool: ?*anyopaque, native_solve: ?*const anyopaque, trace: [*c]const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW, problems_accepted: u32, unresolved_count: u32, terminal_problem_kind: u32, repositories: [*c]const TDNF_TRANSACTION_PLAN_INTEGRATION_REPOSITORY, repository_count: u32, environment: [*c]const TDNF_TRANSACTION_PLAN_INTEGRATION_ENVIRONMENT) u32;
+pub extern fn TDNFTransactionPlanIntegrationCapturePending(state: ?*TDNF_TRANSACTION_PLAN_STATE, pool: ?*anyopaque, native_solve: ?*const anyopaque, trace: [*c]const transaction_plan_abi.RequestTraceView, problems_accepted: u32, unresolved_count: u32, terminal_problem_kind: u32, repositories: [*c]const transaction_plan_abi.IntegrationRepository, repository_count: u32, environment: [*c]const transaction_plan_abi.IntegrationEnvironment) u32;
 pub extern fn TDNFTransactionPlanCaptureSetEnabled(tdnf_handle: ?*anyopaque, enabled: u32) u32;
 pub extern fn TDNFTransactionPlanCaptureGetCanonicalJson(tdnf_handle: ?*anyopaque, data: [*c][*c]const u8, length: [*c]usize) u32;
 pub extern fn TDNFTransactionPlanCaptureFailNextRepositoryRecord(tdnf_handle: ?*anyopaque) void;
@@ -3282,14 +2932,14 @@ pub extern fn TDNFTransactionPlanRequestTraceRecordPackageJob(trace: ?*TDNF_TRAN
 pub extern fn TDNFTransactionPlanRequestTraceRecordPackageJobRange(trace: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE, queue: [*c]const i32, start: u32, end: u32, action: u32, reason: u32, request_ref: u32) void;
 pub extern fn TDNFTransactionPlanRequestTraceRecordNameJob(trace: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE, queue_pair_index: u32, action: u32, selection_name: [*c]const u8, raw_how: i32, raw_flags: u32, reason: u32, request_ref: u32) void;
 pub extern fn TDNFTransactionPlanRequestTraceRecordAllJob(trace: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE, queue_pair_index: u32, action: u32, raw_how: i32, raw_flags: u32, reason: u32, request_ref: u32) void;
-pub extern fn TDNFTransactionPlanRequestTraceRecordCapabilityJob(trace: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE, queue_pair_index: u32, action: u32, capability: [*c]const TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY, raw_how: i32, raw_flags: u32, reason: u32, request_ref: u32) void;
+pub extern fn TDNFTransactionPlanRequestTraceRecordCapabilityJob(trace: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE, queue_pair_index: u32, action: u32, capability: [*c]const transaction_plan_abi.Capability, raw_how: i32, raw_flags: u32, reason: u32, request_ref: u32) void;
 pub extern fn TDNFTransactionPlanRequestTraceRecordPolicies(trace: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE, excludes: [*c]const [*c]const u8, installonly_names: [*c]const [*c]const u8, locked_names: [*c]const [*c]const u8, min_versions: [*c]const [*c]const u8, protected_names: [*c]const [*c]const u8, allow_erasing: u32) void;
 pub extern fn TDNFTransactionPlanRequestTraceFinalize(trace: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE, queue: [*c]const i32, element_count: u32, clean_deps_mask: i32, force_best_mask: i32) void;
-pub extern fn TDNFTransactionPlanRequestTraceGetView(trace: ?*const TDNF_TRANSACTION_PLAN_REQUEST_TRACE) [*c]const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW;
+pub extern fn TDNFTransactionPlanRequestTraceGetView(trace: ?*const TDNF_TRANSACTION_PLAN_REQUEST_TRACE) [*c]const transaction_plan_abi.RequestTraceView;
 pub extern fn TDNFTransactionPlanRequestTraceGetError(trace: ?*const TDNF_TRANSACTION_PLAN_REQUEST_TRACE) u32;
 pub extern fn TDNFTransactionPlanRequestTraceTestFailNextCreate() void;
 pub extern fn TDNFTransactionPlanRequestTraceTestFailNextRecord() void;
-pub extern fn TDNFTransactionPlanRequestTraceCaptureFactsCreate(trace: ?*const TDNF_TRANSACTION_PLAN_REQUEST_TRACE, package_refs: [*c]const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_PACKAGE_REF, package_ref_count: u32, facts: [*c][*c]const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_FACTS, owner: [*c]?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER) u32;
+pub extern fn TDNFTransactionPlanRequestTraceCaptureFactsCreate(trace: ?*const TDNF_TRANSACTION_PLAN_REQUEST_TRACE, package_refs: [*c]const transaction_plan_abi.RequestTracePackageRef, package_ref_count: u32, facts: [*c][*c]const transaction_plan_abi.RequestTraceCaptureFacts, owner: [*c]?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER) u32;
 pub extern fn TDNFTransactionPlanRequestTraceCaptureFactsDestroy(owner: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER) void;
 pub const TDNF_PLUGIN = struct__TDNF_PLUGIN_;
 pub const TDNF = struct__TDNF_;
@@ -3780,14 +3430,14 @@ fn captureSolved(
     if (TDNFTransactionPlanStateIsEnabled(tdnf.*.pTransactionPlanState) == 0) return 0;
 
     var repos: PTDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 = null;
-    var capture_repos: [*c]TDNF_TRANSACTION_PLAN_INTEGRATION_REPOSITORY = null;
+    var capture_repos: [*c]transaction_plan_abi.IntegrationRepository = null;
     var repo_count: u32 = 0;
     defer {
         if (capture_repos != null) TDNFFreeMemory(@ptrCast(capture_repos));
         TDNFGoalFreeNativeSolverRepoInputs(repos, repo_count);
     }
 
-    var environment = TDNF_TRANSACTION_PLAN_INTEGRATION_ENVIRONMENT{
+    var environment = transaction_plan_abi.IntegrationEnvironment{
         .architecture = tdnf.*.pConf.*.pszBaseArch,
         .distro = tdnf.*.pConf.*.pszOSName,
         .releasever = tdnf.*.pConf.*.pszVarReleaseVer,
@@ -3821,7 +3471,7 @@ fn captureSolved(
     }
 
     if (repo_count != 0) {
-        rc = TDNFAllocateMemory(repo_count, @sizeOf(TDNF_TRANSACTION_PLAN_INTEGRATION_REPOSITORY), @ptrCast(&capture_repos));
+        rc = TDNFAllocateMemory(repo_count, @sizeOf(transaction_plan_abi.IntegrationRepository), @ptrCast(&capture_repos));
         if (rc != 0) return rc;
         var repo_index: u32 = 0;
         while (repo_index < repo_count) : (repo_index += 1) {
@@ -3949,7 +3599,7 @@ fn tdnfSolv(
         if (nAllowErasing != 0 and pTdnf.*.pConf.*.ppszProtectedPkgs != null) {
             rc = TDNFSolvAddProtectPkgs(pTdnf, pQueueJobs);
             if (rc == ERROR_TDNF_PROTECTED) {
-                rc = captureFailure(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, nUnresolved, TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE, ppszExcludes, 1, 0, 0, &native_solve, rc);
+                rc = captureFailure(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, nUnresolved, transaction_plan_abi.problem_kind.protected_package, ppszExcludes, 1, 0, 0, &native_solve, rc);
             }
             if (rc != 0) break :solve;
         }
@@ -3981,10 +3631,10 @@ fn tdnfSolv(
             rc = captureFailure(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, nUnresolved, 0xffffffff, ppszExcludes, 0, 1, 0, &native_solve, reported);
             break :solve;
         } else if (rc == ERROR_TDNF_PROTECTED) {
-            rc = captureFailure(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, nUnresolved, TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE, ppszExcludes, 0, 0, 1, &native_solve, rc);
+            rc = captureFailure(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, nUnresolved, transaction_plan_abi.problem_kind.protected_package, ppszExcludes, 0, 0, 1, &native_solve, rc);
             break :solve;
         } else if (rc == ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED) {
-            rc = captureFailure(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, nUnresolved, TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_INSTALLONLY_LIMIT, ppszExcludes, 0, 0, 0, &native_solve, rc);
+            rc = captureFailure(pTdnf, pQueueJobs, nAllowErasing, nAutoErase, flags, stamped_count, nUnresolved, transaction_plan_abi.problem_kind.installonly_limit, ppszExcludes, 0, 0, 0, &native_solve, rc);
             break :solve;
         }
         TDNFTransactionPlanRequestTraceFinalize(pTdnf.*.pRequestTrace, pQueueJobs.*.pnElements, pQueueJobs.*.dwCount, TDNF_JOB_CLEANDEPS, TDNF_JOB_FORCEBEST);
@@ -7983,26 +7633,26 @@ pub inline fn IsNullOrEmptyString(str: anytype) @TypeOf(!(str != 0) or !(str.* !
     _ = &str;
     return !(str != 0) or !(str.* != 0);
 }
-pub const BAIL_ON_TDNF_SYSTEM_ERROR = @compileError("unable to translate macro: undefined identifier `error`"); // include/tdnf-common-defines.h:27:9
-pub const BAIL_ON_TDNF_SYSTEM_ERROR_UNCOND = @compileError("unable to translate macro: undefined identifier `error`"); // include/tdnf-common-defines.h:36:9
-pub const CHECK_JD_RC = @compileError("unable to translate macro: undefined identifier `dwError`"); // include/tdnf-common-defines.h:42:9
-pub const CHECK_JD_NULL = @compileError("unable to translate macro: undefined identifier `dwError`"); // include/tdnf-common-defines.h:50:9
-pub const JD_SAFE_DESTROY = @compileError("unable to translate macro: undefined identifier `jd_destroy`"); // include/tdnf-common-defines.h:58:9
-pub const TDNF_SAFE_FREE_MEMORY = @compileError("unable to translate C expr: unexpected token 'do'"); // include/tdnf-common-defines.h:66:9
-pub const TDNF_SAFE_FREE_STRINGARRAY = @compileError("unable to translate C expr: unexpected token 'do'"); // include/tdnf-common-defines.h:74:9
+pub const BAIL_ON_TDNF_SYSTEM_ERROR = @compileError("unable to translate macro: undefined identifier `error`");
+pub const BAIL_ON_TDNF_SYSTEM_ERROR_UNCOND = @compileError("unable to translate macro: undefined identifier `error`");
+pub const CHECK_JD_RC = @compileError("unable to translate macro: undefined identifier `dwError`");
+pub const CHECK_JD_NULL = @compileError("unable to translate macro: undefined identifier `dwError`");
+pub const JD_SAFE_DESTROY = @compileError("unable to translate macro: undefined identifier `jd_destroy`");
+pub const TDNF_SAFE_FREE_MEMORY = @compileError("unable to translate C expr: unexpected token 'do'");
+pub const TDNF_SAFE_FREE_STRINGARRAY = @compileError("unable to translate C expr: unexpected token 'do'");
 pub const LOG_INFO = @as(c_int, 0);
 pub const LOG_ERR = @as(c_int, 1);
 pub const LOG_CRIT = @as(c_int, 2);
 pub const LOG_NOTICE = @as(c_int, 3);
-pub const pr_info = @compileError("unable to translate C expr: unexpected token '##'"); // include/tdnf-common-defines.h:88:9
-pub const pr_err = @compileError("unable to translate C expr: unexpected token '##'"); // include/tdnf-common-defines.h:91:9
-pub const pr_notice = @compileError("unable to translate C expr: unexpected token '##'"); // include/tdnf-common-defines.h:94:9
+pub const pr_info = @compileError("unable to translate C expr: unexpected token '##'");
+pub const pr_err = @compileError("unable to translate C expr: unexpected token '##'");
+pub const pr_notice = @compileError("unable to translate C expr: unexpected token '##'");
 pub inline fn pr_json(str: anytype) @TypeOf(fputs(str, stdout)) {
     _ = &str;
     return fputs(str, stdout);
 }
-pub const pr_jsonf = @compileError("unable to translate C expr: unexpected token '##'"); // include/tdnf-common-defines.h:100:9
-pub const pr_crit = @compileError("unable to translate C expr: unexpected token '##'"); // include/tdnf-common-defines.h:107:9
+pub const pr_jsonf = @compileError("unable to translate C expr: unexpected token '##'");
+pub const pr_crit = @compileError("unable to translate C expr: unexpected token '##'");
 pub const _TDNF_RPMZIG_RPMDB_H_ = "";
 pub const TDNF_JOB_SOLVABLE = @as(c_int, 0x01);
 pub const TDNF_JOB_SOLVABLE_NAME = @as(c_int, 0x02);
@@ -8024,108 +7674,13 @@ pub const TDNF_METADATA_COOKIE_LEN = @as(c_int, 32);
 pub const TDNF_NEVRA_UNINSTALLED = @as(c_int, 0);
 pub const TDNF_NEVRA_INSTALLED = @as(c_int, 1);
 pub const _TDNF_CLIENT_TRANSACTION_PLAN_CAPTURE_ABI_INC_ = "";
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ABI_VERSION = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_DISTRO_SYNC = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_DOWNGRADE = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_ERASE = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_INSTALL = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_LOCK = UINT32_C(@as(c_int, 4));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_REINSTALL = UINT32_C(@as(c_int, 5));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_UPDATE = UINT32_C(@as(c_int, 6));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_UPDATE_ALL = UINT32_C(@as(c_int, 7));
-pub const TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_PENDING = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_QUEUED = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_NO_CANDIDATE = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_INSTALL = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ERASE = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_UPDATE = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DOWNGRADE = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DIST_SYNC = UINT32_C(@as(c_int, 4));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_REINSTALL = UINT32_C(@as(c_int, 5));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_LOCK = UINT32_C(@as(c_int, 6));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION = UINT32_C(@as(c_int, 7));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED = UINT32_C(@as(c_int, 8));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ALLOW_UNINSTALL = UINT32_C(@as(c_int, 9));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REASON_DEPENDENCY = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REASON_WEAK_DEPENDENCY = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REASON_CLEANUP = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REASON_INSTALLONLY_LIMIT = UINT32_C(@as(c_int, 4));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY = UINT32_C(@as(c_int, 5));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_AVAILABLE = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_INSTALLED = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_DOWNGRADE = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_ERASE = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_INSTALL = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_OBSOLETE = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REINSTALL = UINT32_C(@as(c_int, 4));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_UPGRADE = UINT32_C(@as(c_int, 5));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_CLEANUP = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_DEPENDENCY = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_INSTALLONLY_LIMIT = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_OBSOLETES = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_POLICY = UINT32_C(@as(c_int, 4));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_USER = UINT32_C(@as(c_int, 5));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_WEAK_DEPENDENCY = UINT32_C(@as(c_int, 6));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_CONFLICT = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_INSTALLONLY_LIMIT = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_NO_CANDIDATE = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_NOT_INSTALLABLE = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_OBSOLETES = UINT32_C(@as(c_int, 4));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE = UINT32_C(@as(c_int, 5));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_UNSATISFIED_REQUIREMENT = UINT32_C(@as(c_int, 6));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_EQ = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_GE = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_GT = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_LE = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_LT = UINT32_C(@as(c_int, 4));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_NONE = UINT32_C(@as(c_int, 5));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_PROBLEMS = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_RESOLVED = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_RESOLVED_WITH_SKIPS = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_BDB = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_NDB = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_SQLITE = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_AVAILABLE = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_INSTALLED = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_COMMAND_LINE = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_ALL = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_PACKAGE = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_NAME = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_CAPABILITY = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST = UINT32_MAX;
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_CLEAN_DEPS = UINT32_C(@as(c_int, 1)) << @as(c_int, 0);
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_FORCE_BEST = UINT32_C(@as(c_int, 1)) << @as(c_int, 1);
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_TARGETED = UINT32_C(@as(c_int, 1)) << @as(c_int, 2);
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_NOT_BY_USER = UINT32_C(@as(c_int, 1)) << @as(c_int, 3);
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_WEAK = UINT32_C(@as(c_int, 1)) << @as(c_int, 4);
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_EXCLUDE = UINT32_C(@as(c_int, 0));
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_INSTALLONLY = UINT32_C(@as(c_int, 1));
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_LOCK = UINT32_C(@as(c_int, 2));
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_MIN_VERSION = UINT32_C(@as(c_int, 3));
-pub const TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_PROTECTED = UINT32_C(@as(c_int, 4));
-pub const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS_DEFAULTS = @compileError("unable to translate C expr: unexpected token '{'"); // client/transaction_plan_capture_abi.inc:481:9
-pub const TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT_DEFAULTS = @compileError("unable to translate C expr: unexpected token '{'"); // client/transaction_plan_capture_abi.inc:491:9
-pub const TDNF_TRANSACTION_PLAN_CAPTURE_HIDDEN = @compileError("unable to translate macro: undefined identifier `visibility`"); // client/transaction_plan_capture_abi.inc:584:9
-pub const TDNF_TRANSACTION_PLAN_HANDLE_RESOLVE_ERROR = @compileError("unable to translate C expr: unexpected token 'do'"); // client/transaction_plan_capture_abi.inc:707:9
-pub const TDNF_TRANSACTION_PLAN_PUBLISH = @compileError("unable to translate C expr: unexpected token 'do'"); // client/transaction_plan_capture_abi.inc:716:9
-pub const TDNF_TRANSACTION_PLAN_REJECT_UNSUPPORTED_RESOLVE = @compileError("unable to translate C expr: unexpected token 'do'"); // client/transaction_plan_capture_abi.inc:723:9
-pub const TDNF_TRANSACTION_PLAN_REJECT_REPOFROMDIR = @compileError("unable to translate macro: undefined identifier `_repo_data`"); // client/transaction_plan_capture_abi.inc:736:9
-pub const TDNF_TRANSACTION_PLAN_CHECK_TRACE = @compileError("unable to translate C expr: unexpected token 'do'"); // client/transaction_plan_capture_abi.inc:753:9
 pub const __LLCONF_NODES_H_INCLUDED = "";
 pub inline fn find_child(cn_parent: anytype, name: anytype) @TypeOf(find_node(cn_parent.*.first_child, name)) {
     _ = &cn_parent;
     _ = &name;
     return find_node(cn_parent.*.first_child, name);
 }
-pub inline fn STRINGIFYX(N: anytype) @TypeOf(STRINGIFY(N)) {
-    _ = &N;
-    return STRINGIFY(N);
-}
-pub const STRINGIFY = @compileError("unable to translate C expr: unexpected token ''"); // client/../common/defines.h:12:9
 pub const MAX_CONFIG_LINE_LENGTH = @as(c_int, 1024);
-pub const TDNF_SAFE_FREE_PKGINFO = @compileError("unable to translate C expr: unexpected token 'do'"); // client/../common/defines.h:16:9
 pub const TDNF_DEFAULT_MAX_STRING_LEN = __helpers.promoteIntLiteral(c_int, 16384000, .decimal);
 pub const TDNF_MD5_DIGEST_LEN = @as(c_int, 16);
 pub const TDNF_SHA1_DIGEST_LEN = @as(c_int, 20);
@@ -8137,7 +7692,6 @@ pub inline fn STR_IS_TRUE(s: anytype) @TypeOf((s != 0) and (!(strcmp(s, "1") != 
     _ = &s;
     return (s != 0) and (!(strcmp(s, "1") != 0) or !(strcasecmp(s, "true") != 0));
 }
-pub const SET_STRING = @compileError("unable to translate macro: undefined identifier `dwError`"); // client/../common/config.h:3:9
 pub const TDNF_RPM_EXT = ".rpm";
 pub const TDNF_NAME = "tdnf";
 pub const DIR_SEPARATOR = '/';
@@ -8235,7 +7789,6 @@ pub const TDNF_REPO_DEFAULT_TIMEOUT = @as(c_int, 0);
 pub const TDNF_REPO_DEFAULT_RETRIES = @as(c_int, 10);
 pub const TDNF_REPO_DEFAULT_PRIORITY = @as(c_int, 50);
 pub const TDNF_REPO_DEFAULT_METADATA_EXPIRE = __helpers.promoteIntLiteral(c_int, 172800, .decimal);
-pub const TDNF_REPO_DEFAULT_METADATA_EXPIRE_STR = STRINGIFYX(TDNF_REPO_DEFAULT_METADATA_EXPIRE);
 pub const TDNF_REPO_DEFAULT_SKIP_MD_FILELISTS = @as(c_int, 0);
 pub const TDNF_REPO_DEFAULT_SKIP_MD_UPDATEINFO = @as(c_int, 0);
 pub const TDNF_REPO_DEFAULT_SKIP_MD_OTHER = @as(c_int, 0);

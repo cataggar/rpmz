@@ -151,15 +151,12 @@ test "plan command emits parseable versioned JSON" {
 
     const tdnf = try std.fs.path.join(allocator, &.{ prefix, "bin", "tdnf" });
     defer allocator.free(tdnf);
-    const lib_dir = try std.fs.path.join(allocator, &.{ prefix, "lib" });
-    defer allocator.free(lib_dir);
     const config = try std.fs.path.join(allocator, &.{ root, "tdnf.conf" });
     defer allocator.free(config);
 
     var environ: std.process.Environ.Map = .init(allocator);
     defer environ.deinit();
     try environ.putPosixBlock(std.testing.environ.block.view());
-    try environ.put("LD_LIBRARY_PATH", lib_dir);
 
     const run_result = try std.process.run(allocator, io, .{
         .argv = &.{

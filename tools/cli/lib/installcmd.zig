@@ -5,24 +5,22 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const jsondump = @import("jsondump_abi");
 const common = @import("tdnf_common");
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
-    @cInclude("jsondump.h");
     @cInclude("stdio.h");
-    @cInclude("tdnf.h");
-    @cInclude("tdnfcli.h");
-    @cInclude("tdnferror.h");
 });
 const jsonfmt = @import("jsonfmt.zig");
 const output = @import("output.zig");
 
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
 extern fn TDNFFreeStringArray(ppszArray: [*c]?[*:0]u8) void;
-extern fn TDNFFreeSolvedPackageInfo(pSolvedPkgInfo: c.PTDNF_SOLVED_PKG_INFO) void;
+extern fn TDNFFreeSolvedPackageInfo(pSolvedPkgInfo: abi.PTDNF_SOLVED_PKG_INFO) void;
 extern fn TDNFUtilsFormatSize(unSize: u64, ppszFormattedSize: ?*?[*:0]u8) u32;
 extern fn TDNFYesOrNo(
-    pArgs: ?*c.TDNF_CMD_ARGS,
+    pArgs: ?*abi.TDNF_CMD_ARGS,
     pszQuestion: ?[*:0]const u8,
     pAnswer: ?*c_int,
 ) u32;
@@ -35,14 +33,14 @@ const allocator = std.heap.c_allocator;
 
 fn checkJsonResult(nResult: c_int) u32 {
     if (nResult != 0) {
-        return c.ERROR_TDNF_JSONDUMP;
+        return abi.ERROR_TDNF_JSONDUMP;
     }
     return 0;
 }
 
-fn destroyJsonDump(ppDump: *?*c.struct_json_dump) void {
+fn destroyJsonDump(ppDump: *?*jsondump.JsonDump) void {
     if (ppDump.*) |pDump| {
-        c.jd_destroy(pDump);
+        jsondump.jd_destroy(pDump);
         ppDump.* = null;
     }
 }
@@ -61,7 +59,7 @@ fn freeOwnedString(ppValue: *?[*:0]u8) void {
 }
 
 fn getErrno() c_int {
-    return c.__errno_location().*;
+    return abi.__errno_location().*;
 }
 
 fn nonNullString(pszValue: ?[*:0]const u8) [*:0]const u8 {
@@ -73,22 +71,22 @@ fn formatStringSlice(pszValue: ?[*:0]const u8) []const u8 {
 }
 
 fn mapAlterError(dwError: u32) u32 {
-    return if (dwError == c.ERROR_TDNF_ALREADY_INSTALLED)
-        c.ERROR_TDNF_CLI_NOTHING_TO_DO
+    return if (dwError == abi.ERROR_TDNF_ALREADY_INSTALLED)
+        abi.ERROR_TDNF_CLI_NOTHING_TO_DO
     else
         dwError;
 }
 
 fn addSolvedPackageList(
-    jd: ?*c.struct_json_dump,
+    jd: ?*jsondump.JsonDump,
     pszKey: [*:0]const u8,
-    pPkgInfos: ?*c.TDNF_PKG_INFO,
+    pPkgInfos: ?*abi.TDNF_PKG_INFO,
 ) u32 {
     if (pPkgInfos == null) {
         return 0;
     }
 
-    var jd_list: ?*c.struct_json_dump = null;
+    var jd_list: ?*jsondump.JsonDump = null;
     defer destroyJsonDump(&jd_list);
 
     const dwError = JDPkgList(pPkgInfos, &jd_list);
@@ -96,18 +94,18 @@ fn addSolvedPackageList(
         return dwError;
     }
 
-    return checkJsonResult(c.jd_map_add_child(jd, pszKey, jd_list));
+    return checkJsonResult(jsondump.jd_map_add_child(jd, pszKey, jd_list));
 }
 
 fn addPackageEvr(
     format_allocator: std.mem.Allocator,
-    jd: ?*c.struct_json_dump,
+    jd: ?*jsondump.JsonDump,
     pszVersion: ?[*:0]const u8,
     pszRelease: ?[*:0]const u8,
 ) u32 {
     return checkJsonResult(jsonfmt.mapAddFormatted(
         format_allocator,
-        c.jd_map_add_string,
+        jsondump.jd_map_add_string,
         jd,
         "Evr",
         "{s}-{s}",
@@ -118,15 +116,15 @@ fn addPackageEvr(
     ));
 }
 
-fn printActionHeader(nAlterType: c.TDNF_ALTERTYPE) u32 {
+fn printActionHeader(nAlterType: abi.TDNF_ALTERTYPE) u32 {
     switch (nAlterType) {
-        c.ALTER_INSTALL => common.log(LOG_INFO, "\nInstalling:", .{}),
-        c.ALTER_UPGRADE => common.log(LOG_INFO, "\nUpgrading:", .{}),
-        c.ALTER_ERASE => common.log(LOG_INFO, "\nRemoving:", .{}),
-        c.ALTER_DOWNGRADE => common.log(LOG_INFO, "\nDowngrading:", .{}),
-        c.ALTER_REINSTALL => common.log(LOG_INFO, "\nReinstalling:", .{}),
-        c.ALTER_OBSOLETED => common.log(LOG_INFO, "\nObsoleting:", .{}),
-        else => return c.ERROR_TDNF_INVALID_PARAMETER,
+        abi.ALTER_INSTALL => common.log(LOG_INFO, "\nInstalling:", .{}),
+        abi.ALTER_UPGRADE => common.log(LOG_INFO, "\nUpgrading:", .{}),
+        abi.ALTER_ERASE => common.log(LOG_INFO, "\nRemoving:", .{}),
+        abi.ALTER_DOWNGRADE => common.log(LOG_INFO, "\nDowngrading:", .{}),
+        abi.ALTER_REINSTALL => common.log(LOG_INFO, "\nReinstalling:", .{}),
+        abi.ALTER_OBSOLETED => common.log(LOG_INFO, "\nObsoleting:", .{}),
+        else => return abi.ERROR_TDNF_INVALID_PARAMETER,
     }
 
     common.log(LOG_INFO, "\n", .{});
@@ -134,7 +132,7 @@ fn printActionHeader(nAlterType: c.TDNF_ALTERTYPE) u32 {
 }
 
 fn formatEpochVersionRelease(
-    pPkgInfo: *c.TDNF_PKG_INFO,
+    pPkgInfo: *abi.TDNF_PKG_INFO,
     pszBuffer: *[MAX_COL_LEN]u8,
 ) u32 {
     const nResult = if (pPkgInfo.dwEpoch != 0)
@@ -163,18 +161,18 @@ fn formatEpochVersionRelease(
 }
 
 fn alterCommandWithType(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
-    nAlterType: c.TDNF_ALTERTYPE,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
+    nAlterType: abi.TDNF_ALTERTYPE,
 ) u32 {
     return TDNFCliAlterCommand(pContext, pCmdArgs, nAlterType);
 }
 
 fn selectAllIfNoArgs(
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
-    nDefaultType: c.TDNF_ALTERTYPE,
-    nAllType: c.TDNF_ALTERTYPE,
-) c.TDNF_ALTERTYPE {
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
+    nDefaultType: abi.TDNF_ALTERTYPE,
+    nAllType: abi.TDNF_ALTERTYPE,
+) abi.TDNF_ALTERTYPE {
     if (pCmdArgs != null and pCmdArgs.?.nCmdCount == 1) {
         return nAllType;
     }
@@ -182,17 +180,17 @@ fn selectAllIfNoArgs(
 }
 
 fn TDNFCliAskAndAlter(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
-    pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
+    pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const solved_info = pSolvedPkgInfo orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const context = pContext orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const solved_info = pSolvedPkgInfo orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     var dwError = TDNFCliAskForAction(cmd_args, solved_info);
     if (dwError != 0) {
-        if (cmd_args.nJsonOutput != 0 and dwError == c.ERROR_TDNF_OPERATION_ABORTED) {
+        if (cmd_args.nJsonOutput != 0 and dwError == abi.ERROR_TDNF_OPERATION_ABORTED) {
             return 0;
         }
         return dwError;
@@ -214,72 +212,72 @@ fn TDNFCliAskAndAlter(
 }
 
 pub export fn TDNFCliInstallCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    return alterCommandWithType(pContext, pCmdArgs, c.ALTER_INSTALL);
+    return alterCommandWithType(pContext, pCmdArgs, abi.ALTER_INSTALL);
 }
 
 pub export fn TDNFCliEraseCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    return alterCommandWithType(pContext, pCmdArgs, c.ALTER_ERASE);
+    return alterCommandWithType(pContext, pCmdArgs, abi.ALTER_ERASE);
 }
 
 pub export fn TDNFCliUpgradeCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
     return alterCommandWithType(
         pContext,
         pCmdArgs,
-        selectAllIfNoArgs(pCmdArgs, c.ALTER_UPGRADE, c.ALTER_UPGRADEALL),
+        selectAllIfNoArgs(pCmdArgs, abi.ALTER_UPGRADE, abi.ALTER_UPGRADEALL),
     );
 }
 
 pub export fn TDNFCliDistroSyncCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    return alterCommandWithType(pContext, pCmdArgs, c.ALTER_DISTRO_SYNC);
+    return alterCommandWithType(pContext, pCmdArgs, abi.ALTER_DISTRO_SYNC);
 }
 
 pub export fn TDNFCliDowngradeCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
     return alterCommandWithType(
         pContext,
         pCmdArgs,
-        selectAllIfNoArgs(pCmdArgs, c.ALTER_DOWNGRADE, c.ALTER_DOWNGRADEALL),
+        selectAllIfNoArgs(pCmdArgs, abi.ALTER_DOWNGRADE, abi.ALTER_DOWNGRADEALL),
     );
 }
 
 pub export fn TDNFCliAutoEraseCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
     return alterCommandWithType(
         pContext,
         pCmdArgs,
-        selectAllIfNoArgs(pCmdArgs, c.ALTER_AUTOERASE, c.ALTER_AUTOERASEALL),
+        selectAllIfNoArgs(pCmdArgs, abi.ALTER_AUTOERASE, abi.ALTER_AUTOERASEALL),
     );
 }
 
 pub export fn TDNFCliReinstallCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    return alterCommandWithType(pContext, pCmdArgs, c.ALTER_REINSTALL);
+    return alterCommandWithType(pContext, pCmdArgs, abi.ALTER_REINSTALL);
 }
 
 pub export fn TDNFCliAskForAction(
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
-    pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
+    pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO,
 ) u32 {
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const solved_info = pSolvedPkgInfo orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const solved_info = pSolvedPkgInfo orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const nSilent = cmd_args.nNoOutput;
 
     if (nSilent == 0 and solved_info.ppszPkgsNotResolved != null) {
@@ -291,9 +289,9 @@ pub export fn TDNFCliAskForAction(
 
     if (solved_info.nNeedAction == 0) {
         if (solved_info.ppszPkgsNotResolved != null and solved_info.ppszPkgsNotResolved[0] != null) {
-            return c.ERROR_TDNF_NO_MATCH;
+            return abi.ERROR_TDNF_NO_MATCH;
         }
-        return c.ERROR_TDNF_CLI_NOTHING_TO_DO;
+        return abi.ERROR_TDNF_CLI_NOTHING_TO_DO;
     }
 
     if (nSilent == 0) {
@@ -320,15 +318,15 @@ pub export fn TDNFCliAskForAction(
             return dwError;
         }
         if (nAnswer == 0) {
-            return c.ERROR_TDNF_OPERATION_ABORTED;
+            return abi.ERROR_TDNF_OPERATION_ABORTED;
         }
     }
 
     return 0;
 }
 
-pub export fn TDNFCliPrintActionComplete(pCmdArgs: ?*c.TDNF_CMD_ARGS) u32 {
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+pub export fn TDNFCliPrintActionComplete(pCmdArgs: ?*abi.TDNF_CMD_ARGS) u32 {
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     if (cmd_args.nNoOutput == 0) {
         common.log(LOG_INFO, "\nComplete!\n", .{});
@@ -345,25 +343,25 @@ pub export fn TDNFCliPrintActionComplete(pCmdArgs: ?*c.TDNF_CMD_ARGS) u32 {
 }
 
 pub export fn TDNFCliAlterCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
-    nAlterType: c.TDNF_ALTERTYPE,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
+    nAlterType: abi.TDNF_ALTERTYPE,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const context = pContext orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     if (context.hTdnf == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     var ppszPackageArgs: [*c][*c]u8 = null;
     defer freeStringArray(ppszPackageArgs);
 
-    var pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO = null;
+    var pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO = null;
     defer TDNFFreeSolvedPackageInfo(pSolvedPkgInfo);
 
     var nPackageCount: c_int = 0;
 
-    var dwError = c.TDNFCliParsePackageArgs(cmd_args, &ppszPackageArgs, &nPackageCount);
+    var dwError = abi.TDNFCliParsePackageArgs(cmd_args, &ppszPackageArgs, &nPackageCount);
     if (dwError != 0) {
         return mapAlterError(dwError);
     }
@@ -400,44 +398,44 @@ pub export fn TDNFCliAlterCommand(
 }
 
 fn JDPkgList(
-    pPkgInfos: ?*c.TDNF_PKG_INFO,
-    ppJDList: ?*?*c.struct_json_dump,
+    pPkgInfos: ?*abi.TDNF_PKG_INFO,
+    ppJDList: ?*?*jsondump.JsonDump,
 ) u32 {
     if (ppJDList == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    var pPkgInfo = pPkgInfos orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    var pPkgInfo = pPkgInfos orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     ppJDList.?.* = null;
 
-    var jd_list: ?*c.struct_json_dump = c.jd_create(0);
+    var jd_list: ?*jsondump.JsonDump = jsondump.jd_create(0);
     if (jd_list == null) {
-        return c.ERROR_TDNF_JSONDUMP;
+        return abi.ERROR_TDNF_JSONDUMP;
     }
     var transfer_complete = false;
     defer if (!transfer_complete) destroyJsonDump(&jd_list);
 
-    var dwError = checkJsonResult(c.jd_list_start(jd_list));
+    var dwError = checkJsonResult(jsondump.jd_list_start(jd_list));
     if (dwError != 0) {
         return dwError;
     }
 
     while (true) {
-        var jd_pkg: ?*c.struct_json_dump = c.jd_create(0);
+        var jd_pkg: ?*jsondump.JsonDump = jsondump.jd_create(0);
         if (jd_pkg == null) {
-            return c.ERROR_TDNF_JSONDUMP;
+            return abi.ERROR_TDNF_JSONDUMP;
         }
         defer destroyJsonDump(&jd_pkg);
 
-        dwError = checkJsonResult(c.jd_map_start(jd_pkg));
+        dwError = checkJsonResult(jsondump.jd_map_start(jd_pkg));
         if (dwError != 0) {
             return dwError;
         }
-        dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Name", pPkgInfo.pszName));
+        dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Name", pPkgInfo.pszName));
         if (dwError != 0) {
             return dwError;
         }
-        dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Arch", pPkgInfo.pszArch));
+        dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Arch", pPkgInfo.pszArch));
         if (dwError != 0) {
             return dwError;
         }
@@ -450,7 +448,7 @@ fn JDPkgList(
         if (dwError != 0) {
             return dwError;
         }
-        dwError = checkJsonResult(c.jd_map_add_int(
+        dwError = checkJsonResult(jsondump.jd_map_add_int(
             jd_pkg,
             "InstallSize",
             @as(c_int, @intCast(pPkgInfo.dwInstallSizeBytes)),
@@ -458,11 +456,11 @@ fn JDPkgList(
         if (dwError != 0) {
             return dwError;
         }
-        dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Repo", pPkgInfo.pszRepoName));
+        dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Repo", pPkgInfo.pszRepoName));
         if (dwError != 0) {
             return dwError;
         }
-        dwError = checkJsonResult(c.jd_list_add_child(jd_list, jd_pkg));
+        dwError = checkJsonResult(jsondump.jd_list_add_child(jd_list, jd_pkg));
         if (dwError != 0) {
             return dwError;
         }
@@ -479,15 +477,15 @@ fn JDPkgList(
     return 0;
 }
 
-fn jsonBuffer(jd: *const c.struct_json_dump) []const u8 {
+fn jsonBuffer(jd: *const jsondump.JsonDump) []const u8 {
     const ptr: [*:0]const u8 = @ptrCast(jd.buf);
     return std.mem.span(ptr);
 }
 
 test "package EVR JSON formatting preserves long values" {
-    const jd = c.jd_create(0) orelse return error.OutOfMemory;
-    defer c.jd_destroy(jd);
-    try std.testing.expectEqual(@as(c_int, 0), c.jd_map_start(jd));
+    const jd = jsondump.jd_create(0) orelse return error.OutOfMemory;
+    defer jsondump.jd_destroy(jd);
+    try std.testing.expectEqual(@as(c_int, 0), jsondump.jd_map_start(jd));
 
     const version = try std.testing.allocator.allocSentinel(u8, 1024, 0);
     defer std.testing.allocator.free(version);
@@ -510,31 +508,31 @@ test "package EVR JSON formatting preserves long values" {
 }
 
 test "package EVR formatting allocation failure maps to JSON error" {
-    const jd = c.jd_create(0) orelse return error.OutOfMemory;
-    defer c.jd_destroy(jd);
-    try std.testing.expectEqual(@as(c_int, 0), c.jd_map_start(jd));
+    const jd = jsondump.jd_create(0) orelse return error.OutOfMemory;
+    defer jsondump.jd_destroy(jd);
+    try std.testing.expectEqual(@as(c_int, 0), jsondump.jd_map_start(jd));
 
     var failing = std.testing.FailingAllocator.init(
         std.testing.allocator,
         .{ .fail_index = 0 },
     );
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_JSONDUMP),
+        @as(u32, abi.ERROR_TDNF_JSONDUMP),
         addPackageEvr(failing.allocator(), jd, "1.2.3", "4"),
     );
     try std.testing.expectEqualStrings("{}", jsonBuffer(jd));
 }
 
-pub export fn PrintSolvedInfoJson(pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO) u32 {
-    const solved_info = pSolvedPkgInfo orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+pub export fn PrintSolvedInfoJson(pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO) u32 {
+    const solved_info = pSolvedPkgInfo orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
-    var jd: ?*c.struct_json_dump = c.jd_create(1024);
+    var jd: ?*jsondump.JsonDump = jsondump.jd_create(1024);
     if (jd == null) {
-        return c.ERROR_TDNF_JSONDUMP;
+        return abi.ERROR_TDNF_JSONDUMP;
     }
     defer destroyJsonDump(&jd);
 
-    var dwError = checkJsonResult(c.jd_map_start(jd));
+    var dwError = checkJsonResult(jsondump.jd_map_start(jd));
     if (dwError != 0) {
         return dwError;
     }
@@ -580,8 +578,8 @@ pub export fn PrintSolvedInfoJson(pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO) u32 
     return 0;
 }
 
-pub export fn PrintSolvedInfo(pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO) u32 {
-    const solved_info = pSolvedPkgInfo orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+pub export fn PrintSolvedInfo(pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO) u32 {
+    const solved_info = pSolvedPkgInfo orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     var dwError: u32 = 0;
 
@@ -598,43 +596,43 @@ pub export fn PrintSolvedInfo(pSolvedPkgInfo: ?*c.TDNF_SOLVED_PKG_INFO) u32 {
         }
     }
     if (solved_info.pPkgsToInstall != null) {
-        dwError = PrintAction(solved_info.pPkgsToInstall, c.ALTER_INSTALL);
+        dwError = PrintAction(solved_info.pPkgsToInstall, abi.ALTER_INSTALL);
         if (dwError != 0) {
             return dwError;
         }
     }
     if (solved_info.pPkgsToUpgrade != null) {
-        dwError = PrintAction(solved_info.pPkgsToUpgrade, c.ALTER_UPGRADE);
+        dwError = PrintAction(solved_info.pPkgsToUpgrade, abi.ALTER_UPGRADE);
         if (dwError != 0) {
             return dwError;
         }
     }
     if (solved_info.pPkgsToDowngrade != null) {
-        dwError = PrintAction(solved_info.pPkgsToDowngrade, c.ALTER_DOWNGRADE);
+        dwError = PrintAction(solved_info.pPkgsToDowngrade, abi.ALTER_DOWNGRADE);
         if (dwError != 0) {
             return dwError;
         }
     }
     if (solved_info.pPkgsToRemove != null) {
-        dwError = PrintAction(solved_info.pPkgsToRemove, c.ALTER_ERASE);
+        dwError = PrintAction(solved_info.pPkgsToRemove, abi.ALTER_ERASE);
         if (dwError != 0) {
             return dwError;
         }
     }
     if (solved_info.pPkgsUnNeeded != null) {
-        dwError = PrintAction(solved_info.pPkgsUnNeeded, c.ALTER_ERASE);
+        dwError = PrintAction(solved_info.pPkgsUnNeeded, abi.ALTER_ERASE);
         if (dwError != 0) {
             return dwError;
         }
     }
     if (solved_info.pPkgsToReinstall != null) {
-        dwError = PrintAction(solved_info.pPkgsToReinstall, c.ALTER_REINSTALL);
+        dwError = PrintAction(solved_info.pPkgsToReinstall, abi.ALTER_REINSTALL);
         if (dwError != 0) {
             return dwError;
         }
     }
     if (solved_info.pPkgsObsoleted != null) {
-        dwError = PrintAction(solved_info.pPkgsObsoleted, c.ALTER_OBSOLETED);
+        dwError = PrintAction(solved_info.pPkgsObsoleted, abi.ALTER_OBSOLETED);
         if (dwError != 0) {
             return dwError;
         }
@@ -647,7 +645,7 @@ pub export fn PrintNotAvailable(ppszPkgsNotAvailable: [*c][*c]u8) u32 {
     const pkgs = if (ppszPkgsNotAvailable != null)
         ppszPkgsNotAvailable
     else
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     var i: usize = 0;
     while (pkgs[i] != null) : (i += 1) {
@@ -657,8 +655,8 @@ pub export fn PrintNotAvailable(ppszPkgsNotAvailable: [*c][*c]u8) u32 {
     return 0;
 }
 
-pub export fn PrintExistingPackagesSkipped(pPkgInfos: ?*c.TDNF_PKG_INFO) u32 {
-    var pPkgInfo = pPkgInfos orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+pub export fn PrintExistingPackagesSkipped(pPkgInfos: ?*abi.TDNF_PKG_INFO) u32 {
+    var pPkgInfo = pPkgInfos orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     while (true) {
         common.log(LOG_INFO, "Package %s-%s-%s.%s is already installed, skipping.\n", .{ pPkgInfo.pszName, pPkgInfo.pszVersion, pPkgInfo.pszRelease, pPkgInfo.pszArch });
@@ -672,8 +670,8 @@ pub export fn PrintExistingPackagesSkipped(pPkgInfos: ?*c.TDNF_PKG_INFO) u32 {
     return 0;
 }
 
-pub export fn PrintNotAvailablePackages(pPkgInfos: ?*c.TDNF_PKG_INFO) u32 {
-    var pPkgInfo = pPkgInfos orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+pub export fn PrintNotAvailablePackages(pPkgInfos: ?*abi.TDNF_PKG_INFO) u32 {
+    var pPkgInfo = pPkgInfos orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     while (true) {
         common.log(LOG_INFO, "No package %s available.\n", .{pPkgInfo.pszName});
@@ -688,10 +686,10 @@ pub export fn PrintNotAvailablePackages(pPkgInfos: ?*c.TDNF_PKG_INFO) u32 {
 }
 
 pub export fn PrintAction(
-    pPkgInfos: ?*c.TDNF_PKG_INFO,
-    nAlterType: c.TDNF_ALTERTYPE,
+    pPkgInfos: ?*abi.TDNF_PKG_INFO,
+    nAlterType: abi.TDNF_ALTERTYPE,
 ) u32 {
-    var pPkgInfo = pPkgInfos orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    var pPkgInfo = pPkgInfos orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     var dwError = printActionHeader(nAlterType);
     if (dwError != 0) {

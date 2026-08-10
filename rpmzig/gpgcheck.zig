@@ -1,4 +1,4 @@
-//! Direct package-integrity API used by libtdnf's GPG policy layer.
+//! Direct package-integrity API used by the client's GPG policy layer.
 
 const std = @import("std");
 const pkgfile = @import("rpm_pkgfile");

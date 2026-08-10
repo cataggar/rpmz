@@ -6,7 +6,6 @@
 # of the License are located in the COPYING file of this distribution.
 #
 
-import ctypes
 import glob
 import json
 import os
@@ -55,183 +54,32 @@ def check_packages_consistency():
     yield
 
 
-class LegacyNativeTransactionItem(ctypes.Structure):
-    _fields_ = [
-        ('dwOperation', ctypes.c_uint32),
-        ('pszPath', ctypes.c_char_p),
-        ('pszName', ctypes.c_char_p),
-        ('pszEVR', ctypes.c_char_p),
-        ('pszArch', ctypes.c_char_p),
-    ]
-
-
-class NativeTransactionItemV2(ctypes.Structure):
-    _fields_ = [
-        ('dwOperation', ctypes.c_uint32),
-        ('pszPath', ctypes.c_char_p),
-        ('pszName', ctypes.c_char_p),
-        ('pszEVR', ctypes.c_char_p),
-        ('pszArch', ctypes.c_char_p),
-        ('dwRpmDbHnum', ctypes.c_uint32),
-    ]
-
-
-class NativeTransactionProblem(ctypes.Structure):
-    _fields_ = [
-        ('nType', ctypes.c_uint32),
-        ('dwInputIndex', ctypes.c_uint32),
-        ('pszPackage', ctypes.c_char_p),
-        ('pszRelatedPackage', ctypes.c_char_p),
-        ('pszSubject', ctypes.c_char_p),
-        ('dwCount', ctypes.c_uint32),
-    ]
-
-
-class NativeTransactionPlanItem(ctypes.Structure):
-    _fields_ = [
-        ('dwPriorOffset', ctypes.c_uint32),
-        ('dwPriorCount', ctypes.c_uint32),
-    ]
-
-
-class NativeTransactionPlan(ctypes.Structure):
-    _fields_ = [
-        ('dwItemCount', ctypes.c_uint32),
-        ('pdwOrderIndices', ctypes.POINTER(ctypes.c_uint32)),
-        ('pItems', ctypes.POINTER(NativeTransactionPlanItem)),
-        ('dwPriorHnumCount', ctypes.c_uint32),
-        ('pdwPriorHnums', ctypes.POINTER(ctypes.c_uint32)),
-        ('dwProblemCount', ctypes.c_uint32),
-        ('pProblems', ctypes.POINTER(NativeTransactionProblem)),
-    ]
-
-
 class NativeTransactionSolver(object):
-    def __init__(self, build_dir):
-        self.lib = ctypes.CDLL(os.path.join(build_dir, 'lib', 'libtdnf.so'))
-        self.lib.TDNFRepoMdNativeTransactionPlanSolveV2.argtypes = [
-            ctypes.POINTER(NativeTransactionItemV2),
-            ctypes.c_uint32,
-            ctypes.c_char_p,
-            ctypes.POINTER(ctypes.POINTER(NativeTransactionPlan)),
-        ]
-        self.lib.TDNFRepoMdNativeTransactionPlanSolveV2.restype = ctypes.c_uint32
-        self.lib.TDNFRepoMdNativeTransactionSolve.argtypes = [
-            ctypes.POINTER(LegacyNativeTransactionItem),
-            ctypes.c_uint32,
-            ctypes.c_char_p,
-            ctypes.POINTER(ctypes.POINTER(ctypes.c_char_p)),
-            ctypes.POINTER(ctypes.c_uint32),
-            ctypes.POINTER(ctypes.POINTER(ctypes.c_char_p)),
-            ctypes.POINTER(ctypes.c_uint32),
-        ]
-        self.lib.TDNFRepoMdNativeTransactionSolve.restype = ctypes.c_uint32
-        self.lib.TDNFRepoMdNativeTransactionPlanFree.argtypes = [
-            ctypes.POINTER(NativeTransactionPlan),
-        ]
-        self.lib.TDNFRepoMdNativeTransactionLastError.restype = ctypes.c_char_p
-        self.lib.TDNFFreeStringArray.argtypes = [
-            ctypes.POINTER(ctypes.c_char_p),
-        ]
+    def __init__(self, support_binary):
+        self.support_binary = support_binary
 
     def solve(self, root, items):
-        raw_items = (NativeTransactionItemV2 * len(items))()
-        for index, item in enumerate(items):
-            raw_items[index].dwOperation = item['op']
-            raw_items[index].pszPath = item.get('path')
-            raw_items[index].pszName = item.get('name')
-            raw_items[index].pszEVR = item.get('evr')
-            raw_items[index].pszArch = item.get('arch')
-            raw_items[index].dwRpmDbHnum = item.get('hnum', 0)
-
-        plan_ptr = ctypes.POINTER(NativeTransactionPlan)()
-        rc = self.lib.TDNFRepoMdNativeTransactionPlanSolveV2(
-            raw_items,
-            len(items),
-            root.encode(),
-            ctypes.byref(plan_ptr),
-        )
-        if rc != 0:
-            last_error = self.lib.TDNFRepoMdNativeTransactionLastError().decode()
-            pytest.fail(f'native transaction solve failed: rc={rc} err={last_error}')
-
-        assert plan_ptr
-        try:
-            plan = plan_ptr.contents
-            order = [
-                plan.pdwOrderIndices[index]
-                for index in range(plan.dwItemCount)
-            ]
-            problems = []
-            for index in range(plan.dwProblemCount):
-                problem = plan.pProblems[index]
-                problems.append({
-                    'type': problem.nType,
-                    'input': problem.dwInputIndex,
-                    'package': _decode(problem.pszPackage),
-                    'related': _decode(problem.pszRelatedPackage),
-                    'subject': _decode(problem.pszSubject),
-                    'count': problem.dwCount,
-                })
-            priors = []
-            for index in range(plan.dwItemCount):
-                plan_item = plan.pItems[index]
-                priors.append([
-                    plan.pdwPriorHnums[plan_item.dwPriorOffset + offset]
-                    for offset in range(plan_item.dwPriorCount)
-                ])
-        finally:
-            self.lib.TDNFRepoMdNativeTransactionPlanFree(plan_ptr)
-        return order, problems, priors
+        result = self._run('transaction-v2', root, items)
+        return result['order'], result['problems'], result['priors']
 
     def solve_legacy(self, root, items):
-        raw_items = (LegacyNativeTransactionItem * len(items))()
-        for index, item in enumerate(items):
-            raw_items[index].dwOperation = item['op']
-            raw_items[index].pszPath = item.get('path')
-            raw_items[index].pszName = item.get('name')
-            raw_items[index].pszEVR = item.get('evr')
-            raw_items[index].pszArch = item.get('arch')
+        result = self._run('transaction-legacy', root, items)
+        return result['order'], result['problems']
 
-        order_lines = ctypes.POINTER(ctypes.c_char_p)()
-        order_count = ctypes.c_uint32()
-        problem_lines = ctypes.POINTER(ctypes.c_char_p)()
-        problem_count = ctypes.c_uint32()
-        rc = self.lib.TDNFRepoMdNativeTransactionSolve(
-            raw_items,
-            len(items),
-            root.encode(),
-            ctypes.byref(order_lines),
-            ctypes.byref(order_count),
-            ctypes.byref(problem_lines),
-            ctypes.byref(problem_count),
-        )
-        if rc != 0:
-            last_error = self.lib.TDNFRepoMdNativeTransactionLastError().decode()
+    def _run(self, mode, root, items):
+        completed = run_cmd([
+            self.support_binary,
+            mode,
+            root,
+            json.dumps(items),
+        ])
+        result = json.loads(completed.stdout)
+        if result['rc'] != 0:
             pytest.fail(
-                f'legacy native transaction solve failed: '
-                f'rc={rc} err={last_error}'
+                'native transaction solve failed: '
+                f"rc={result['rc']} err={result.get('error')}"
             )
-
-        try:
-            order = [
-                int(order_lines[index].decode())
-                for index in range(order_count.value)
-            ]
-            problems = [
-                problem_lines[index].decode()
-                for index in range(problem_count.value)
-            ]
-        finally:
-            if order_lines:
-                self.lib.TDNFFreeStringArray(order_lines)
-            if problem_lines:
-                self.lib.TDNFFreeStringArray(problem_lines)
-        return order, problems
-
-
-def _decode(value):
-    return value.decode() if value else None
+        return result
 
 
 def run_cmd(cmd):
@@ -383,15 +231,15 @@ def rpmdb_hnums_by_arch(root, name):
 
 
 def build_install_items(*rpm_paths):
-    return [{'op': OP_INSTALL, 'path': rpm_path.encode()} for rpm_path in rpm_paths]
+    return [{'op': OP_INSTALL, 'path': rpm_path} for rpm_path in rpm_paths]
 
 
 def build_erase_items(rpm_meta):
     return [{
         'op': OP_ERASE,
-        'name': meta['name'].encode(),
-        'evr': meta['evr'].encode(),
-        'arch': meta['arch'].encode(),
+        'name': meta['name'],
+        'evr': meta['evr'],
+        'arch': meta['arch'],
     } for meta in rpm_meta]
 
 
@@ -437,7 +285,7 @@ def native_ctx():
     yield {
         'packages': packages,
         'package_meta': package_meta,
-        'solver': NativeTransactionSolver(config['build_dir']),
+        'solver': NativeTransactionSolver(config['test_support_binary']),
         'work_dir': work_dir,
     }
 
@@ -458,13 +306,6 @@ def create_root(native_ctx, name, installed_packages):
 
 def order_names(order, names):
     return [names[index] for index in order]
-
-
-def test_legacy_transaction_item_layout_is_unchanged():
-    pointer_size = ctypes.sizeof(ctypes.c_void_p)
-    expected_size = 40 if pointer_size == 8 else 20
-    assert ctypes.sizeof(LegacyNativeTransactionItem) == expected_size
-    assert NativeTransactionItemV2.dwRpmDbHnum.offset == expected_size
 
 
 def test_legacy_solver_consumes_old_stride_arrays(native_ctx):
@@ -643,7 +484,7 @@ def test_upgrade_plan_carries_exact_prior_hnum(native_ctx):
 
     order, problems, priors = native_ctx['solver'].solve(root, [{
         'op': OP_UPGRADE,
-        'path': native_ctx['packages'][MULTIVERSION_HIGHER].encode(),
+        'path': native_ctx['packages'][MULTIVERSION_HIGHER],
     }])
 
     assert order == [0]
@@ -662,7 +503,7 @@ def test_upgrade_plan_rejects_same_arch_multiplicity(native_ctx):
 
     order, problems, priors = native_ctx['solver'].solve(root, [{
         'op': OP_UPGRADE,
-        'path': native_ctx['packages'][MULTIVERSION_HIGHER].encode(),
+        'path': native_ctx['packages'][MULTIVERSION_HIGHER],
     }])
 
     assert order == [0]
@@ -682,7 +523,7 @@ def test_reinstall_plan_supports_duplicate_nevra_rows(native_ctx):
 
     order, problems, priors = native_ctx['solver'].solve(root, [{
         'op': OP_REINSTALL,
-        'path': rpm_path.encode(),
+        'path': rpm_path,
     }])
 
     assert order == [0]
@@ -700,8 +541,8 @@ def test_multilib_upgrades_select_prior_from_matching_arch(native_ctx):
     expected = rpmdb_hnums_by_arch(root, name)
 
     items = [
-        {'op': OP_UPGRADE, 'path': v2['noarch'].encode()},
-        {'op': OP_UPGRADE, 'path': v2[platform.machine()].encode()},
+        {'op': OP_UPGRADE, 'path': v2['noarch']},
+        {'op': OP_UPGRADE, 'path': v2[platform.machine()]},
     ]
     order, problems, priors = native_ctx['solver'].solve(root, items)
 

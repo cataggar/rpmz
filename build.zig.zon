@@ -32,7 +32,6 @@
         "COPYING",
         "README.md",
         "abi",
-        "include",
         "common",
         "client",
         "history",

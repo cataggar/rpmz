@@ -6,6 +6,7 @@ const rpm_add_with_hdrid = 1 << 15;
 const rpm_add_with_changelog = 1 << 17;
 const rpmdb_keep_gpg_pubkey = 1 << 19;
 
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("stdio.h");
@@ -13,8 +14,6 @@ const c = @cImport({
     @cInclude("string.h");
     @cInclude("time.h");
     @cInclude("rpmdb.h");
-    @cInclude("tdnferror.h");
-    @cInclude("tdnfrepomd.h");
     @cInclude("solv/chksum.h");
     @cInclude("solv/poolarch.h");
     @cInclude("solv/repodata.h");
@@ -88,7 +87,7 @@ pub export fn TDNFRepoMdNativeLastError() [*:0]const u8 {
 }
 
 pub export fn TDNFRepoMdNativeLoadSolvRepo(
-    raw_repo: ?*c.Repo,
+    raw_repo: ?*abi.Repo,
     repomd_path: ?[*:0]const u8,
     primary_path: ?[*:0]const u8,
     filelists_path: ?[*:0]const u8,
@@ -107,7 +106,7 @@ pub export fn TDNFRepoMdNativeLoadSolvRepo(
 }
 
 fn transactionPlanLoadSolvRepo(
-    raw_repo: ?*c.Repo,
+    raw_repo: ?*abi.Repo,
     repomd_path: ?[*:0]const u8,
     primary_path: ?[*:0]const u8,
     filelists_path: ?[*:0]const u8,
@@ -115,7 +114,7 @@ fn transactionPlanLoadSolvRepo(
     other_path: ?[*:0]const u8,
     cookie_sha256: ?[*]u8,
 ) callconv(.c) u32 {
-    if (cookie_sha256 == null) return c.ERROR_TDNF_INVALID_PARAMETER;
+    if (cookie_sha256 == null) return abi.ERROR_TDNF_INVALID_PARAMETER;
     return loadSolvRepo(
         raw_repo,
         repomd_path,
@@ -128,7 +127,7 @@ fn transactionPlanLoadSolvRepo(
 }
 
 fn loadSolvRepo(
-    raw_repo: ?*c.Repo,
+    raw_repo: ?*abi.Repo,
     repomd_path: ?[*:0]const u8,
     primary_path: ?[*:0]const u8,
     filelists_path: ?[*:0]const u8,
@@ -140,15 +139,15 @@ fn loadSolvRepo(
 
     const repo = raw_repo orelse {
         setError("null repo", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     if (repo.pool == null) {
         setError("repo has no pool", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    const repomd_slice = spanRequiredPath(repomd_path, "repomd") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const primary_slice = spanRequiredPath(primary_path, "primary") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const repomd_slice = spanRequiredPath(repomd_path, "repomd") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const primary_slice = spanRequiredPath(primary_path, "primary") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena_state.deinit();
@@ -220,7 +219,7 @@ comptime {
 }
 
 pub export fn TDNFRepoMdNativeLoadInstalledSolvRepo(
-    raw_repo: ?*c.Repo,
+    raw_repo: ?*abi.Repo,
     root_dir: ?[*:0]const u8,
     flags: c_int,
 ) u32 {
@@ -228,11 +227,11 @@ pub export fn TDNFRepoMdNativeLoadInstalledSolvRepo(
 
     const repo = raw_repo orelse {
         setError("null repo", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     if (repo.pool == null) {
         setError("repo has no pool", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
@@ -255,19 +254,19 @@ pub export fn TDNFRepoMdNativeLoadInstalledSolvRepo(
 }
 
 pub export fn TDNFRepoMdNativeLoadInstalledSolvRepoConfig(
-    raw_repo: ?*c.Repo,
-    config: ?*const c.tdnf_rpm_config,
+    raw_repo: ?*abi.Repo,
+    config: ?*const abi.tdnf_rpm_config,
     flags: c_int,
 ) u32 {
     clearError();
 
     const repo = raw_repo orelse {
         setError("null repo", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     if (repo.pool == null or config == null) {
         setError("repo or rpm config is null", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
@@ -290,7 +289,7 @@ pub export fn TDNFRepoMdNativeLoadInstalledSolvRepoConfig(
 }
 
 pub export fn TDNFRepoMdNativeAddRpm(
-    raw_repo: ?*c.Repo,
+    raw_repo: ?*abi.Repo,
     rpm_path: ?[*:0]const u8,
     flags: c_int,
     out_solvid: ?*u32,
@@ -303,14 +302,14 @@ pub export fn TDNFRepoMdNativeAddRpm(
 
     const repo = raw_repo orelse {
         setError("null repo", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     if (repo.pool == null) {
         setError("repo has no pool", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    const rpm_path_slice = spanRequiredPath(rpm_path, "rpm") orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const rpm_path_slice = spanRequiredPath(rpm_path, "rpm") orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena_state.deinit();
@@ -318,7 +317,7 @@ pub export fn TDNFRepoMdNativeAddRpm(
 
     const rpm_path_z = arena.dupeZ(u8, rpm_path_slice) catch {
         setError("out of memory", .{});
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
 
     var rpm = rpm_pkgfile.RpmFile.open(arena, rpm_path_z) catch |err| {
@@ -399,54 +398,54 @@ fn mapLoadError(err: LoadError, repomd_path: []const u8) u32 {
     return switch (err) {
         error.InvalidRepoMetadata => blk: {
             setError("invalid repository metadata under {s}", .{repomd_path});
-            break :blk c.ERROR_TDNF_INVALID_REPO_FILE;
+            break :blk abi.ERROR_TDNF_INVALID_REPO_FILE;
         },
         error.OutOfMemory => blk: {
             setError("out of memory", .{});
-            break :blk c.ERROR_TDNF_OUT_OF_MEMORY;
+            break :blk abi.ERROR_TDNF_OUT_OF_MEMORY;
         },
         error.FileNotFound => blk: {
             setError("file not found under {s}", .{repomd_path});
-            break :blk c.ERROR_TDNF_FILE_NOT_FOUND;
+            break :blk abi.ERROR_TDNF_FILE_NOT_FOUND;
         },
         error.AccessDenied => blk: {
             setError("access denied under {s}", .{repomd_path});
-            break :blk c.ERROR_TDNF_ACCESS_DENIED;
+            break :blk abi.ERROR_TDNF_ACCESS_DENIED;
         },
         error.NameTooLong => blk: {
             setError("path too long under {s}", .{repomd_path});
-            break :blk c.ERROR_TDNF_NAME_TOO_LONG;
+            break :blk abi.ERROR_TDNF_NAME_TOO_LONG;
         },
         error.BadPathName => blk: {
             setError("bad path under {s}", .{repomd_path});
-            break :blk c.ERROR_TDNF_INVALID_PARAMETER;
+            break :blk abi.ERROR_TDNF_INVALID_PARAMETER;
         },
         error.NotDir, error.IsDir => blk: {
             setError("invalid directory under {s}", .{repomd_path});
-            break :blk c.ERROR_TDNF_INVALID_DIR;
+            break :blk abi.ERROR_TDNF_INVALID_DIR;
         },
         error.FileTooBig, error.StreamTooLong => blk: {
             setError("metadata file too large under {s}", .{repomd_path});
-            break :blk c.ERROR_TDNF_OVERFLOW;
+            break :blk abi.ERROR_TDNF_OVERFLOW;
         },
         error.UnsupportedCompressor, error.DecompressFailed => blk: {
             setError("failed to decompress metadata under {s}", .{repomd_path});
-            break :blk c.ERROR_TDNF_INVALID_REPO_FILE;
+            break :blk abi.ERROR_TDNF_INVALID_REPO_FILE;
         },
         error.FileSystemIo => blk: {
             setError("filesystem IO error under {s}", .{repomd_path});
-            break :blk c.ERROR_TDNF_FILESYS_IO;
+            break :blk abi.ERROR_TDNF_FILESYS_IO;
         },
     };
 }
 
 test "resource policy and backing OOM map distinctly" {
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_OVERFLOW),
+        @as(u32, abi.ERROR_TDNF_OVERFLOW),
         mapLoadError(error.StreamTooLong, "fixture"),
     );
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_OUT_OF_MEMORY),
+        @as(u32, abi.ERROR_TDNF_OUT_OF_MEMORY),
         mapLoadError(error.OutOfMemory, "fixture"),
     );
 }
@@ -455,34 +454,34 @@ fn mapBuildError(err: BuildError) u32 {
     return switch (err) {
         error.InvalidRepoMetadata => blk: {
             setError("invalid repository metadata model", .{});
-            break :blk c.ERROR_TDNF_INVALID_REPO_FILE;
+            break :blk abi.ERROR_TDNF_INVALID_REPO_FILE;
         },
         error.OutOfMemory => blk: {
             setError("out of memory", .{});
-            break :blk c.ERROR_TDNF_OUT_OF_MEMORY;
+            break :blk abi.ERROR_TDNF_OUT_OF_MEMORY;
         },
     };
 }
 
 fn mapNativeRpmError(err: NativeRpmError) u32 {
     return switch (err) {
-        error.InvalidParameter => c.ERROR_TDNF_INVALID_PARAMETER,
-        error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
-        error.InvalidRpmHeader => c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
-        error.InvalidRpmFile => c.ERROR_TDNF_INVALID_REPO_FILE,
-        error.UnsupportedCompressor, error.DecompressFailed => c.ERROR_TDNF_INVALID_REPO_FILE,
-        error.RpmDbOpenFailed => c.ERROR_TDNF_RPMTS_OPENDB_FAILED,
-        error.RpmDbReadFailed => c.ERROR_TDNF_SOLV_IO,
-        error.FileSystemIo => c.ERROR_TDNF_FILESYS_IO,
+        error.InvalidParameter => abi.ERROR_TDNF_INVALID_PARAMETER,
+        error.OutOfMemory => abi.ERROR_TDNF_OUT_OF_MEMORY,
+        error.InvalidRpmHeader => abi.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
+        error.InvalidRpmFile => abi.ERROR_TDNF_INVALID_REPO_FILE,
+        error.UnsupportedCompressor, error.DecompressFailed => abi.ERROR_TDNF_INVALID_REPO_FILE,
+        error.RpmDbOpenFailed => abi.ERROR_TDNF_RPMTS_OPENDB_FAILED,
+        error.RpmDbReadFailed => abi.ERROR_TDNF_SOLV_IO,
+        error.FileSystemIo => abi.ERROR_TDNF_FILESYS_IO,
     };
 }
 
 fn mapNativeRpmFileError(err: rpm_pkgfile.Error) u32 {
     return switch (err) {
-        error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
-        error.BadLeadMagic, error.HeaderParseFailed => c.ERROR_TDNF_INVALID_REPO_FILE,
-        error.UnsupportedCompressor, error.DecompressFailed => c.ERROR_TDNF_INVALID_REPO_FILE,
-        else => c.ERROR_TDNF_FILESYS_IO,
+        error.OutOfMemory => abi.ERROR_TDNF_OUT_OF_MEMORY,
+        error.BadLeadMagic, error.HeaderParseFailed => abi.ERROR_TDNF_INVALID_REPO_FILE,
+        error.UnsupportedCompressor, error.DecompressFailed => abi.ERROR_TDNF_INVALID_REPO_FILE,
+        else => abi.ERROR_TDNF_FILESYS_IO,
     };
 }
 
@@ -490,11 +489,11 @@ fn mapNativeRpmPackageError(err: rpmpkg.Error) u32 {
     return switch (err) {
         error.OutOfMemory => blk: {
             setError("out of memory", .{});
-            break :blk c.ERROR_TDNF_OUT_OF_MEMORY;
+            break :blk abi.ERROR_TDNF_OUT_OF_MEMORY;
         },
         error.InvalidRpmHeader => blk: {
             setError("invalid rpm header", .{});
-            break :blk c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED;
+            break :blk abi.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED;
         },
     };
 }
@@ -529,7 +528,7 @@ const BuildRepoOptions = struct {
 
 const SolvBuilder = struct {
     arena: std.mem.Allocator,
-    repo: *c.Repo,
+    repo: *abi.Repo,
     pool: *c.Pool,
     repository: *const model.RepositoryModel,
     package_solvids: []c.Id,
@@ -537,7 +536,7 @@ const SolvBuilder = struct {
 
     fn init(
         arena: std.mem.Allocator,
-        repo: *c.Repo,
+        repo: *abi.Repo,
         repository: *const model.RepositoryModel,
         options: BuildRepoOptions,
     ) BuildError!SolvBuilder {
@@ -880,14 +879,14 @@ const NativeRpmBridgeOptions = struct {
 
 const NativeRpmBridge = struct {
     arena: std.mem.Allocator,
-    repo: *c.Repo,
+    repo: *abi.Repo,
     pool: *c.Pool,
     options: NativeRpmBridgeOptions,
     primary_data: *c.Repodata,
 
     fn init(
         arena: std.mem.Allocator,
-        repo: *c.Repo,
+        repo: *abi.Repo,
         options: NativeRpmBridgeOptions,
     ) BuildError!NativeRpmBridge {
         const pool = repo.pool orelse return error.InvalidRepoMetadata;
@@ -1050,7 +1049,7 @@ pub const InstalledHeaderBatch = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        repo: *c.Repo,
+        repo: *abi.Repo,
     ) !InstalledHeaderBatch {
         return .{
             .allocator = allocator,
@@ -1110,7 +1109,7 @@ test "installed header batch scratch memory is package bounded" {
     const header = try rpm_header.Header.parse(blob);
     const pool = c.pool_create() orelse return error.OutOfMemory;
     defer c.pool_free(pool);
-    const repo: *c.Repo = @ptrCast(
+    const repo: *abi.Repo = @ptrCast(
         c.repo_create(pool, "@System") orelse return error.OutOfMemory,
     );
     c.pool_set_installed(pool, repo);
@@ -1125,7 +1124,7 @@ test "installed header batch scratch memory is package bounded" {
 
 pub fn buildInstalledHeaderIntoRepo(
     allocator: std.mem.Allocator,
-    repo: *c.Repo,
+    repo: *abi.Repo,
     header: rpm_header.Header,
     rpmdb_hnum: u32,
 ) !c.Id {
@@ -1139,7 +1138,7 @@ pub fn seedFileProvideDependencies(
     allocator: std.mem.Allocator,
     source_pool: *c.Pool,
     target_pool: *c.Pool,
-    target_repo: *c.Repo,
+    target_repo: *abi.Repo,
 ) BuildError!void {
     var dummy: ?*c.Solvable = null;
     for ([_]c.Id{
@@ -1279,10 +1278,10 @@ test "file dependency bridge seeds ten thousand paths by kind" {
     defer c.pool_free(source_pool);
     const target_pool = c.pool_create() orelse return error.OutOfMemory;
     defer c.pool_free(target_pool);
-    const source_repo: *c.Repo = @ptrCast(
+    const source_repo: *abi.Repo = @ptrCast(
         c.repo_create(source_pool, "source") orelse return error.OutOfMemory,
     );
-    const target_repo: *c.Repo = @ptrCast(
+    const target_repo: *abi.Repo = @ptrCast(
         c.repo_create(target_pool, "target") orelse return error.OutOfMemory,
     );
     const source_id = c.repo_add_solvable(source_repo);
@@ -1361,7 +1360,7 @@ test "bridged repository keeps the file provides libsolv reads from the filtered
     const pool = c.pool_create() orelse return error.OutOfMemory;
     defer c.pool_free(pool);
     _ = c.pool_set_flag(pool, c.POOL_FLAG_ADDFILEPROVIDESFILTERED, 1);
-    const repo: *c.Repo = @ptrCast(
+    const repo: *abi.Repo = @ptrCast(
         c.repo_create(pool, "bridged") orelse return error.OutOfMemory,
     );
 
@@ -1425,23 +1424,23 @@ fn loadInstalledPackagesIntoBridge(
     arena: std.mem.Allocator,
     bridge: *NativeRpmBridge,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     flags: c_int,
 ) NativeRpmError!void {
     const iter = (if (config) |cfg|
-        c.tdnf_rpmdb_iter_open_config(cfg)
+        abi.tdnf_rpmdb_iter_open_config(cfg)
     else
-        c.tdnf_rpmdb_iter_open(root_dir)) orelse {
-        setError("failed to open rpmdb iterator: {s}", .{std.mem.span(c.tdnf_rpmdb_last_error())});
+        abi.tdnf_rpmdb_iter_open(root_dir)) orelse {
+        setError("failed to open rpmdb iterator: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
         return error.RpmDbOpenFailed;
     };
-    defer c.tdnf_rpmdb_iter_close(iter);
+    defer abi.tdnf_rpmdb_iter_close(iter);
 
     while (true) {
         var hnum: u32 = 0;
         var blob_ptr: ?[*]const u8 = null;
         var blob_len: usize = 0;
-        const rc = c.tdnf_rpmdb_iter_next_header_blob_hnum(
+        const rc = abi.tdnf_rpmdb_iter_next_header_blob_hnum(
             iter,
             &hnum,
             &blob_ptr,
@@ -1451,7 +1450,7 @@ fn loadInstalledPackagesIntoBridge(
             break;
         }
         if (rc < 0) {
-            setError("failed to read rpmdb iterator: {s}", .{std.mem.span(c.tdnf_rpmdb_last_error())});
+            setError("failed to read rpmdb iterator: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
             return error.RpmDbReadFailed;
         }
         const ptr = blob_ptr orelse continue;
@@ -1509,7 +1508,7 @@ fn addFileEntry(
     c.repodata_add_dirstr(data, solvid, c.SOLVABLE_FILELIST, dir_id, try z(allocator, name_buf));
 }
 
-pub fn buildRepositoryIntoRepo(arena: std.mem.Allocator, repo: *c.Repo, repository: *const model.RepositoryModel) BuildError!void {
+pub fn buildRepositoryIntoRepo(arena: std.mem.Allocator, repo: *abi.Repo, repository: *const model.RepositoryModel) BuildError!void {
     var builder = try SolvBuilder.init(arena, repo, repository, .{});
     return builder.build();
 }
@@ -1710,7 +1709,7 @@ pub fn normalizeRpmEpoch(epoch: ?u32) ?u32 {
 fn nativeRpmSetDeps(
     allocator: std.mem.Allocator,
     pool: *c.Pool,
-    repo: *c.Repo,
+    repo: *abi.Repo,
     deps: *c.Offset,
     relations: []const model.Relation,
     is_requires: bool,
@@ -1777,7 +1776,7 @@ fn compareOpToSolv(op: model.CompareOp) c_int {
     };
 }
 
-fn addAdvisoryConflict(repo: *c.Repo, pool: *c.Pool, solvid: c.Id, name_id: c.Id, arch_id: c.Id, evr_id: c.Id) void {
+fn addAdvisoryConflict(repo: *abi.Repo, pool: *c.Pool, solvid: c.Id, name_id: c.Id, arch_id: c.Id, evr_id: c.Id) void {
     var conflict: c.Id = 0;
     if (arch_id != 0 and arch_id != c.ARCH_NOARCH) {
         conflict = c.pool_rel2id(pool, name_id, arch_id, c.REL_ARCH, 1);
@@ -1800,7 +1799,7 @@ fn advisoryBuildTime(advisory: model.Advisory) u64 {
 
 fn parseDateToTimestamp(text: []const u8) u64 {
     const trimmed = std.mem.trim(u8, text, " \t\r\n");
-    var tm: c.struct_tm = std.mem.zeroes(c.struct_tm);
+    var tm: abi.struct_tm = std.mem.zeroes(abi.struct_tm);
 
     if (trimmed.len == 0) {
         return 0;
@@ -1818,7 +1817,7 @@ fn parseDateToTimestamp(text: []const u8) u64 {
     tm.tm_min = @intCast(parts.minute);
     tm.tm_sec = @intCast(parts.second);
 
-    const stamp = c.timegm(&tm);
+    const stamp = abi.timegm(&tm);
     return if (stamp >= 0) @intCast(stamp) else 0;
 }
 

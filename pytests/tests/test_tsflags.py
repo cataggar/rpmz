@@ -21,7 +21,6 @@ REPO_ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 OUT_DIR = os.path.join(REPO_ROOT, 'out')
 TDNF_BIN = os.path.join(OUT_DIR, 'bin', 'tdnf')
 TDNF_CONF = os.path.join(OUT_DIR, 'repo', 'tdnf.conf')
-LD_LIBRARY_PATH = os.path.join(OUT_DIR, 'lib')
 RPMDB_WRITE = os.path.join(
     OUT_DIR, 'libexec', 'tdnf', 'tdnf-rpmdb-write')
 CASE_ROOT = os.path.join(OUT_DIR, 'phase7-tsflags')
@@ -111,8 +110,6 @@ def _provision_shell(root):
 
 
 def _run_tdnf(root, args, check=True):
-    env = os.environ.copy()
-    env['LD_LIBRARY_PATH'] = LD_LIBRARY_PATH
     result = subprocess.run(
         _unshare_wrapper() + [
             TDNF_BIN,
@@ -124,7 +121,6 @@ def _run_tdnf(root, args, check=True):
             '--enablerepo=photon-test-unsigned',
             '--nogpgcheck',
         ] + args,
-        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -863,7 +859,6 @@ def test_recognized_compatibility_noop_flags_are_explicit(flag):
 def test_rpmverbosity_is_documented_compatibility_noop():
     result = subprocess.run(
         [TDNF_BIN, '--help'],
-        env=dict(os.environ, LD_LIBRARY_PATH=LD_LIBRARY_PATH),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

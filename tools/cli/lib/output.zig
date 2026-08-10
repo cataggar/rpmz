@@ -5,15 +5,15 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("sys/ioctl.h");
     @cInclude("unistd.h");
-    @cInclude("tdnferror.h");
 });
 
 pub export fn GetConsoleWidth(pnConsoleWidth: ?*c_int) u32 {
-    const out = pnConsoleWidth orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const out = pnConsoleWidth orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     var stWinSize: c.struct_winsize = std.mem.zeroes(c.struct_winsize);
     const nIoctlError = c.ioctl(c.STDOUT_FILENO, c.TIOCGWINSZ, &stWinSize);
@@ -33,7 +33,7 @@ pub export fn GetColumnWidths(
     pnColWidths: [*c]c_int,
 ) u32 {
     if (pnColPercents == null or pnColWidths == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     var nConsoleWidth: c_int = 0;
@@ -54,11 +54,11 @@ pub export fn GetColumnWidths(
 test "GetColumnWidths validates arguments" {
     var nWidths = [_]c_int{0} ** 2;
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_INVALID_PARAMETER),
+        @as(u32, abi.ERROR_TDNF_INVALID_PARAMETER),
         GetColumnWidths(2, null, &nWidths),
     );
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_INVALID_PARAMETER),
+        @as(u32, abi.ERROR_TDNF_INVALID_PARAMETER),
         GetColumnWidths(2, &[_]c_int{ 50, 50 }, null),
     );
 }

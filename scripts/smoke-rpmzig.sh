@@ -127,8 +127,6 @@ rpmsign \
     --define "_tmppath ${RPM_TMP}" \
     --addsign "${OWNER_RPM}"
 
-export LD_LIBRARY_PATH="${PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-
 INFO_OUTPUT="$("${LIBEXEC}/tdnf-rpm-info" "${OWNER_RPM}")"
 grep -Fq 'NEVRA:       tdnf-rpmzig-smoke-1.0.0-1.noarch' \
     <<< "${INFO_OUTPUT}"
