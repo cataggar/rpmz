@@ -53,6 +53,11 @@ Application source can then use
 `transaction_plan.schema`, and the associated public plan model types.
 Consumers should not import files from `client/` directly.
 
+`tdnf plan <verb>` prints the same document from the command line. See
+[doc/transaction-plan-api.md](doc/transaction-plan-api.md) for what a plan
+contains, the explicit-input and ownership rules, how failures are reported,
+what makes two plans identical, and why planning never executes anything.
+
 ## Configuration
 
 Create `tdnf.conf` under `/etc/tdnf/`:

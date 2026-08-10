@@ -43,6 +43,25 @@ const primary_xml =
     \\
 ;
 
+/// A second declared repository. It offers a package the first one does not,
+/// so a plan that lost it would be visibly different rather than merely
+/// differently ordered.
+const extra_primary_xml =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<metadata xmlns="http://linux.duke.edu/metadata/common"
+    \\              xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1">
+    \\  <package type="rpm">
+    \\    <name>tool</name>
+    \\    <arch>x86_64</arch>
+    \\    <version epoch="0" ver="2" rel="1"/>
+    \\    <checksum type="sha256" pkgid="YES">dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd</checksum>
+    \\    <size package="123"/>
+    \\    <location href="packages/tool.rpm"/>
+    \\  </package>
+    \\</metadata>
+    \\
+;
+
 /// Metadata for a repository the caller never declares. Nothing from it may
 /// reach the plan.
 const undeclared_primary_xml =
@@ -99,6 +118,7 @@ const Fixture = struct {
     base: []u8,
     root: []u8,
     snapshot: []u8,
+    extra: []u8,
     undeclared: []u8,
     scratch: []u8,
 
@@ -110,6 +130,7 @@ const Fixture = struct {
         try tmp.dir.createDirPath(io, "root");
         try tmp.dir.createDirPath(io, "work");
         try tmp.dir.createDirPath(io, "snapshot/repodata");
+        try tmp.dir.createDirPath(io, "extra/repodata");
         try tmp.dir.createDirPath(io, "undeclared/repodata");
 
         var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -128,6 +149,17 @@ const Fixture = struct {
             .data = repomd,
         });
 
+        const extra_repomd = try repomdFor(allocator, extra_primary_xml);
+        defer allocator.free(extra_repomd);
+        try tmp.dir.writeFile(io, .{
+            .sub_path = "extra/repodata/primary.xml",
+            .data = extra_primary_xml,
+        });
+        try tmp.dir.writeFile(io, .{
+            .sub_path = "extra/repodata/repomd.xml",
+            .data = extra_repomd,
+        });
+
         const undeclared_repomd = try repomdFor(allocator, undeclared_primary_xml);
         defer allocator.free(undeclared_repomd);
         try tmp.dir.writeFile(io, .{
@@ -144,6 +176,7 @@ const Fixture = struct {
             .base = base,
             .root = undefined,
             .snapshot = undefined,
+            .extra = undefined,
             .undeclared = undefined,
             .scratch = undefined,
         };
@@ -151,6 +184,8 @@ const Fixture = struct {
         errdefer allocator.free(self.root);
         self.snapshot = try std.fmt.allocPrint(allocator, "{s}/snapshot", .{base});
         errdefer allocator.free(self.snapshot);
+        self.extra = try std.fmt.allocPrint(allocator, "{s}/extra", .{base});
+        errdefer allocator.free(self.extra);
         self.undeclared = try std.fmt.allocPrint(
             allocator,
             "{s}/undeclared",
@@ -165,6 +200,7 @@ const Fixture = struct {
         const allocator = std.testing.allocator;
         allocator.free(self.scratch);
         allocator.free(self.undeclared);
+        allocator.free(self.extra);
         allocator.free(self.snapshot);
         allocator.free(self.root);
         allocator.free(self.base);
@@ -194,7 +230,25 @@ const Fixture = struct {
             .metadata = .{ .local_snapshot = self.snapshot },
         };
     }
+
+    fn declaredExtra(self: *const Fixture) resolver.Repository {
+        return .{
+            .id = "extra",
+            .metadata = .{ .local_snapshot = self.extra },
+        };
+    }
 };
+
+/// Resolves `request` and returns the canonical bytes, which carry the digest
+/// and therefore the plan's whole identity.
+fn canonicalBytes(
+    allocator: std.mem.Allocator,
+    request: resolver.ResolveInput,
+) ![]u8 {
+    const plan = try resolver.resolvePlan(allocator, io, request);
+    defer plan.destroy();
+    return plan.canonicalJsonAlloc(allocator);
+}
 
 /// A sorted `path\0size\n` inventory of every file under `sub_path`, skipping
 /// the metadata cache the resolve is allowed to populate.
@@ -480,4 +534,224 @@ test "declared policy reaches the plan environment" {
         "excluded-package",
         policy.excludes[0],
     );
+}
+
+// Repository order and the order within a policy's name lists are caller
+// conveniences, not facts about the transaction. The canonical document sorts
+// them, so permuting them must leave the bytes -- and therefore the digest --
+// untouched. Without this, two callers that declared the same transaction in a
+// different order would disagree about its identity.
+test "permuting semantically unordered inputs leaves the plan identical" {
+    const allocator = std.testing.allocator;
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+
+    const policy = resolver.Policy{
+        .excludes = &.{ "excluded-a", "excluded-b" },
+        .installonly_names = &.{ "kernel", "kernel-debug" },
+        .locked_names = &.{ "locked-a", "locked-b" },
+        .protected_names = &.{ "protected-a", "protected-b" },
+    };
+    const reversed = resolver.Policy{
+        .excludes = &.{ "excluded-b", "excluded-a" },
+        .installonly_names = &.{ "kernel-debug", "kernel" },
+        .locked_names = &.{ "locked-b", "locked-a" },
+        .protected_names = &.{ "protected-b", "protected-a" },
+    };
+
+    const forward = [_]resolver.Repository{
+        fixture.declared(),
+        fixture.declaredExtra(),
+    };
+    const backward = [_]resolver.Repository{
+        fixture.declaredExtra(),
+        fixture.declared(),
+    };
+
+    var first_request = fixture.input(&forward);
+    first_request.policy = policy;
+    const first = try canonicalBytes(allocator, first_request);
+    defer allocator.free(first);
+
+    var second_request = fixture.input(&backward);
+    second_request.policy = reversed;
+    const second = try canonicalBytes(allocator, second_request);
+    defer allocator.free(second);
+
+    try std.testing.expectEqualStrings(first, second);
+
+    // The permutation is only meaningful if both repositories actually
+    // reached the plan; a plan that silently dropped one would also compare
+    // equal to itself.
+    try std.testing.expect(std.mem.indexOf(u8, first, "\"id\":\"extra\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "\"id\":\"base\"") != null);
+}
+
+// The mirror image of the permutation test: every input the plan claims to be
+// derived from must be able to change it. A digest that ignored one of these
+// would let two genuinely different transactions share an identity.
+test "a semantically relevant input change changes the plan identity" {
+    const allocator = std.testing.allocator;
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const declared = [_]resolver.Repository{fixture.declared()};
+    const both = [_]resolver.Repository{
+        fixture.declared(),
+        fixture.declaredExtra(),
+    };
+
+    const baseline = try canonicalBytes(allocator, fixture.input(&declared));
+    defer allocator.free(baseline);
+
+    // Each entry is the same request with exactly one fact changed.
+    var subject_changed = fixture.input(&declared);
+    subject_changed.subjects = &.{"broken"};
+
+    var architecture_changed = fixture.input(&declared);
+    architecture_changed.environment.architecture = "aarch64";
+
+    var distro_changed = fixture.input(&declared);
+    distro_changed.environment.distro = "other-distro";
+
+    var release_changed = fixture.input(&declared);
+    release_changed.environment.release_version = "43";
+
+    var policy_changed = fixture.input(&declared);
+    policy_changed.policy = .{ .installonly_limit = 9 };
+
+    const repositories_changed = fixture.input(&both);
+
+    const Case = struct {
+        name: []const u8,
+        request: resolver.ResolveInput,
+    };
+    const cases = [_]Case{
+        .{ .name = "subject", .request = subject_changed },
+        .{ .name = "architecture", .request = architecture_changed },
+        .{ .name = "distro", .request = distro_changed },
+        .{ .name = "release version", .request = release_changed },
+        .{ .name = "policy", .request = policy_changed },
+        .{ .name = "repository set", .request = repositories_changed },
+    };
+    for (cases) |case| {
+        const bytes = try canonicalBytes(allocator, case.request);
+        defer allocator.free(bytes);
+        if (std.mem.eql(u8, baseline, bytes)) {
+            std.debug.print(
+                "changing the {s} did not change the plan\n",
+                .{case.name},
+            );
+            return error.PlanIdentityInsensitive;
+        }
+    }
+
+    // Installed state is the one input the caller cannot pass by value, so it
+    // is exercised through the declared root rather than the table above.
+    try fixture.tmp.dir.createDirPath(io, "root/usr/lib/sysimage/rpm");
+    const changed_root = try canonicalBytes(allocator, fixture.input(&declared));
+    defer allocator.free(changed_root);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        changed_root,
+        "\"rpmdb\":",
+    ) != null);
+}
+
+const secret_password = "s3cret-password-value";
+const secret_username = "s3cret-username-value";
+
+const SecretCounter = struct {
+    lookups: usize = 0,
+
+    fn lookup(
+        context: ?*anyopaque,
+        _: []const u8,
+        field: resolver.SecretField,
+    ) ?[]const u8 {
+        const self: *SecretCounter = @ptrCast(@alignCast(context.?));
+        self.lookups += 1;
+        return switch (field) {
+            .username => secret_username,
+            .password => secret_password,
+        };
+    }
+};
+
+// A secret provider hands the resolver credentials it needs to fetch metadata.
+// Those credentials describe how the caller reaches a repository, never what
+// the transaction is, so they must not appear in the plan, in the bytes the
+// digest is taken over, or in anything the resolver leaves on disk. The
+// provider is deliberately asked for a value on a repository whose metadata is
+// local, proving the redaction does not depend on the fetch succeeding.
+test "provider-supplied secrets reach neither the plan nor the scratch tree" {
+    const allocator = std.testing.allocator;
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+
+    const base_url = try std.fmt.allocPrint(
+        allocator,
+        "file://{s}",
+        .{fixture.snapshot},
+    );
+    defer allocator.free(base_url);
+
+    var counter = SecretCounter{};
+    const repositories = [_]resolver.Repository{.{
+        .id = "base",
+        .metadata = .{ .remote = .{
+            .base_urls = &.{base_url},
+            .secrets = .{ .context = &counter, .lookup = SecretCounter.lookup },
+        } },
+    }};
+
+    const request = fixture.input(&repositories);
+    const plan = try resolver.resolvePlan(allocator, io, request);
+    defer plan.destroy();
+
+    // Without this the rest of the test would pass for a resolver that simply
+    // ignored the provider.
+    try std.testing.expectEqual(@as(usize, 2), counter.lookups);
+
+    const json = try plan.canonicalJsonAlloc(allocator);
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, secret_password) == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, secret_username) == null);
+
+    // The scratch tree holds the generated configuration the credentials would
+    // have been written to. It must be gone, and nothing may remain under the
+    // declared root that names them.
+    const work = try inventory(allocator, fixture.tmp.dir, "work");
+    defer allocator.free(work);
+    try std.testing.expectEqualStrings("", work);
+    try expectSecretFree(allocator, fixture.tmp.dir, "root");
+}
+
+// Reads every regular file under `sub_path` and fails if any of them contains
+// the fixture's secret material.
+fn expectSecretFree(
+    allocator: std.mem.Allocator,
+    dir: std.Io.Dir,
+    sub_path: []const u8,
+) !void {
+    var target = try dir.openDir(io, sub_path, .{ .iterate = true });
+    defer target.close(io);
+
+    var walker = try target.walk(allocator);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        const contents = target.readFileAlloc(
+            io,
+            entry.path,
+            allocator,
+            .limited(1 << 20),
+        ) catch continue;
+        defer allocator.free(contents);
+        for ([_][]const u8{ secret_password, secret_username }) |secret| {
+            if (std.mem.indexOf(u8, contents, secret) != null) {
+                std.debug.print("secret leaked into {s}\n", .{entry.path});
+                return error.SecretLeaked;
+            }
+        }
+    }
 }
