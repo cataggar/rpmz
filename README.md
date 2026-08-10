@@ -48,10 +48,11 @@ const tdnf_dep = b.dependency("tdnf", .{
 exe.root_module.addImport("tdnf", tdnf_dep.module("tdnf"));
 ```
 
-Application source can then use
-`@import("tdnf").transaction_plan.Plan`, the versioned
-`transaction_plan.schema`, and the associated public plan model types.
-Consumers should not import files from `client/` directly.
+Application source can then use `@import("tdnf").resolver` to resolve a
+transaction into an owned canonical plan, plus
+`@import("tdnf").transaction_plan` for the versioned `schema` and the public
+plan model types. Those two namespaces are the whole supported surface;
+consumers should not import files from the component directories directly.
 
 `tdnf plan <verb>` prints the same document from the command line. See
 [doc/transaction-plan-api.md](doc/transaction-plan-api.md) for what a plan

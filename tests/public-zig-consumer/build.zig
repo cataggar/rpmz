@@ -20,6 +20,9 @@ pub fn build(b: *std.Build) void {
         .root_module = consumer_mod,
     });
     const run_consumer = b.addRunArtifact(consumer);
+    // The consumer writes its fixture relative to cwd, so give it a private
+    // directory inside the build cache rather than the audit tree.
+    run_consumer.setCwd(b.path("."));
     b.step("check", "Build and run the public Zig API consumer")
         .dependOn(&run_consumer.step);
 }

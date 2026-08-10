@@ -37,6 +37,8 @@
         "history",
         "jsondump",
         "llconf",
+        "repomd",
+        "xml",
         "plugins",
         "rpmzig",
         "tools",

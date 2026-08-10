@@ -34,10 +34,15 @@ obsoleting package, and `prior_package_ids` names the rows it replaces.
 ## Producing a plan
 
 `resolvePlan` is the only supported way to obtain a plan without the private
-handle API:
+handle API. It is reachable from outside the repository: depend on this package
+and import `tdnf`, whose `resolver` and `transaction_plan` namespaces are the
+entire supported surface. Nothing else under the component directories is
+public, and `public-zig-api-audit` fails the build if a public file reaches
+outside that surface.
 
 ```zig
 const tdnf = @import("tdnf");
+const resolver = tdnf.resolver;
 
 const plan = try resolver.resolvePlan(allocator, io, .{
     .operation = .install,
@@ -150,3 +155,14 @@ This layer resolves. It does not download packages and it does not execute.
 
 There is deliberately no canonical-JSON parser, no query API over the plan
 model, and no public C ABI for this surface.
+
+## How this is proven
+
+`tests/public-zig-consumer/` is built the way a real dependent is built: from a
+read-only copy of exactly what `build.zig.zon` packages, with remote fetching
+disabled and only the pinned dependency closure available. It creates its own
+repository and install root, resolves against them, and checks that the plan
+resolved, that the requested package is in it, that no undeclared repository
+appears, that repeating the request reproduces the bytes and digest, that
+changing the architecture does not, and that the scratch tree is gone when the
+call returns.

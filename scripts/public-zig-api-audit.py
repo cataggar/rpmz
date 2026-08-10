@@ -31,16 +31,11 @@ PUBLIC_SOURCE_FILES = (
     "tdnf.zig",
     "client/transaction_plan.zig",
 )
-# Named modules the files above may import. `std` and `builtin` come from the
-# toolchain; the rest must be registered as public modules in `build.zig`
-# before the early return, or a consumer's build cannot resolve them.
-PUBLIC_MODULE_IMPORTS = frozenset(
-    {
-        "std",
-        "builtin",
-        "transaction_plan",
-    }
-)
+# Modules the toolchain always provides. Every other module a public source
+# file imports must be registered on the public module in `build.zig`, which
+# the audit reads rather than restates.
+TOOLCHAIN_MODULES = frozenset({"std", "builtin"})
+PUBLIC_MODULE_VARIABLE = "public_tdnf_mod"
 RETIRED_PUBLIC_C_FILES = (
     "client/libtdnf.map",
     "client/tdnf.pc.in",
@@ -62,6 +57,64 @@ def package_paths(manifest: Path) -> list[str]:
     if not paths:
         raise RuntimeError(f"{manifest} has an empty .paths list")
     return paths
+
+
+# The packages the resolve module graph cannot build without. Naming them
+# keeps the audit honest if the closure is ever supplied from somewhere that
+# happens to be empty.
+REQUIRED_DEPENDENCY_NAMES = ("sqlite", "tls", "zlua")
+
+
+def pinned_hashes(manifest: Path) -> set[str]:
+    """Return the dependency hashes a `build.zig.zon` pins."""
+    if not manifest.is_file():
+        return set()
+    text = manifest.read_text(encoding="utf-8")
+    return set(re.findall(r'\.hash\s*=\s*"([^"]+)"', text))
+
+
+def provide_system_packages(source_root: Path, destination: Path) -> set[str]:
+    """Materialize the pinned closure into a `--system` package directory.
+
+    `zig-pkg/` is where the root build extracts what it resolved, so it is the
+    closure this checkout actually built against, transitive entries included.
+    Every entry must be pinned by a manifest somewhere in that closure: an
+    unpinned package would mean the consumer's build depends on something no
+    manifest records.
+
+    Not every pinned dependency has to be present. `libsolv` is lazy and only
+    the opt-in parity oracle asks for it, which is the point of the separate
+    `product-no-libsolv-fetch-audit`.
+    """
+    extracted = source_root / "zig-pkg"
+    if not extracted.is_dir():
+        raise RuntimeError(
+            "zig-pkg/ is missing; run a root build before the audit"
+        )
+    entries = sorted(
+        entry for entry in extracted.iterdir() if entry.is_dir()
+    )
+    pinned = pinned_hashes(source_root / "build.zig.zon")
+    for entry in entries:
+        pinned |= pinned_hashes(entry / "build.zig.zon")
+
+    provided = set()
+    for entry in entries:
+        shutil.copytree(entry, destination / entry.name, symlinks=True)
+        provided.add(entry.name)
+
+    unpinned = sorted(provided - pinned)
+    if unpinned:
+        raise RuntimeError(
+            "extracted closure contains unpinned packages: "
+            + ", ".join(unpinned)
+        )
+    for name in REQUIRED_DEPENDENCY_NAMES:
+        if not any(entry.startswith(name + "-") for entry in provided):
+            raise RuntimeError(
+                f"closure is missing the required dependency: {name}"
+            )
+    return provided
 
 
 def package_name(manifest: Path) -> str:
@@ -102,6 +155,26 @@ def tracked_files(source_root: Path, paths: list[str]) -> list[Path]:
     return files
 
 
+def registered_public_modules(build_script: Path) -> set[str]:
+    """Return the module names `build.zig` registers on the public module.
+
+    Reading them instead of listing them here keeps the audit from drifting:
+    the set a consumer can resolve is exactly the set `build.zig` publishes.
+    """
+    text = build_script.read_text(encoding="utf-8")
+    names = set(
+        re.findall(
+            re.escape(PUBLIC_MODULE_VARIABLE) + r'\.addImport\(\s*"([^"]+)"',
+            text,
+        )
+    )
+    if not names:
+        raise RuntimeError(
+            f"{build_script} registers no imports on {PUBLIC_MODULE_VARIABLE}"
+        )
+    return names
+
+
 def check_public_closure(package_root: Path) -> None:
     """Fail if the public module graph reaches beyond its declared surface.
 
@@ -109,6 +182,9 @@ def check_public_closure(package_root: Path) -> None:
     into the public module -- but it would make an implementation file part of
     the package's compatibility promise without anyone deciding to.
     """
+    allowed_modules = TOOLCHAIN_MODULES | registered_public_modules(
+        package_root / "build.zig"
+    )
     public_files = set(PUBLIC_SOURCE_FILES)
     pending = sorted(public_files)
     while pending:
@@ -119,9 +195,9 @@ def check_public_closure(package_root: Path) -> None:
         text = source.read_text(encoding="utf-8")
         for target in re.findall(r'@import\(\s*"([^"]+)"\s*\)', text):
             if not target.endswith(".zig"):
-                if target not in PUBLIC_MODULE_IMPORTS:
+                if target not in allowed_modules:
                     raise RuntimeError(
-                        f"{relative} imports non-public module: {target}"
+                        f"{relative} imports unregistered module: {target}"
                     )
                 continue
             resolved = os.path.normpath(
@@ -233,13 +309,19 @@ def main() -> None:
         (global_cache / "tmp").mkdir(parents=True)
         system_packages = audit_root / "system-packages"
         system_packages.mkdir()
+        provided_packages = provide_system_packages(
+            source_root,
+            system_packages,
+        )
         make_read_only(system_packages)
         environment = os.environ.copy()
         environment["ZIG_GLOBAL_CACHE_DIR"] = str(global_cache)
         environment.pop("ZIG_LOCAL_CACHE_DIR", None)
-        # Zig 0.16's --system disables fetching. Keeping this directory empty
-        # makes the build itself failure-sensitive: requesting any private
-        # package aborts before its build logic can execute.
+        # Zig 0.16's --system disables fetching and resolves every dependency
+        # from this directory alone. It holds exactly the closure pinned in the
+        # project manifest, so a build that reached for anything else -- an
+        # unpinned package, or a transitive dependency nobody declared --
+        # aborts before its build logic can execute.
         subprocess.run(
             [
                 args.zig,
@@ -256,8 +338,14 @@ def main() -> None:
             check=True,
         )
 
-        if any(system_packages.iterdir()):
-            raise RuntimeError("Zig modified the empty system package directory")
+        provided = {entry.name for entry in system_packages.iterdir()}
+        if provided != provided_packages:
+            raise RuntimeError(
+                "Zig modified the system package directory: "
+                + ", ".join(
+                    sorted(provided.symmetric_difference(provided_packages))
+                )
+            )
 
         after = source_snapshot(package_root)
         if after != before:
@@ -273,13 +361,12 @@ def main() -> None:
                         f"unexpected package cache entry: {cached_package.name}"
                     )
                 resolved_packages.append(package_name(manifest))
-        private_packages = [
-            name for name in resolved_packages if name != "tdnf"
-        ]
-        if private_packages:
+        # Nothing may be fetched into the consumer's own cache: every
+        # dependency has to have come from the pinned closure above.
+        if resolved_packages:
             raise RuntimeError(
-                "public module import resolved private package dependencies: "
-                + ", ".join(sorted(private_packages))
+                "public module import fetched packages outside the pinned "
+                "closure: " + ", ".join(sorted(resolved_packages))
             )
     finally:
         if audit_root.exists():
