@@ -2356,6 +2356,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
+        test_mod.addImport("tdnf_internal_abi", internal_abi_mod);
         test_mod.addIncludePath(b.path("rpmzig"));
         addLibsolvIncludes(
             test_mod,

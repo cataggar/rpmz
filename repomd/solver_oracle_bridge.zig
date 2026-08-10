@@ -87,7 +87,7 @@ pub export fn TDNFRepoMdNativeLastError() [*:0]const u8 {
 }
 
 pub export fn TDNFRepoMdNativeLoadSolvRepo(
-    raw_repo: ?*abi.Repo,
+    raw_repo: ?*c.Repo,
     repomd_path: ?[*:0]const u8,
     primary_path: ?[*:0]const u8,
     filelists_path: ?[*:0]const u8,
@@ -106,7 +106,7 @@ pub export fn TDNFRepoMdNativeLoadSolvRepo(
 }
 
 fn transactionPlanLoadSolvRepo(
-    raw_repo: ?*abi.Repo,
+    raw_repo: ?*c.Repo,
     repomd_path: ?[*:0]const u8,
     primary_path: ?[*:0]const u8,
     filelists_path: ?[*:0]const u8,
@@ -127,7 +127,7 @@ fn transactionPlanLoadSolvRepo(
 }
 
 fn loadSolvRepo(
-    raw_repo: ?*abi.Repo,
+    raw_repo: ?*c.Repo,
     repomd_path: ?[*:0]const u8,
     primary_path: ?[*:0]const u8,
     filelists_path: ?[*:0]const u8,
@@ -219,7 +219,7 @@ comptime {
 }
 
 pub export fn TDNFRepoMdNativeLoadInstalledSolvRepo(
-    raw_repo: ?*abi.Repo,
+    raw_repo: ?*c.Repo,
     root_dir: ?[*:0]const u8,
     flags: c_int,
 ) u32 {
@@ -254,7 +254,7 @@ pub export fn TDNFRepoMdNativeLoadInstalledSolvRepo(
 }
 
 pub export fn TDNFRepoMdNativeLoadInstalledSolvRepoConfig(
-    raw_repo: ?*abi.Repo,
+    raw_repo: ?*c.Repo,
     config: ?*const abi.tdnf_rpm_config,
     flags: c_int,
 ) u32 {
@@ -289,7 +289,7 @@ pub export fn TDNFRepoMdNativeLoadInstalledSolvRepoConfig(
 }
 
 pub export fn TDNFRepoMdNativeAddRpm(
-    raw_repo: ?*abi.Repo,
+    raw_repo: ?*c.Repo,
     rpm_path: ?[*:0]const u8,
     flags: c_int,
     out_solvid: ?*u32,
@@ -528,7 +528,7 @@ const BuildRepoOptions = struct {
 
 const SolvBuilder = struct {
     arena: std.mem.Allocator,
-    repo: *abi.Repo,
+    repo: *c.Repo,
     pool: *c.Pool,
     repository: *const model.RepositoryModel,
     package_solvids: []c.Id,
@@ -536,7 +536,7 @@ const SolvBuilder = struct {
 
     fn init(
         arena: std.mem.Allocator,
-        repo: *abi.Repo,
+        repo: *c.Repo,
         repository: *const model.RepositoryModel,
         options: BuildRepoOptions,
     ) BuildError!SolvBuilder {
@@ -879,14 +879,14 @@ const NativeRpmBridgeOptions = struct {
 
 const NativeRpmBridge = struct {
     arena: std.mem.Allocator,
-    repo: *abi.Repo,
+    repo: *c.Repo,
     pool: *c.Pool,
     options: NativeRpmBridgeOptions,
     primary_data: *c.Repodata,
 
     fn init(
         arena: std.mem.Allocator,
-        repo: *abi.Repo,
+        repo: *c.Repo,
         options: NativeRpmBridgeOptions,
     ) BuildError!NativeRpmBridge {
         const pool = repo.pool orelse return error.InvalidRepoMetadata;
@@ -1049,7 +1049,7 @@ pub const InstalledHeaderBatch = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        repo: *abi.Repo,
+        repo: *c.Repo,
     ) !InstalledHeaderBatch {
         return .{
             .allocator = allocator,
@@ -1109,7 +1109,7 @@ test "installed header batch scratch memory is package bounded" {
     const header = try rpm_header.Header.parse(blob);
     const pool = c.pool_create() orelse return error.OutOfMemory;
     defer c.pool_free(pool);
-    const repo: *abi.Repo = @ptrCast(
+    const repo: *c.Repo = @ptrCast(
         c.repo_create(pool, "@System") orelse return error.OutOfMemory,
     );
     c.pool_set_installed(pool, repo);
@@ -1124,7 +1124,7 @@ test "installed header batch scratch memory is package bounded" {
 
 pub fn buildInstalledHeaderIntoRepo(
     allocator: std.mem.Allocator,
-    repo: *abi.Repo,
+    repo: *c.Repo,
     header: rpm_header.Header,
     rpmdb_hnum: u32,
 ) !c.Id {
@@ -1138,7 +1138,7 @@ pub fn seedFileProvideDependencies(
     allocator: std.mem.Allocator,
     source_pool: *c.Pool,
     target_pool: *c.Pool,
-    target_repo: *abi.Repo,
+    target_repo: *c.Repo,
 ) BuildError!void {
     var dummy: ?*c.Solvable = null;
     for ([_]c.Id{
@@ -1278,10 +1278,10 @@ test "file dependency bridge seeds ten thousand paths by kind" {
     defer c.pool_free(source_pool);
     const target_pool = c.pool_create() orelse return error.OutOfMemory;
     defer c.pool_free(target_pool);
-    const source_repo: *abi.Repo = @ptrCast(
+    const source_repo: *c.Repo = @ptrCast(
         c.repo_create(source_pool, "source") orelse return error.OutOfMemory,
     );
-    const target_repo: *abi.Repo = @ptrCast(
+    const target_repo: *c.Repo = @ptrCast(
         c.repo_create(target_pool, "target") orelse return error.OutOfMemory,
     );
     const source_id = c.repo_add_solvable(source_repo);
@@ -1360,7 +1360,7 @@ test "bridged repository keeps the file provides libsolv reads from the filtered
     const pool = c.pool_create() orelse return error.OutOfMemory;
     defer c.pool_free(pool);
     _ = c.pool_set_flag(pool, c.POOL_FLAG_ADDFILEPROVIDESFILTERED, 1);
-    const repo: *abi.Repo = @ptrCast(
+    const repo: *c.Repo = @ptrCast(
         c.repo_create(pool, "bridged") orelse return error.OutOfMemory,
     );
 
@@ -1508,7 +1508,7 @@ fn addFileEntry(
     c.repodata_add_dirstr(data, solvid, c.SOLVABLE_FILELIST, dir_id, try z(allocator, name_buf));
 }
 
-pub fn buildRepositoryIntoRepo(arena: std.mem.Allocator, repo: *abi.Repo, repository: *const model.RepositoryModel) BuildError!void {
+pub fn buildRepositoryIntoRepo(arena: std.mem.Allocator, repo: *c.Repo, repository: *const model.RepositoryModel) BuildError!void {
     var builder = try SolvBuilder.init(arena, repo, repository, .{});
     return builder.build();
 }
@@ -1709,7 +1709,7 @@ pub fn normalizeRpmEpoch(epoch: ?u32) ?u32 {
 fn nativeRpmSetDeps(
     allocator: std.mem.Allocator,
     pool: *c.Pool,
-    repo: *abi.Repo,
+    repo: *c.Repo,
     deps: *c.Offset,
     relations: []const model.Relation,
     is_requires: bool,
@@ -1776,7 +1776,7 @@ fn compareOpToSolv(op: model.CompareOp) c_int {
     };
 }
 
-fn addAdvisoryConflict(repo: *abi.Repo, pool: *c.Pool, solvid: c.Id, name_id: c.Id, arch_id: c.Id, evr_id: c.Id) void {
+fn addAdvisoryConflict(repo: *c.Repo, pool: *c.Pool, solvid: c.Id, name_id: c.Id, arch_id: c.Id, evr_id: c.Id) void {
     var conflict: c.Id = 0;
     if (arch_id != 0 and arch_id != c.ARCH_NOARCH) {
         conflict = c.pool_rel2id(pool, name_id, arch_id, c.REL_ARCH, 1);
