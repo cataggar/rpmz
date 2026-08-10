@@ -21,6 +21,25 @@ REQUIRED_PUBLIC_FILES = (
     "build.zig.zon",
     "tdnf.zig",
     "client/transaction_plan.zig",
+    "doc/transaction-plan-api.md",
+)
+# Every source file a dependency consumer can reach through the public module
+# graph. `build.zig` returns before it registers anything private, so this is
+# the whole supported surface; a file that is not listed here is an
+# implementation detail regardless of whether it happens to be packaged.
+PUBLIC_SOURCE_FILES = (
+    "tdnf.zig",
+    "client/transaction_plan.zig",
+)
+# Named modules the files above may import. `std` and `builtin` come from the
+# toolchain; the rest must be registered as public modules in `build.zig`
+# before the early return, or a consumer's build cannot resolve them.
+PUBLIC_MODULE_IMPORTS = frozenset(
+    {
+        "std",
+        "builtin",
+        "transaction_plan",
+    }
 )
 RETIRED_PUBLIC_C_FILES = (
     "client/libtdnf.map",
@@ -81,6 +100,42 @@ def tracked_files(source_root: Path, paths: list[str]) -> list[Path]:
                 f"build.zig.zon .paths entry has no tracked files: {package_path}"
             )
     return files
+
+
+def check_public_closure(package_root: Path) -> None:
+    """Fail if the public module graph reaches beyond its declared surface.
+
+    A private import would still build here -- the audit consumer only calls
+    into the public module -- but it would make an implementation file part of
+    the package's compatibility promise without anyone deciding to.
+    """
+    public_files = set(PUBLIC_SOURCE_FILES)
+    pending = sorted(public_files)
+    while pending:
+        relative = pending.pop()
+        source = package_root / relative
+        if not source.is_file():
+            raise RuntimeError(f"public source file is missing: {relative}")
+        text = source.read_text(encoding="utf-8")
+        for target in re.findall(r'@import\(\s*"([^"]+)"\s*\)', text):
+            if not target.endswith(".zig"):
+                if target not in PUBLIC_MODULE_IMPORTS:
+                    raise RuntimeError(
+                        f"{relative} imports non-public module: {target}"
+                    )
+                continue
+            resolved = os.path.normpath(
+                str(Path(relative).parent / target)
+            )
+            if resolved not in public_files:
+                raise RuntimeError(
+                    f"{relative} imports non-public source file: {resolved}"
+                )
+    unreachable = public_files - set(PUBLIC_SOURCE_FILES)
+    if unreachable:
+        raise RuntimeError(
+            "public source list is stale: " + ", ".join(sorted(unreachable))
+        )
 
 
 def copy_file(source: Path, destination: Path) -> None:
@@ -168,6 +223,8 @@ def main() -> None:
                 raise RuntimeError(
                     f"distributable package contains generated source file: {relative}"
                 )
+
+        check_public_closure(package_root)
 
         make_read_only(package_root)
         before = source_snapshot(package_root)
