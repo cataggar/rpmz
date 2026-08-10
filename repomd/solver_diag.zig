@@ -3,7 +3,7 @@
 //! Turns the structured, unsatisfiable-core problems the native solver
 //! enumerates (`solver_result`, in core *discovery* order) into the exact
 //! human-readable strings that libsolv's `solver_problemruleinfo2str` produced,
-//! so libtdnf can report a failed resolution without any libsolv solver state.
+//! so the client can report a failed resolution without libsolv solver state.
 //!
 //! libsolv walks its problem list from `solver_problem_count()` down to 1, so
 //! it reports problems in the reverse of the order it discovered the cores.

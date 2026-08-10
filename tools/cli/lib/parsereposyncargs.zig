@@ -5,14 +5,13 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("string.h");
     @cInclude("strings.h");
     @cInclude("stdlib.h");
     @cInclude("nodes.h");
-    @cInclude("tdnfcli.h");
-    @cInclude("tdnferror.h");
 });
 
 fn equalsIgnoreCase(pszValue: [*c]const u8, comptime pszExpected: [*:0]const u8) bool {
@@ -21,33 +20,33 @@ fn equalsIgnoreCase(pszValue: [*c]const u8, comptime pszExpected: [*:0]const u8)
 
 fn duplicateString(pszValue: [*c]const u8, ppOut: *allowzero [*c]u8) u32 {
     if (pszValue == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     const value = pszValue;
-    const pszDup = c.strdup(value) orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
+    const pszDup = c.strdup(value) orelse return abi.ERROR_TDNF_OUT_OF_MEMORY;
     ppOut.* = @ptrCast(pszDup);
     return 0;
 }
 
-fn ensureArchArray(pReposyncArgs: *c.TDNF_REPOSYNC_ARGS) u32 {
+fn ensureArchArray(pReposyncArgs: *abi.TDNF_REPOSYNC_ARGS) u32 {
     if (pReposyncArgs.ppszArchs == null) {
-        const nArchSlots: usize = @as(usize, c.TDNF_REPOSYNC_MAXARCHS) + 1;
+        const nArchSlots: usize = @as(usize, abi.TDNF_REPOSYNC_MAXARCHS) + 1;
         const pAllocated = c.calloc(nArchSlots, @sizeOf(?[*:0]u8)) orelse
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         pReposyncArgs.ppszArchs = @ptrCast(@alignCast(pAllocated));
     }
     return 0;
 }
 
-fn appendArch(pReposyncArgs: *c.TDNF_REPOSYNC_ARGS, pszArch: [*c]const u8) u32 {
+fn appendArch(pReposyncArgs: *abi.TDNF_REPOSYNC_ARGS, pszArch: [*c]const u8) u32 {
     var dwError = ensureArchArray(pReposyncArgs);
     if (dwError != 0) {
         return dwError;
     }
 
     var i: usize = 0;
-    while (i < c.TDNF_REPOSYNC_MAXARCHS and pReposyncArgs.ppszArchs[i] != null) : (i += 1) {}
-    if (i >= c.TDNF_REPOSYNC_MAXARCHS) {
+    while (i < abi.TDNF_REPOSYNC_MAXARCHS and pReposyncArgs.ppszArchs[i] != null) : (i += 1) {}
+    if (i >= abi.TDNF_REPOSYNC_MAXARCHS) {
         return 0;
     }
 
@@ -64,7 +63,7 @@ fn freeCString(pszValue: [*c]u8) void {
 fn freeArchArray(ppszArchs: [*c][*c]u8) void {
     if (ppszArchs) |ppArchs| {
         var i: usize = 0;
-        while (i < c.TDNF_REPOSYNC_MAXARCHS and ppArchs[i] != null) : (i += 1) {
+        while (i < abi.TDNF_REPOSYNC_MAXARCHS and ppArchs[i] != null) : (i += 1) {
             freeCString(ppArchs[i]);
         }
         c.free(@ptrCast(ppArchs));
@@ -72,17 +71,17 @@ fn freeArchArray(ppszArchs: [*c][*c]u8) void {
 }
 
 pub export fn TDNFCliParseRepoSyncArgs(
-    pArgs: ?*c.TDNF_CMD_ARGS,
-    ppReposyncArgs: ?*?*c.TDNF_REPOSYNC_ARGS,
+    pArgs: ?*abi.TDNF_CMD_ARGS,
+    ppReposyncArgs: ?*?*abi.TDNF_REPOSYNC_ARGS,
 ) u32 {
-    const cmd_args = pArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const out = ppReposyncArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const out = ppReposyncArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
-    const pAllocated = c.calloc(1, @sizeOf(c.TDNF_REPOSYNC_ARGS)) orelse
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
-    const pReposyncArgs: *c.TDNF_REPOSYNC_ARGS = @ptrCast(@alignCast(pAllocated));
+    const pAllocated = c.calloc(1, @sizeOf(abi.TDNF_REPOSYNC_ARGS)) orelse
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
+    const pReposyncArgs: *abi.TDNF_REPOSYNC_ARGS = @ptrCast(@alignCast(pAllocated));
 
-    var pNode: [*c]c.struct_cnfnode = if (cmd_args.cn_setopts != null) cmd_args.cn_setopts[0].first_child else null;
+    var pNode: [*c]abi.struct_cnfnode = if (cmd_args.cn_setopts != null) cmd_args.cn_setopts[0].first_child else null;
     while (pNode != null) : (pNode = pNode[0].next) {
         if (equalsIgnoreCase(pNode[0].name, "arch")) {
             const dwError = appendArch(pReposyncArgs, pNode[0].value);
@@ -127,7 +126,7 @@ pub export fn TDNFCliParseRepoSyncArgs(
     return 0;
 }
 
-pub export fn TDNFCliFreeRepoSyncArgs(pReposyncArgs: ?*c.TDNF_REPOSYNC_ARGS) void {
+pub export fn TDNFCliFreeRepoSyncArgs(pReposyncArgs: ?*abi.TDNF_REPOSYNC_ARGS) void {
     if (pReposyncArgs) |reposync_args| {
         freeArchArray(reposync_args.ppszArchs);
         freeCString(reposync_args.pszDownloadPath);
@@ -137,12 +136,12 @@ pub export fn TDNFCliFreeRepoSyncArgs(pReposyncArgs: ?*c.TDNF_REPOSYNC_ARGS) voi
 }
 
 test "TDNFCliParseRepoSyncArgs preserves reposync flags and values" {
-    var setopt_root: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var arch0_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var arch1_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var delete_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var path_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var metadata_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
+    var setopt_root: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var arch0_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var arch1_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var delete_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var path_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var metadata_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
 
     arch0_node.name = @constCast("arch");
     arch0_node.value = @constCast("x86_64");
@@ -160,10 +159,10 @@ test "TDNFCliParseRepoSyncArgs preserves reposync flags and values" {
     path_node.next = &metadata_node;
     setopt_root.first_child = &arch0_node;
 
-    var cmd_args: c.TDNF_CMD_ARGS = std.mem.zeroes(c.TDNF_CMD_ARGS);
+    var cmd_args: abi.TDNF_CMD_ARGS = std.mem.zeroes(abi.TDNF_CMD_ARGS);
     cmd_args.cn_setopts = &setopt_root;
 
-    var pReposyncArgs: ?*c.TDNF_REPOSYNC_ARGS = null;
+    var pReposyncArgs: ?*abi.TDNF_REPOSYNC_ARGS = null;
     defer TDNFCliFreeRepoSyncArgs(pReposyncArgs);
 
     try std.testing.expectEqual(@as(u32, 0), TDNFCliParseRepoSyncArgs(&cmd_args, &pReposyncArgs));
@@ -183,13 +182,13 @@ test "TDNFCliParseRepoSyncArgs preserves reposync flags and values" {
 }
 
 test "TDNFCliParseRepoSyncArgs preserves boolean option names" {
-    var setopt_root: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var metadata_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var gpg_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var newest_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var norepopath_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var source_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
-    var urls_node: c.struct_cnfnode = std.mem.zeroes(c.struct_cnfnode);
+    var setopt_root: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var metadata_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var gpg_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var newest_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var norepopath_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var source_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
+    var urls_node: abi.struct_cnfnode = std.mem.zeroes(abi.struct_cnfnode);
 
     metadata_node.name = @constCast("download-metadata");
     gpg_node.name = @constCast("gpgcheck");
@@ -205,10 +204,10 @@ test "TDNFCliParseRepoSyncArgs preserves boolean option names" {
     source_node.next = &urls_node;
     setopt_root.first_child = &metadata_node;
 
-    var cmd_args: c.TDNF_CMD_ARGS = std.mem.zeroes(c.TDNF_CMD_ARGS);
+    var cmd_args: abi.TDNF_CMD_ARGS = std.mem.zeroes(abi.TDNF_CMD_ARGS);
     cmd_args.cn_setopts = &setopt_root;
 
-    var pReposyncArgs: ?*c.TDNF_REPOSYNC_ARGS = null;
+    var pReposyncArgs: ?*abi.TDNF_REPOSYNC_ARGS = null;
     defer TDNFCliFreeRepoSyncArgs(pReposyncArgs);
 
     try std.testing.expectEqual(@as(u32, 0), TDNFCliParseRepoSyncArgs(&cmd_args, &pReposyncArgs));

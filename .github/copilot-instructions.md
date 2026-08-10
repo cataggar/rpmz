@@ -1,266 +1,143 @@
 # tdnf - Copilot instructions
 
-tdnf is "tiny dandified yum" — a C implementation of a dnf/yum-compatible package
-manager built on vendored `libsolv` and the native Zig RPM stack in
-`rpmzig/`, with downloads handled by Zig's HTTP/TLS stack. It ships a
-public C library (`libtdnf`) plus CLI binaries and has no production
-dependency on system RPM libraries, headers, or development metadata.
+tdnf is a Zig implementation of a dnf/yum-compatible package manager. It
+uses vendored `libsolv`, the native Zig RPM stack under `rpmzig/`, and Zig
+HTTP/TLS downloads. The supported distribution surfaces are the `tdnf` Zig
+package module and executable/tools; there is no public C SDK or installed
+`libtdnf*` shared library.
 
 ## Build, test, lint
 
-The build is driven by **Zig 0.16+** (no CMake — migrated to `build.zig`).
-SQLite, libsolv, and the
-pure-Zig Lua scriptlet runtime are vendored dependencies. Lua scriptlet
-support is unconditional because real base packages use `<lua>`-tagged
-scriptlets; no system Lua headers or libraries are required.
+The build requires Zig 0.16+ and is driven by `build.zig`.
 
 ```sh
-# build + install into ./out
 zig build -Doptimize=ReleaseSafe install --prefix ./out
-
-# tests only (runs `pytest -v` in pytests/, depends on install). Needs an
-# rpm-aware host with rpmbuild + createrepo_c + python pytest/requests/pyOpenSSL.
+zig build test
+zig build -Doptimize=ReleaseSafe test
 zig build check
-
-# single pytest (cwd must be pytests/ so config.json is picked up)
-cd pytests && LD_LIBRARY_PATH=../out/lib \
-    pytest -v tests/test_install.py::test_install_no_arg
-
-# python lint
-zig build lint    # equivalent to: flake8 pytests
+zig build lint
 ```
 
-All compilation goes through **`zig cc`** (clang from Zig's bundled LLVM).
-There is no longer a separate gcc/clang CI matrix; what `zig build`
-produces locally is what CI produces.
+The full pytest suite needs an rpm-aware host with `rpmbuild`,
+`createrepo_c`, pytest, requests, and pyOpenSSL. For one pytest, run from
+`pytests/` so `config.json` is found:
 
-CI builds with no RPM development files, runs unit tests, lint, ABI and
-migration audits, compiles an isolated public C consumer, checks all
-installed ELF files, and executes every native smoke helper. The full
-pytest integration suite is run by the developer on a local rpm-aware
-host. There is no Docker image or RPM packaging in this repo.
+```sh
+cd pytests && pytest -v tests/test_install.py::test_install_no_arg
+```
 
-The pytest harness (`pytests/conftest.py`) sets up an HTTP repo on
-`localhost:8080`, generates RPMs from specs under `pytests/repo/`, and
-invokes the binaries from `./out/bin/` (or wherever `zig build install`
-landed). The `utils` fixture rewrites `tdnf`/`tdnf-config` commands to
-point at the build tree and injects `-c <repo_path>/tdnf.conf`
-automatically — use `utils.run([...])` rather than calling `subprocess`
-directly. A module-scoped autouse fixture
-(`check_packages_consistency`) snapshots installed packages around
-every test, so tests must clean up anything they install. Use
-`utils.run_memcheck(cmd)` for valgrind coverage.
+The pytest `utils` fixture rewrites `tdnf`/`tdnf-config` commands to the
+build tree and injects the test configuration. Use `utils.run([...])` rather
+than invoking those commands directly. Tests must remove packages they
+install because the consistency fixture checks host state.
 
-`DIST` env var (`photon` or `fedora`) is read by `conftest.py` and a
-handful of test files; some tests skip or branch on distro.
-
-The default branch for PRs is **`main`** (see CONTRIBUTING.md).
+CI builds without RPM development files, runs Debug and ReleaseSafe Zig
+tests, lint, migration and dependency audits, the external public Zig
+consumer, installed-ELF checks, and native smoke helpers. The default branch
+is `main`.
 
 ## Architecture
 
-`build.zig` composes the project from these source dirs (each used to be
-its own CMake component — the source layout is unchanged):
+`build.zig` composes private Zig modules directly into the executables:
 
-| Component | Output | Purpose |
-|---|---|---|
-| `common/` | `libcommon.a` | logging (`pr_info`/`pr_err`), memory wrappers, string utils, file locking |
-| `llconf/` | `libtdnfllconf.a` | vendored ini/config parser (`.repo` and `tdnf.conf`) |
-| `jsondump/` | `libjsondump.a` | JSON output used by `tdnf <cmd> -j` |
-| `history/` | `libtdnfhistory.a` + `tdnf-history-util` | sqlite-backed transaction history |
-| `repomd/` | (part of `libtdnf`) | native repository models, query engine, and authoritative solver |
-| `client/` | `libtdnf.so` | the public library — implements every `TDNF*` API in `include/tdnf.h` |
-| `tools/cli/` | `tdnf` + `libtdnfcli.so` | argument parsing, output formatting, subcommand dispatch |
-| `tools/config/` | `tdnf-config` | read/edit `tdnf.conf` |
-| `plugins/` | built into `libtdnf` | metalink and repository-signature modules; see `plugins/README.md` |
-| `bin/` | `tdnf-automatic` | systemd-driven auto-update script (generated from `.in` template) |
-| `pytests/` | (test only) | pytest-based integration tests |
+| Component | Purpose |
+|---|---|
+| `common/` | logging, memory wrappers, strings, file locking |
+| `llconf/` | vendored ini/config parser |
+| `jsondump/` | CLI JSON output |
+| `history/` | sqlite-backed transaction history |
+| `repomd/` | repository models, query engine, authoritative solver |
+| `rpmzig/` | RPM parsing, rpmdb, verification, transactions, scriptlets |
+| `client/` | package-manager orchestration |
+| `tools/cli/` | CLI parsing, output, and subcommand dispatch |
+| `tools/config/` | `tdnf-config` |
+| `plugins/` | built-in metalink and repository-signature modules |
 
-Dependency direction is one-way: `tools/cli` → `client` (libtdnf) →
-`repomd` → `common`. The two built-in plugins are called directly from
-the repository lifecycle.
+Dependency direction is `tools/cli` → `client` → `repomd`/`rpmzig` →
+foundational modules. Cross-component implementation dependencies use Zig
+modules registered in `build.zig`, not public C headers.
 
-Public headers live in `include/`. A component must **never** include a
-header from another component's source folder — only headers under
-`include/` are cross-component (`doc/coding-guidelines.md`). Plugins
-follow this strictly: they go through `libtdnf`'s public API only.
+The public package boundary is `b.addModule("tdnf", ...)` in `build.zig`.
+Consumers import `@import("tdnf").transaction_plan`; files under component
+directories are private.
 
-## Generated files (configure-time, `build.zig`'s `writeTemplate`)
+`abi/internal.zig` contains private transitional declarations for internal
+symbols still linked with the C calling convention. It is not installed or
+part of the public Zig module. Do not recreate an installed C header,
+pkg-config, or shared-library surface.
 
-The following files are produced from `*.h.in` templates at the start
-of every `zig build` and written **into the source tree** (gitignored).
-This matches what the prior CMake `configure_file` did and avoids the
-otherwise unsolvable "two `config.h` headers shadow each other" problem
-that an in-cache layout would create.
+## Generated files
 
-- `client/config.h` — `PACKAGE_NAME`, `VERSION`, `SYSTEM_LIBDIR`
-- `history/config.h` — `HISTORY_DB_DIR`
+`build.zig` writes `pytests/config.json`, `pytests/mount-small-cache`, and
+`bin/tdnf-automatic` into the source tree. Edit their templates, not generated
+outputs.
 
-Pkg-config files and the `tdnf-automatic` script are produced via
-`b.addConfigHeader(.autoconf_at, ...)` into the build cache, then
-installed.
+Edit the corresponding templates, not generated outputs.
 
-## Native RPM implementation (issue #137 complete)
+## Native RPM implementation
 
-`rpmzig/` is a Zig static library that owns package parsing, rpmdb
-access, OpenPGP verification, configuration, pubkey import, and the
-composed transaction executor.
-Today it exposes (via the C ABI in `rpmzig/rpmdb.h` and the
-install/erase/scriptlet/trigger engines used from
-`client/transaction.zig`):
+`rpmzig/` owns package parsing, rpmdb access, OpenPGP verification,
+configuration, pubkey import, source extraction, file install/erase,
+scriptlets, triggers, and transaction execution. The composed native
+executor is unconditional; there is no host implementation fallback.
+Multi-instance upgrades are refused explicitly.
 
-- **rpmdb reader** (T1): `tdnf_rpmdb_count_packages`,
-  `tdnf_rpmdb_iter_*`, `tdnf_rpmdb_cookie`,
-  `tdnf_rpmdb_pubkeys_*` (walks `gpg-pubkey-*` entries — the
-  imported public-key keyring).
-- **`.rpm` file parser** (T2): `tdnf_rpm_file_*` — opens a
-  `.rpm`, parses lead + signature header + main header, walks
-  the cpio payload via `std.compress.{flate,zstd,xz}`.
-- **Signature verifier** (T3): distinct consumers share the same
-  pure-Zig OpenPGP code in `rpmzig/pgp/*.zig` (see
-  plan-pure-zig-pgp.md, issue #14) — do not confuse their policies:
-  - `tdnf_rpm_file_verify_signatures_config`
-    (`rpmzig/rpmdb.zig`, → `integrity.verifySignatures`) is
-    **libtdnf's** path. `client/gpgcheck.c` calls it directly,
-    handing rpmzig an already-parsed file handle plus the complete
-    key set and retaining ownership of all files and buffers.
-  - The typed helper in `rpmzig/verify.zig` serves the standalone
-    `tdnf-rpm-verify` smoke helper (`rpmzig/verify_main.zig`) and the
-    built-in repository-metadata verifier. The latter reaches it through
-    the narrow internal `rpmzig_verify_detached_armored` bridge in
-    `rpmzig/rpmdb.zig`; no package-install path calls this helper.
-- **Composed native transaction executor** (T4, issue #117):
-  `client/transaction.zig` composes the rpmzig install,
-  rpmdb-write, file-erase, scriptlet, trigger, and pure-Zig Lua
-  engines into the sole transaction path. It runs
-  `%pretrans` once, then per-item in native order
-  `%pre`→file-install→rpmdb-write→`%post`→`%triggerin`; for
-  upgrades the old blob is torn down via
-  `%triggerun`→`%preun`→file-erase-of-old→`%postun`→`%triggerpostun`
-  (arg2 correctly = 1 while the new instance survives), and
-  finally `%posttrans` once. Multi-instance upgrades
-  (`nPriors >= 2`) are refused loudly with a clear error.
+System RPM and Lua headers, symbols, runtime loads, and link declarations
+are forbidden by `scripts/librpm-audit.py`. Host RPM commands remain
+test-only fixture generators and behavior oracles. Vendored SQLite and
+libsolv may compile C internally, but no project-owned `.c` file may be
+tracked.
 
-libtdnf uses the pure-Zig OpenPGP verifier unconditionally on the
-package-install path. Package headers and imported keys are handled by
-rpmzig. Repository metadata signatures use the same pure-Zig OpenPGP
-implementation with keys loaded from the ambient GnuPG keyring.
+Native smoke helpers are installed under `libexec/tdnf/`, including the
+rpmdb, package inspection, verification, install, erase, scriptlet, and
+trigger tools. `tdnf-test-support` is also installed there as the private
+command bridge used by pytest; a normal install must remain sufficient before
+running the integration suite.
 
-The crosscheck-only scaffolding flags used during T4 development
-(`-Drpmzig-file-install-crosscheck`, `-Drpmzig-file-erase-crosscheck`,
-`-Drpmzig-transaction-check`) and the rollback-safety
-`-Drpmzig-transaction-execute` flag (which briefly gated the composed
-native executor after PR #132 flipped it on by default) have been
-removed — their behaviours are now unconditional. Every
-`tdnf install`/`erase`/`upgrade` dispatches through the native
-executor in `client/transaction.zig`; there is no host implementation
-fallback.
+## Zig conventions
 
-Smoke-test consumers under `libexec/tdnf/`:
-`tdnf-rpmdb-count`, `tdnf-rpmdb-list`, `tdnf-rpmdb-pubkeys`,
-`tdnf-rpmdb-import-pubkeys`, `tdnf-rpmdb-write`,
-`tdnf-rpm-info`, `tdnf-rpm-files`, `tdnf-rpm-verify` (the last
-supports `--key` and `--rpmdb [root]`, using the same pure-Zig
-verification path as libtdnf), `tdnf-rpm-install`, `tdnf-rpm-erase`,
-`tdnf-rpm-trigger`, `tdnf-rpm-scriptlet`.
+- Prefer typed Zig errors for new internal APIs. Preserve existing numeric
+  `ERROR_TDNF_*` behavior where tests or CLI output expose it.
+- Allocate into locals and transfer ownership only on success.
+- Avoid broad catches and silent fallback behavior.
+- Use `common.log`/existing logging helpers rather than ad-hoc output from
+  package-manager code.
+- Match surrounding naming while converting legacy code; internal exported
+  symbols may retain `TDNF*` names until their callers are migrated.
+- Keep remaining `@cImport` declarations private and narrow. Prefer canonical
+  Zig declarations over adding another header.
 
-**Zero production librpm dependency:** system RPM headers, ABI symbols,
-version probes, and link declarations are forbidden by
-`scripts/librpm-audit.py`. Host `rpm`, `rpmkeys`, `rpmbuild`, and
-`rpmsign` remain test-only fixture tools and behavior oracles.
-`TDNFInit`/`TDNFUninit` and the legacy verbosity option remain
-ABI-compatible no-ops.
+See `doc/coding-guidelines.md`.
 
-Vendored `cataggar/zig-sqlite` is safe to import from static libraries;
-`history_lib` and `rpmzig_lib` now compile SQLite in-tree and do
-not rely on a system `-lsqlite3` link.
+## Audits
 
-## C code conventions
+Run:
 
-These are enforced by convention (and reviewed for); deviating from them
-is the most common reason for review churn. The full rules are in
-`doc/coding-guidelines.md`.
+```sh
+zig build migration-audit
+zig build dead-errdefer-audit
+zig build -Doptimize=ReleaseSafe install --prefix ./out
+zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
+```
 
-**Per-component file layout.** Inside each component:
+The migration audit permanently rejects project-owned C, public C headers,
+retired C SDK files, dynamic-library declarations, and removal of the public
+Zig module/audit. The native dependency audit validates the final install
+layout and rejects `libtdnf*`, installed headers, `.pc` files, and forbidden
+dynamic dependencies.
 
-- `includes.h` — the only header any `.c` file in the component
-  includes; it pulls in (in order) project headers, system headers,
-  dependency headers, then `defines.h`, `structs.h`, `prototypes.h`,
-  `externs.h`.
-- `defines.h` / `structs.h` / `prototypes.h` / `externs.h` —
-  definitions, structs, private function prototypes, extern globals.
-- `globals.c` — defines globals (avoid globals where possible).
+When changing libsolv-facing code, read `doc/migration-verification.md` and
+run the opt-in oracle:
 
-**Error handling.** Functions that can fail return `uint32_t`. Use the
-`BAIL_ON_TDNF_ERROR(dwError)` macro from `include/tdnf-common-defines.h`
-after each fallible call, with a single `error:` label at the bottom of
-the function (optionally paired with a `cleanup:` label). Allocate to
-locals, transfer to out-pointers only at the end of the success path.
-See `client/api.c` for the canonical pattern. Error codes are
-`ERROR_TDNF_*` from `include/tdnferror.h` (range 1000–1999); CLI-only
-codes are `ERROR_TDNFCLI_*` in `include/tdnfclierror.h`. Tests assert
-on these numeric codes directly (e.g. `assert ret['retval'] == 1001`),
-so don't renumber existing ones.
+```sh
+zig build -Dlibsolv-oracle=true libsolv-oracle-test
+```
 
-**Memory.** Allocate with `TDNFAllocateMemory` / `TDNFAllocateString`;
-typed Zig formatting uses `common.allocPrint`. The variadic
-`TDNFAllocateStringPrintf` symbol remains ABI compatibility only. Free
-with `TDNFFreeMemory` — and prefer the `TDNF_SAFE_FREE_MEMORY(p)` /
-`TDNF_SAFE_FREE_STRINGARRAY(pp)` macros, which null the pointer after
-free. All allocations are zero-initialized (calloc-style).
+Version defaults live in both `build.zig` and `build.zig.zon`.
 
-**Output / logging.** Use `pr_info`, `pr_err`, `pr_crit` (printed
-regardless of `--quiet`) and `pr_json`/`pr_jsonf` — never call
-`printf`/`fprintf` directly from library code.
+## Commits and PRs
 
-**Naming.** Public symbols are `TDNF<PascalCase>`; types are
-`TDNF_FOO` / `PTDNF_FOO` (pointer typedef). Argument prefixes follow
-Hungarian notation: `pszName` (string), `pp...` (out-pointer),
-`dwError`/`dwCount` (uint32). Match the surrounding style when editing
-existing files (CONTRIBUTING.md explicitly says: even if it feels
-weird).
-
-**Static functions.** Declared at the top of the `.c` file in the order
-they are defined; defined at the bottom of the file.
-
-## Things that bite
-
-- **If you are porting a component off `libsolv`, read
-  `doc/migration-verification.md` first.** It documents the gate's
-  blind spots (a green `libsolv-oracle-test` has shipped three real
-  bugs), how to diff two binaries without false positives, why
-  `Solv*` call-site counts are a gameable proxy, and the
-  no-silent-fallback rule. The oracle is explicitly opt-in:
-  `zig build -Dlibsolv-oracle=true libsolv-oracle-test`.
-- `client/config.h`, `history/config.h`, the plugin `config.h`s, and
-  the `.pc` files are **generated**. Edit the `.in` files, not the
-  outputs.
-- Version defaults to `default_project_version = "4.0.0"` in `build.zig`
-  and also appears in `build.zig.zon`. There is no `VERSION` file
-  anymore. Bumping requires both edits.
-- `zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix
-  ./out` scans source, dynamic dependencies, and undefined symbols.
-  `zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out`
-  compiles each installed header and links a consumer with isolated
-  package metadata. Always pass `-Doptimize=ReleaseSafe` to the audits,
-  as CI does: they inspect the installed prefix, so running them bare
-  rebuilds it as Debug and clobbers a ReleaseSafe install. `abi-audit`
-  then reports the whole vendored symbol table as newly exported,
-  because zig links `libtdnf.so` with its self-hosted ELF linker in
-  Debug builds and does not forward `--version-script` to it, silently
-  dropping `client/libtdnf.map`.
-- Plugins are off by default — set `plugins=1` in `tdnf.conf` to load
-  them, and CLI flags `--enableplugin=<glob>` /
-  `--disableplugin=<glob>` override per-plugin config
-  (`plugins/README.md`).
-- GCC-only warnings (`-Wjump-misses-init`, `-Wduplicated-cond`,
-  `-Wduplicated-branches`, `-Wlogical-op`, `-Walloc-zero`,
-  `-Wtrampolines`) were dropped during the move to `zig cc`. If a
-  GCC-only diagnostic catches a regression, prefer fixing the C code;
-  do not reintroduce the flag (clang rejects it).
-
-## Commits & PRs
-
-- Open PRs against the `main` branch.
-- Keep commits as logical units; squash fixups into the commit that
-  introduced them (CONTRIBUTING.md "Updating pull requests"). One
-  self-contained commit per merge is the rule of thumb.
+Open PRs against `main`. Keep commits as logical, independently mergeable
+units and squash fixups into the commit that introduced them.

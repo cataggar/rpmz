@@ -1,6 +1,6 @@
 //! Pure-Zig incremental checksum API (PR1 of issue #34).
 //!
-//! This module exposes a small C ABI over std.crypto so later PRs can
+//! This module exposes a small internal ABI over std.crypto so callers can
 //! swap C-side checksum verification away from OpenSSL without
 //! changing the existing `TDNF_HASH_*` call sites first.
 

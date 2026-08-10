@@ -1,11 +1,10 @@
 const std = @import("std");
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
     @cInclude("string.h");
-    @cInclude("tdnferror.h");
-    @cInclude("tdnfrepomd.h");
     @cInclude("rpmdb.h");
 });
 
@@ -107,10 +106,10 @@ const PackageView = struct {
 };
 
 const TransactionOperation = enum(u32) {
-    install = c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_INSTALL,
-    reinstall = c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_REINSTALL,
-    erase = c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE,
-    upgrade = c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_UPGRADE,
+    install = abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_INSTALL,
+    reinstall = abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_REINSTALL,
+    erase = abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE,
+    upgrade = abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_UPGRADE,
 };
 
 const TransactionInput = struct {
@@ -125,15 +124,15 @@ const TransactionInput = struct {
 };
 
 const VerifiedTransactionItems = struct {
-    items: []const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+    items: []const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     headers: []const ?[*]const u8,
     header_lengths: []const usize,
     package_sizes: []const u64,
 };
 
 const RawTransactionItems = union(enum) {
-    legacy_paths: []const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
-    paths_v2: []const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+    legacy_paths: []const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+    paths_v2: []const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     verified: VerifiedTransactionItems,
 };
 
@@ -238,12 +237,12 @@ const RepositoryBuilder = struct {
 };
 
 const ProblemKind = enum(u32) {
-    dependency = c.TDNF_REPOMD_NATIVE_PROBLEM_DEPENDENCY,
-    pretrans = c.TDNF_REPOMD_NATIVE_PROBLEM_PRETRANS,
-    conflict = c.TDNF_REPOMD_NATIVE_PROBLEM_CONFLICT,
-    obsoletes = c.TDNF_REPOMD_NATIVE_PROBLEM_OBSOLETES,
-    file_conflict = c.TDNF_REPOMD_NATIVE_PROBLEM_FILE_CONFLICT,
-    unsupported_multiple = c.TDNF_REPOMD_NATIVE_PROBLEM_UNSUPPORTED_MULTIPLE,
+    dependency = abi.TDNF_REPOMD_NATIVE_PROBLEM_DEPENDENCY,
+    pretrans = abi.TDNF_REPOMD_NATIVE_PROBLEM_PRETRANS,
+    conflict = abi.TDNF_REPOMD_NATIVE_PROBLEM_CONFLICT,
+    obsoletes = abi.TDNF_REPOMD_NATIVE_PROBLEM_OBSOLETES,
+    file_conflict = abi.TDNF_REPOMD_NATIVE_PROBLEM_FILE_CONFLICT,
+    unsupported_multiple = abi.TDNF_REPOMD_NATIVE_PROBLEM_UNSUPPORTED_MULTIPLE,
 };
 
 const NativeProblem = struct {
@@ -309,7 +308,7 @@ pub export fn TDNFRepoMdNativeTransactionLastError() [*:0]const u8 {
 }
 
 pub export fn TDNFRepoMdNativeTransactionSolve(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
     root_dir: ?[*:0]const u8,
     out_order_lines: ?*[*c][*c]u8,
@@ -331,7 +330,7 @@ pub export fn TDNFRepoMdNativeTransactionSolve(
 }
 
 pub export fn TDNFRepoMdNativeTransactionSolveV2(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
     root_dir: ?[*:0]const u8,
     out_order_lines: ?*[*c][*c]u8,
@@ -353,9 +352,9 @@ pub export fn TDNFRepoMdNativeTransactionSolveV2(
 }
 
 pub export fn TDNFRepoMdNativeTransactionSolveConfig(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
     out_problem_lines: ?*[*c][*c]u8,
@@ -375,9 +374,9 @@ pub export fn TDNFRepoMdNativeTransactionSolveConfig(
 }
 
 pub export fn TDNFRepoMdNativeTransactionSolveConfigV2(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
     out_problem_lines: ?*[*c][*c]u8,
@@ -397,10 +396,10 @@ pub export fn TDNFRepoMdNativeTransactionSolveConfigV2(
 }
 
 pub export fn TDNFRepoMdNativeTransactionPlanSolve(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    out_plan: ?*?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     return transactionPlanSolveLegacy(
         raw_items,
@@ -413,10 +412,10 @@ pub export fn TDNFRepoMdNativeTransactionPlanSolve(
 }
 
 pub export fn TDNFRepoMdNativeTransactionPlanSolveV2(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    out_plan: ?*?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     return transactionPlanSolveV2(
         raw_items,
@@ -429,10 +428,10 @@ pub export fn TDNFRepoMdNativeTransactionPlanSolveV2(
 }
 
 pub export fn TDNFRepoMdNativeTransactionPlanSolveConfig(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
-    config: ?*const c.tdnf_rpm_config,
-    out_plan: ?*?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    config: ?*const abi.tdnf_rpm_config,
+    out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     return transactionPlanSolveLegacy(
         raw_items,
@@ -445,10 +444,10 @@ pub export fn TDNFRepoMdNativeTransactionPlanSolveConfig(
 }
 
 pub export fn TDNFRepoMdNativeTransactionPlanSolveConfigV2(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
-    config: ?*const c.tdnf_rpm_config,
-    out_plan: ?*?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    config: ?*const abi.tdnf_rpm_config,
+    out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     return transactionPlanSolveV2(
         raw_items,
@@ -461,13 +460,13 @@ pub export fn TDNFRepoMdNativeTransactionPlanSolveConfigV2(
 }
 
 fn verifiedTransactionSolveConfig(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     raw_headers: ?[*]const ?[*]const u8,
     raw_header_lengths: ?[*]const usize,
     raw_package_sizes: ?[*]const u64,
     item_count: u32,
-    config: ?*const c.tdnf_rpm_config,
-    out_plan: ?*?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    config: ?*const abi.tdnf_rpm_config,
+    out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32 {
     clearError();
     const plan_out = out_plan orelse
@@ -479,7 +478,7 @@ fn verifiedTransactionSolveConfig(
     const items = if (raw_items) |ptr|
         ptr[0..item_count]
     else if (item_count == 0)
-        &[_]c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2{}
+        &[_]abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2{}
     else
         return invalidParameter("null verified transaction input", .{});
     const headers = if (raw_headers) |ptr|
@@ -521,10 +520,10 @@ comptime {
 }
 
 fn transactionSolveLegacy(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
@@ -532,7 +531,7 @@ fn transactionSolveLegacy(
     out_problem_count: ?*u32,
 ) u32 {
     return transactionSolveTyped(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
         raw_items,
         item_count,
         root_dir,
@@ -546,10 +545,10 @@ fn transactionSolveLegacy(
 }
 
 fn transactionSolveV2(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
@@ -557,7 +556,7 @@ fn transactionSolveV2(
     out_problem_count: ?*u32,
 ) u32 {
     return transactionSolveTyped(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
         raw_items,
         item_count,
         root_dir,
@@ -575,7 +574,7 @@ fn transactionSolveTyped(
     raw_items: ?[*]const Item,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
@@ -601,7 +600,7 @@ fn transactionSolveTyped(
     else
         return invalidParameter("null transaction input", .{});
     const normalized_items: RawTransactionItems =
-        if (Item == c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM)
+        if (Item == abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM)
             .{ .legacy_paths = items }
         else
             .{ .paths_v2 = items };
@@ -643,15 +642,15 @@ fn transactionSolveTyped(
 }
 
 fn transactionPlanSolveLegacy(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
-    out_plan: ?*?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     return transactionPlanSolveTyped(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
         raw_items,
         item_count,
         root_dir,
@@ -662,15 +661,15 @@ fn transactionPlanSolveLegacy(
 }
 
 fn transactionPlanSolveV2(
-    raw_items: ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+    raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
-    out_plan: ?*?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     return transactionPlanSolveTyped(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
         raw_items,
         item_count,
         root_dir,
@@ -685,9 +684,9 @@ fn transactionPlanSolveTyped(
     raw_items: ?[*]const Item,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     config_required: bool,
-    out_plan: ?*?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     clearError();
     const plan_out = out_plan orelse
@@ -703,7 +702,7 @@ fn transactionPlanSolveTyped(
     else
         return invalidParameter("null transaction input", .{});
     const normalized_items: RawTransactionItems =
-        if (Item == c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM)
+        if (Item == abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM)
             .{ .legacy_paths = items }
         else
             .{ .paths_v2 = items };
@@ -720,7 +719,7 @@ fn solveTransaction(
     arena: std.mem.Allocator,
     raw_items: RawTransactionItems,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
 ) TransactionError!SolveResult {
     const items = try normalizeTransactionItems(arena, raw_items);
     const source: installed_repository.Source = if (config) |rpm_config|
@@ -773,8 +772,8 @@ fn solveTransaction(
 fn buildOwnedPlan(
     raw_items: RawTransactionItems,
     root_dir: ?[*:0]const u8,
-    config: ?*const c.tdnf_rpm_config,
-    out_plan: *?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    config: ?*const abi.tdnf_rpm_config,
+    out_plan: *?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena_state.deinit();
@@ -792,12 +791,12 @@ fn buildOwnedPlan(
 
 fn createOwnedPlan(
     result: SolveResult,
-) TransactionError!*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN {
+) TransactionError!*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN {
     const raw_plan = c.calloc(
         1,
-        @sizeOf(c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN),
+        @sizeOf(abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN),
     ) orelse return error.OutOfMemory;
-    const plan: *c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN =
+    const plan: *abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN =
         @ptrCast(@alignCast(raw_plan));
     errdefer freeOwnedPlan(plan);
 
@@ -812,7 +811,7 @@ fn createOwnedPlan(
     if (result.priors.len != 0) {
         const raw_items = c.calloc(
             result.priors.len,
-            @sizeOf(c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN_ITEM),
+            @sizeOf(abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN_ITEM),
         ) orelse return error.OutOfMemory;
         plan.pItems = @ptrCast(@alignCast(raw_items));
     }
@@ -845,7 +844,7 @@ fn createOwnedPlan(
     if (result.problems.len != 0) {
         const raw_problems = c.calloc(
             result.problems.len,
-            @sizeOf(c.TDNF_REPOMD_NATIVE_TRANSACTION_PROBLEM),
+            @sizeOf(abi.TDNF_REPOMD_NATIVE_TRANSACTION_PROBLEM),
         ) orelse return error.OutOfMemory;
         plan.pProblems = @ptrCast(@alignCast(raw_problems));
     }
@@ -872,12 +871,12 @@ fn mapPlanBuildError(err: anyerror) TransactionError {
 }
 
 pub export fn TDNFRepoMdNativeTransactionPlanFree(
-    plan: ?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    plan: ?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) void {
     freeOwnedPlan(plan);
 }
 
-fn freeOwnedPlan(plan_raw: ?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) void {
+fn freeOwnedPlan(plan_raw: ?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) void {
     const plan = plan_raw orelse return;
     if (plan.pProblems != null) {
         for (plan.pProblems[0..plan.dwProblemCount]) |problem| {
@@ -895,89 +894,89 @@ fn freeOwnedPlan(plan_raw: ?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) void {
 
 fn invalidParameter(comptime fmt: []const u8, args: anytype) u32 {
     setError(fmt, args);
-    return c.ERROR_TDNF_INVALID_PARAMETER;
+    return abi.ERROR_TDNF_INVALID_PARAMETER;
 }
 
 fn mapTransactionError(err: anyerror) u32 {
     return switch (err) {
-        error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
+        error.OutOfMemory => abi.ERROR_TDNF_OUT_OF_MEMORY,
         error.InvalidParameter => blk: {
             if (last_error_len == 0) {
                 setError("invalid transaction input", .{});
             }
-            break :blk c.ERROR_TDNF_INVALID_PARAMETER;
+            break :blk abi.ERROR_TDNF_INVALID_PARAMETER;
         },
         error.InvalidRpmHeader => blk: {
             if (last_error_len == 0) {
                 setError("invalid rpm header", .{});
             }
-            break :blk c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED;
+            break :blk abi.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED;
         },
         error.FileNotFound => blk: {
             if (last_error_len == 0) {
                 setError("file not found", .{});
             }
-            break :blk c.ERROR_TDNF_FILE_NOT_FOUND;
+            break :blk abi.ERROR_TDNF_FILE_NOT_FOUND;
         },
         error.AccessDenied => blk: {
             if (last_error_len == 0) {
                 setError("access denied", .{});
             }
-            break :blk c.ERROR_TDNF_ACCESS_DENIED;
+            break :blk abi.ERROR_TDNF_ACCESS_DENIED;
         },
         error.NameTooLong => blk: {
             if (last_error_len == 0) {
                 setError("path too long", .{});
             }
-            break :blk c.ERROR_TDNF_NAME_TOO_LONG;
+            break :blk abi.ERROR_TDNF_NAME_TOO_LONG;
         },
         error.BadPathName => blk: {
             if (last_error_len == 0) {
                 setError("bad path", .{});
             }
-            break :blk c.ERROR_TDNF_INVALID_PARAMETER;
+            break :blk abi.ERROR_TDNF_INVALID_PARAMETER;
         },
         error.NotDir, error.IsDir => blk: {
             if (last_error_len == 0) {
                 setError("invalid directory", .{});
             }
-            break :blk c.ERROR_TDNF_INVALID_DIR;
+            break :blk abi.ERROR_TDNF_INVALID_DIR;
         },
         error.FileTooBig, error.StreamTooLong => blk: {
             if (last_error_len == 0) {
                 setError("file too large", .{});
             }
-            break :blk c.ERROR_TDNF_OVERFLOW;
+            break :blk abi.ERROR_TDNF_OVERFLOW;
         },
         error.UnsupportedCompressor, error.DecompressFailed => blk: {
             if (last_error_len == 0) {
                 setError("failed to parse rpm payload", .{});
             }
-            break :blk c.ERROR_TDNF_INVALID_REPO_FILE;
+            break :blk abi.ERROR_TDNF_INVALID_REPO_FILE;
         },
         error.FileSystemIo => blk: {
             if (last_error_len == 0) {
                 setError("filesystem io error", .{});
             }
-            break :blk c.ERROR_TDNF_FILESYS_IO;
+            break :blk abi.ERROR_TDNF_FILESYS_IO;
         },
         error.RpmDbOpenFailed => blk: {
             if (last_error_len == 0) {
-                setError("failed to open rpmdb: {s}", .{std.mem.span(c.tdnf_rpmdb_last_error())});
+                setError("failed to open rpmdb: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
             }
-            break :blk c.ERROR_TDNF_RPMTS_OPENDB_FAILED;
+            break :blk abi.ERROR_TDNF_RPMTS_OPENDB_FAILED;
         },
         error.RpmDbReadFailed => blk: {
             if (last_error_len == 0) {
-                setError("failed to read rpmdb: {s}", .{std.mem.span(c.tdnf_rpmdb_last_error())});
+                setError("failed to read rpmdb: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
             }
-            break :blk c.ERROR_TDNF_SOLV_IO;
+            break :blk abi.ERROR_TDNF_SOLV_IO;
         },
         else => blk: {
             if (last_error_len == 0) {
                 setError("native transaction failure: {t}", .{err});
             }
-            break :blk c.ERROR_TDNF_SOLV_IO;
+            break :blk abi.ERROR_TDNF_SOLV_IO;
         },
     };
 }
@@ -1022,9 +1021,9 @@ fn normalizeTransactionItems(
             for (items.items, inputs, 0..) |item, *input, index| {
                 const header_length = items.header_lengths[index];
                 const needs_header =
-                    item.dwOperation == c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_INSTALL or
-                    item.dwOperation == c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_REINSTALL or
-                    item.dwOperation == c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_UPGRADE;
+                    item.dwOperation == abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_INSTALL or
+                    item.dwOperation == abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_REINSTALL or
+                    item.dwOperation == abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_UPGRADE;
                 if (needs_header and header_length == 0) {
                     setError(
                         "verified transaction item {d} has no header bytes",
@@ -1079,10 +1078,10 @@ fn parseTransaction(
 
     for (items, 0..) |item, input_index| {
         const op = switch (item.operation) {
-            c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_INSTALL => TransactionOperation.install,
-            c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_REINSTALL => TransactionOperation.reinstall,
-            c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE => TransactionOperation.erase,
-            c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_UPGRADE => TransactionOperation.upgrade,
+            abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_INSTALL => TransactionOperation.install,
+            abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_REINSTALL => TransactionOperation.reinstall,
+            abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE => TransactionOperation.erase,
+            abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_UPGRADE => TransactionOperation.upgrade,
             else => return error.InvalidParameter,
         };
         switch (op) {
@@ -1258,7 +1257,7 @@ fn collectNativeProblems(
     final_build: FinalBuildResult,
     installed_index: *const query_index.RepositoryIndex,
     final_index: *const query_index.RepositoryIndex,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
 ) TransactionError!void {
     for (tx.added.items, 0..) |added, added_index| {
         const source_final = final_build.added_to_final[added_index];
@@ -1306,7 +1305,7 @@ fn collectAddedPackageProblems(
     installed_index: *const query_index.RepositoryIndex,
     final_index: *const query_index.RepositoryIndex,
     added_base: usize,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
 ) TransactionError!void {
     for (source.relationEntries(.requires)) |relation| {
         if (shouldSkipFinalRequire(relation)) {
@@ -1474,7 +1473,7 @@ fn collectFileConflictProblems(
     source_final_index: usize,
     final_index: *const query_index.RepositoryIndex,
     added_base: usize,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
 ) TransactionError!void {
     for (source.fileEntries()) |source_file| {
         if (source_file.kind == .dir) {
@@ -1561,13 +1560,13 @@ fn collectFileConflictProblems(
 
 fn canonicalPathForTransaction(
     arena: std.mem.Allocator,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const abi.tdnf_rpm_config,
     path: []const u8,
 ) TransactionError![]const u8 {
     const cfg = config orelse return path;
     const path_z = try arena.dupeZ(u8, path);
     var output: [4096]u8 = undefined;
-    if (c.tdnf_rpm_canonical_path_config(
+    if (abi.tdnf_rpm_canonical_path_config(
         cfg,
         path_z.ptr,
         &output,
@@ -2230,8 +2229,8 @@ test "verified transaction input never reopens diagnostic path" {
 
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
-    const raw_items = [_]c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2{.{
-        .dwOperation = c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_INSTALL,
+    const raw_items = [_]abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2{.{
+        .dwOperation = abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_INSTALL,
         .pszPath = "/path/replaced-after-verification.rpm",
         .pszName = "verified-package",
         .pszEVR = "1.0-1",
@@ -2320,7 +2319,7 @@ test "duplicate NEVRA erases map and validate by exact rpmdb hnum" {
     };
 
     const second_only = [_]TransactionInput{.{
-        .operation = c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE,
+        .operation = abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE,
         .path = null,
         .name = "duplicate-provider",
         .evr = "1.0-1",
@@ -2334,7 +2333,7 @@ test "duplicate NEVRA erases map and validate by exact rpmdb hnum" {
 
     const both = [_]TransactionInput{
         .{
-            .operation = c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE,
+            .operation = abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE,
             .path = null,
             .name = "duplicate-provider",
             .evr = "1.0-1",
@@ -2342,7 +2341,7 @@ test "duplicate NEVRA erases map and validate by exact rpmdb hnum" {
             .rpmdb_hnum = 73,
         },
         .{
-            .operation = c.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE,
+            .operation = abi.TDNF_REPOMD_NATIVE_TRANSACTION_OP_ERASE,
             .path = null,
             .name = "duplicate-provider",
             .evr = "1.0-1",
@@ -2760,14 +2759,14 @@ test "native transaction detects conflicts across trusted root aliases" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const config = c.tdnf_rpm_config_create("/") orelse
+    const config = abi.tdnf_rpm_config_create("/") orelse
         return error.TestUnexpectedResult;
-    defer c.tdnf_rpm_config_destroy(config);
+    defer abi.tdnf_rpm_config_destroy(config);
     // Only hosts that merged /lib into /usr/lib, with both owned by the same
     // uid as /, have the alias this covers. Everywhere else canonicalization
     // refuses the path rather than resolving it somewhere else.
     var canonical_buf: [4096]u8 = undefined;
-    if (c.tdnf_rpm_canonical_path_config(
+    if (abi.tdnf_rpm_canonical_path_config(
         config,
         "/lib/alias-conflict",
         &canonical_buf,

@@ -7,7 +7,6 @@
 #
 
 import glob
-import ctypes
 import os
 import platform
 import pytest
@@ -276,40 +275,19 @@ def test_source_extraction_uses_retained_handle_after_path_replaced(utils):
     name = 'tdnf-phase6-retained'
     path = build_source_rpm(name)
     target = os.path.join(RPMBUILD_DIR, 'retained')
-    library = ctypes.CDLL(os.path.join(REPO_ROOT, 'out', 'lib', 'libtdnf.so'))
-    library.tdnf_rpm_file_open.argtypes = [ctypes.c_char_p]
-    library.tdnf_rpm_file_open.restype = ctypes.c_void_p
-    library.tdnf_rpm_file_close.argtypes = [ctypes.c_void_p]
-    library.tdnf_rpm_config_create.argtypes = [ctypes.c_char_p]
-    library.tdnf_rpm_config_create.restype = ctypes.c_void_p
-    library.tdnf_rpm_config_destroy.argtypes = [ctypes.c_void_p]
-    library.tdnf_rpm_config_apply_define.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_char_p,
-    ]
-    library.tdnf_rpm_file_extract_source_config.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-    ]
-
-    handle = library.tdnf_rpm_file_open(os.fsencode(path))
-    assert handle
-    config = library.tdnf_rpm_config_create(b'/')
-    assert config
-    try:
-        define = '_topdir {}'.format(target).encode()
-        assert library.tdnf_rpm_config_apply_define(config, define) == 0
-        os.replace(path, path + '.verified')
-        with open(path, 'wb') as replacement:
-            replacement.write(b'not an rpm')
-
-        assert library.tdnf_rpm_file_extract_source_config(
-            handle, config, 0) == 0
-        assert os.path.isfile(os.path.join(
-            target, 'SPECS', name + '.spec'))
-        assert os.path.isfile(os.path.join(
-            target, 'SOURCES', name + '.source'))
-    finally:
-        library.tdnf_rpm_config_destroy(config)
-        library.tdnf_rpm_file_close(handle)
+    completed = subprocess.run(
+        [
+            utils.config['test_support_binary'],
+            'retained-source',
+            path,
+            target,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert os.path.isfile(os.path.join(
+        target, 'SPECS', name + '.spec'))
+    assert os.path.isfile(os.path.join(
+        target, 'SOURCES', name + '.source'))

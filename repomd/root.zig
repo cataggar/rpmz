@@ -1,10 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("tdnferror.h");
-    @cInclude("tdnfrepomd.h");
-});
+const abi = @import("tdnf_internal_abi");
 const model = @import("model.zig");
 const repomd = @import("repomd.zig");
 
@@ -40,9 +36,7 @@ pub const solver_search = @import("solver_search.zig");
 pub const solver_diag = @import("solver_diag.zig");
 pub const directory_repository = @import("directory_repository.zig");
 
-const c_header = if (builtin.is_test) @cImport({
-    @cInclude("tdnfrepomd.h");
-}) else struct {};
+const c_header = if (builtin.is_test) abi else struct {};
 
 pub const TDNF_REPOMD_DOC = opaque {};
 pub const TDNF_REPOMD_CHECKSUM = model.Checksum;
@@ -82,7 +76,7 @@ pub export fn TDNFRepoMdLastError() [*:0]const u8 {
 }
 
 pub export fn TDNFRepoMdNativeSolverResultFree(
-    result: ?*c.TDNF_REPOMD_NATIVE_SOLVER_RESULT,
+    result: ?*abi.TDNF_REPOMD_NATIVE_SOLVER_RESULT,
 ) void {
     solver_result_c.freeOwnedResult(@ptrCast(result));
 }
@@ -91,13 +85,13 @@ pub export fn TDNFRepoMdNativeSolverResultFree(
 /// repository metadata and the rpmdb. The caller owns `*ppSolved` and releases
 /// it with `TDNFFreeSolvedPackageInfo`.
 pub export fn TDNFRepoMdNativeSolverLiveSolve(
-    raw_repositories: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
+    raw_repositories: ?[*]const abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
     repository_count: u32,
-    raw_jobs: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    raw_jobs: ?[*]const abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
     job_count: u32,
-    raw_erase_jobs: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    raw_erase_jobs: ?[*]const abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
     erase_job_count: u32,
-    raw_hidden_available: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    raw_hidden_available: ?[*]const abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
     hidden_available_count: u32,
     all_deps: c_int,
     best: c_int,
@@ -116,28 +110,28 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
     raw_user_installed_names: ?[*:null]const ?[*:0]const u8,
     raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
     reinstall: c_int,
-    rpm_config: ?*const c.tdnf_rpm_config,
+    rpm_config: ?*const abi.tdnf_rpm_config,
     raw_native_arch: ?[*:0]const u8,
     prepare_only: c_int,
     refute_unsat: c_int,
-    solved: ?*c.PTDNF_SOLVED_PKG_INFO,
+    solved: ?*abi.PTDNF_SOLVED_PKG_INFO,
     handle: ?*?*anyopaque,
 ) u32 {
     if (handle) |slot| slot.* = null;
     if (prepare_only != 0 and refute_unsat != 0) {
         clearError();
         setError("native live solve cannot prepare and refute at once", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     if ((prepare_only != 0 or refute_unsat != 0) and handle == null) {
         clearError();
         setError("native live terminal capture discards its only output", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     if (prepare_only == 0 and refute_unsat == 0 and solved == null) {
         clearError();
         setError("null native live solve output", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     return nativeSolverLiveSolve(
         repository_count,
@@ -297,14 +291,14 @@ fn refutedRenderError(err: solver_diag.RenderError) u32 {
     switch (err) {
         error.OutOfMemory => {
             setError("out of memory rendering solver diagnostics", .{});
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         },
         error.InvalidInput, error.UnsupportedProblem => {
             // No silent fallback: a problem the native renderer cannot turn
             // into libsolv's text is a hard failure, not a reason to defer to
             // libsolv.
             setError("unable to render native solver diagnostics", .{});
-            return c.ERROR_TDNF_SOLV_FAILED;
+            return abi.ERROR_TDNF_SOLV_FAILED;
         },
     }
 }
@@ -320,23 +314,22 @@ pub export fn TDNFRepoMdNativeSolverRefutedProblemCount(
     clearError();
     const count_out = out_count orelse {
         setError("null refuted problem count output", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     count_out.* = 0;
     const refuted = handleToRefuted(handle) orelse {
         setError("handle does not retain refuted diagnostics", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     const rendered = refutedEnsureRendered(refuted) catch |err| return refutedRenderError(err);
     count_out.* = std.math.cast(u32, rendered.items.len) orelse {
         setError("refuted problem count overflow", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     return 0;
 }
 
-// TDNF_SKIPPROBLEM_TYPE bits from include/tdnftypes.h. Kept local because that
-// header is not part of the tdnfrepomd.h cImport surface.
+// TDNF_SKIPPROBLEM_TYPE bits retained by the private client ABI.
 const skipproblem_conflicts: u32 = 0x01;
 const skipproblem_obsoletes: u32 = 0x02;
 const skipproblem_disabled: u32 = 0x04;
@@ -473,23 +466,23 @@ pub export fn TDNFRepoMdNativeSolverRefutedProblem(
     clearError();
     const message_out = out_message orelse {
         setError("null refuted problem message output", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     message_out.* = null;
     const reported_out = out_reported orelse {
         setError("null refuted problem reported output", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     reported_out.* = 0;
     const refuted = handleToRefuted(handle) orelse {
         setError("handle does not retain refuted diagnostics", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     const rendered = refutedEnsureRendered(refuted) catch |err| return refutedRenderError(err);
     const items = rendered.items;
     if (index_arg >= items.len) {
         setError("refuted problem index out of range", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     message_out.* = items[index_arg].message.ptr;
     reported_out.* = if (refutedProblemReported(
@@ -532,23 +525,23 @@ fn checkLocalPrepareError(
                 "unable to read the check-local directory: {s}",
                 .{@tagName(@as(std.posix.E, @enumFromInt(errno_value)))},
             );
-            return @intCast(c.ERROR_TDNF_SYSTEM_BASE + errno_value);
+            return @intCast(abi.ERROR_TDNF_SYSTEM_BASE + errno_value);
         },
         error.OutOfMemory => {
             setError("out of memory reading the check-local directory", .{});
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         },
         error.RpmFileOpenFailed => {
             setError("unreadable rpm file in the check-local directory", .{});
-            return c.ERROR_TDNF_INVALID_REPO_FILE;
+            return abi.ERROR_TDNF_INVALID_REPO_FILE;
         },
         error.InvalidRpmHeader => {
             setError("invalid rpm header in the check-local directory", .{});
-            return c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED;
+            return abi.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED;
         },
         else => {
             setError("native check-local universe unavailable: {t}", .{err});
-            return c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+            return abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
         },
     }
 }
@@ -575,21 +568,21 @@ pub export fn TDNFRepoMdNativeSolverCheckLocal(
     if (out_error_path) |out| out.* = null;
     const count_out = out_count orelse {
         setError("null check-local package count output", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     count_out.* = 0;
     const handle_out = out_handle orelse {
         setError("null check-local diagnostics output", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     handle_out.* = null;
     const directory = spanRequired(raw_directory) orelse {
         setError("null check-local directory", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     const native_arch = spanRequired(raw_native_arch) orelse {
         setError("null check-local architecture", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
 
     const allocator = std.heap.c_allocator;
@@ -601,7 +594,7 @@ pub export fn TDNFRepoMdNativeSolverCheckLocal(
     count_out.* = std.math.cast(u32, prepared.universe.packages.len) orelse {
         prepared.deinit();
         setError("check-local package count overflow", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
 
     // libsolv set SOLVER_FLAG_ALLOW_UNINSTALL on this solve; every other flag
@@ -637,9 +630,9 @@ pub export fn TDNFRepoMdNativeSolverCheckLocal(
         prepared.deinit();
         setError("native check-local solve unavailable: {t}", .{err});
         return if (err == error.OutOfMemory)
-            c.ERROR_TDNF_OUT_OF_MEMORY
+            abi.ERROR_TDNF_OUT_OF_MEMORY
         else
-            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+            abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
     }
 
     // The request is unsatisfiable, which is the only case that produces
@@ -654,9 +647,9 @@ pub export fn TDNFRepoMdNativeSolverCheckLocal(
         prepared.deinit();
         setError("native check-local diagnostics unavailable: {t}", .{err});
         return if (err == error.OutOfMemory)
-            c.ERROR_TDNF_OUT_OF_MEMORY
+            abi.ERROR_TDNF_OUT_OF_MEMORY
         else
-            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+            abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
     };
     const job_origins = refutedJobOrigins(
         &prepared,
@@ -666,15 +659,15 @@ pub export fn TDNFRepoMdNativeSolverCheckLocal(
         prepared.deinit();
         setError("native check-local job origins unavailable: {t}", .{err});
         return if (err == error.OutOfMemory)
-            c.ERROR_TDNF_OUT_OF_MEMORY
+            abi.ERROR_TDNF_OUT_OF_MEMORY
         else
-            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+            abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
     };
     const owned = allocator.create(RetainedSolve) catch {
         refutation.deinit();
         prepared.deinit();
         setError("out of memory retaining check-local diagnostics", .{});
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
     var refuted = RefutedSolve.init(prepared, refutation, job_origins);
     // The sack check-local filtered against held no available packages.
@@ -686,11 +679,11 @@ pub export fn TDNFRepoMdNativeSolverCheckLocal(
 
 fn nativeSolverLiveSolve(
     repository_count: u32,
-    raw_jobs: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    raw_jobs: ?[*]const abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
     job_count: u32,
-    raw_erase_jobs: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    raw_erase_jobs: ?[*]const abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
     erase_job_count: u32,
-    raw_hidden_available: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    raw_hidden_available: ?[*]const abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
     hidden_available_count: u32,
     all_deps: bool,
     best: bool,
@@ -698,7 +691,7 @@ fn nativeSolverLiveSolve(
     skip_broken: bool,
     allow_erasing: bool,
     raw_protected_names: ?[*:null]const ?[*:0]const u8,
-    rpm_config: ?*const c.tdnf_rpm_config,
+    rpm_config: ?*const abi.tdnf_rpm_config,
     raw_native_arch: ?[*:0]const u8,
     update_all: bool,
     dist_sync_all: bool,
@@ -709,40 +702,40 @@ fn nativeSolverLiveSolve(
     installonly_limit: u32,
     raw_user_installed_names: ?[*:null]const ?[*:0]const u8,
     raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
-    raw_repositories: ?[*]const c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
+    raw_repositories: ?[*]const abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
     reinstall: bool,
     prepare_only: bool,
     refute_unsat: bool,
-    solved: ?*c.PTDNF_SOLVED_PKG_INFO,
+    solved: ?*abi.PTDNF_SOLVED_PKG_INFO,
     handle: ?*?*anyopaque,
 ) u32 {
     clearError();
     if (solved) |output| output.* = null;
     if (repository_count != 0 and raw_repositories == null) {
         setError("null native live repositories", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     if (job_count != 0 and raw_jobs == null) {
         setError("null native live jobs", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     if (erase_job_count != 0 and raw_erase_jobs == null) {
         setError("null native live erase jobs", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     const config = rpm_config orelse {
         setError("null native live rpm configuration", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     const native_arch = if (raw_native_arch) |value|
         std.mem.span(value)
     else {
         setError("null native live architecture", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     if (native_arch.len == 0) {
         setError("empty native live architecture", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     const allocator = std.heap.c_allocator;
     const protected_names = namesFromC(
@@ -755,11 +748,11 @@ fn nativeSolverLiveSolve(
                     "out of memory translating protected package names",
                     .{},
                 );
-                break :blk c.ERROR_TDNF_OUT_OF_MEMORY;
+                break :blk abi.ERROR_TDNF_OUT_OF_MEMORY;
             },
             error.InvalidInput => blk: {
                 setError("invalid protected package name", .{});
-                break :blk c.ERROR_TDNF_INVALID_PARAMETER;
+                break :blk abi.ERROR_TDNF_INVALID_PARAMETER;
             },
         };
     };
@@ -771,11 +764,11 @@ fn nativeSolverLiveSolve(
         return switch (err) {
             error.OutOfMemory => blk: {
                 setError("out of memory translating locked package names", .{});
-                break :blk c.ERROR_TDNF_OUT_OF_MEMORY;
+                break :blk abi.ERROR_TDNF_OUT_OF_MEMORY;
             },
             error.InvalidInput => blk: {
                 setError("invalid locked package name", .{});
-                break :blk c.ERROR_TDNF_INVALID_PARAMETER;
+                break :blk abi.ERROR_TDNF_INVALID_PARAMETER;
             },
         };
     };
@@ -790,11 +783,11 @@ fn nativeSolverLiveSolve(
                     "out of memory translating install-only package names",
                     .{},
                 );
-                break :blk c.ERROR_TDNF_OUT_OF_MEMORY;
+                break :blk abi.ERROR_TDNF_OUT_OF_MEMORY;
             },
             error.InvalidInput => blk: {
                 setError("invalid install-only package name", .{});
-                break :blk c.ERROR_TDNF_INVALID_PARAMETER;
+                break :blk abi.ERROR_TDNF_INVALID_PARAMETER;
             },
         };
     };
@@ -807,11 +800,11 @@ fn nativeSolverLiveSolve(
                         "out of memory translating user-installed package names",
                         .{},
                     );
-                    break :blk c.ERROR_TDNF_OUT_OF_MEMORY;
+                    break :blk abi.ERROR_TDNF_OUT_OF_MEMORY;
                 },
                 error.InvalidInput => blk: {
                     setError("invalid user-installed package name", .{});
-                    break :blk c.ERROR_TDNF_INVALID_PARAMETER;
+                    break :blk abi.ERROR_TDNF_INVALID_PARAMETER;
                 },
             };
         }
@@ -823,7 +816,7 @@ fn nativeSolverLiveSolve(
         repository_count,
     ) catch {
         setError("out of memory translating native live repositories", .{});
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
     defer allocator.free(repositories);
     if (raw_repositories) |repositories_ptr| {
@@ -835,7 +828,7 @@ fn nativeSolverLiveSolve(
             repository.* = .{
                 .id = spanRequired(raw.pszId) orelse {
                     setError("invalid native live repository id", .{});
-                    return c.ERROR_TDNF_INVALID_PARAMETER;
+                    return abi.ERROR_TDNF_INVALID_PARAMETER;
                 },
                 // A directory-backed repository has no metadata cache, so
                 // pszCacheDir is expected to be absent for exactly those.
@@ -844,7 +837,7 @@ fn nativeSolverLiveSolve(
                 else
                     spanRequired(raw.pszCacheDir) orelse {
                         setError("invalid native live repository cache", .{});
-                        return c.ERROR_TDNF_INVALID_PARAMETER;
+                        return abi.ERROR_TDNF_INVALID_PARAMETER;
                     },
                 .rpm_directory = rpm_directory,
                 .snapshot_file = spanOptional(raw.pszSnapshotFile),
@@ -858,14 +851,14 @@ fn nativeSolverLiveSolve(
         job_count,
     ) catch {
         setError("out of memory translating native live jobs", .{});
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
     defer allocator.free(jobs);
     if (raw_jobs) |jobs_ptr| {
         for (jobs_ptr[0..job_count], jobs) |raw, *job| {
             job.* = liveJobFromC(raw) orelse {
                 setError("invalid native live job selector", .{});
-                return c.ERROR_TDNF_INVALID_PARAMETER;
+                return abi.ERROR_TDNF_INVALID_PARAMETER;
             };
         }
     }
@@ -876,7 +869,7 @@ fn nativeSolverLiveSolve(
                 "out of memory translating native live command-line paths",
                 .{},
             );
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         };
         for (paths_ptr[0..job_count], paths) |raw, *path| {
             path.* = if (raw) |value| std.mem.span(value) else null;
@@ -890,27 +883,27 @@ fn nativeSolverLiveSolve(
         erase_job_count,
     ) catch {
         setError("out of memory translating native live erase jobs", .{});
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
     defer allocator.free(erase_jobs);
     if (raw_erase_jobs) |erase_jobs_ptr| {
         for (erase_jobs_ptr[0..erase_job_count], erase_jobs) |raw, *job| {
             job.* = liveEraseJobFromC(raw) orelse {
                 setError("invalid native live erase job selector", .{});
-                return c.ERROR_TDNF_INVALID_PARAMETER;
+                return abi.ERROR_TDNF_INVALID_PARAMETER;
             };
         }
     }
     if (hidden_available_count != 0 and raw_hidden_available == null) {
         setError("null native live hidden available packages", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     const hidden_available = allocator.alloc(
         solver_live.JobInput,
         hidden_available_count,
     ) catch {
         setError("out of memory translating native live visibility", .{});
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
     defer allocator.free(hidden_available);
     if (raw_hidden_available) |hidden_ptr| {
@@ -920,7 +913,7 @@ fn nativeSolverLiveSolve(
         | {
             item.* = liveJobFromC(raw) orelse {
                 setError("invalid native live hidden package selector", .{});
-                return c.ERROR_TDNF_INVALID_PARAMETER;
+                return abi.ERROR_TDNF_INVALID_PARAMETER;
             };
         }
     }
@@ -928,7 +921,7 @@ fn nativeSolverLiveSolve(
     const locked_queue_pairs = if (raw_locked_queue_pairs) |pairs| blk: {
         const values = allocator.alloc(?u32, locked_names.len) catch {
             setError("out of memory translating lock queue pairs", .{});
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         };
         for (pairs[0..locked_names.len], values) |pair, *value| {
             value.* = pair;
@@ -967,14 +960,14 @@ fn nativeSolverLiveSolve(
         var prepared = solver_live.prepare(allocator, solver_input) catch |err| {
             setError("native live prepare unavailable: {t}", .{err});
             return if (err == error.OutOfMemory)
-                c.ERROR_TDNF_OUT_OF_MEMORY
+                abi.ERROR_TDNF_OUT_OF_MEMORY
             else
-                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+                abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
         };
         const owned = allocator.create(RetainedSolve) catch {
             prepared.deinit();
             setError("out of memory retaining the native live universe", .{});
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         };
         owned.* = .{ .prepared = prepared };
         handle.?.* = @ptrCast(owned);
@@ -985,9 +978,9 @@ fn nativeSolverLiveSolve(
         var prepared = solver_live.prepare(allocator, solver_input) catch |err| {
             setError("native live refute prepare unavailable: {t}", .{err});
             return if (err == error.OutOfMemory)
-                c.ERROR_TDNF_OUT_OF_MEMORY
+                abi.ERROR_TDNF_OUT_OF_MEMORY
             else
-                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+                abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
         };
         var refutation = solver_native.refuteProjectedWithEffectiveJobs(
             allocator,
@@ -1009,9 +1002,9 @@ fn nativeSolverLiveSolve(
             prepared.deinit();
             setError("native live refute unavailable: {t}", .{err});
             return if (err == error.OutOfMemory)
-                c.ERROR_TDNF_OUT_OF_MEMORY
+                abi.ERROR_TDNF_OUT_OF_MEMORY
             else
-                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+                abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
         };
         const job_origins = refutedJobOrigins(
             &prepared,
@@ -1021,15 +1014,15 @@ fn nativeSolverLiveSolve(
             prepared.deinit();
             setError("native live refute job origins unavailable: {t}", .{err});
             return if (err == error.OutOfMemory)
-                c.ERROR_TDNF_OUT_OF_MEMORY
+                abi.ERROR_TDNF_OUT_OF_MEMORY
             else
-                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+                abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
         };
         const owned = allocator.create(RetainedSolve) catch {
             refutation.deinit();
             prepared.deinit();
             setError("out of memory retaining the native live refutation", .{});
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         };
         owned.* = .{
             .refuted = RefutedSolve.init(prepared, refutation, job_origins),
@@ -1040,7 +1033,7 @@ fn nativeSolverLiveSolve(
 
     const output = solved orelse {
         setError("null native live solve output", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     var solve = solver_live.produce(allocator, solver_input) catch |err| switch (err) {
         // Outcomes tdnf models with error codes of its own rather than solver
@@ -1048,15 +1041,15 @@ fn nativeSolverLiveSolve(
         // the diagnostic empty, which is what tells `TDNFGoalSolveNative` not
         // to print a `native-solver:` line for them: the caller renders each
         // one itself, in the wording the corresponding libsolv check used.
-        error.Unsatisfiable => return c.ERROR_TDNF_SOLV_FAILED,
-        error.ProtectedPackage => return c.ERROR_TDNF_PROTECTED,
-        error.InstallonlyLimit => return c.ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED,
+        error.Unsatisfiable => return abi.ERROR_TDNF_SOLV_FAILED,
+        error.ProtectedPackage => return abi.ERROR_TDNF_PROTECTED,
+        error.InstallonlyLimit => return abi.ERROR_TDNF_INSTALLONLY_LIMIT_EXCEEDED,
         else => {
             setError("native live solve unavailable: {t}", .{err});
             return if (err == error.OutOfMemory)
-                c.ERROR_TDNF_OUT_OF_MEMORY
+                abi.ERROR_TDNF_OUT_OF_MEMORY
             else
-                c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+                abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
         },
     };
     // A caller asking for the handle snapshots the solve after this returns,
@@ -1066,7 +1059,7 @@ fn nativeSolverLiveSolve(
         const owned = allocator.create(RetainedSolve) catch {
             solve.deinit();
             setError("out of memory retaining the native live solve", .{});
-            return c.ERROR_TDNF_OUT_OF_MEMORY;
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
         };
         owned.* = .{ .solved = solve };
         retained = owned;
@@ -1087,9 +1080,9 @@ fn nativeSolverLiveSolve(
         }
         setError("native live solve unavailable: {t}", .{err});
         return if (err == error.OutOfMemory)
-            c.ERROR_TDNF_OUT_OF_MEMORY
+            abi.ERROR_TDNF_OUT_OF_MEMORY
         else
-            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+            abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
     };
     defer solver_result_c.freeOwnedResult(native);
     solver_legacy_result.build(
@@ -1105,9 +1098,9 @@ fn nativeSolverLiveSolve(
         }
         setError("native live solve result unavailable: {t}", .{err});
         return if (err == error.OutOfMemory)
-            c.ERROR_TDNF_OUT_OF_MEMORY
+            abi.ERROR_TDNF_OUT_OF_MEMORY
         else
-            c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+            abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
     };
     if (handle) |slot| slot.* = @ptrCast(retained);
     return 0;
@@ -1133,7 +1126,7 @@ fn namesFromC(
 }
 
 fn liveJobFromC(
-    raw: c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    raw: abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
 ) ?solver_live.JobInput {
     const checksum = if (raw.pszChecksumType == null and
         raw.pszChecksumValue == null)
@@ -1164,7 +1157,7 @@ fn liveJobFromC(
 }
 
 fn liveEraseJobFromC(
-    raw: c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+    raw: abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
 ) ?solver_live.EraseJobInput {
     const job = liveJobFromC(raw) orelse return null;
     if (job.selector.checksum != null or
@@ -1199,17 +1192,17 @@ pub export fn TDNFRepoMdParseBuffer(
 
     const doc_out = out_doc orelse {
         setError("null output document", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     doc_out.* = null;
 
     const data_ptr = buf orelse {
         setError("null repomd buffer", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     if (len == 0) {
         setError("empty repomd buffer", .{});
-        return c.ERROR_TDNF_INVALID_REPO_FILE;
+        return abi.ERROR_TDNF_INVALID_REPO_FILE;
     }
 
     return parseIntoDoc(data_ptr[0..len], doc_out);
@@ -1223,18 +1216,18 @@ pub export fn TDNFRepoMdParseFile(
 
     const doc_out = out_doc orelse {
         setError("null output document", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     doc_out.* = null;
 
     const path_ptr = path orelse {
         setError("null repomd path", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     const path_slice = std.mem.span(path_ptr);
     if (path_slice.len == 0) {
         setError("empty repomd path", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     var io_state: std.Io.Threaded = .init(std.heap.c_allocator, .{});
@@ -1286,7 +1279,7 @@ pub export fn TDNFRepoMdGetRecord(
 fn parseIntoDoc(data: []const u8, out_doc: *?*TDNF_REPOMD_DOC) u32 {
     const state = std.heap.c_allocator.create(DocState) catch {
         setError("out of memory", .{});
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
     state.* = .{
         .arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator),
@@ -1297,11 +1290,11 @@ fn parseIntoDoc(data: []const u8, out_doc: *?*TDNF_REPOMD_DOC) u32 {
         return switch (err) {
             error.InvalidRepoMd => blk: {
                 setError("invalid repomd.xml", .{});
-                break :blk c.ERROR_TDNF_INVALID_REPO_FILE;
+                break :blk abi.ERROR_TDNF_INVALID_REPO_FILE;
             },
             error.OutOfMemory => blk: {
                 setError("out of memory", .{});
-                break :blk c.ERROR_TDNF_OUT_OF_MEMORY;
+                break :blk abi.ERROR_TDNF_OUT_OF_MEMORY;
             },
         };
     };
@@ -1314,16 +1307,16 @@ fn parseIntoDoc(data: []const u8, out_doc: *?*TDNF_REPOMD_DOC) u32 {
 
 fn mapFileError(err: anyerror) u32 {
     return switch (err) {
-        error.FileNotFound => c.ERROR_TDNF_FILE_NOT_FOUND,
-        error.AccessDenied => c.ERROR_TDNF_ACCESS_DENIED,
-        error.NameTooLong => c.ERROR_TDNF_NAME_TOO_LONG,
-        error.BadPathName => c.ERROR_TDNF_INVALID_PARAMETER,
-        error.NotDir => c.ERROR_TDNF_INVALID_DIR,
-        error.IsDir => c.ERROR_TDNF_INVALID_DIR,
-        error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
-        error.FileTooBig => c.ERROR_TDNF_OVERFLOW,
-        error.StreamTooLong => c.ERROR_TDNF_OVERFLOW,
-        else => c.ERROR_TDNF_FILESYS_IO,
+        error.FileNotFound => abi.ERROR_TDNF_FILE_NOT_FOUND,
+        error.AccessDenied => abi.ERROR_TDNF_ACCESS_DENIED,
+        error.NameTooLong => abi.ERROR_TDNF_NAME_TOO_LONG,
+        error.BadPathName => abi.ERROR_TDNF_INVALID_PARAMETER,
+        error.NotDir => abi.ERROR_TDNF_INVALID_DIR,
+        error.IsDir => abi.ERROR_TDNF_INVALID_DIR,
+        error.OutOfMemory => abi.ERROR_TDNF_OUT_OF_MEMORY,
+        error.FileTooBig => abi.ERROR_TDNF_OVERFLOW,
+        error.StreamTooLong => abi.ERROR_TDNF_OVERFLOW,
+        else => abi.ERROR_TDNF_FILESYS_IO,
     };
 }
 
@@ -1437,7 +1430,7 @@ test "native live solve wrapper rejects a null output" {
     );
 
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_INVALID_PARAMETER),
+        @as(u32, abi.ERROR_TDNF_INVALID_PARAMETER),
         result,
     );
 }
@@ -1478,13 +1471,13 @@ test "native live prepare rejects a request with nowhere to put the handle" {
     );
 
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_INVALID_PARAMETER),
+        @as(u32, abi.ERROR_TDNF_INVALID_PARAMETER),
         result,
     );
 }
 
 test "translates exact installed erase selectors" {
-    var raw = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB);
+    var raw = std.mem.zeroes(abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB);
     raw.pszRepository = "@System";
     raw.pszName = "installed";
     raw.pszVersion = "1";
@@ -1499,7 +1492,7 @@ test "translates exact installed erase selectors" {
 }
 
 test "carries the job queue pair across the C translation" {
-    var raw = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB);
+    var raw = std.mem.zeroes(abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB);
     raw.pszRepository = "@System";
     raw.pszName = "installed";
     raw.pszVersion = "1";
@@ -1585,7 +1578,7 @@ test "parses repomd records with revision checksums sizes and database versions"
 
     const primary = TDNFRepoMdGetRecord(parsed, 0) orelse return error.TestExpectedEqual;
     try expectOptionalString("primary", primary.pszType);
-    try testing.expectEqual(@as(u32, c.TDNF_REPOMD_RECORD_KIND_PRIMARY), primary.dwKind);
+    try testing.expectEqual(@as(u32, abi.TDNF_REPOMD_RECORD_KIND_PRIMARY), primary.dwKind);
     try expectOptionalString("repodata/primary.xml.zst", primary.pszLocationHref);
     try expectOptionalString("sha256", primary.checksum.pszType);
     try expectOptionalString("62f84034", primary.checksum.pszValue);
@@ -1601,12 +1594,12 @@ test "parses repomd records with revision checksums sizes and database versions"
 
     const updateinfo = TDNFRepoMdGetRecord(parsed, 1) orelse return error.TestExpectedEqual;
     try expectOptionalString("updateinfo-1", updateinfo.pszType);
-    try testing.expectEqual(@as(u32, c.TDNF_REPOMD_RECORD_KIND_UPDATEINFO), updateinfo.dwKind);
+    try testing.expectEqual(@as(u32, abi.TDNF_REPOMD_RECORD_KIND_UPDATEINFO), updateinfo.dwKind);
     try expectOptionalString("repodata/updateinfo-1.xml.zst", updateinfo.pszLocationHref);
 
     const primary_db = TDNFRepoMdGetRecord(parsed, 2) orelse return error.TestExpectedEqual;
     try expectOptionalString("primary_db", primary_db.pszType);
-    try testing.expectEqual(@as(u32, c.TDNF_REPOMD_RECORD_KIND_UNKNOWN), primary_db.dwKind);
+    try testing.expectEqual(@as(u32, abi.TDNF_REPOMD_RECORD_KIND_UNKNOWN), primary_db.dwKind);
     try testing.expectEqual(@as(c_int, 1), primary_db.nHasDatabaseVersion);
     try testing.expectEqual(@as(u64, 10), primary_db.nDatabaseVersion);
 }
@@ -1635,7 +1628,7 @@ test "rejects missing required repomd fields" {
     for (cases) |case| {
         var doc: ?*TDNF_REPOMD_DOC = null;
         const rc = TDNFRepoMdParseBuffer(case.xml.ptr, case.xml.len, &doc);
-        try testing.expectEqual(@as(u32, c.ERROR_TDNF_INVALID_REPO_FILE), rc);
+        try testing.expectEqual(@as(u32, abi.ERROR_TDNF_INVALID_REPO_FILE), rc);
         try testing.expect(doc == null);
     }
 }
@@ -1653,7 +1646,7 @@ test "rejects malformed repomd xml" {
     for (cases) |xml| {
         var doc: ?*TDNF_REPOMD_DOC = null;
         const rc = TDNFRepoMdParseBuffer(xml.ptr, xml.len, &doc);
-        try testing.expectEqual(@as(u32, c.ERROR_TDNF_INVALID_REPO_FILE), rc);
+        try testing.expectEqual(@as(u32, abi.ERROR_TDNF_INVALID_REPO_FILE), rc);
         try testing.expect(doc == null);
     }
 }
@@ -1682,6 +1675,6 @@ test "normalizes raw updateinfo variants to advisory kind" {
     const second = TDNFRepoMdGetRecord(parsed, 1) orelse return error.TestExpectedEqual;
     try expectOptionalString("updateinfo", first.pszType);
     try expectOptionalString("updateinfo-2", second.pszType);
-    try testing.expectEqual(@as(u32, c.TDNF_REPOMD_RECORD_KIND_UPDATEINFO), first.dwKind);
-    try testing.expectEqual(@as(u32, c.TDNF_REPOMD_RECORD_KIND_UPDATEINFO), second.dwKind);
+    try testing.expectEqual(@as(u32, abi.TDNF_REPOMD_RECORD_KIND_UPDATEINFO), first.dwKind);
+    try testing.expectEqual(@as(u32, abi.TDNF_REPOMD_RECORD_KIND_UPDATEINFO), second.dwKind);
 }

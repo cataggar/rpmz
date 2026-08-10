@@ -28,7 +28,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install C build dependencies
+      - name: Install build and test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -36,7 +36,6 @@ jobs:
             createrepo-c \
             gcc \
             gnupg \
-            pkg-config \
             python3-openssl \
             python3-pytest \
             python3-requests \
@@ -70,7 +69,7 @@ jobs:
       - name: Smoke test
         continue-on-error: true
         run: |
-          LD_LIBRARY_PATH=./out/lib ./out/bin/tdnf --version
+          ./out/bin/tdnf --version
 
       - name: Lint smoke test
         continue-on-error: true

@@ -7,15 +7,16 @@
 const std = @import("std");
 const variadic = @import("variadic.zig");
 
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("stdarg.h");
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
     @cInclude("string.h");
-    @cInclude("defines.h");
-    @cInclude("tdnferror.h");
 });
+
+const default_max_string_len: usize = 16_384_000;
 
 const AllocOps = struct {
     ctx: ?*anyopaque = null,
@@ -95,18 +96,18 @@ fn allocateMemoryWithOps(
 ) u32 {
     if (ppMemory == null or nSize == 0 or nNumElements == 0) {
         setNullOut(?*anyopaque, ppMemory);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     if (nNumElements > std.math.maxInt(usize) / nSize) {
         setNullOut(?*anyopaque, ppMemory);
-        return c.ERROR_TDNF_INVALID_ALLOCSIZE;
+        return abi.ERROR_TDNF_INVALID_ALLOCSIZE;
     }
 
     const pMemory = ops.callocFn(ops.ctx, nNumElements, nSize);
     if (pMemory == null) {
         setNullOut(?*anyopaque, ppMemory);
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     }
 
     ppMemory.?.* = pMemory;
@@ -123,7 +124,7 @@ fn reallocateMemoryWithOps(
             freeWithOps(ops, out.*);
             out.* = null;
         }
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pMemory = ops.reallocFn(ops.ctx, ppMemory.?.*, nSize);
@@ -131,7 +132,7 @@ fn reallocateMemoryWithOps(
         freeWithOps(ops, ppMemory.?.*);
         ppMemory.?.* = null;
         freeWithOps(ops, pMemory);
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     }
 
     ppMemory.?.* = pMemory;
@@ -145,14 +146,14 @@ fn allocateStringWithOps(
 ) u32 {
     if (pszSrcOpt == null or ppszDst == null) {
         setNullOut(?[*:0]u8, ppszDst);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pszSrc = pszSrcOpt.?;
     const src = std.mem.span(pszSrc);
-    if (src.len > @as(usize, c.TDNF_DEFAULT_MAX_STRING_LEN)) {
+    if (src.len > default_max_string_len) {
         setNullOut(?[*:0]u8, ppszDst);
-        return c.ERROR_TDNF_STRING_TOO_LONG;
+        return abi.ERROR_TDNF_STRING_TOO_LONG;
     }
 
     var raw: ?*anyopaque = null;
@@ -178,7 +179,7 @@ fn safeAllocateStringWithOps(
     var pszDst: ?[*:0]u8 = null;
 
     if (ppszDst == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     if (pszSrcOpt != null) {
@@ -201,7 +202,7 @@ fn allocateStringArrayWithOps(
 
     if (ppszSrc == null or pppszDst == null) {
         setNullOut([*c]?[*:0]u8, pppszDst);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     var n: usize = 0;
@@ -238,7 +239,7 @@ fn allocateStringNWithOps(
 ) u32 {
     if (pszSrcOpt == null or ppszDst == null) {
         setNullOut(?[*:0]u8, ppszDst);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pszSrc = pszSrcOpt.?;
@@ -248,7 +249,7 @@ fn allocateStringNWithOps(
 
     if (nNumElements > dwSrcLength) {
         setNullOut(?[*:0]u8, ppszDst);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     var raw: ?*anyopaque = null;
@@ -303,7 +304,7 @@ fn allocateStringPrintfV(
 ) u32 {
     if (ppszDst == null or pszFmtOpt == null) {
         setNullOut(?[*:0]u8, ppszDst);
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pszFmt = pszFmtOpt.?;
@@ -319,14 +320,14 @@ fn allocateStringPrintfV(
     );
     if (nSizeProbe <= 0) {
         ppszDst.?.* = null;
-        return @as(u32, @intCast(c.ERROR_TDNF_SYSTEM_BASE)) +
-            @as(u32, @intCast(c.__errno_location().*));
+        return @as(u32, @intCast(abi.ERROR_TDNF_SYSTEM_BASE)) +
+            @as(u32, @intCast(abi.__errno_location().*));
     }
 
     const nSize: usize = @as(usize, @intCast(nSizeProbe)) + 1;
-    if (nSize > c.TDNF_DEFAULT_MAX_STRING_LEN) {
+    if (nSize > default_max_string_len) {
         ppszDst.?.* = null;
-        return c.ERROR_TDNF_STRING_TOO_LONG;
+        return abi.ERROR_TDNF_STRING_TOO_LONG;
     }
 
     var raw: ?*anyopaque = null;
@@ -349,8 +350,8 @@ fn allocateStringPrintfV(
     if (nWritten <= 0) {
         freeWithOps(libc_ops, @ptrCast(pszDst));
         ppszDst.?.* = null;
-        return @as(u32, @intCast(c.ERROR_TDNF_SYSTEM_BASE)) +
-            @as(u32, @intCast(c.__errno_location().*));
+        return @as(u32, @intCast(abi.ERROR_TDNF_SYSTEM_BASE)) +
+            @as(u32, @intCast(abi.__errno_location().*));
     }
 
     ppszDst.?.* = pszDst;
@@ -457,7 +458,7 @@ test "TDNFAllocateMemory zeroes allocations and clears stale output on zero-size
 
     const stale = c.malloc(1).?;
     var stale_out: ?*anyopaque = stale;
-    try std.testing.expectEqual(@as(u32, c.ERROR_TDNF_INVALID_PARAMETER), TDNFAllocateMemory(0, 1, &stale_out));
+    try std.testing.expectEqual(@as(u32, abi.ERROR_TDNF_INVALID_PARAMETER), TDNFAllocateMemory(0, 1, &stale_out));
     try std.testing.expect(stale_out == null);
     c.free(stale);
 }
@@ -466,7 +467,7 @@ test "TDNFAllocateMemory rejects size overflow" {
     const stale = c.malloc(1).?;
     var out: ?*anyopaque = stale;
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_INVALID_ALLOCSIZE),
+        @as(u32, abi.ERROR_TDNF_INVALID_ALLOCSIZE),
         TDNFAllocateMemory(std.math.maxInt(usize), 2, &out),
     );
     try std.testing.expect(out == null);
@@ -505,7 +506,7 @@ test "TDNFReAllocateMemory frees the old buffer on failure" {
     var raw: ?*anyopaque = c.calloc(1, 4);
     try std.testing.expect(raw != null);
 
-    try std.testing.expectEqual(@as(u32, c.ERROR_TDNF_OUT_OF_MEMORY), reallocateMemoryWithOps(ops, 8, &raw));
+    try std.testing.expectEqual(@as(u32, abi.ERROR_TDNF_OUT_OF_MEMORY), reallocateMemoryWithOps(ops, 8, &raw));
     try std.testing.expect(tracking.freed);
     try std.testing.expect(raw == null);
 }
@@ -522,7 +523,7 @@ test "TDNFReAllocateMemory frees the old buffer on invalid parameter" {
     var raw: ?*anyopaque = c.calloc(1, 4);
     try std.testing.expect(raw != null);
 
-    try std.testing.expectEqual(@as(u32, c.ERROR_TDNF_INVALID_PARAMETER), reallocateMemoryWithOps(ops, 0, &raw));
+    try std.testing.expectEqual(@as(u32, abi.ERROR_TDNF_INVALID_PARAMETER), reallocateMemoryWithOps(ops, 0, &raw));
     try std.testing.expect(tracking.freed);
     try std.testing.expect(raw == null);
 }
@@ -547,7 +548,7 @@ test "TDNFAllocateString and TDNFSafeAllocateString preserve output semantics" {
         .freeFn = libcFree,
     };
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_OUT_OF_MEMORY),
+        @as(u32, abi.ERROR_TDNF_OUT_OF_MEMORY),
         safeAllocateStringWithOps(fail_ops, "copy me", &preserved_out),
     );
     try std.testing.expect(preserved_out == &preserved);
@@ -584,7 +585,7 @@ test "TDNFAllocateStringPrintf preserves the compatibility varargs entry point" 
 
     var stale: ?[*:0]u8 = @ptrFromInt(1);
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_INVALID_PARAMETER),
+        @as(u32, abi.ERROR_TDNF_INVALID_PARAMETER),
         TDNFAllocateStringPrintf(&stale, null),
     );
     try std.testing.expect(stale == null);

@@ -5,13 +5,11 @@
 // of the License are located in the COPYING file of this distribution.
 
 const common = @import("tdnf_common");
+const abi = @import("tdnf_internal_abi");
+const jsondump = @import("jsondump_abi");
 const c = @cImport({
     @cInclude("errno.h");
-    @cInclude("jsondump.h");
     @cInclude("stdio.h");
-    @cInclude("tdnf.h");
-    @cInclude("tdnfcli.h");
-    @cInclude("tdnferror.h");
 });
 const output = @import("output.zig");
 
@@ -27,14 +25,14 @@ const LIST_COL_COUNT: c_int = 3;
 
 fn checkJsonResult(nResult: c_int) u32 {
     if (nResult != 0) {
-        return c.ERROR_TDNF_JSONDUMP;
+        return abi.ERROR_TDNF_JSONDUMP;
     }
     return 0;
 }
 
-fn destroyJsonDump(ppDump: *?*c.struct_json_dump) void {
+fn destroyJsonDump(ppDump: *?*jsondump.JsonDump) void {
     if (ppDump.*) |pDump| {
-        c.jd_destroy(pDump);
+        jsondump.jd_destroy(pDump);
         ppDump.* = null;
     }
 }
@@ -53,55 +51,55 @@ fn freeStringArray(ppszArray: [*c][*c]u8) void {
 }
 
 fn getErrno() c_int {
-    return c.__errno_location().*;
+    return abi.__errno_location().*;
 }
 
 fn TDNFCliListPackagesPrint(
-    pPkgInfo: [*c]c.TDNF_PKG_INFO,
+    pPkgInfo: [*c]abi.TDNF_PKG_INFO,
     dwCount: u32,
     nJsonOutput: c_int,
 ) u32 {
     if (nJsonOutput != 0) {
-        var jd: ?*c.struct_json_dump = c.jd_create(0);
+        var jd: ?*jsondump.JsonDump = jsondump.jd_create(0);
         if (jd == null) {
-            return c.ERROR_TDNF_JSONDUMP;
+            return abi.ERROR_TDNF_JSONDUMP;
         }
         defer destroyJsonDump(&jd);
 
-        _ = c.jd_list_start(jd);
+        _ = jsondump.jd_list_start(jd);
 
         var dwIndex: u32 = 0;
         while (dwIndex < dwCount) : (dwIndex += 1) {
-            var jd_pkg: ?*c.struct_json_dump = c.jd_create(0);
+            var jd_pkg: ?*jsondump.JsonDump = jsondump.jd_create(0);
             if (jd_pkg == null) {
-                return c.ERROR_TDNF_JSONDUMP;
+                return abi.ERROR_TDNF_JSONDUMP;
             }
             defer destroyJsonDump(&jd_pkg);
 
-            var dwError = checkJsonResult(c.jd_map_start(jd_pkg));
+            var dwError = checkJsonResult(jsondump.jd_map_start(jd_pkg));
             if (dwError != 0) {
                 return dwError;
             }
 
             const pPkg = &pPkgInfo[@intCast(dwIndex)];
 
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Name", pPkg.pszName));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Name", pPkg.pszName));
             if (dwError != 0) {
                 return dwError;
             }
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Arch", pPkg.pszArch));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Arch", pPkg.pszArch));
             if (dwError != 0) {
                 return dwError;
             }
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Evr", pPkg.pszEVR));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Evr", pPkg.pszEVR));
             if (dwError != 0) {
                 return dwError;
             }
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Repo", pPkg.pszRepoName));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Repo", pPkg.pszRepoName));
             if (dwError != 0) {
                 return dwError;
             }
-            dwError = checkJsonResult(c.jd_list_add_child(jd, jd_pkg));
+            dwError = checkJsonResult(jsondump.jd_list_add_child(jd, jd_pkg));
             if (dwError != 0) {
                 return dwError;
             }
@@ -142,18 +140,18 @@ fn TDNFCliListPackagesPrint(
 }
 
 pub export fn TDNFCliCleanCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null or context.pFnClean == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
-    var nCleanType: u32 = c.CLEANTYPE_NONE;
-    var dwError = c.TDNFCliParseCleanArgs(cmd_args, &nCleanType);
+    var nCleanType: u32 = abi.CLEANTYPE_NONE;
+    var dwError = abi.TDNFCliParseCleanArgs(cmd_args, &nCleanType);
     if (dwError != 0) {
         return dwError;
     }
@@ -168,14 +166,14 @@ pub export fn TDNFCliCleanCommand(
 }
 
 pub export fn TDNFCliCountCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null or context.pFnCount == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     var dwCount: u32 = 0;
@@ -194,29 +192,29 @@ pub export fn TDNFCliCountCommand(
 }
 
 pub export fn TDNFCliListCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null or context.pFnList == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
-    var pPkgInfo: [*c]c.TDNF_PKG_INFO = null;
+    var pPkgInfo: [*c]abi.TDNF_PKG_INFO = null;
     var dwCount: u32 = 0;
-    var pListArgs: ?*c.TDNF_LIST_ARGS = null;
-    defer if (pListArgs != null) c.TDNFCliFreeListArgs(pListArgs);
-    defer if (pPkgInfo != null) c.TDNFFreePackageInfoArray(pPkgInfo, dwCount);
+    var pListArgs: ?*abi.TDNF_LIST_ARGS = null;
+    defer if (pListArgs != null) abi.TDNFCliFreeListArgs(pListArgs);
+    defer if (pPkgInfo != null) abi.TDNFFreePackageInfoArray(pPkgInfo, dwCount);
 
-    var dwError = c.TDNFCliParseListArgs(cmd_args, &pListArgs);
+    var dwError = abi.TDNFCliParseListArgs(cmd_args, &pListArgs);
     if (dwError != 0) {
         return dwError;
     }
 
     dwError = context.pFnList.?(context, pListArgs, &pPkgInfo, &dwCount);
-    if (cmd_args.nJsonOutput != 0 and dwError == c.ERROR_TDNF_NO_MATCH) {
+    if (cmd_args.nJsonOutput != 0 and dwError == abi.ERROR_TDNF_NO_MATCH) {
         dwError = 0;
     }
     if (dwError != 0) {
@@ -227,32 +225,32 @@ pub export fn TDNFCliListCommand(
 }
 
 pub export fn TDNFCliInfoCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null or context.pFnInfo == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     var pszFormattedSize: ?[*:0]u8 = null;
     defer freeOwnedString(&pszFormattedSize);
 
-    var pPkgInfo: [*c]c.TDNF_PKG_INFO = null;
-    var pInfoArgs: ?*c.TDNF_LIST_ARGS = null;
+    var pPkgInfo: [*c]abi.TDNF_PKG_INFO = null;
+    var pInfoArgs: ?*abi.TDNF_LIST_ARGS = null;
     var dwCount: u32 = 0;
-    defer if (pInfoArgs != null) c.TDNFCliFreeListArgs(pInfoArgs);
-    defer if (pPkgInfo != null) c.TDNFFreePackageInfoArray(pPkgInfo, dwCount);
+    defer if (pInfoArgs != null) abi.TDNFCliFreeListArgs(pInfoArgs);
+    defer if (pPkgInfo != null) abi.TDNFFreePackageInfoArray(pPkgInfo, dwCount);
 
-    var dwError = c.TDNFCliParseInfoArgs(cmd_args, &pInfoArgs);
+    var dwError = abi.TDNFCliParseInfoArgs(cmd_args, &pInfoArgs);
     if (dwError != 0) {
         return dwError;
     }
 
     dwError = context.pFnInfo.?(context, pInfoArgs, &pPkgInfo, &dwCount);
-    if (cmd_args.nJsonOutput != 0 and dwError == c.ERROR_TDNF_NO_MATCH) {
+    if (cmd_args.nJsonOutput != 0 and dwError == abi.ERROR_TDNF_NO_MATCH) {
         dwError = 0;
     }
     if (dwError != 0) {
@@ -260,63 +258,63 @@ pub export fn TDNFCliInfoCommand(
     }
 
     if (cmd_args.nJsonOutput != 0) {
-        var jd: ?*c.struct_json_dump = c.jd_create(1024);
+        var jd: ?*jsondump.JsonDump = jsondump.jd_create(1024);
         if (jd == null) {
-            return c.ERROR_TDNF_JSONDUMP;
+            return abi.ERROR_TDNF_JSONDUMP;
         }
         defer destroyJsonDump(&jd);
 
-        dwError = checkJsonResult(c.jd_list_start(jd));
+        dwError = checkJsonResult(jsondump.jd_list_start(jd));
         if (dwError != 0) {
             return dwError;
         }
 
         var dwIndex: u32 = 0;
         while (dwIndex < dwCount) : (dwIndex += 1) {
-            var jd_pkg: ?*c.struct_json_dump = c.jd_create(0);
+            var jd_pkg: ?*jsondump.JsonDump = jsondump.jd_create(0);
             if (jd_pkg == null) {
-                return c.ERROR_TDNF_JSONDUMP;
+                return abi.ERROR_TDNF_JSONDUMP;
             }
             defer destroyJsonDump(&jd_pkg);
 
-            dwError = checkJsonResult(c.jd_map_start(jd_pkg));
+            dwError = checkJsonResult(jsondump.jd_map_start(jd_pkg));
             if (dwError != 0) {
                 return dwError;
             }
 
             const pPkg = &pPkgInfo[@intCast(dwIndex)];
 
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Name", pPkg.pszName));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Name", pPkg.pszName));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Arch", pPkg.pszArch));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Arch", pPkg.pszArch));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Evr", pPkg.pszEVR));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Evr", pPkg.pszEVR));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Repo", pPkg.pszRepoName));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Repo", pPkg.pszRepoName));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Url", pPkg.pszURL));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Url", pPkg.pszURL));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_int(
+            dwError = checkJsonResult(jsondump.jd_map_add_int(
                 jd_pkg,
                 "InstallSize",
                 @as(c_int, @intCast(pPkg.dwInstallSizeBytes)),
             ));
             if (dwError != 0) return dwError;
             if (pPkg.dwDownloadSizeBytes != 0) {
-                dwError = checkJsonResult(c.jd_map_add_int(
+                dwError = checkJsonResult(jsondump.jd_map_add_int(
                     jd_pkg,
                     "DownloadSize",
                     @as(c_int, @intCast(pPkg.dwDownloadSizeBytes)),
                 ));
                 if (dwError != 0) return dwError;
             }
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Summary", pPkg.pszSummary));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Summary", pPkg.pszSummary));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "License", pPkg.pszLicense));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "License", pPkg.pszLicense));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Description", pPkg.pszDescription));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Description", pPkg.pszDescription));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_list_add_child(jd, jd_pkg));
+            dwError = checkJsonResult(jsondump.jd_list_add_child(jd, jd_pkg));
             if (dwError != 0) return dwError;
 
             destroyJsonDump(&jd_pkg);
@@ -363,21 +361,21 @@ pub export fn TDNFCliInfoCommand(
 }
 
 pub export fn TDNFCliRepoListCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null or context.pFnRepoList == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
-    var pRepoList: ?*c.TDNF_REPO_DATA = null;
-    defer c.TDNFFreeRepos(pRepoList);
+    var pRepoList: ?*abi.TDNF_REPO_DATA = null;
+    defer abi.TDNFFreeRepos(pRepoList);
 
-    var nFilter: c.TDNF_REPOLISTFILTER = c.REPOLISTFILTER_ENABLED;
-    var dwError = c.TDNFCliParseRepoListArgs(cmd_args, &nFilter);
+    var nFilter: abi.TDNF_REPOLISTFILTER = abi.REPOLISTFILTER_ENABLED;
+    var dwError = abi.TDNFCliParseRepoListArgs(cmd_args, &nFilter);
     if (dwError != 0) {
         return dwError;
     }
@@ -388,31 +386,31 @@ pub export fn TDNFCliRepoListCommand(
     }
 
     if (cmd_args.nJsonOutput != 0) {
-        var jd: ?*c.struct_json_dump = c.jd_create(0);
+        var jd: ?*jsondump.JsonDump = jsondump.jd_create(0);
         if (jd == null) {
-            return c.ERROR_TDNF_JSONDUMP;
+            return abi.ERROR_TDNF_JSONDUMP;
         }
         defer destroyJsonDump(&jd);
 
-        _ = c.jd_list_start(jd);
+        _ = jsondump.jd_list_start(jd);
 
         var pRepo = pRepoList;
         while (pRepo) |repo| : (pRepo = repo.pNext) {
-            var jd_repo: ?*c.struct_json_dump = c.jd_create(0);
+            var jd_repo: ?*jsondump.JsonDump = jsondump.jd_create(0);
             if (jd_repo == null) {
-                return c.ERROR_TDNF_JSONDUMP;
+                return abi.ERROR_TDNF_JSONDUMP;
             }
             defer destroyJsonDump(&jd_repo);
 
-            dwError = checkJsonResult(c.jd_map_start(jd_repo));
+            dwError = checkJsonResult(jsondump.jd_map_start(jd_repo));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_repo, "Repo", repo.pszId));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_repo, "Repo", repo.pszId));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_repo, "RepoName", repo.pszName));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_repo, "RepoName", repo.pszName));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_bool(jd_repo, "Enabled", repo.nEnabled));
+            dwError = checkJsonResult(jsondump.jd_map_add_bool(jd_repo, "Enabled", repo.nEnabled));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_list_add_child(jd, jd_repo));
+            dwError = checkJsonResult(jsondump.jd_list_add_child(jd, jd_repo));
             if (dwError != 0) return dwError;
 
             destroyJsonDump(&jd_repo);
@@ -438,22 +436,22 @@ pub export fn TDNFCliRepoListCommand(
 }
 
 pub export fn TDNFCliSearchCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null or context.pFnSearch == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
-    var pPkgInfo: [*c]c.TDNF_PKG_INFO = null;
+    var pPkgInfo: [*c]abi.TDNF_PKG_INFO = null;
     var dwCount: u32 = 0;
-    defer c.TDNFFreePackageInfoArray(pPkgInfo, dwCount);
+    defer abi.TDNFFreePackageInfoArray(pPkgInfo, dwCount);
 
     var dwError = context.pFnSearch.?(context, cmd_args, &pPkgInfo, &dwCount);
-    if (cmd_args.nJsonOutput != 0 and dwError == c.ERROR_TDNF_NO_SEARCH_RESULTS) {
+    if (cmd_args.nJsonOutput != 0 and dwError == abi.ERROR_TDNF_NO_SEARCH_RESULTS) {
         dwError = 0;
     }
     if (dwError != 0) {
@@ -461,33 +459,33 @@ pub export fn TDNFCliSearchCommand(
     }
 
     if (cmd_args.nJsonOutput != 0) {
-        var jd: ?*c.struct_json_dump = c.jd_create(0);
+        var jd: ?*jsondump.JsonDump = jsondump.jd_create(0);
         if (jd == null) {
-            return c.ERROR_TDNF_JSONDUMP;
+            return abi.ERROR_TDNF_JSONDUMP;
         }
         defer destroyJsonDump(&jd);
 
-        _ = c.jd_list_start(jd);
+        _ = jsondump.jd_list_start(jd);
 
         var dwIndex: u32 = 0;
         while (dwIndex < dwCount) : (dwIndex += 1) {
-            var jd_pkg: ?*c.struct_json_dump = c.jd_create(0);
+            var jd_pkg: ?*jsondump.JsonDump = jsondump.jd_create(0);
             if (jd_pkg == null) {
-                return c.ERROR_TDNF_JSONDUMP;
+                return abi.ERROR_TDNF_JSONDUMP;
             }
             defer destroyJsonDump(&jd_pkg);
 
-            dwError = checkJsonResult(c.jd_map_start(jd_pkg));
+            dwError = checkJsonResult(jsondump.jd_map_start(jd_pkg));
             if (dwError != 0) {
                 return dwError;
             }
 
             const pPkg = &pPkgInfo[@intCast(dwIndex)];
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Name", pPkg.pszName));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Name", pPkg.pszName));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Summary", pPkg.pszSummary));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Summary", pPkg.pszSummary));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_list_add_child(jd, jd_pkg));
+            dwError = checkJsonResult(jsondump.jd_list_add_child(jd, jd_pkg));
             if (dwError != 0) return dwError;
 
             destroyJsonDump(&jd_pkg);
@@ -507,18 +505,18 @@ pub export fn TDNFCliSearchCommand(
 }
 
 pub export fn TDNFCliCheckLocalCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null or context.pFnCheckLocal == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     if (cmd_args.nCmdCount < 2) {
-        return c.ERROR_TDNF_CLI_CHECKLOCAL_EXPECT_DIR;
+        return abi.ERROR_TDNF_CLI_CHECKLOCAL_EXPECT_DIR;
     }
 
     const dwError = context.pFnCheckLocal.?(context, cmd_args.ppszCmds[1]);
@@ -531,22 +529,22 @@ pub export fn TDNFCliCheckLocalCommand(
 }
 
 pub export fn TDNFCliProvidesCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null or context.pFnProvides == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     if (cmd_args.nCmdCount < 2) {
-        return c.ERROR_TDNF_CLI_PROVIDES_EXPECT_ARG;
+        return abi.ERROR_TDNF_CLI_PROVIDES_EXPECT_ARG;
     }
 
-    var pPkgInfos: ?*c.TDNF_PKG_INFO = null;
-    defer c.TDNFFreePackageInfo(pPkgInfos);
+    var pPkgInfos: ?*abi.TDNF_PKG_INFO = null;
+    defer abi.TDNFFreePackageInfo(pPkgInfos);
 
     var dwError = context.pFnProvides.?(context, cmd_args.ppszCmds[1], &pPkgInfos);
     if (dwError != 0) {
@@ -554,33 +552,33 @@ pub export fn TDNFCliProvidesCommand(
     }
 
     if (cmd_args.nJsonOutput != 0) {
-        var jd: ?*c.struct_json_dump = c.jd_create(0);
+        var jd: ?*jsondump.JsonDump = jsondump.jd_create(0);
         if (jd == null) {
-            return c.ERROR_TDNF_JSONDUMP;
+            return abi.ERROR_TDNF_JSONDUMP;
         }
         defer destroyJsonDump(&jd);
 
-        _ = c.jd_list_start(jd);
+        _ = jsondump.jd_list_start(jd);
 
         var pPkg = pPkgInfos;
         while (pPkg) |pkg| : (pPkg = pkg.pNext) {
-            var jd_pkg: ?*c.struct_json_dump = c.jd_create(0);
+            var jd_pkg: ?*jsondump.JsonDump = jsondump.jd_create(0);
             if (jd_pkg == null) {
-                return c.ERROR_TDNF_JSONDUMP;
+                return abi.ERROR_TDNF_JSONDUMP;
             }
             defer destroyJsonDump(&jd_pkg);
 
-            dwError = checkJsonResult(c.jd_map_start(jd_pkg));
+            dwError = checkJsonResult(jsondump.jd_map_start(jd_pkg));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Name", pkg.pszName));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Name", pkg.pszName));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Arch", pkg.pszArch));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Arch", pkg.pszArch));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Evr", pkg.pszEVR));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Evr", pkg.pszEVR));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_map_add_string(jd_pkg, "Summary", pkg.pszSummary));
+            dwError = checkJsonResult(jsondump.jd_map_add_string(jd_pkg, "Summary", pkg.pszSummary));
             if (dwError != 0) return dwError;
-            dwError = checkJsonResult(c.jd_list_add_child(jd, jd_pkg));
+            dwError = checkJsonResult(jsondump.jd_list_add_child(jd, jd_pkg));
             if (dwError != 0) return dwError;
 
             destroyJsonDump(&jd_pkg);
@@ -600,25 +598,25 @@ pub export fn TDNFCliProvidesCommand(
 }
 
 pub export fn TDNFCliCheckUpdateCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null or context.pFnCheckUpdate == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     const nCheckUpdateCompat = GlobalGetDnfCheckUpdateCompat();
-    var pPkgInfo: [*c]c.TDNF_PKG_INFO = null;
+    var pPkgInfo: [*c]abi.TDNF_PKG_INFO = null;
     var dwCount: u32 = 0;
     var ppszPackageArgs: [*c][*c]u8 = null;
     defer freeStringArray(ppszPackageArgs);
-    defer if (pPkgInfo != null) c.TDNFFreePackageInfoArray(pPkgInfo, dwCount);
+    defer if (pPkgInfo != null) abi.TDNFFreePackageInfoArray(pPkgInfo, dwCount);
 
     var nPackageCount: c_int = 0;
-    var dwError = c.TDNFCliParsePackageArgs(cmd_args, &ppszPackageArgs, &nPackageCount);
+    var dwError = abi.TDNFCliParsePackageArgs(cmd_args, &ppszPackageArgs, &nPackageCount);
     if (dwError != 0) {
         return dwError;
     }
@@ -645,21 +643,21 @@ pub export fn TDNFCliCheckUpdateCommand(
     }
 
     if (nCheckUpdateCompat and dwCount > 0) {
-        return c.ERROR_TDNF_CLI_CHECK_UPDATES_AVAILABLE;
+        return abi.ERROR_TDNF_CLI_CHECK_UPDATES_AVAILABLE;
     }
 
     return 0;
 }
 
 pub export fn TDNFCliCheckCommand(
-    pContext: ?*c.TDNF_CLI_CONTEXT,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pContext: ?*abi.TDNF_CLI_CONTEXT,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const context = pContext orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    _ = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    _ = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
     if (context.hTdnf == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     const dwError = context.pFnCheck.?(context);

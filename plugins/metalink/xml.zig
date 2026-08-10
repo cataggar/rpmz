@@ -1,7 +1,7 @@
 //! Pure-Zig metalink XML parser backed by the shared SAX core.
 //!
 //! This parser intentionally supports only the metalink 3.0/4.0 subset
-//! that the metalink plugin consumes. It keeps the existing C ABI and
+//! that the metalink plugin consumes. It keeps the internal callback ABI and
 //! forward-only callback surface for file/size/hash/url records.
 
 const std = @import("std");

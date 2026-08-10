@@ -21,7 +21,6 @@ REPO_ROOT = os.path.abspath(
 OUT_DIR = os.path.join(REPO_ROOT, 'out')
 TDNF_BIN = os.path.join(OUT_DIR, 'bin', 'tdnf')
 TDNF_CONF = os.path.join(OUT_DIR, 'repo', 'tdnf.conf')
-LD_LIBRARY_PATH = os.path.join(OUT_DIR, 'lib')
 CASE_ROOT = os.path.join(OUT_DIR, 'native-file-trigger-tests')
 
 OWNER = 'tdnf-phase7-filetrigger-owner'
@@ -112,8 +111,6 @@ def _provision_shell(root):
 
 
 def _run_tdnf(root, args, check=True):
-    env = os.environ.copy()
-    env['LD_LIBRARY_PATH'] = LD_LIBRARY_PATH
     result = subprocess.run(
         _unshare_wrapper() + [
             TDNF_BIN,
@@ -125,7 +122,6 @@ def _run_tdnf(root, args, check=True):
             '--enablerepo=photon-test-unsigned',
             '--nogpgcheck',
         ] + args,
-        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

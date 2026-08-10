@@ -2,12 +2,7 @@ const std = @import("std");
 const solver_result_abi = @import("solver_result_abi");
 const solver_legacy_abi = @import("solver_legacy_abi");
 const solver_live_abi = @import("solver_live_abi");
-const capture_abi = @import("transaction_plan_capture_abi");
-pub const c = @cImport({
-    @cInclude("tdnf.h");
-    @cInclude("tdnfrepomd.h");
-    @cInclude("transaction_plan_capture_abi.inc");
-});
+pub const abi = @import("tdnf_internal_abi");
 
 fn expectSameLayout(
     comptime zig_type: type,
@@ -24,172 +19,20 @@ fn expectSameLayout(
     }
 }
 
-fn assertSameCaptureLayout(comptime zig_type: type, comptime c_type: type) void {
-    if (@sizeOf(zig_type) != @sizeOf(c_type)) {
-        @compileError("C ABI size mismatch for " ++ @typeName(zig_type));
-    }
-    if (@alignOf(zig_type) != @alignOf(c_type)) {
-        @compileError("C ABI alignment mismatch for " ++ @typeName(zig_type));
-    }
-    const zig_fields = @typeInfo(zig_type).@"struct".fields;
-    const c_fields = @typeInfo(c_type).@"struct".fields;
-    if (zig_fields.len != c_fields.len) {
-        @compileError("C ABI field-count mismatch for " ++ @typeName(zig_type));
-    }
-    inline for (zig_fields) |field| {
-        if (!@hasField(c_type, field.name)) {
-            @compileError("C ABI missing field " ++ field.name);
-        }
-        if (@offsetOf(zig_type, field.name) != @offsetOf(c_type, field.name)) {
-            @compileError("C ABI offset mismatch for " ++ field.name);
-        }
-        const c_field_type = @TypeOf(@field(
-            @as(c_type, undefined),
-            field.name,
-        ));
-        if (@sizeOf(field.type) != @sizeOf(c_field_type) or
-            @alignOf(field.type) != @alignOf(c_field_type))
-        {
-            @compileError("C ABI field layout mismatch for " ++ field.name);
-        }
-    }
-}
-
-comptime {
-    assertSameCaptureLayout(capture_abi.Bytes, c.TDNF_TRANSACTION_PLAN_CAPTURE_BYTES);
-    assertSameCaptureLayout(capture_abi.Checksum, c.TDNF_TRANSACTION_PLAN_CAPTURE_CHECKSUM);
-    assertSameCaptureLayout(capture_abi.Location, c.TDNF_TRANSACTION_PLAN_CAPTURE_LOCATION);
-    assertSameCaptureLayout(capture_abi.Capability, c.TDNF_TRANSACTION_PLAN_CAPTURE_CAPABILITY);
-    assertSameCaptureLayout(capture_abi.MinVersion, c.TDNF_TRANSACTION_PLAN_CAPTURE_MIN_VERSION);
-    assertSameCaptureLayout(capture_abi.Policy, c.TDNF_TRANSACTION_PLAN_CAPTURE_POLICY);
-    assertSameCaptureLayout(capture_abi.Rpmdb, c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB);
-    assertSameCaptureLayout(capture_abi.Environment, c.TDNF_TRANSACTION_PLAN_CAPTURE_ENVIRONMENT);
-    assertSameCaptureLayout(capture_abi.MetadataRecord, c.TDNF_TRANSACTION_PLAN_CAPTURE_METADATA_RECORD);
-    assertSameCaptureLayout(capture_abi.Repomd, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOMD);
-    assertSameCaptureLayout(capture_abi.Snapshot, c.TDNF_TRANSACTION_PLAN_CAPTURE_SNAPSHOT);
-    assertSameCaptureLayout(capture_abi.Repository, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY);
-    assertSameCaptureLayout(capture_abi.Request, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST);
-    assertSameCaptureLayout(capture_abi.Job, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB);
-    assertSameCaptureLayout(capture_abi.PackageIdentity, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_IDENTITY);
-    assertSameCaptureLayout(capture_abi.PackageSource, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_SOURCE);
-    assertSameCaptureLayout(capture_abi.Package, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE);
-    assertSameCaptureLayout(capture_abi.Action, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION);
-    assertSameCaptureLayout(capture_abi.Problem, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM);
-    assertSameCaptureLayout(capture_abi.Capture, c.TDNF_TRANSACTION_PLAN_CAPTURE);
-    assertSameCaptureLayout(capture_abi.IntegrationRepository, c.TDNF_TRANSACTION_PLAN_INTEGRATION_REPOSITORY);
-    assertSameCaptureLayout(capture_abi.IntegrationEnvironment, c.TDNF_TRANSACTION_PLAN_INTEGRATION_ENVIRONMENT);
-    assertSameCaptureLayout(capture_abi.RepositoryInitCallbacks, c.TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS);
-    assertSameCaptureLayout(capture_abi.RepositoryRefreshView, c.TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_VIEW);
-    assertSameCaptureLayout(capture_abi.RepositoryRefreshInput, c.TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT);
-    assertSameCaptureLayout(capture_abi.RepositoryInitInput, c.TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_INPUT);
-    assertSameCaptureLayout(capture_abi.RequestTraceJob, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_JOB);
-    assertSameCaptureLayout(capture_abi.RequestTraceQueueOrigin, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_QUEUE_ORIGIN);
-    assertSameCaptureLayout(capture_abi.RequestTracePolicyFact, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_FACT);
-    assertSameCaptureLayout(capture_abi.RequestTraceSatisfiedSelection, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_SATISFIED_SELECTION);
-    assertSameCaptureLayout(capture_abi.RequestTraceView, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_VIEW);
-    assertSameCaptureLayout(capture_abi.RequestTracePackageRef, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_PACKAGE_REF);
-    assertSameCaptureLayout(capture_abi.RequestTraceSatisfiedPackage, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_SATISFIED_PACKAGE);
-    assertSameCaptureLayout(capture_abi.RequestTraceCaptureFacts, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_FACTS);
-}
-
-test "private transaction capture constants match C declarations" {
-    inline for (.{
-        .{ capture_abi.abi_version, c.TDNF_TRANSACTION_PLAN_CAPTURE_ABI_VERSION },
-        .{ capture_abi.request_kind.distro_sync, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_DISTRO_SYNC },
-        .{ capture_abi.request_kind.downgrade, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_DOWNGRADE },
-        .{ capture_abi.request_kind.erase, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_ERASE },
-        .{ capture_abi.request_kind.install, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_INSTALL },
-        .{ capture_abi.request_kind.lock, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_LOCK },
-        .{ capture_abi.request_kind.reinstall, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_REINSTALL },
-        .{ capture_abi.request_kind.update, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_UPDATE },
-        .{ capture_abi.request_kind.update_all, c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_UPDATE_ALL },
-        .{ capture_abi.job_action.install, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_INSTALL },
-        .{ capture_abi.job_action.erase, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ERASE },
-        .{ capture_abi.job_action.update, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_UPDATE },
-        .{ capture_abi.job_action.downgrade, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DOWNGRADE },
-        .{ capture_abi.job_action.dist_sync, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_DIST_SYNC },
-        .{ capture_abi.job_action.reinstall, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_REINSTALL },
-        .{ capture_abi.job_action.lock, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_LOCK },
-        .{ capture_abi.job_action.multiversion, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_MULTIVERSION },
-        .{ capture_abi.job_action.user_installed, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_USER_INSTALLED },
-        .{ capture_abi.job_action.allow_uninstall, c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ALLOW_UNINSTALL },
-        .{ capture_abi.request_reason.user, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER },
-        .{ capture_abi.request_reason.dependency, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_DEPENDENCY },
-        .{ capture_abi.request_reason.weak_dependency, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_WEAK_DEPENDENCY },
-        .{ capture_abi.request_reason.cleanup, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_CLEANUP },
-        .{ capture_abi.request_reason.installonly_limit, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_INSTALLONLY_LIMIT },
-        .{ capture_abi.request_reason.policy, c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_POLICY },
-        .{ capture_abi.package_state.available, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_AVAILABLE },
-        .{ capture_abi.package_state.installed, c.TDNF_TRANSACTION_PLAN_CAPTURE_PACKAGE_INSTALLED },
-        .{ capture_abi.action_kind.downgrade, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_DOWNGRADE },
-        .{ capture_abi.action_kind.erase, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_ERASE },
-        .{ capture_abi.action_kind.install, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_INSTALL },
-        .{ capture_abi.action_kind.obsolete, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_OBSOLETE },
-        .{ capture_abi.action_kind.reinstall, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REINSTALL },
-        .{ capture_abi.action_kind.upgrade, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_UPGRADE },
-        .{ capture_abi.action_reason.cleanup, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_CLEANUP },
-        .{ capture_abi.action_reason.dependency, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_DEPENDENCY },
-        .{ capture_abi.action_reason.installonly_limit, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_INSTALLONLY_LIMIT },
-        .{ capture_abi.action_reason.obsoletes, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_OBSOLETES },
-        .{ capture_abi.action_reason.policy, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_POLICY },
-        .{ capture_abi.action_reason.user, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_USER },
-        .{ capture_abi.action_reason.weak_dependency, c.TDNF_TRANSACTION_PLAN_CAPTURE_ACTION_REASON_WEAK_DEPENDENCY },
-        .{ capture_abi.problem_kind.conflict, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_CONFLICT },
-        .{ capture_abi.problem_kind.installonly_limit, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_INSTALLONLY_LIMIT },
-        .{ capture_abi.problem_kind.no_candidate, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_NO_CANDIDATE },
-        .{ capture_abi.problem_kind.not_installable, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_NOT_INSTALLABLE },
-        .{ capture_abi.problem_kind.obsoletes, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_OBSOLETES },
-        .{ capture_abi.problem_kind.protected_package, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_PROTECTED_PACKAGE },
-        .{ capture_abi.problem_kind.unsatisfied_requirement, c.TDNF_TRANSACTION_PLAN_CAPTURE_PROBLEM_UNSATISFIED_REQUIREMENT },
-        .{ capture_abi.compare_op.eq, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_EQ },
-        .{ capture_abi.compare_op.ge, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_GE },
-        .{ capture_abi.compare_op.gt, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_GT },
-        .{ capture_abi.compare_op.le, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_LE },
-        .{ capture_abi.compare_op.lt, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_LT },
-        .{ capture_abi.compare_op.none, c.TDNF_TRANSACTION_PLAN_CAPTURE_COMPARE_NONE },
-        .{ capture_abi.resolution_status.problems, c.TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_PROBLEMS },
-        .{ capture_abi.resolution_status.resolved, c.TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_RESOLVED },
-        .{ capture_abi.resolution_status.resolved_with_skips, c.TDNF_TRANSACTION_PLAN_CAPTURE_STATUS_RESOLVED_WITH_SKIPS },
-        .{ capture_abi.rpmdb_backend.bdb, c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_BDB },
-        .{ capture_abi.rpmdb_backend.ndb, c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_NDB },
-        .{ capture_abi.rpmdb_backend.sqlite, c.TDNF_TRANSACTION_PLAN_CAPTURE_RPMDB_SQLITE },
-        .{ capture_abi.repository_kind.available, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_AVAILABLE },
-        .{ capture_abi.repository_kind.installed, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_INSTALLED },
-        .{ capture_abi.repository_kind.command_line, c.TDNF_TRANSACTION_PLAN_CAPTURE_REPOSITORY_COMMAND_LINE },
-        .{ capture_abi.selection_kind.all, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_ALL },
-        .{ capture_abi.selection_kind.package, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_PACKAGE },
-        .{ capture_abi.selection_kind.name, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_NAME },
-        .{ capture_abi.selection_kind.capability, c.TDNF_TRANSACTION_PLAN_CAPTURE_SELECTION_CAPABILITY },
-        .{ capture_abi.request_trace_no_request, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_NO_REQUEST },
-        .{ capture_abi.request_trace_flag.clean_deps, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_CLEAN_DEPS },
-        .{ capture_abi.request_trace_flag.force_best, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_FORCE_BEST },
-        .{ capture_abi.request_trace_flag.targeted, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_TARGETED },
-        .{ capture_abi.request_trace_flag.not_by_user, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_NOT_BY_USER },
-        .{ capture_abi.request_trace_flag.weak, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_FLAG_WEAK },
-        .{ capture_abi.request_trace_policy.exclude, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_EXCLUDE },
-        .{ capture_abi.request_trace_policy.installonly, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_INSTALLONLY },
-        .{ capture_abi.request_trace_policy.lock, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_LOCK },
-        .{ capture_abi.request_trace_policy.min_version, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_MIN_VERSION },
-        .{ capture_abi.request_trace_policy.protected, c.TDNF_TRANSACTION_PLAN_REQUEST_TRACE_POLICY_PROTECTED },
-    }) |values| {
-        try std.testing.expectEqual(values[1], values[0]);
-    }
-}
-
-test "public configuration layout remains stable" {
+test "private configuration layout remains stable" {
     const pointer_size = @sizeOf(*anyopaque);
     const expected_size: usize = if (pointer_size == 8) 216 else 136;
     const expected_alignment: usize = if (pointer_size == 8) 8 else 4;
 
     try std.testing.expect(pointer_size == 4 or pointer_size == 8);
-    try std.testing.expectEqual(expected_size, @sizeOf(c.TDNF_CONF));
-    try std.testing.expectEqual(expected_alignment, @alignOf(c.TDNF_CONF));
+    try std.testing.expectEqual(expected_size, @sizeOf(abi.TDNF_CONF));
+    try std.testing.expectEqual(expected_alignment, @alignOf(abi.TDNF_CONF));
     try std.testing.expectEqual(@as(usize, 40), @offsetOf(
-        c.TDNF_CONF,
+        abi.TDNF_CONF,
         "rpmTransFlags",
     ));
     try std.testing.expectEqual(@as(usize, 4), @sizeOf(
-        @TypeOf(@as(c.TDNF_CONF, undefined).rpmTransFlags),
+        @TypeOf(@as(abi.TDNF_CONF, undefined).rpmTransFlags),
     ));
 }
 
@@ -201,39 +44,39 @@ test "legacy native transaction item layout remains stable" {
 
     try std.testing.expect(pointer_size == 4 or pointer_size == 8);
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
         "dwOperation",
     ));
     try std.testing.expectEqual(first_pointer_offset, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
         "pszPath",
     ));
     try std.testing.expectEqual(first_pointer_offset + pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
         "pszName",
     ));
     try std.testing.expectEqual(first_pointer_offset + 2 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
         "pszEVR",
     ));
     try std.testing.expectEqual(first_pointer_offset + 3 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
         "pszArch",
     ));
     try std.testing.expectEqual(legacy_size, @sizeOf(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     ));
 
     try std.testing.expectEqual(first_pointer_offset + 3 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
         "pszArch",
     ));
     try std.testing.expectEqual(legacy_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
         "dwRpmDbHnum",
     ));
     try std.testing.expectEqual(v2_size, @sizeOf(
-        c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
+        abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     ));
 }
 
@@ -244,101 +87,101 @@ test "native solver package layout remains stable" {
 
     try std.testing.expect(pointer_size == 4 or pointer_size == 8);
     try std.testing.expectEqual(pointer_size, @alignOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
     ));
     try std.testing.expectEqual(expected_size, @sizeOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
     ));
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszRepository",
     ));
     try std.testing.expectEqual(pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszName",
     ));
     try std.testing.expectEqual(2 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszVersion",
     ));
     try std.testing.expectEqual(3 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszRelease",
     ));
     try std.testing.expectEqual(4 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszArch",
     ));
     try std.testing.expectEqual(5 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszChecksumType",
     ));
     try std.testing.expectEqual(6 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszChecksumValue",
     ));
     try std.testing.expectEqual(7 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszLocationHref",
     ));
     try std.testing.expectEqual(8 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszLocationBase",
     ));
     try std.testing.expectEqual(9 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "pszSummary",
     ));
     try std.testing.expectEqual(scalar_offset, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nPackageSize",
     ));
     try std.testing.expectEqual(scalar_offset + 8, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nInstalledSize",
     ));
     try std.testing.expectEqual(scalar_offset + 16, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "dwPackageId",
     ));
     try std.testing.expectEqual(scalar_offset + 20, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "dwRepositoryId",
     ));
     try std.testing.expectEqual(scalar_offset + 24, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "dwEpoch",
     ));
     try std.testing.expectEqual(scalar_offset + 28, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "dwRpmDbHnum",
     ));
     try std.testing.expectEqual(scalar_offset + 32, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nRepositoryKind",
     ));
     try std.testing.expectEqual(scalar_offset + 36, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nHasEpoch",
     ));
     try std.testing.expectEqual(scalar_offset + 40, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nHasRpmDbHnum",
     ));
     try std.testing.expectEqual(scalar_offset + 44, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nChecksumIsPkgId",
     ));
     try std.testing.expectEqual(scalar_offset + 48, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nChecksumIsHeaderOnly",
     ));
     try std.testing.expectEqual(scalar_offset + 52, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nHasPackageSize",
     ));
     try std.testing.expectEqual(scalar_offset + 56, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nHasInstalledSize",
     ));
 }
@@ -350,10 +193,10 @@ test "native solver action and relation layouts remain stable" {
 
     try std.testing.expect(pointer_size == 4 or pointer_size == 8);
     try std.testing.expectEqual(@as(usize, 28), @sizeOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_ACTION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_ACTION,
     ));
     try std.testing.expectEqual(@as(usize, 4), @alignOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_ACTION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_ACTION,
     ));
     inline for (.{
         .{ "dwPackageRef", 0 },
@@ -366,30 +209,30 @@ test "native solver action and relation layouts remain stable" {
     }) |field| {
         try std.testing.expectEqual(
             @as(usize, field[1]),
-            @offsetOf(c.TDNF_REPOMD_NATIVE_SOLVER_ACTION, field[0]),
+            @offsetOf(abi.TDNF_REPOMD_NATIVE_SOLVER_ACTION, field[0]),
         );
     }
 
     try std.testing.expectEqual(pointer_size, @alignOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
     ));
     try std.testing.expectEqual(relation_size, @sizeOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
     ));
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
         "pszName",
     ));
     try std.testing.expectEqual(pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
         "pszVersion",
     ));
     try std.testing.expectEqual(2 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
         "pszRelease",
     ));
     try std.testing.expectEqual(3 * pointer_size, @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
         "pszFlags",
     ));
     inline for (.{
@@ -401,7 +244,7 @@ test "native solver action and relation layouts remain stable" {
     }) |field| {
         try std.testing.expectEqual(
             relation_scalar_offset + field[1],
-            @offsetOf(c.TDNF_REPOMD_NATIVE_SOLVER_RELATION, field[0]),
+            @offsetOf(abi.TDNF_REPOMD_NATIVE_SOLVER_RELATION, field[0]),
         );
     }
 }
@@ -414,13 +257,13 @@ test "native solver problem and result layouts remain stable" {
 
     try std.testing.expect(pointer_size == 4 or pointer_size == 8);
     try std.testing.expectEqual(pointer_size, @alignOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM,
     ));
     try std.testing.expectEqual(problem_size, @sizeOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM,
     ));
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM,
         "capability",
     ));
     inline for (.{
@@ -436,15 +279,15 @@ test "native solver problem and result layouts remain stable" {
     }) |field| {
         try std.testing.expectEqual(
             relation_size + field[1],
-            @offsetOf(c.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM, field[0]),
+            @offsetOf(abi.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM, field[0]),
         );
     }
 
     try std.testing.expectEqual(pointer_size, @alignOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_RESULT,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RESULT,
     ));
     try std.testing.expectEqual(result_count_offset + 24, @sizeOf(
-        c.TDNF_REPOMD_NATIVE_SOLVER_RESULT,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RESULT,
     ));
     inline for (.{
         .{ "pPackages", 0 },
@@ -457,7 +300,7 @@ test "native solver problem and result layouts remain stable" {
     }) |field| {
         try std.testing.expectEqual(
             field[1] * pointer_size,
-            @offsetOf(c.TDNF_REPOMD_NATIVE_SOLVER_RESULT, field[0]),
+            @offsetOf(abi.TDNF_REPOMD_NATIVE_SOLVER_RESULT, field[0]),
         );
     }
     inline for (.{
@@ -470,15 +313,15 @@ test "native solver problem and result layouts remain stable" {
     }) |field| {
         try std.testing.expectEqual(
             result_count_offset + field[1],
-            @offsetOf(c.TDNF_REPOMD_NATIVE_SOLVER_RESULT, field[0]),
+            @offsetOf(abi.TDNF_REPOMD_NATIVE_SOLVER_RESULT, field[0]),
         );
     }
 }
 
-test "native solver Zig ABI mirror matches the public C layouts" {
+test "native solver Zig ABI mirror matches the private layouts" {
     try expectSameLayout(
         solver_result_abi.Package,
-        c.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         .{
             "pszRepository",
             "pszName",
@@ -507,7 +350,7 @@ test "native solver Zig ABI mirror matches the public C layouts" {
     );
     try expectSameLayout(
         solver_result_abi.Action,
-        c.TDNF_REPOMD_NATIVE_SOLVER_ACTION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_ACTION,
         .{
             "dwPackageRef",
             "dwKind",
@@ -520,7 +363,7 @@ test "native solver Zig ABI mirror matches the public C layouts" {
     );
     try expectSameLayout(
         solver_result_abi.Relation,
-        c.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RELATION,
         .{
             "pszName",
             "pszVersion",
@@ -535,7 +378,7 @@ test "native solver Zig ABI mirror matches the public C layouts" {
     );
     try expectSameLayout(
         solver_result_abi.Problem,
-        c.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PROBLEM,
         .{
             "capability",
             "dwKind",
@@ -551,7 +394,7 @@ test "native solver Zig ABI mirror matches the public C layouts" {
     );
     try expectSameLayout(
         solver_result_abi.Result,
-        c.TDNF_REPOMD_NATIVE_SOLVER_RESULT,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_RESULT,
         .{
             "pPackages",
             "pdwSelectedPackageRefs",
@@ -570,10 +413,10 @@ test "native solver Zig ABI mirror matches the public C layouts" {
     );
 }
 
-test "native solver shadow ABI mirror matches the public C layouts" {
+test "native solver shadow ABI mirror matches the private layouts" {
     try expectSameLayout(
         solver_legacy_abi.LegacyPackage,
-        c.TDNF_PKG_INFO,
+        abi.TDNF_PKG_INFO,
         .{
             "dwEpoch",
             "dwInstallSizeBytes",
@@ -602,7 +445,7 @@ test "native solver shadow ABI mirror matches the public C layouts" {
     );
     try expectSameLayout(
         solver_legacy_abi.LegacyResult,
-        c.TDNF_SOLVED_PKG_INFO,
+        abi.TDNF_SOLVED_PKG_INFO,
         .{
             "nNeedAction",
             "nNeedDownload",
@@ -623,10 +466,10 @@ test "native solver shadow ABI mirror matches the public C layouts" {
     );
 }
 
-test "native solver live ABI mirrors match the public C layouts" {
+test "native solver live ABI mirrors match the private layouts" {
     try expectSameLayout(
         solver_live_abi.Job,
-        c.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
+        abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB,
         .{
             "pszRepository",
             "pszName",
@@ -643,15 +486,15 @@ test "native solver live ABI mirrors match the public C layouts" {
     );
 }
 
-test "native solver shadow C layouts remain stable" {
+test "native solver private layouts remain stable" {
     const pointer_size = @sizeOf(*anyopaque);
     const package_size: usize = if (pointer_size == 8) 168 else 92;
     const result_pointer_offset: usize = if (pointer_size == 8) 16 else 12;
     const result_size: usize = if (pointer_size == 8) 112 else 60;
 
     try std.testing.expect(pointer_size == 4 or pointer_size == 8);
-    try std.testing.expectEqual(pointer_size, @alignOf(c.TDNF_PKG_INFO));
-    try std.testing.expectEqual(package_size, @sizeOf(c.TDNF_PKG_INFO));
+    try std.testing.expectEqual(pointer_size, @alignOf(abi.TDNF_PKG_INFO));
+    try std.testing.expectEqual(package_size, @sizeOf(abi.TDNF_PKG_INFO));
     inline for (.{
         .{ "dwEpoch", 0 },
         .{ "dwInstallSizeBytes", 4 },
@@ -660,7 +503,7 @@ test "native solver shadow C layouts remain stable" {
     }) |field| {
         try std.testing.expectEqual(
             @as(usize, field[1]),
-            @offsetOf(c.TDNF_PKG_INFO, field[0]),
+            @offsetOf(abi.TDNF_PKG_INFO, field[0]),
         );
     }
     inline for (.{
@@ -686,15 +529,15 @@ test "native solver shadow C layouts remain stable" {
     }) |field| {
         try std.testing.expectEqual(
             16 + field[1] * pointer_size,
-            @offsetOf(c.TDNF_PKG_INFO, field[0]),
+            @offsetOf(abi.TDNF_PKG_INFO, field[0]),
         );
     }
 
     try std.testing.expectEqual(pointer_size, @alignOf(
-        c.TDNF_SOLVED_PKG_INFO,
+        abi.TDNF_SOLVED_PKG_INFO,
     ));
     try std.testing.expectEqual(result_size, @sizeOf(
-        c.TDNF_SOLVED_PKG_INFO,
+        abi.TDNF_SOLVED_PKG_INFO,
     ));
     inline for (.{
         .{ "nNeedAction", 0 },
@@ -703,7 +546,7 @@ test "native solver shadow C layouts remain stable" {
     }) |field| {
         try std.testing.expectEqual(
             @as(usize, field[1]),
-            @offsetOf(c.TDNF_SOLVED_PKG_INFO, field[0]),
+            @offsetOf(abi.TDNF_SOLVED_PKG_INFO, field[0]),
         );
     }
     inline for (.{
@@ -722,7 +565,7 @@ test "native solver shadow C layouts remain stable" {
     }) |field| {
         try std.testing.expectEqual(
             result_pointer_offset + field[1] * pointer_size,
-            @offsetOf(c.TDNF_SOLVED_PKG_INFO, field[0]),
+            @offsetOf(abi.TDNF_SOLVED_PKG_INFO, field[0]),
         );
     }
 }

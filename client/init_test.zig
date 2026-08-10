@@ -95,44 +95,6 @@ fn expectSameBytes(expected: anytype, actual: @TypeOf(expected)) !void {
     );
 }
 
-fn expectSameLayout(
-    comptime zig_type: type,
-    comptime c_type: type,
-) void {
-    if (@sizeOf(zig_type) != @sizeOf(c_type) or
-        @alignOf(zig_type) != @alignOf(c_type))
-    {
-        @compileError("C ABI size/alignment mismatch for " ++ @typeName(zig_type));
-    }
-    const zig_fields = @typeInfo(zig_type).@"struct".fields;
-    const c_fields = @typeInfo(c_type).@"struct".fields;
-    if (zig_fields.len != c_fields.len) {
-        @compileError("C ABI field-count mismatch for " ++ @typeName(zig_type));
-    }
-    inline for (zig_fields) |field| {
-        if (!@hasField(c_type, field.name) or
-            @offsetOf(zig_type, field.name) != @offsetOf(c_type, field.name))
-        {
-            @compileError("C ABI field mismatch for " ++ field.name);
-        }
-    }
-}
-
-comptime {
-    expectSameLayout(
-        abi.RepositoryInitCallbacks,
-        c.TDNF_TRANSACTION_PLAN_REPOSITORY_INIT_CALLBACKS,
-    );
-    expectSameLayout(
-        abi.RepositoryRefreshView,
-        c.TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_VIEW,
-    );
-    expectSameLayout(
-        abi.RepositoryRefreshInput,
-        c.TDNF_TRANSACTION_PLAN_REPOSITORY_REFRESH_INPUT,
-    );
-}
-
 test "build refresh input rejects invalid handle combinations without clearing output" {
     var fixture = Fixture{};
     try fixture.init();

@@ -1,10 +1,10 @@
 /*
- * tdnf rpmdb (Zig) — C ABI for the read-only Zig rpmdb reader.
+ * tdnf rpmdb (Zig) — private ABI for the Zig rpmdb reader.
  *
  * T1 of the librpm-replacement plan (see plan-replace-librpm.md in
  * the session-state archive). The implementation lives in
  * rpmzig/rpmdb.zig (+ rpmzig/header.zig for the RPM header v3
- * decoder) and is linked into libtdnf, tdnf-rpmdb-count, and
+ * decoder) and is linked into tdnf, tdnf-rpmdb-count, and
  * tdnf-rpmdb-list.
  */
 #ifndef _TDNF_RPMZIG_RPMDB_H_
@@ -12,13 +12,13 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "../include/tdnfrpmconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct tdnf_rpm_file tdnf_rpm_file;
+typedef struct tdnf_rpm_config tdnf_rpm_config;
 
 /**
  * Count rows in /var/lib/rpm/rpmdb.sqlite's Packages table.
@@ -630,7 +630,8 @@ int tdnf_rpm_file_bytes(
 /**
  * Calculate a digest over the exact bytes owned by this parsed file handle.
  *
- * `kind` uses the TDNF_HASH_* values from common/structs.h. The output
+ * `kind` uses the internal digest values (MD5=0, SHA1=1, SHA256=2,
+ * SHA512=3). The output
  * buffer must be at least the digest length for that kind. Returns 0 on
  * success, or -1 on invalid arguments/allocation failure.
  */

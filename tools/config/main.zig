@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const jsondump = @import("jsondump_abi");
 const c = @cImport({
     @cInclude("ctype.h");
     @cInclude("errno.h");
@@ -15,14 +16,10 @@ const c = @cImport({
     @cInclude("string.h");
     @cInclude("unistd.h");
 
-    @cInclude("common/config.h");
-
     @cInclude("llconf/nodes.h");
     @cInclude("llconf/modules.h");
     @cInclude("llconf/entry.h");
     @cInclude("llconf/ini.h");
-
-    @cInclude("jsondump/jsondump.h");
 });
 
 const ERR_CMDLINE: u8 = 1;
@@ -32,6 +29,9 @@ const ERR_NO_SETTING: u8 = 4;
 const ERR_REPO_EXISTS: u8 = 5;
 const ERR_JSON: u8 = 6;
 const ERR_INTERNAL: u8 = 7;
+const tdnf_conf_file = "/etc/tdnf/tdnf.conf";
+const repo_dir_key = "repodir";
+const default_repo_dir = "/etc/yum.repos.d";
 
 var mod_ini: [*c]c.struct_cnfmodule = null;
 
@@ -164,14 +164,14 @@ fn getRepodir(psz_main_config: [*c]const u8) [*c]u8 {
     if (cn_root != null) {
         const cn_main = findChild(cn_root, "main");
         if (cn_main != null) {
-            const cn_repodir = findChild(cn_main, c.TDNF_CONF_KEY_REPODIR);
+            const cn_repodir = findChild(cn_main, repo_dir_key);
             if (cn_repodir != null) {
                 psz_repodir = c.strdup(c.cnfnode_getval(cn_repodir));
             }
         }
     }
     if (psz_repodir == null) {
-        psz_repodir = c.strdup(c.TDNF_DEFAULT_REPO_LOCATION);
+        psz_repodir = c.strdup(default_repo_dir);
     }
 
     if (cn_root != null) {
@@ -242,30 +242,30 @@ fn writeFile(cn_root: [*c]c.struct_cnfnode, psz_filename: [*c]const u8) c_int {
     return rc;
 }
 
-fn cnfTreeToJson(cn_root: [*c]c.struct_cnfnode) ?*c.struct_json_dump {
-    const jd = c.jd_create(0) orelse return null;
+fn cnfTreeToJson(cn_root: [*c]c.struct_cnfnode) ?*jsondump.JsonDump {
+    const jd = jsondump.jd_create(0) orelse return null;
 
-    if (c.jd_map_start(jd) != 0) {
-        c.jd_destroy(jd);
+    if (jsondump.jd_map_start(jd) != 0) {
+        jsondump.jd_destroy(jd);
         return null;
     }
 
     if (cn_root[0].first_child != null) {
         const jd_child = cnfTreeToJson(cn_root[0].first_child) orelse {
-            c.jd_destroy(jd);
+            jsondump.jd_destroy(jd);
             return null;
         };
-        defer c.jd_destroy(jd_child);
+        defer jsondump.jd_destroy(jd_child);
 
-        if (c.jd_map_add_child(jd, cn_root[0].name, jd_child) != 0) {
-            c.jd_destroy(jd);
+        if (jsondump.jd_map_add_child(jd, cn_root[0].name, jd_child) != 0) {
+            jsondump.jd_destroy(jd);
             return null;
         }
     } else {
         var cn = cn_root;
         while (cn != null) : (cn = cn[0].next) {
-            if (c.jd_map_add_string(jd, cn[0].name, cn[0].value) != 0) {
-                c.jd_destroy(jd);
+            if (jsondump.jd_map_add_string(jd, cn[0].name, cn[0].value) != 0) {
+                jsondump.jd_destroy(jd);
                 return null;
             }
         }
@@ -306,7 +306,7 @@ fn printRemoveError(psz_filename: [*c]const u8) u8 {
 }
 
 pub fn main(init: std.process.Init.Minimal) u8 {
-    var psz_main_config: [*c]const u8 = c.TDNF_CONF_FILE;
+    var psz_main_config: [*c]const u8 = tdnf_conf_file;
     var psz_repo_config: [*c]const u8 = null;
     var do_json = false;
 
@@ -549,7 +549,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             const jd = cnfTreeToJson(cn_repo) orelse {
                 return failf(ERR_JSON, "failed to generate json\n", .{});
             };
-            defer c.jd_destroy(jd);
+            defer jsondump.jd_destroy(jd);
 
             _ = c.printf("%s", jd.buf);
             c.destroy_cnftree(cn_repo);
@@ -584,7 +584,7 @@ test "json dump preserves repo wrapper object" {
     c.append_node(cn_repo, cn_enabled);
 
     const jd = cnfTreeToJson(cn_repo) orelse return error.TestUnexpectedNull;
-    defer c.jd_destroy(jd);
+    defer jsondump.jd_destroy(jd);
 
     try std.testing.expectEqualStrings(
         "{\"foo\":{\"name\":\"Foo\",\"enabled\":\"1\"}}",

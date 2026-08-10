@@ -6,11 +6,10 @@
 
 const std = @import("std");
 const getopt = @import("getopt_c.zig").c;
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("string.h");
-    @cInclude("tdnfclierror.h");
-    @cInclude("tdnferror.h");
 });
 
 fn isNullOrEmpty(pszValue: [*c]const u8) bool {
@@ -41,7 +40,7 @@ pub export fn _TDNFCliGetOptionByName(
         if (ppOption) |out| {
             out.* = null;
         }
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pszSearch = stripOptionMarker(pszName);
@@ -54,7 +53,7 @@ pub export fn _TDNFCliGetOptionByName(
     }
 
     ppOption.?.* = null;
-    return c.ERROR_TDNF_CLI_OPTION_NAME_INVALID;
+    return abi.ERROR_TDNF_CLI_OPTION_NAME_INVALID;
 }
 
 pub export fn TDNFCliValidateOptionName(
@@ -64,7 +63,7 @@ pub export fn TDNFCliValidateOptionName(
     var pOption: [*c]getopt.struct_option = null;
 
     if (isNullOrEmpty(pszName) or pKnownOptions == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     return _TDNFCliGetOptionByName(pszName, pKnownOptions, &pOption);
@@ -79,7 +78,7 @@ pub export fn TDNFCliValidateOptionArg(
     var dwError: u32 = 0;
 
     if (isNullOrEmpty(pszName) or pKnownOptions == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     dwError = _TDNFCliGetOptionByName(pszName, pKnownOptions, &pOption);
@@ -88,11 +87,11 @@ pub export fn TDNFCliValidateOptionArg(
     }
 
     if (isNullOrEmpty(pszArg) and pOption[0].has_arg == getopt.required_argument) {
-        return c.ERROR_TDNF_CLI_OPTION_ARG_REQUIRED;
+        return abi.ERROR_TDNF_CLI_OPTION_ARG_REQUIRED;
     }
 
     if (!isNullOrEmpty(pszArg) and pOption[0].has_arg == getopt.no_argument) {
-        return c.ERROR_TDNF_CLI_OPTION_ARG_UNEXPECTED;
+        return abi.ERROR_TDNF_CLI_OPTION_ARG_UNEXPECTED;
     }
 
     return 0;
@@ -106,7 +105,7 @@ pub export fn TDNFCliValidateOptions(
     var dwError: u32 = 0;
 
     if (isNullOrEmpty(pszName) or pKnownOptions == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     dwError = TDNFCliValidateOptionName(pszName, pKnownOptions);
@@ -140,11 +139,11 @@ test "TDNFCliValidateOptionArg preserves required and no-argument checks" {
     };
 
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_CLI_OPTION_ARG_REQUIRED),
+        @as(u32, abi.ERROR_TDNF_CLI_OPTION_ARG_REQUIRED),
         TDNFCliValidateOptionArg("config", null, &known_options),
     );
     try std.testing.expectEqual(
-        @as(u32, c.ERROR_TDNF_CLI_OPTION_ARG_UNEXPECTED),
+        @as(u32, abi.ERROR_TDNF_CLI_OPTION_ARG_UNEXPECTED),
         TDNFCliValidateOptionArg("help", "1", &known_options),
     );
 }

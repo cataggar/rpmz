@@ -7,14 +7,12 @@
 const std = @import("std");
 const common = @import("tdnf_common");
 const getopt = @import("getopt_c.zig").c;
+const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("stdlib.h");
     @cInclude("string.h");
     @cInclude("strings.h");
-    @cInclude("tdnf.h");
-    @cInclude("tdnfcli.h");
-    @cInclude("tdnferror.h");
     @cInclude("nodes.h");
 });
 const argparse = @import("argparse.zig");
@@ -27,7 +25,7 @@ const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
 const LEGACY_VERBOSITY_INFO: c_int = 6;
 
-var option_state: c.TDNF_CMD_ARGS = std.mem.zeroes(c.TDNF_CMD_ARGS);
+var option_state: abi.TDNF_CMD_ARGS = std.mem.zeroes(abi.TDNF_CMD_ARGS);
 
 fn optionEntry(
     name: ?[*:0]const u8,
@@ -147,7 +145,7 @@ var pstOptions = [_]getopt.struct_option{
 };
 
 fn resetOptionState() void {
-    option_state = std.mem.zeroes(c.TDNF_CMD_ARGS);
+    option_state = std.mem.zeroes(abi.TDNF_CMD_ARGS);
 }
 
 fn isNullOrEmpty(pszValue: ?[*:0]const u8) bool {
@@ -167,12 +165,12 @@ fn freeCString(pszValue: [*c]u8) void {
 fn duplicateCString(pszValue: ?[*:0]const u8, ppOut: *allowzero [*c]u8) u32 {
     if (pszValue == null) {
         ppOut.* = null;
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const pszDup = c.strdup(pszValue) orelse {
         ppOut.* = null;
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
 
     ppOut.* = @ptrCast(pszDup);
@@ -188,37 +186,37 @@ fn replaceStringField(ppField: *allowzero [*c]u8, pszValue: ?[*:0]const u8) u32 
 fn duplicateArgVector(ppszCmds: *[*c][*c]u8, nCount: usize) u32 {
     const pAllocated = c.calloc(nCount + 1, @sizeOf([*c]u8)) orelse {
         ppszCmds.* = null;
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
     ppszCmds.* = @ptrCast(@alignCast(pAllocated));
     return 0;
 }
 
-fn createOptionNode(name: ?[*:0]const u8, value: ?[*:0]const u8) ?*c.struct_cnfnode {
-    const cn = c.create_cnfnode(name) orelse return null;
-    c.cnfnode_setval(cn, value);
+fn createOptionNode(name: ?[*:0]const u8, value: ?[*:0]const u8) ?*abi.struct_cnfnode {
+    const cn = abi.create_cnfnode(name) orelse return null;
+    abi.cnfnode_setval(cn, value);
     return cn;
 }
 
-fn appendNode(parent: [*c]c.struct_cnfnode, name: ?[*:0]const u8, value: ?[*:0]const u8) u32 {
-    const cn = createOptionNode(name, value) orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
-    c.append_node(parent, cn);
+fn appendNode(parent: [*c]abi.struct_cnfnode, name: ?[*:0]const u8, value: ?[*:0]const u8) u32 {
+    const cn = createOptionNode(name, value) orelse return abi.ERROR_TDNF_OUT_OF_MEMORY;
+    abi.append_node(parent, cn);
     return 0;
 }
 
-fn findRepoNode(root: [*c]c.struct_cnfnode, pszRepoName: ?[*:0]const u8) ?*c.struct_cnfnode {
+fn findRepoNode(root: [*c]abi.struct_cnfnode, pszRepoName: ?[*:0]const u8) ?*abi.struct_cnfnode {
     if (root == null) {
         return null;
     }
-    return c.find_node(root[0].first_child, pszRepoName);
+    return abi.find_node(root[0].first_child, pszRepoName);
 }
 
-fn parseSetOpt(pszArg: ?[*:0]const u8, pCmdArgs: *c.TDNF_CMD_ARGS) u32 {
+fn parseSetOpt(pszArg: ?[*:0]const u8, pCmdArgs: *abi.TDNF_CMD_ARGS) u32 {
     var dwError: u32 = 0;
     var pszCopyArgs: [*c]u8 = null;
 
     if (pszArg == null) {
-        return c.ERROR_TDNF_CLI_OPTION_ARG_REQUIRED;
+        return abi.ERROR_TDNF_CLI_OPTION_ARG_REQUIRED;
     }
 
     dwError = duplicateCString(pszArg, &pszCopyArgs);
@@ -227,7 +225,7 @@ fn parseSetOpt(pszArg: ?[*:0]const u8, pCmdArgs: *c.TDNF_CMD_ARGS) u32 {
     }
     defer freeCString(pszCopyArgs);
 
-    const psep_eq = c.strstr(pszCopyArgs, "=") orelse return c.ERROR_TDNF_CLI_SETOPT_NO_EQUALS;
+    const psep_eq = c.strstr(pszCopyArgs, "=") orelse return abi.ERROR_TDNF_CLI_SETOPT_NO_EQUALS;
     psep_eq[0] = 0;
 
     const pseq_dot = c.strstr(pszCopyArgs, ".");
@@ -237,19 +235,19 @@ fn parseSetOpt(pszArg: ?[*:0]const u8, pCmdArgs: *c.TDNF_CMD_ARGS) u32 {
 
     pseq_dot[0] = 0;
     if (TDNFStrIsValidRepoName(pszCopyArgs) == 0) {
-        return c.ERROR_TDNF_INVALID_REPO_NAME;
+        return abi.ERROR_TDNF_INVALID_REPO_NAME;
     }
 
     var cn_repo = findRepoNode(pCmdArgs.cn_repoopts, pszCopyArgs);
     if (cn_repo == null) {
-        cn_repo = c.create_cnfnode(pszCopyArgs) orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
-        c.append_node(pCmdArgs.cn_repoopts, cn_repo);
+        cn_repo = abi.create_cnfnode(pszCopyArgs) orelse return abi.ERROR_TDNF_OUT_OF_MEMORY;
+        abi.append_node(pCmdArgs.cn_repoopts, cn_repo);
     }
 
     return appendNode(cn_repo, pseq_dot + 1, psep_eq + 1);
 }
 
-fn parseExclude(pszName: ?[*:0]const u8, pszArg: ?[*:0]const u8, pCmdArgs: *c.TDNF_CMD_ARGS) u32 {
+fn parseExclude(pszName: ?[*:0]const u8, pszArg: ?[*:0]const u8, pCmdArgs: *abi.TDNF_CMD_ARGS) u32 {
     var dwError: u32 = 0;
     var pszCopyArgs: [*c]u8 = null;
 
@@ -270,7 +268,7 @@ fn parseExclude(pszName: ?[*:0]const u8, pszArg: ?[*:0]const u8, pCmdArgs: *c.TD
     return 0;
 }
 
-fn appendGenericSetOpt(pszName: ?[*:0]const u8, pszArg: ?[*:0]const u8, pCmdArgs: *c.TDNF_CMD_ARGS) u32 {
+fn appendGenericSetOpt(pszName: ?[*:0]const u8, pszArg: ?[*:0]const u8, pCmdArgs: *abi.TDNF_CMD_ARGS) u32 {
     var i: usize = 0;
     while (i < pstOptions.len) : (i += 1) {
         if (pstOptions[i].name != null and c.strcasecmp(pstOptions[i].name, pszName) == 0) {
@@ -283,32 +281,32 @@ fn appendGenericSetOpt(pszName: ?[*:0]const u8, pszArg: ?[*:0]const u8, pCmdArgs
 pub export fn TDNFCliParseArgs(
     argc: c_int,
     argv: [*c]?[*:0]u8,
-    ppCmdArgs: ?*?*c.TDNF_CMD_ARGS,
+    ppCmdArgs: ?*?*abi.TDNF_CMD_ARGS,
 ) u32 {
     var dwError: u32 = 0;
-    var pCmdArgs: ?*c.TDNF_CMD_ARGS = null;
+    var pCmdArgs: ?*abi.TDNF_CMD_ARGS = null;
     var nOptionIndex: c_int = 0;
     const pszDefaultInstallRoot: [*:0]const u8 = "/";
 
     if (ppCmdArgs == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
     ppCmdArgs.?.* = null;
 
     resetOptionState();
 
-    const pAllocated = c.calloc(1, @sizeOf(c.TDNF_CMD_ARGS)) orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
+    const pAllocated = c.calloc(1, @sizeOf(abi.TDNF_CMD_ARGS)) orelse return abi.ERROR_TDNF_OUT_OF_MEMORY;
     pCmdArgs = @ptrCast(@alignCast(pAllocated));
     // This function reports failure with a `u32` status rather than a Zig
     // error union, so `errdefer` would never run. Release on every failing
     // path with a `defer` gated on reaching the success return instead.
     var transfer_complete = false;
     defer if (!transfer_complete) {
-        if (pCmdArgs != null) c.TDNFFreeCmdArgs(pCmdArgs);
+        if (pCmdArgs != null) abi.TDNFFreeCmdArgs(pCmdArgs);
     };
 
-    pCmdArgs.?.cn_setopts = c.create_cnfnode("(setopts)") orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
-    pCmdArgs.?.cn_repoopts = c.create_cnfnode("(repoopts)") orelse return c.ERROR_TDNF_OUT_OF_MEMORY;
+    pCmdArgs.?.cn_setopts = abi.create_cnfnode("(setopts)") orelse return abi.ERROR_TDNF_OUT_OF_MEMORY;
+    pCmdArgs.?.cn_repoopts = abi.create_cnfnode("(repoopts)") orelse return abi.ERROR_TDNF_OUT_OF_MEMORY;
 
     if (argv[0]) |arg0| {
         const arg0_slice = std.mem.span(arg0);
@@ -388,7 +386,7 @@ pub export fn TDNFCliParseArgs(
         }
     } else if (pCmdArgs.?.pszInstallRoot[0] != '/') {
         common.log(LOG_CRIT, "Install root must be an absolute path.\n", .{});
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     dwError = TDNFCopyOptions(&option_state, pCmdArgs);
@@ -412,7 +410,7 @@ pub export fn TDNFCliParseArgs(
         while (nArgIndex < argc) : (nArgIndex += 1) {
             if (argv[@intCast(nArgIndex)] == null or argv[@intCast(nArgIndex)].?[0] == 0) {
                 common.log(LOG_ERR, "argument is empty string\n", .{});
-                return c.ERROR_TDNF_INVALID_PARAMETER;
+                return abi.ERROR_TDNF_INVALID_PARAMETER;
             }
 
             dwError = duplicateCString(argv[@intCast(nArgIndex)], &pCmdArgs.?.ppszCmds[nIndex]);
@@ -424,15 +422,15 @@ pub export fn TDNFCliParseArgs(
     }
 
     if (pCmdArgs.?.pszDownloadDir != null and pCmdArgs.?.nDownloadOnly == 0) {
-        return c.ERROR_TDNF_CLI_DOWNLOADDIR_REQUIRES_DOWNLOADONLY;
+        return abi.ERROR_TDNF_CLI_DOWNLOADDIR_REQUIRES_DOWNLOADONLY;
     }
 
     if (pCmdArgs.?.nAllDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
-        return c.ERROR_TDNF_CLI_ALLDEPS_REQUIRES_DOWNLOADONLY;
+        return abi.ERROR_TDNF_CLI_ALLDEPS_REQUIRES_DOWNLOADONLY;
     }
 
     if (pCmdArgs.?.nNoDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
-        return c.ERROR_TDNF_CLI_NODEPS_REQUIRES_DOWNLOADONLY;
+        return abi.ERROR_TDNF_CLI_NODEPS_REQUIRES_DOWNLOADONLY;
     }
 
     ppCmdArgs.?.* = pCmdArgs;
@@ -441,11 +439,11 @@ pub export fn TDNFCliParseArgs(
 }
 
 pub export fn TDNFCopyOptions(
-    pOptionArgs: ?*c.TDNF_CMD_ARGS,
-    pArgs: ?*c.TDNF_CMD_ARGS,
+    pOptionArgs: ?*abi.TDNF_CMD_ARGS,
+    pArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const option_args = pOptionArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const args = pArgs orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const option_args = pOptionArgs orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const args = pArgs orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     args.nAllDeps = option_args.nAllDeps;
     args.nAllowErasing = option_args.nAllowErasing;
@@ -484,11 +482,11 @@ pub export fn TDNFCopyOptions(
 pub export fn ParseOption(
     pszName: ?[*:0]const u8,
     pszArg: ?[*:0]const u8,
-    pCmdArgs: ?*c.TDNF_CMD_ARGS,
+    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
 ) u32 {
-    const cmd_args = pCmdArgs orelse return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     if (pszName == null) {
-        return c.ERROR_TDNF_CLI_INVALID_ARGUMENT;
+        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
     }
 
     const dwError = options.validateOptionsRaw(pszName, pszArg, @ptrCast(&pstOptions));
@@ -528,8 +526,8 @@ pub export fn ParseRpmVerbosity(
     pszRpmVerbosity: ?[*:0]const u8,
     pnRpmVerbosity: ?*c_int,
 ) u32 {
-    const out = pnRpmVerbosity orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    _ = pszRpmVerbosity orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const out = pnRpmVerbosity orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    _ = pszRpmVerbosity orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     out.* = LEGACY_VERBOSITY_INFO;
     return 0;
@@ -541,13 +539,13 @@ pub export fn HandleOptionsError(
     pstOpts: [*c]getopt.struct_option,
 ) u32 {
     if (isNullOrEmpty(pszName) or pstOpts == null) {
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     const dwError = options.validateOptionsRaw(pszName, pszArg, @ptrCast(pstOpts));
-    if (dwError == c.ERROR_TDNF_CLI_OPTION_NAME_INVALID) {
+    if (dwError == abi.ERROR_TDNF_CLI_OPTION_NAME_INVALID) {
         help.TDNFCliShowNoSuchOption(pszName);
-    } else if (dwError == c.ERROR_TDNF_CLI_OPTION_ARG_REQUIRED) {
+    } else if (dwError == abi.ERROR_TDNF_CLI_OPTION_ARG_REQUIRED) {
         common.log(LOG_ERR, "Option %s requires an argument\n", .{pszName.?});
     }
 
@@ -565,20 +563,20 @@ test "ParseRpmVerbosity is a compatibility no-op" {
 }
 
 test "ParseOption preserves repo-scoped setopt handling" {
-    var cmd_args: c.TDNF_CMD_ARGS = std.mem.zeroes(c.TDNF_CMD_ARGS);
-    cmd_args.cn_setopts = c.create_cnfnode("(setopts)");
-    cmd_args.cn_repoopts = c.create_cnfnode("(repoopts)");
-    defer c.destroy_cnftree(cmd_args.cn_setopts);
-    defer c.destroy_cnftree(cmd_args.cn_repoopts);
+    var cmd_args: abi.TDNF_CMD_ARGS = std.mem.zeroes(abi.TDNF_CMD_ARGS);
+    cmd_args.cn_setopts = abi.create_cnfnode("(setopts)");
+    cmd_args.cn_repoopts = abi.create_cnfnode("(repoopts)");
+    defer abi.destroy_cnftree(cmd_args.cn_setopts);
+    defer abi.destroy_cnftree(cmd_args.cn_repoopts);
 
     try std.testing.expectEqual(
         @as(u32, 0),
         ParseOption("setopt", "photon.skip_if_unavailable=1", &cmd_args),
     );
 
-    const cn_repo = c.find_node(cmd_args.cn_repoopts[0].first_child, "photon");
+    const cn_repo = abi.find_node(cmd_args.cn_repoopts[0].first_child, "photon");
     try std.testing.expect(cn_repo != null);
-    const cn_opt = c.find_node(cn_repo[0].first_child, "skip_if_unavailable");
+    const cn_opt = abi.find_node(cn_repo[0].first_child, "skip_if_unavailable");
     try std.testing.expect(cn_opt != null);
-    try std.testing.expectEqualStrings("1", std.mem.span(c.cnfnode_getval(cn_opt.?)));
+    try std.testing.expectEqualStrings("1", std.mem.span(abi.cnfnode_getval(cn_opt.?)));
 }

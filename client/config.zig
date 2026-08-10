@@ -959,7 +959,7 @@ fn fixturePath(comptime suffix: []const u8) [:0]const u8 {
     return options.source_root ++ "/client/fixtures/config/" ++ suffix;
 }
 
-test "configuration ABI layouts match the transitional C ABI" {
+test "configuration layouts match the private cross-module ABI" {
     try testing.expectEqual(@as(usize, 216), @sizeOf(Conf));
     try testing.expectEqual(@as(usize, 56), @offsetOf(Conf, "pszRepoDir"));
     try testing.expectEqual(@as(usize, 96), @offsetOf(Conf, "ppszDistroVerPkgs"));

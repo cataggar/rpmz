@@ -45,27 +45,8 @@ def resolve_bindir(config):
     return os.path.join(config['build_dir'], 'bin')
 
 
-def resolve_libdir(config):
-    libdir = config.get('libdir')
-    if libdir:
-        return libdir
-
-    bindir = config.get('bindir')
-    if bindir:
-        return os.path.join(os.path.dirname(bindir), 'lib')
-
-    return os.path.join(config['build_dir'], 'lib')
-
-
-def build_command_env(config):
-    env = os.environ.copy()
-    libdir = resolve_libdir(config)
-    current = env.get('LD_LIBRARY_PATH')
-    if current:
-        env['LD_LIBRARY_PATH'] = libdir + os.pathsep + current
-    else:
-        env['LD_LIBRARY_PATH'] = libdir
-    return env
+def build_command_env(_config):
+    return os.environ.copy()
 
 
 def decorate_tdnf_cmd_for_test(cmd, config, noconfig=False):

@@ -2242,7 +2242,7 @@ fn dedupeStrings(
 /// `SolvInitSack` is the only thing that ever calls `pool_setarch`, and it
 /// passes `pTdnf->pArgs->pszArch` verbatim when that pointer is non-NULL and
 /// `uname().machine` otherwise -- the identical expression this environment
-/// carries as `force_architecture` (`transaction_plan_capture_abi.inc`).
+/// carries as `force_architecture` (`transaction_plan_capture_abi.zig`).
 ///
 /// The pool read that this replaces recovered the lowest-scoring architecture
 /// above the noarch class from `pool->id2arch`, which is the first token of the

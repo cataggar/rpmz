@@ -48,8 +48,6 @@ pub const basearch = switch (@import("builtin").cpu.arch) {
 pub const Layout = struct {
     /// `<prefix>/bin/tdnf`.
     tdnf: []const u8,
-    /// `<prefix>/lib`, needed on the loader path for `libtdnf.so`.
-    lib_dir: []const u8,
     /// `<prefix>/lib/tdnf-plugins`.
     plugin_dir: []const u8,
     /// Absolute path to the repository seed `setup-repo.sh` produced. It has to
@@ -58,7 +56,6 @@ pub const Layout = struct {
 
     pub fn deinit(self: Layout, allocator: std.mem.Allocator) void {
         allocator.free(self.tdnf);
-        allocator.free(self.lib_dir);
         allocator.free(self.plugin_dir);
         allocator.free(self.repo_dir);
     }
@@ -82,8 +79,6 @@ pub fn resolveLayout(allocator: std.mem.Allocator) !Layout {
     errdefer allocator.free(tdnf);
     cwd.access(io, tdnf, .{}) catch return Error.MissingBuildTree;
 
-    const lib_dir = try std.fs.path.join(allocator, &.{ prefix, "lib" });
-    errdefer allocator.free(lib_dir);
     const plugin_dir = std.testing.environ.getAlloc(
         allocator,
         "TDNF_ZTEST_PLUGIN_DIR",
@@ -104,7 +99,6 @@ pub fn resolveLayout(allocator: std.mem.Allocator) !Layout {
 
     return .{
         .tdnf = tdnf,
-        .lib_dir = lib_dir,
         .plugin_dir = plugin_dir,
         .repo_dir = repo_dir,
     };
@@ -497,7 +491,6 @@ pub const Harness = struct {
         var environ: std.process.Environ.Map = .init(self.allocator);
         errdefer environ.deinit();
         try environ.putPosixBlock(std.testing.environ.block.view());
-        try environ.put("LD_LIBRARY_PATH", self.layout.lib_dir);
 
         var created: Root = .{
             .allocator = self.allocator,

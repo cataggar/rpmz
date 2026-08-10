@@ -64,8 +64,7 @@ PATTERNS = (
 ASSERT_TOKEN = "TDNF_VENDORED_LIBSOLV_VERSION_PATCH"
 
 # __has_include(<solv/pool.h>) is deliberately NOT matched: it is a
-# predicate, brings no declaration into the translation unit, and
-# client/includes.h uses it as a negative control that must keep working.
+# predicate and brings no declaration into the translation unit.
 
 
 def sources():

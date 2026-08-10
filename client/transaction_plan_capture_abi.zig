@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub const abi_version: u32 = 1;
 
 pub const request_kind = struct {
@@ -529,3 +531,7 @@ pub const RequestTraceCaptureFacts = extern struct {
     job_count: u32 = 0,
     satisfied_package_count: u32 = 0,
 };
+
+test {
+    std.testing.refAllDecls(@This());
+}

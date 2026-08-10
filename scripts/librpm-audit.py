@@ -258,7 +258,8 @@ def elf_errors(prefix):
         r"^(?:rpm|rpmlog|header[A-Z_]|pgp[A-Z_]|F[A-Z])"
     )
     needed_pattern = re.compile(
-        r"\blib(?:rpm(?:io)?|sqlite3|solv(?:ext)?|lua[0-9.]*)\.so(?:\.|])"
+        r"\blib(?:tdnf(?:cli)?|rpm(?:io)?|sqlite3|solv(?:ext)?|"
+        r"lua[0-9.]*)\.so(?:\.|])"
     )
     runtime_load_pattern = re.compile(
         r"\blib(?:" + "rpm" + r"(?:io)?|" + "lua" +
@@ -294,6 +295,29 @@ def elf_errors(prefix):
     return errors
 
 
+def installed_surface_errors(prefix):
+    errors = []
+    required = (
+        prefix / "bin" / "tdnf",
+        prefix / "bin" / "tdnf-config",
+        prefix / "libexec" / "tdnf" / "tdnf-history-util",
+        prefix / "libexec" / "tdnf" / "tdnf-test-support",
+    )
+    for path in required:
+        if not path.is_file():
+            errors.append(f"{path}: required executable is missing")
+
+    for path in sorted(prefix.rglob("*")):
+        relative = path.relative_to(prefix)
+        if relative.parts and relative.parts[0] == "include":
+            errors.append(f"{path}: installed C header surface is forbidden")
+        if path.name.startswith("libtdnf"):
+            errors.append(f"{path}: installed libtdnf artifact is forbidden")
+        if path.suffix == ".pc":
+            errors.append(f"{path}: installed pkg-config metadata is forbidden")
+    return errors
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=(
@@ -315,6 +339,7 @@ def main():
             if not prefix.is_dir():
                 raise FileNotFoundError(prefix)
             errors.extend(elf_errors(prefix))
+            errors.extend(installed_surface_errors(prefix))
     except (
         FileNotFoundError,
         OSError,

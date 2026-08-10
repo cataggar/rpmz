@@ -23,7 +23,7 @@ const std = @import("std");
 
 const errors = @import("tdnf_error");
 
-/// Mirrors `TDNF_ID_LIST` in `common/structs.h`.
+/// Private growable list layout shared with the client module.
 pub const IdList = extern struct {
     pnElements: ?[*]i32,
     dwCount: u32,

@@ -9,6 +9,7 @@ const common = @import("tdnf_common");
 const abi = @import("client_abi");
 const errors = @import("tdnf_error");
 const options = @import("client_config_options");
+const transaction_plan_abi = @import("transaction_plan_capture_abi");
 
 const c = abi.C;
 const CmdArgs = abi.CmdArgs;
@@ -1153,7 +1154,7 @@ fn addCmdLinePackages(
                     TDNFTransactionPlanRequestTraceRecordRequestOutcome(
                         handle.pRequestTrace,
                         @intCast(index - 1),
-                        c.TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_NO_CANDIDATE,
+                        transaction_plan_abi.request_outcome.no_candidate,
                     );
                     unresolved_output.* += 1;
                 }
@@ -1200,7 +1201,7 @@ fn addCmdLinePackages(
             trace_start,
             queue.dwCount,
             alter_type,
-            c.TDNF_TRANSACTION_PLAN_CAPTURE_REASON_USER,
+            transaction_plan_abi.request_reason.user,
             @intCast(index - 1),
         );
     }
@@ -2017,7 +2018,7 @@ pub export fn TDNFHistoryResolve(
                 continue;
             const trace_start = install.dwCount;
             var outcome: c_int =
-                c.TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED;
+                transaction_plan_abi.request_outcome.satisfied;
             var candidates = IdList{};
             TDNFIdListInit(&candidates);
             defer TDNFIdListFree(&candidates);
@@ -2043,7 +2044,7 @@ pub export fn TDNFHistoryResolve(
                 result = TDNFAddNotResolved(unresolved, name);
                 if (result != 0) break;
                 outcome =
-                    c.TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_NO_CANDIDATE;
+                    transaction_plan_abi.request_outcome.no_candidate;
                 unresolved_count += 1;
             } else {
                 freeStringArray(&matches);
@@ -2076,7 +2077,7 @@ pub export fn TDNFHistoryResolve(
                     );
                     if (result != 0) break;
                     outcome =
-                        c.TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_QUEUED;
+                        transaction_plan_abi.request_outcome.queued;
                 }
             }
             freeStringArray(&matches);
@@ -2084,8 +2085,8 @@ pub export fn TDNFHistoryResolve(
             TDNFTransactionPlanRequestTraceRecordHistoryGoal(
                 handle.pRequestTrace,
                 name,
-                c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_INSTALL,
-                c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_INSTALL,
+                transaction_plan_abi.request_kind.install,
+                transaction_plan_abi.job_action.install,
                 install.pnElements,
                 trace_start,
                 install.dwCount,
@@ -2126,16 +2127,16 @@ pub export fn TDNFHistoryResolve(
             );
             if (result != 0) break;
             const outcome: u32 = if (erase.dwCount == trace_start)
-                c.TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_SATISFIED
+                transaction_plan_abi.request_outcome.satisfied
             else
-                c.TDNF_TRANSACTION_PLAN_REQUEST_OUTCOME_QUEUED;
+                transaction_plan_abi.request_outcome.queued;
             freeStringArray(&matches);
             match_count = 0;
             TDNFTransactionPlanRequestTraceRecordHistoryGoal(
                 handle.pRequestTrace,
                 name,
-                c.TDNF_TRANSACTION_PLAN_CAPTURE_REQUEST_ERASE,
-                c.TDNF_TRANSACTION_PLAN_CAPTURE_JOB_ERASE,
+                transaction_plan_abi.request_kind.erase,
+                transaction_plan_abi.job_action.erase,
                 erase.pnElements,
                 trace_start,
                 erase.dwCount,

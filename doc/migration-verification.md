@@ -45,7 +45,7 @@ cd <branch>/out/repo && python3 -m http.server 8080 &
 # both binaries: same config file, same served repo, separate FRESH cachedirs
 for pair in "<main>/out /tmp/c_main" "<branch>/out /tmp/c_branch"; do
   set -- $pair
-  sudo -E env LD_LIBRARY_PATH=$1/lib $1/bin/tdnf \
+  sudo -E $1/bin/tdnf \
       -c <branch>/out/repo/tdnf.conf --releasever=1.0 \
       --setopt=cachedir=$2 list tdnf-test-one
 done
@@ -132,8 +132,8 @@ normalization conventions that the old layer applied silently.
 
 ## 6. Gate hazards
 
-- Never pipe `abi-audit` through `tail`/`head` — you read the pager's exit
-  code and can miss `ABI regression:`. Redirect to a file and grep it.
+- Do not hide audit exit codes behind `tail`, `head`, or an unguarded
+  pipeline. Judge every audit by its own exit status.
 - `zig build test` prints `failed command: .../test --listen=-` while exiting
   0. **Judge by exit code.**
 - Always pass `--prefix ./out`.
@@ -142,8 +142,8 @@ normalization conventions that the old layer applied silently.
   `sudo chown -R "$(id -u):$(id -g)" .zig-cache out` first, and check the
   build actually ran.
 - `rm -rf out` destroys the `ztest` repo seed; reinstall before `ztest`.
-- Editing a C header may not invalidate the cached `@cImport` for
-  `abi/repomd_layout.zig`; re-verify with `--cache-dir .zig-cache-verify`.
+- Editing a remaining private `@cImport` shim may not invalidate a cached
+  translation; use a fresh cache when validating declaration changes.
 - `zig build ztest` requires root and a prior `zig build install --prefix
   ./out`. It reports `33/33 steps` — the install steps in that graph are what
   guarantee the tested binary is freshly built (#250). A much smaller step

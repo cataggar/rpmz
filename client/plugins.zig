@@ -1074,7 +1074,7 @@ fn writePluginConfigs(
     });
 }
 
-test "plugin ABI layouts match the canonical C definitions" {
+test "plugin ABI layouts match the private canonical definitions" {
     try testing.expectEqual(@sizeOf(abi.C.TDNF_PLUGIN), @sizeOf(Plugin));
     try testing.expectEqual(@alignOf(abi.C.TDNF_PLUGIN), @alignOf(Plugin));
     try testing.expectEqual(@sizeOf(abi.C.TDNF_REPO_DATA), @sizeOf(RepoData));

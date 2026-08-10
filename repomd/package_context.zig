@@ -7,10 +7,7 @@ const installed_repository = @import("installed_repository.zig");
 const model = @import("model.zig");
 const rpmpkg = @import("rpmpkg.zig");
 
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("tdnferror.h");
-});
+const abi = @import("tdnf_internal_abi");
 
 const IdList = extern struct {
     elements: ?[*]i32,
@@ -790,12 +787,12 @@ fn TDNFPackageContextCreate(
     include_installed: c_int,
     output: ?*?*Context,
 ) callconv(.c) u32 {
-    const slot = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const slot = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     slot.* = null;
     const arch = if (raw_architecture) |value|
         std.mem.span(value)
     else
-        nativeArchitecture() catch return c.ERROR_TDNF_SOLV_IO;
+        nativeArchitecture() catch return abi.ERROR_TDNF_SOLV_IO;
     const context = createWithInstalled(
         std.heap.c_allocator,
         if (cache_dir) |value| std.mem.span(value) else null,
@@ -807,10 +804,10 @@ fn TDNFPackageContextCreate(
             .{ .root_dir = root_dir },
         include_installed != 0,
     ) catch |err| return switch (err) {
-        error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
-        error.InvalidRpmHeader => c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
-        error.RpmDbOpenFailed => c.ERROR_TDNF_RPMTS_OPENDB_FAILED,
-        error.RpmDbReadFailed => c.ERROR_TDNF_SOLV_IO,
+        error.OutOfMemory => abi.ERROR_TDNF_OUT_OF_MEMORY,
+        error.InvalidRpmHeader => abi.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
+        error.RpmDbOpenFailed => abi.ERROR_TDNF_RPMTS_OPENDB_FAILED,
+        error.RpmDbReadFailed => abi.ERROR_TDNF_SOLV_IO,
     };
     slot.* = context;
     return 0;
@@ -836,11 +833,11 @@ fn TDNFPackageContextInitCommandLine(
     context: ?*Context,
     output: ?*?*Repository,
 ) callconv(.c) u32 {
-    const slot = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const slot = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     slot.* = null;
     const repository = createCommandLine(context orelse
-        return c.ERROR_TDNF_INVALID_PARAMETER) catch
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_INVALID_PARAMETER) catch
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     slot.* = repository;
     return 0;
 }
@@ -849,11 +846,11 @@ fn TDNFPackageContextResetCommandLine(
     context: ?*Context,
     output: ?*?*Repository,
 ) callconv(.c) u32 {
-    const slot = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const slot = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     slot.* = null;
     const repository = resetCommandLine(context orelse
-        return c.ERROR_TDNF_INVALID_PARAMETER) catch
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_INVALID_PARAMETER) catch
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     slot.* = repository;
     return 0;
 }
@@ -865,15 +862,15 @@ fn TDNFPackageContextAddRpm(
     package_id: ?*u32,
 ) callconv(.c) u32 {
     if (package_id) |value| value.* = 0;
-    const path = raw_path orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const path = raw_path orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const id = addCommandLineRpm(
-        context orelse return c.ERROR_TDNF_INVALID_PARAMETER,
-        repository orelse return c.ERROR_TDNF_INVALID_PARAMETER,
+        context orelse return abi.ERROR_TDNF_INVALID_PARAMETER,
+        repository orelse return abi.ERROR_TDNF_INVALID_PARAMETER,
         std.mem.span(path),
     ) catch |err| return switch (err) {
-        error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
-        error.RpmFileOpenFailed => c.ERROR_TDNF_FILE_NOT_FOUND,
-        error.InvalidRpmHeader => c.ERROR_TDNF_INVALID_REPO_FILE,
+        error.OutOfMemory => abi.ERROR_TDNF_OUT_OF_MEMORY,
+        error.RpmFileOpenFailed => abi.ERROR_TDNF_FILE_NOT_FOUND,
+        error.InvalidRpmHeader => abi.ERROR_TDNF_INVALID_REPO_FILE,
     };
     if (package_id) |value| value.* = id;
     return 0;
@@ -889,11 +886,11 @@ fn TDNFPackageContextGetFields(
         repository: ?[*:0]const u8,
     },
 ) callconv(.c) u32 {
-    const destination = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const destination = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const fields = packageFields(
-        context orelse return c.ERROR_TDNF_INVALID_PARAMETER,
+        context orelse return abi.ERROR_TDNF_INVALID_PARAMETER,
         package_id,
-    ) orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    ) orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     destination.* = .{
         .name = fields.name,
         .arch = fields.arch,
@@ -910,14 +907,14 @@ fn TDNFPackageContextGetRepoNevra(
     nevra: ?*?[*:0]u8,
 ) callconv(.c) u32 {
     const repository_slot = repository orelse
-        return c.ERROR_TDNF_INVALID_PARAMETER;
-    const nevra_slot = nevra orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const nevra_slot = nevra orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     repository_slot.* = null;
     nevra_slot.* = null;
     const fields = packageFields(
-        context orelse return c.ERROR_TDNF_INVALID_PARAMETER,
+        context orelse return abi.ERROR_TDNF_INVALID_PARAMETER,
         package_id,
-    ) orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    ) orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     var copy: ?[*:0]u8 = null;
     const result = TDNFAllocateString(fields.nevra, &copy);
     if (result != 0) return result;
@@ -930,8 +927,8 @@ fn TDNFPackageContextGetInstalledPkgIds(
     context: ?*const Context,
     output: ?*IdList,
 ) callconv(.c) u32 {
-    const value = context orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const list = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const value = context orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const list = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const repository = value.impl.installed orelse return 0;
     for (repository.handles) |handle| {
         const result = TDNFIdListPush(
@@ -947,8 +944,8 @@ fn TDNFPackageContextGetAllPkgIds(
     context: ?*const Context,
     output: ?*IdList,
 ) callconv(.c) u32 {
-    const value = context orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const list = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const value = context orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const list = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     if (value.impl.installed) |repository| {
         for (repository.handles) |handle| {
             const result = TDNFIdListPush(list, @intCast(handle));
@@ -976,9 +973,9 @@ fn TDNFPackageContextGetRepoDataList(
     output: ?*?[*]?*anyopaque,
     count: ?*u32,
 ) callconv(.c) u32 {
-    const value = context orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const output_slot = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const count_slot = count orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const value = context orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const output_slot = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const count_slot = count orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     output_slot.* = null;
     count_slot.* = 0;
     var owner_count: usize = 0;
@@ -1034,18 +1031,18 @@ pub export fn SolvGetPkgNameFromId(
     package_id: u32,
     output: ?*?[*:0]u8,
 ) u32 {
-    const slot = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const slot = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     slot.* = null;
     const fields = packageFields(
-        context orelse return c.ERROR_TDNF_INVALID_PARAMETER,
+        context orelse return abi.ERROR_TDNF_INVALID_PARAMETER,
         @intCast(package_id),
-    ) orelse return c.ERROR_TDNF_NO_DATA;
+    ) orelse return abi.ERROR_TDNF_NO_DATA;
     return TDNFAllocateString(fields.name, slot);
 }
 
 fn allocateSlice(value: []const u8, output: *?[*:0]u8) u32 {
     const copy = std.heap.c_allocator.dupeZ(u8, value) catch
-        return c.ERROR_TDNF_OUT_OF_MEMORY;
+        return abi.ERROR_TDNF_OUT_OF_MEMORY;
     defer std.heap.c_allocator.free(copy);
     return TDNFAllocateString(copy, output);
 }
@@ -1057,18 +1054,18 @@ pub export fn SolvSplitEvr(
     version_output: ?*?[*:0]u8,
     release_output: ?*?[*:0]u8,
 ) u32 {
-    _ = context orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const epoch_slot = epoch_output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    _ = context orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const epoch_slot = epoch_output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const version_slot = version_output orelse
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     const release_slot = release_output orelse
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     epoch_slot.* = null;
     version_slot.* = null;
     release_slot.* = null;
     const evr = std.mem.span(raw_evr orelse
-        return c.ERROR_TDNF_INVALID_PARAMETER);
-    if (evr.len == 0) return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER);
+    if (evr.len == 0) return abi.ERROR_TDNF_INVALID_PARAMETER;
 
     var version_start: usize = 0;
     if (std.mem.indexOfScalar(u8, evr, ':')) |colon| {
@@ -1115,14 +1112,14 @@ pub export fn SolvGetNevraFromId(
     arch_output: ?*?[*:0]u8,
     evr_output: ?*?[*:0]u8,
 ) u32 {
-    const value = context orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const epoch_slot = epoch_output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
-    const name_slot = name_output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const value = context orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const epoch_slot = epoch_output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const name_slot = name_output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const version_slot = version_output orelse
-        return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     const release_slot = release_output orelse
-        return c.ERROR_TDNF_INVALID_PARAMETER;
-    const arch_slot = arch_output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const arch_slot = arch_output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     epoch_slot.* = 0;
     name_slot.* = null;
     version_slot.* = null;
@@ -1130,7 +1127,7 @@ pub export fn SolvGetNevraFromId(
     arch_slot.* = null;
     if (evr_output) |slot| slot.* = null;
     const fields = packageFields(value, @intCast(package_id)) orelse
-        return c.ERROR_TDNF_NO_DATA;
+        return abi.ERROR_TDNF_NO_DATA;
 
     var epoch: ?[*:0]u8 = null;
     var result = TDNFAllocateString(fields.name, name_slot);
@@ -1190,11 +1187,11 @@ pub export fn TDNFPkgHandleGetFields(
         repository: ?[*:0]const u8,
     },
 ) u32 {
-    const destination = output orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const destination = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const fields = packageFields(
-        context orelse return c.ERROR_TDNF_INVALID_PARAMETER,
+        context orelse return abi.ERROR_TDNF_INVALID_PARAMETER,
         package_id,
-    ) orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    ) orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     destination.* = .{
         .name = fields.name,
         .arch = fields.arch,
@@ -1238,7 +1235,7 @@ pub export fn SolvSackReadInstalledRpms(
     rpm_config: ?*const anyopaque,
 ) u32 {
     _ = cache_file;
-    const value = context orelse return c.ERROR_TDNF_INVALID_PARAMETER;
+    const value = context orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     loadInstalled(
         value,
         if (rpm_config) |config|
@@ -1246,16 +1243,16 @@ pub export fn SolvSackReadInstalledRpms(
         else
             .{ .root_dir = rootDir(value) },
     ) catch |err| return switch (err) {
-        error.OutOfMemory => c.ERROR_TDNF_OUT_OF_MEMORY,
-        error.InvalidRpmHeader => c.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
-        error.RpmDbOpenFailed => c.ERROR_TDNF_RPMTS_OPENDB_FAILED,
-        error.RpmDbReadFailed => c.ERROR_TDNF_SOLV_IO,
+        error.OutOfMemory => abi.ERROR_TDNF_OUT_OF_MEMORY,
+        error.InvalidRpmHeader => abi.ERROR_TDNF_RPM_HEADER_CONVERT_FAILED,
+        error.RpmDbOpenFailed => abi.ERROR_TDNF_RPMTS_OPENDB_FAILED,
+        error.RpmDbReadFailed => abi.ERROR_TDNF_SOLV_IO,
     };
     return 0;
 }
 
 fn unsupported() u32 {
-    return c.ERROR_TDNF_CALL_NOT_SUPPORTED;
+    return abi.ERROR_TDNF_CALL_NOT_SUPPORTED;
 }
 
 pub export fn SolvCreatePool(output: ?*?*anyopaque) u32 {

@@ -36,23 +36,23 @@ exercise it locally:
 
 ```
 zig build install --prefix ./out
-cd pytests && LD_LIBRARY_PATH=../out/lib pytest -v
+cd pytests && pytest -v
 ```
 
-The C-to-Zig migration and public ABI baselines are enforced separately:
+The C-to-Zig migration, installed layout, and public Zig package are
+enforced separately:
 
 ```
 zig build -Doptimize=ReleaseSafe migration-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe abi-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe dead-errdefer-audit --prefix ./out
 zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe public-api-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
+zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
 ```
 
-Pass `-Doptimize=ReleaseSafe`, as CI does. These steps read the installed
-prefix, so running them bare rebuilds it as Debug and `abi-audit` fails:
-zig links `libtdnf.so` with its self-hosted ELF linker in Debug builds
-and never forwards `--version-script` to it, so the export filter in
-`client/libtdnf.map` is skipped.
+Pass `-Doptimize=ReleaseSafe`, as CI does. The native dependency audit
+reads the installed prefix and verifies that no public C headers,
+pkg-config metadata, or `libtdnf*` artifacts are present.
 
 The integration tests need an rpm-aware host (`rpm`, `rpmbuild`,
 `createrepo_c`, plus the python `pytest` / `requests` / `pyOpenSSL`
@@ -61,13 +61,13 @@ stack). See README.md for the apt package list.
 The host RPM commands are test fixture generators and result oracles,
 not build dependencies or runtime fallbacks. CI also builds without RPM
 development files, runs Zig tests and the native helper smoke suite,
-checks every installed ELF, compiles an isolated public C consumer, and
+checks every installed ELF and the external public Zig consumer, and
 runs `flake8 pytests`. The full integration tests above are expected to
 be run by the developer locally.
 
-Generated `config.h` files, `pytests/config.json`, and installed package
-metadata are outputs of `build.zig`; edit the corresponding `.in`
-templates rather than generated files.
+Generated `config.h` files and `pytests/config.json` are outputs of
+`build.zig`; edit the corresponding templates rather than generated
+files.
 
 ### Staying In Sync With Upstream
 
