@@ -326,6 +326,29 @@ test "--skip-broken drops the unsatisfiable job and resolves the rest" {
     try std.testing.expect(!try root.isInstalled(missing_dep));
 }
 
+// `--allowerasing` makes the goal builder mark every non-automatic installed
+// package as user-installed. Those marks are policy state, not a request, so
+// they must stay out of the job list the skip-broken search validates: that
+// search admits a goal only when every job is a plain install, and it caps the
+// job count well below the number of packages a real root has installed.
+test "--skip-broken still resolves when --allowerasing adds user-installed marks" {
+    var h = try harness.open(std.testing.allocator);
+    defer h.deinit();
+    var root = try h.root();
+    defer root.deinit();
+    defer eraseBestEffort(&root, satisfiable);
+
+    var result = try root.run(&.{
+        "install",       "-y",       "--nogpgcheck", "--skip-broken",
+        "--allowerasing", satisfiable, missing_dep,
+    });
+    defer result.deinit();
+    try result.expectOk();
+
+    try std.testing.expect(try root.isInstalled(satisfiable));
+    try std.testing.expect(!try root.isInstalled(missing_dep));
+}
+
 // A skip filter removes problems from the *report*; it does not make the
 // request satisfiable. With the only problem skipped there is nothing to
 // print, and the request must still fail without changing anything.

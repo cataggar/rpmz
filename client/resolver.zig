@@ -32,11 +32,14 @@
 
 const std = @import("std");
 const abi = @import("client_abi");
+const common = @import("tdnf_common");
 const errors = @import("tdnf_error");
 const integration = @import("transaction_plan_integration");
 const resolve_service = @import("resolve_service.zig");
 
 pub const transaction_plan = @import("transaction_plan");
+
+const LOG_CRIT: c_int = 2;
 
 const Allocator = std.mem.Allocator;
 const CmdArgs = abi.CmdArgs;
@@ -116,6 +119,33 @@ pub const Operation = enum {
             .upgrade_all, .downgrade_all, .autoerase_all => true,
             else => false,
         };
+    }
+
+    /// The single mapping from a user-facing transaction verb to a typed
+    /// operation. `tdnf plan` and `resolvePlan` both resolve their verbs here,
+    /// so no caller can disagree with another about what an alias means.
+    ///
+    /// A verb whose bare form means "act on everything installed" is promoted
+    /// to its singleton operation when no subject was given, which is the rule
+    /// `tdnf upgrade`, `tdnf downgrade`, and `tdnf autoremove` have always
+    /// followed. Returns null for a verb this resolver does not plan.
+    pub fn fromVerb(name: []const u8, subject_count: usize) ?Operation {
+        const bare = subject_count == 0;
+        const eq = std.mem.eql;
+        if (eq(u8, name, "install")) return .install;
+        if (eq(u8, name, "erase") or eq(u8, name, "remove")) return .erase;
+        if (eq(u8, name, "upgrade") or eq(u8, name, "update") or
+            eq(u8, name, "upgrade-to") or eq(u8, name, "update-to"))
+        {
+            return if (bare) .upgrade_all else .upgrade;
+        }
+        if (eq(u8, name, "downgrade")) return if (bare) .downgrade_all else .downgrade;
+        if (eq(u8, name, "distro-sync")) return .distro_sync;
+        if (eq(u8, name, "reinstall")) return .reinstall;
+        if (eq(u8, name, "autoerase") or eq(u8, name, "autoremove")) {
+            return if (bare) .autoerase_all else .autoerase;
+        }
+        return null;
     }
 };
 
@@ -365,6 +395,98 @@ pub fn resolvePlan(
     if (state.takePublished()) |plan| return plan;
     if (resolve_result == 0) return error.ResolveFailed;
     return mapError(resolve_result);
+}
+
+extern fn TDNFTransactionPlanSetEnabled(
+    handle: ?*Tdnf,
+    enabled: u32,
+) callconv(.c) u32;
+extern fn TDNFTransactionPlanGetCanonicalJson(
+    handle: ?*Tdnf,
+    json: *?[*:0]u8,
+) callconv(.c) u32;
+
+/// Plans `ppszCmds[0]` over `ppszCmds[1..]` on an already configured handle and
+/// renders the canonical plan bytes.
+///
+/// This is the whole of `tdnf plan`. The command owns nothing but its argument
+/// vector and stdout: the verb mapping, the capture lifecycle, the
+/// problem-plan policy, and the canonical writer all live here, so the CLI
+/// cannot disagree with `resolvePlan` about any of them.
+///
+/// A solver contradiction is a success: it renders a structured problem plan.
+/// On success `*ppszJson` is a NUL-terminated buffer the caller must release
+/// with `TDNFTransactionPlanFreeCanonicalJson`.
+fn resolveCanonicalJson(
+    raw_handle: ?*Tdnf,
+    raw_commands: ?[*]?[*:0]u8,
+    command_count: u32,
+    raw_json: ?*?[*:0]u8,
+) callconv(.c) u32 {
+    const json_out = raw_json orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    json_out.* = null;
+    const handle = raw_handle orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const commands = raw_commands orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const args = handle.pArgs orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+
+    if (command_count == 0) {
+        common.log(LOG_CRIT, "need transaction command as argument\n", .{});
+        return @intCast(abi.C.ERROR_TDNF_CLI_NOT_ENOUGH_ARGS);
+    }
+    const verb = commands[0] orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const operation = Operation.fromVerb(
+        std.mem.span(verb),
+        command_count - 1,
+    ) orelse {
+        common.log(
+            LOG_CRIT,
+            "unsupported transaction plan command '%s'\n",
+            .{verb},
+        );
+        return @intCast(abi.C.ERROR_TDNF_CLI_INVALID_ARGUMENT);
+    };
+
+    const enable_result = TDNFTransactionPlanSetEnabled(handle, 1);
+    if (enable_result != 0) return enable_result;
+
+    // The resolve reads its subjects from the handle's argument vector, so the
+    // caller's operation slice is installed for the duration of the resolve
+    // and restored before returning.
+    const saved_commands = args.ppszCmds;
+    const saved_count = args.nCmdCount;
+    args.ppszCmds = @ptrCast(commands);
+    args.nCmdCount = @intCast(command_count);
+    defer {
+        args.ppszCmds = saved_commands;
+        args.nCmdCount = saved_count;
+    }
+
+    var solved: ?*abi.SolvedPackageInfo = null;
+    const resolve_result = resolve_service.resolve(
+        .{ .handle = handle, .operation = operation.service() },
+        &solved,
+    );
+    if (solved != null) TDNFFreeSolvedPackageInfo(@ptrCast(solved));
+
+    var json: ?[*:0]u8 = null;
+    const json_result = TDNFTransactionPlanGetCanonicalJson(handle, &json);
+    if (json_result != 0)
+        return if (resolve_result != 0) resolve_result else json_result;
+    const rendered = json orelse return errors.ERROR_TDNF_NO_DATA;
+    json_out.* = rendered;
+    return 0;
+}
+
+comptime {
+    @export(&resolveCanonicalJson, .{
+        .name = "TDNFTransactionPlanResolveCanonicalJson",
+        .linkage = .strong,
+    });
 }
 
 fn validate(input: ResolveInput) ResolveError!void {
@@ -896,4 +1018,71 @@ test "resolver: every public operation maps onto exactly one service operation" 
     }
     // `obsoleted` is an outcome, never a request.
     try testing.expect(!seen.contains(.obsoleted));
+}
+
+test "resolver: every transaction verb maps to exactly one operation" {
+    const Case = struct {
+        verb: []const u8,
+        bare: Operation,
+        with_subject: Operation,
+    };
+    // Every alias `tdnf` accepts for a planned transaction, and what it means
+    // with and without a subject. This table is the contract `tdnf plan` and
+    // `resolvePlan` share.
+    const cases = [_]Case{
+        .{ .verb = "install", .bare = .install, .with_subject = .install },
+        .{ .verb = "erase", .bare = .erase, .with_subject = .erase },
+        .{ .verb = "remove", .bare = .erase, .with_subject = .erase },
+        .{ .verb = "upgrade", .bare = .upgrade_all, .with_subject = .upgrade },
+        .{ .verb = "update", .bare = .upgrade_all, .with_subject = .upgrade },
+        .{ .verb = "upgrade-to", .bare = .upgrade_all, .with_subject = .upgrade },
+        .{ .verb = "update-to", .bare = .upgrade_all, .with_subject = .upgrade },
+        .{ .verb = "downgrade", .bare = .downgrade_all, .with_subject = .downgrade },
+        .{ .verb = "distro-sync", .bare = .distro_sync, .with_subject = .distro_sync },
+        .{ .verb = "reinstall", .bare = .reinstall, .with_subject = .reinstall },
+        .{ .verb = "autoerase", .bare = .autoerase_all, .with_subject = .autoerase },
+        .{ .verb = "autoremove", .bare = .autoerase_all, .with_subject = .autoerase },
+    };
+
+    var reachable = std.EnumSet(Operation).initEmpty();
+    for (cases) |case| {
+        try testing.expectEqual(case.bare, Operation.fromVerb(case.verb, 0).?);
+        try testing.expectEqual(
+            case.with_subject,
+            Operation.fromVerb(case.verb, 1).?,
+        );
+        try testing.expectEqual(
+            case.with_subject,
+            Operation.fromVerb(case.verb, 7).?,
+        );
+        reachable.insert(case.bare);
+        reachable.insert(case.with_subject);
+    }
+
+    // No operation may be unreachable from the command line, or the CLI and
+    // the API would not be planning the same set of transactions.
+    inline for (comptime std.enums.values(Operation)) |operation| {
+        try testing.expect(reachable.contains(operation));
+    }
+
+    // A promoted verb is exactly the singleton form of its subject form.
+    for (cases) |case| {
+        if (case.bare != case.with_subject)
+            try testing.expect(case.bare.isSingleton());
+    }
+
+    for ([_][]const u8{
+        "",         "plan",   "check",  "list",
+        "INSTALL",  "remove ", "up",    "distro_sync",
+        "obsolete", "history",
+    }) |unsupported| {
+        try testing.expectEqual(
+            @as(?Operation, null),
+            Operation.fromVerb(unsupported, 0),
+        );
+        try testing.expectEqual(
+            @as(?Operation, null),
+            Operation.fromVerb(unsupported, 1),
+        );
+    }
 }

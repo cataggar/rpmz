@@ -2446,7 +2446,7 @@ pub extern fn TDNFRepoMdNativeTransactionPlanSolve(pItems: [*c]const TDNF_REPOMD
 pub extern fn TDNFRepoMdNativeTransactionPlanSolveV2(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2, dwItemCount: u32, pszInstallRoot: [*c]const u8, ppPlan: [*c][*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) u32;
 pub extern fn TDNFRepoMdNativeTransactionPlanFree(pPlan: [*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) void;
 pub extern fn TDNFRepoMdNativeSolverResultFree(pResult: [*c]TDNF_REPOMD_NATIVE_SOLVER_RESULT) void;
-pub extern fn TDNFRepoMdNativeSolverLiveSolve(pRepositories: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16, dwRepositoryCount: u32, pJobs: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwJobCount: u32, pEraseJobs: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwEraseJobCount: u32, pHiddenAvailable: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwHiddenAvailableCount: u32, nAllDeps: c_int, nBest: c_int, nCleanDeps: c_int, nSkipBroken: c_int, nAllowErasing: c_int, nUpdateAll: c_int, nDistSyncAll: c_int, ppszLockedPackages: [*c]const [*c]const u8, pdwLockedQueuePairs: [*c]const u32, dwGlobalQueuePair: u32, nHasGlobalQueuePair: c_int, ppszInstallOnlyPackages: [*c]const [*c]const u8, dwInstallOnlyLimit: u32, ppszProtectedPackages: [*c]const [*c]const u8, ppszUserInstalledPackages: [*c]const [*c]const u8, ppszCmdLineRpmPaths: [*c]const [*c]const u8, nReInstall: c_int, pRpmConfig: ?*const tdnf_rpm_config, pszNativeArch: [*c]const u8, nPrepareOnly: c_int, nRefuteUnsat: c_int, ppSolved: [*c]PTDNF_SOLVED_PKG_INFO, ppHandle: [*c]?*anyopaque) u32;
+pub extern fn TDNFRepoMdNativeSolverLiveSolve(pRepositories: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16, dwRepositoryCount: u32, pJobs: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwJobCount: u32, pEraseJobs: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwEraseJobCount: u32, pHiddenAvailable: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwHiddenAvailableCount: u32, nAllDeps: c_int, nBest: c_int, nCleanDeps: c_int, nSkipBroken: c_int, nAllowErasing: c_int, nUpdateAll: c_int, nDistSyncAll: c_int, ppszLockedPackages: [*c]const [*c]const u8, pdwLockedQueuePairs: [*c]const u32, dwGlobalQueuePair: u32, nHasGlobalQueuePair: c_int, ppszInstallOnlyPackages: [*c]const [*c]const u8, dwInstallOnlyLimit: u32, ppszProtectedPackages: [*c]const [*c]const u8, ppszUserInstalledPackages: [*c]const [*c]const u8, pdwUserInstalledQueuePairs: [*c]const u32, ppszCmdLineRpmPaths: [*c]const [*c]const u8, nReInstall: c_int, pRpmConfig: ?*const tdnf_rpm_config, pszNativeArch: [*c]const u8, nPrepareOnly: c_int, nRefuteUnsat: c_int, ppSolved: [*c]PTDNF_SOLVED_PKG_INFO, ppHandle: [*c]?*anyopaque) u32;
 pub extern fn TDNFRepoMdNativeSolverLiveSolveRelease(pHandle: ?*anyopaque) void;
 pub extern fn TDNFRepoMdNativeSolverCheckLocal(pszDirectory: [*c]const u8, pszNativeArch: [*c]const u8, pdwPackageCount: [*c]u32, ppHandle: [*c]?*anyopaque, ppszErrorPath: [*c][*c]const u8) u32;
 pub extern fn TDNFRepoMdNativeSolverRefutedProblemCount(pHandle: ?*anyopaque, pdwCount: [*c]u32) u32;
@@ -4490,6 +4490,8 @@ pub fn TDNFGoalSolveNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_L
     _ = &ppszLockedPkgs;
     var pdwLockedQueuePairs: [*c]u32 = null;
     _ = &pdwLockedQueuePairs;
+    var pdwUserInstalledQueuePairs: [*c]u32 = null;
+    _ = &pdwUserInstalledQueuePairs;
     var ppszCmdLinePaths: [*c][*c]u8 = null;
     _ = &ppszCmdLinePaths;
     var pszNativeArch: [*c]const u8 = null;
@@ -4505,6 +4507,7 @@ pub fn TDNFGoalSolveNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_L
         if (pszNativeArchOwned != null) TDNFFreeMemory(@ptrCast(pszNativeArchOwned));
         if (ppszLockedPkgs != null) TDNFFreeMemory(@ptrCast(ppszLockedPkgs));
         if (pdwLockedQueuePairs != null) TDNFFreeMemory(@ptrCast(pdwLockedQueuePairs));
+        if (pdwUserInstalledQueuePairs != null) TDNFFreeMemory(@ptrCast(pdwUserInstalledQueuePairs));
         if (ppszCmdLinePaths != null) TDNFFreeStringArrayWithCount(ppszCmdLinePaths, @intCast(dwJobCount));
         TDNFFreeStringArray(ppszUserInstalledPkgs);
         if (ppszInstallOnlyPkgs != null) TDNFFreeMemory(@ptrCast(ppszInstallOnlyPkgs));
@@ -4541,7 +4544,7 @@ pub fn TDNFGoalSolveNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_L
         if (dwError != @as(u32, 0)) return dwError;
         if (!false) break;
     }
-    dwError = TDNFGoalBuildNativeSolverJobs(pTdnf, pQueueJobs, nStampFlags, nStampedJobCount, &pJobs, &dwJobCount, &pEraseJobs, &dwEraseJobCount, &ppszInstallOnlyPkgs, &ppszUserInstalledPkgs, &ppszLockedPkgs, &pdwLockedQueuePairs, &ppszCmdLinePaths, &nUpdateAll, &nDistSyncAll, &dwGlobalQueuePair, &nHasGlobalQueuePair);
+    dwError = TDNFGoalBuildNativeSolverJobs(pTdnf, pQueueJobs, nStampFlags, nStampedJobCount, &pJobs, &dwJobCount, &pEraseJobs, &dwEraseJobCount, &ppszInstallOnlyPkgs, &ppszUserInstalledPkgs, &pdwUserInstalledQueuePairs, &ppszLockedPkgs, &pdwLockedQueuePairs, &ppszCmdLinePaths, &nUpdateAll, &nDistSyncAll, &dwGlobalQueuePair, &nHasGlobalQueuePair);
     while (true) {
         if (dwError != @as(u32, 0)) return dwError;
         if (!false) break;
@@ -4562,7 +4565,7 @@ pub fn TDNFGoalSolveNative(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_L
     if ((((pTdnf.*.pArgs.*.nCmdCount > @as(c_int, 0)) and (pTdnf.*.pArgs.*.ppszCmds != null)) and (pTdnf.*.pArgs.*.ppszCmds[@as(c_int, 0)] != null)) and (strcmp(pTdnf.*.pArgs.*.ppszCmds[@as(c_int, 0)], "check") == @as(c_int, 0))) {
         nSkipBrokenSolve = 0;
     }
-    dwError = TDNFRepoMdNativeSolverLiveSolve(pRepos, dwRepoCount, pJobs, dwJobCount, pEraseJobs, dwEraseJobCount, pHiddenAvailable, dwHiddenAvailableCount, pTdnf.*.pArgs.*.nAllDeps, pTdnf.*.pArgs.*.nBest, nAutoErase, nSkipBrokenSolve, nAllowErasing, nUpdateAll, nDistSyncAll, @ptrCast(@alignCast(ppszLockedPkgs)), pdwLockedQueuePairs, dwGlobalQueuePair, nHasGlobalQueuePair, @ptrCast(@alignCast(ppszInstallOnlyPkgs)), @bitCast(@as(c_int, pTdnf.*.pConf.*.nInstallOnlyLimit)), @ptrCast(@alignCast(if (nDropProtected != 0) @as(?*const anyopaque, @ptrCast(@alignCast(@as(?*anyopaque, null)))) else @as(?*const anyopaque, @ptrCast(@alignCast(@as([*c]const [*c]const u8, @ptrCast(@alignCast(pTdnf.*.pConf.*.ppszProtectedPkgs)))))))), @ptrCast(@alignCast(ppszUserInstalledPkgs)), @ptrCast(@alignCast(ppszCmdLinePaths)), nReInstall, pTdnf.*.pRpmConfig, pszNativeArch, nPrepareOnly, nRefuteUnsat, @ptrCast(@alignCast(if ((nPrepareOnly != 0) or (nRefuteUnsat != 0)) @as(?*anyopaque, null) else @as(?*anyopaque, @ptrCast(@alignCast(&pInfo))))), ppHandle);
+    dwError = TDNFRepoMdNativeSolverLiveSolve(pRepos, dwRepoCount, pJobs, dwJobCount, pEraseJobs, dwEraseJobCount, pHiddenAvailable, dwHiddenAvailableCount, pTdnf.*.pArgs.*.nAllDeps, pTdnf.*.pArgs.*.nBest, nAutoErase, nSkipBrokenSolve, nAllowErasing, nUpdateAll, nDistSyncAll, @ptrCast(@alignCast(ppszLockedPkgs)), pdwLockedQueuePairs, dwGlobalQueuePair, nHasGlobalQueuePair, @ptrCast(@alignCast(ppszInstallOnlyPkgs)), @bitCast(@as(c_int, pTdnf.*.pConf.*.nInstallOnlyLimit)), @ptrCast(@alignCast(if (nDropProtected != 0) @as(?*const anyopaque, @ptrCast(@alignCast(@as(?*anyopaque, null)))) else @as(?*const anyopaque, @ptrCast(@alignCast(@as([*c]const [*c]const u8, @ptrCast(@alignCast(pTdnf.*.pConf.*.ppszProtectedPkgs)))))))), @ptrCast(@alignCast(ppszUserInstalledPkgs)), if (TDNFTransactionPlanStateIsEnabled(pTdnf.*.pTransactionPlanState) != 0) pdwUserInstalledQueuePairs else null, @ptrCast(@alignCast(ppszCmdLinePaths)), nReInstall, pTdnf.*.pRpmConfig, pszNativeArch, nPrepareOnly, nRefuteUnsat, @ptrCast(@alignCast(if ((nPrepareOnly != 0) or (nRefuteUnsat != 0)) @as(?*anyopaque, null) else @as(?*anyopaque, @ptrCast(@alignCast(&pInfo))))), ppHandle);
     if ((dwError != 0) and (@as(u32, @bitCast(@as(c_int, @intFromBool(!(!(TDNFRepoMdLastError() != null) or !(@as(c_int, TDNFRepoMdLastError().*) != 0)))))) != 0)) {
         common.log(LOG_ERR, "native-solver: %s\n", .{TDNFRepoMdLastError()});
     }
@@ -4717,7 +4720,7 @@ pub fn TDNFGoalFreeNativeSolverRepoInputs(arg_pRepos: PTDNF_REPOMD_NATIVE_SOLVER
         if (!false) break;
     }
 }
-pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_LIST, arg_nStampFlags: c_int, arg_nStampedJobCount: c_int, arg_ppJobs: [*c]PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, arg_pdwJobCount: [*c]u32, arg_ppEraseJobs: [*c]PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, arg_pdwEraseJobCount: [*c]u32, arg_pppszInstallOnlyPkgs: [*c][*c][*c]u8, arg_pppszUserInstalledPkgs: [*c][*c][*c]u8, arg_pppszLockedPkgs: [*c][*c][*c]u8, arg_ppdwLockedQueuePairs: [*c][*c]u32, arg_pppszCmdLinePaths: [*c][*c][*c]u8, arg_pnUpdateAll: [*c]c_int, arg_pnDistSyncAll: [*c]c_int, arg_pdwGlobalQueuePair: [*c]u32, arg_pnHasGlobalQueuePair: [*c]c_int) callconv(.c) u32 {
+pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const TDNF_ID_LIST, arg_nStampFlags: c_int, arg_nStampedJobCount: c_int, arg_ppJobs: [*c]PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, arg_pdwJobCount: [*c]u32, arg_ppEraseJobs: [*c]PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, arg_pdwEraseJobCount: [*c]u32, arg_pppszInstallOnlyPkgs: [*c][*c][*c]u8, arg_pppszUserInstalledPkgs: [*c][*c][*c]u8, arg_ppdwUserInstalledQueuePairs: [*c][*c]u32, arg_pppszLockedPkgs: [*c][*c][*c]u8, arg_ppdwLockedQueuePairs: [*c][*c]u32, arg_pppszCmdLinePaths: [*c][*c][*c]u8, arg_pnUpdateAll: [*c]c_int, arg_pnDistSyncAll: [*c]c_int, arg_pdwGlobalQueuePair: [*c]u32, arg_pnHasGlobalQueuePair: [*c]c_int) callconv(.c) u32 {
     var pTdnf = arg_pTdnf;
     _ = &pTdnf;
     var pQueueJobs = arg_pQueueJobs;
@@ -4738,6 +4741,8 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
     _ = &pppszInstallOnlyPkgs;
     var pppszUserInstalledPkgs = arg_pppszUserInstalledPkgs;
     _ = &pppszUserInstalledPkgs;
+    var ppdwUserInstalledQueuePairs = arg_ppdwUserInstalledQueuePairs;
+    _ = &ppdwUserInstalledQueuePairs;
     var pppszLockedPkgs = arg_pppszLockedPkgs;
     _ = &pppszLockedPkgs;
     var ppdwLockedQueuePairs = arg_ppdwLockedQueuePairs;
@@ -4780,6 +4785,8 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
     _ = &ppszInstallOnlyPkgs;
     var ppszUserInstalledPkgs: [*c][*c]u8 = null;
     _ = &ppszUserInstalledPkgs;
+    var pdwUserInstalledQueuePairs: [*c]u32 = null;
+    _ = &pdwUserInstalledQueuePairs;
     var pszJobRef: [*c]u8 = null;
     _ = &pszJobRef;
     var pszJobRepo: [*c]u8 = null;
@@ -4813,6 +4820,7 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
         if (!transferred) {
             if (ppszLockedPkgs != null) TDNFFreeMemory(@ptrCast(ppszLockedPkgs));
             if (pdwLockedQueuePairs != null) TDNFFreeMemory(@ptrCast(pdwLockedQueuePairs));
+            if (pdwUserInstalledQueuePairs != null) TDNFFreeMemory(@ptrCast(pdwUserInstalledQueuePairs));
             if (ppszCmdLinePaths != null) TDNFFreeStringArrayWithCount(ppszCmdLinePaths, @intCast(dwCount));
             TDNFFreeStringArray(ppszUserInstalledPkgs);
             if (ppszInstallOnlyPkgs != null) TDNFFreeMemory(@ptrCast(ppszInstallOnlyPkgs));
@@ -4825,6 +4833,7 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
     if (pdwEraseJobCount != null) pdwEraseJobCount.* = 0;
     if (pppszInstallOnlyPkgs != null) pppszInstallOnlyPkgs.* = null;
     if (pppszUserInstalledPkgs != null) pppszUserInstalledPkgs.* = null;
+    if (ppdwUserInstalledQueuePairs != null) ppdwUserInstalledQueuePairs.* = null;
     if (pppszLockedPkgs != null) pppszLockedPkgs.* = null;
     if (ppdwLockedQueuePairs != null) ppdwLockedQueuePairs.* = null;
     if (pppszCmdLinePaths != null) pppszCmdLinePaths.* = null;
@@ -4862,6 +4871,11 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
         if (!false) break;
     }
     dwError = TDNFAllocateMemory(dwCount +% @as(u32, 1), @sizeOf(@TypeOf(ppszUserInstalledPkgs.*)), @ptrCast(@alignCast(&ppszUserInstalledPkgs)));
+    while (true) {
+        if (dwError != @as(u32, 0)) return dwError;
+        if (!false) break;
+    }
+    dwError = TDNFAllocateMemory(dwCount +% @as(u32, 1), @sizeOf(@TypeOf(pdwUserInstalledQueuePairs.*)), @ptrCast(@alignCast(&pdwUserInstalledQueuePairs)));
     while (true) {
         if (dwError != @as(u32, 0)) return dwError;
         if (!false) break;
@@ -5029,6 +5043,7 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
             }
             if ((nUserInstalled != 0) or (nAllowUninstall != 0)) {
                 if (nUserInstalled != 0) {
+                    pdwUserInstalledQueuePairs[dwUserInstalledCount] = dwIndex;
                     ppszUserInstalledPkgs[
                         blk: {
                             const ref = &dwUserInstalledCount;
@@ -5091,6 +5106,7 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
     pdwEraseJobCount.* = dwEraseCount;
     pppszInstallOnlyPkgs.* = ppszInstallOnlyPkgs;
     pppszUserInstalledPkgs.* = ppszUserInstalledPkgs;
+    ppdwUserInstalledQueuePairs.* = pdwUserInstalledQueuePairs;
     pppszLockedPkgs.* = ppszLockedPkgs;
     ppdwLockedQueuePairs.* = pdwLockedQueuePairs;
     pppszCmdLinePaths.* = ppszCmdLinePaths;

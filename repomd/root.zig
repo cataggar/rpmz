@@ -108,6 +108,7 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
     installonly_limit: u32,
     raw_protected_names: ?[*:null]const ?[*:0]const u8,
     raw_user_installed_names: ?[*:null]const ?[*:0]const u8,
+    raw_user_installed_queue_pairs: ?[*]const u32,
     raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
     reinstall: c_int,
     rpm_config: ?*const abi.tdnf_rpm_config,
@@ -157,6 +158,7 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
         raw_installonly_names,
         installonly_limit,
         raw_user_installed_names,
+        raw_user_installed_queue_pairs,
         raw_cmdline_rpm_paths,
         raw_repositories,
         reinstall != 0,
@@ -701,6 +703,7 @@ fn nativeSolverLiveSolve(
     raw_installonly_names: ?[*:null]const ?[*:0]const u8,
     installonly_limit: u32,
     raw_user_installed_names: ?[*:null]const ?[*:0]const u8,
+    raw_user_installed_queue_pairs: ?[*]const u32,
     raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
     raw_repositories: ?[*]const abi.TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16,
     reinstall: bool,
@@ -930,6 +933,29 @@ fn nativeSolverLiveSolve(
     } else &.{};
     defer if (locked_queue_pairs.len != 0) allocator.free(locked_queue_pairs);
 
+    const user_installed_queue_pairs = if (raw_user_installed_queue_pairs) |pairs| blk: {
+        const names = user_installed_names orelse {
+            setError(
+                "user-installed queue pairs without user-installed names",
+                .{},
+            );
+            return abi.ERROR_TDNF_INVALID_PARAMETER;
+        };
+        const values = allocator.alloc(?u32, names.len) catch {
+            setError(
+                "out of memory translating user-installed queue pairs",
+                .{},
+            );
+            return abi.ERROR_TDNF_OUT_OF_MEMORY;
+        };
+        for (pairs[0..names.len], values) |pair, *value| {
+            value.* = pair;
+        }
+        break :blk values;
+    } else &.{};
+    defer if (user_installed_queue_pairs.len != 0)
+        allocator.free(user_installed_queue_pairs);
+
     const solver_input: solver_live.Input = .{
         .repositories = repositories,
         .rpmdb = .{ .config = config },
@@ -947,6 +973,7 @@ fn nativeSolverLiveSolve(
         .installonly_names = installonly_names,
         .installonly_limit = installonly_limit,
         .user_installed_names = user_installed_names,
+        .user_installed_queue_pairs = user_installed_queue_pairs,
         .best = best,
         .allow_erasing = allow_erasing,
         .clean_deps = clean_deps,
@@ -1420,6 +1447,7 @@ test "native live solve wrapper rejects a null output" {
         null,
         null,
         null,
+        null,
         0,
         null,
         null,
@@ -1458,6 +1486,7 @@ test "native live prepare rejects a request with nowhere to put the handle" {
         0,
         null,
         0,
+        null,
         null,
         null,
         null,

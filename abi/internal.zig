@@ -903,6 +903,7 @@ pub extern fn TDNFGetPackageName() [*c]const u8;
 pub extern fn TDNFSearchCommand(pTdnf: PTDNF, pCmdArgs: PTDNF_CMD_ARGS, ppPkgInfo: [*c]PTDNF_PKG_INFO, pdwCount: [*c]u32) u32;
 pub extern fn TDNFResolve(pTdnf: PTDNF, nAlterType: TDNF_ALTERTYPE, ppSolvedPkgInfo: [*c]PTDNF_SOLVED_PKG_INFO) u32;
 pub extern fn TDNFTransactionPlanSetEnabled(pTdnf: PTDNF, dwEnabled: u32) u32;
+pub extern fn TDNFTransactionPlanResolveCanonicalJson(pTdnf: PTDNF, ppszCmds: [*c][*c]u8, dwCmdCount: u32, ppszJson: [*c][*c]u8) u32;
 pub extern fn TDNFTransactionPlanGetCanonicalJson(pTdnf: PTDNF, ppszJson: [*c][*c]u8) u32;
 pub extern fn TDNFTransactionPlanFreeCanonicalJson(pszJson: [*c]u8) void;
 pub extern fn TDNFAlterCommand(pTdnf: PTDNF, pSolvedInfo: PTDNF_SOLVED_PKG_INFO) u32;

@@ -66,6 +66,18 @@ pub const Input = struct {
     /// Null means the caller did not provide install-reason data, so every
     /// installed package keeps `.unknown` and stays a clean-deps root.
     user_installed_names: ?[]const []const u8 = null,
+    /// Parallel to `user_installed_names`: the job-queue pair each mark came
+    /// from. Either empty or exactly as long as `user_installed_names`. When
+    /// supplied, every mark also becomes a `.user_installed` job so the
+    /// published plan can name the package behind its queue pair; the marks
+    /// already reach the solve as install reasons either way, so the jobs
+    /// only restate what `applyInstallReasons` decided.
+    ///
+    /// Only a caller that publishes a transaction plan should supply these.
+    /// The jobs are inert to the search but not to the skip-broken policy,
+    /// which admits a goal only when every job is an exact install, so a
+    /// request that never needed the pairs must not pay for them.
+    user_installed_queue_pairs: []const ?u32 = &.{},
     /// Null means the caller did not provide an authoritative considered map.
     hidden_available: ?[]const JobInput = null,
     include_installed: bool = true,
@@ -351,10 +363,32 @@ pub fn prepare(
     {
         return error.InvalidInput;
     }
+    // A user-installed mark names an installed package, and the rpmdb may
+    // hold several rows under that name, so size them the same way erases
+    // are sized.
+    const user_installed_names = input.user_installed_names orelse &.{};
+    if (input.user_installed_queue_pairs.len != 0 and
+        input.user_installed_queue_pairs.len != user_installed_names.len)
+    {
+        return error.InvalidInput;
+    }
+    const user_installed_targets = try arena.alloc(
+        []const solver_model.PackageId,
+        input.user_installed_queue_pairs.len,
+    );
+    var user_installed_job_count: usize = 0;
+    for (user_installed_targets, 0..) |*targets, index| {
+        targets.* = try installedPackagesNamed(
+            arena,
+            universe,
+            user_installed_names[index],
+        );
+        user_installed_job_count += targets.len;
+    }
     const jobs = try arena.alloc(
         solver_model.Job,
         input.jobs.len + erase_job_count + input.locked_names.len +
-            global_job_count,
+            user_installed_job_count + global_job_count,
     );
     // Mirrors `jobs` exactly, so every branch below fills both.
     const job_origins = try arena.alloc(?u32, jobs.len);
@@ -402,6 +436,21 @@ pub fn prepare(
             .selection = .{ .name = try arena.dupe(u8, name) },
             .reason = .policy,
         };
+    }
+    var user_installed_index = exact_job_count + input.locked_names.len;
+    for (user_installed_targets, 0..) |targets, index| {
+        if (user_installed_names[index].len == 0) return error.InvalidInput;
+        for (targets) |package| {
+            jobs[user_installed_index] = .{
+                .action = .user_installed,
+                .selection = .{ .package = package },
+                .reason = .policy,
+            };
+            // Every row this name expanded to came from the one pair.
+            job_origins[user_installed_index] =
+                input.user_installed_queue_pairs[index];
+            user_installed_index += 1;
+        }
     }
     if (input.update_all) {
         jobs[jobs.len - 1] = .{
@@ -617,6 +666,21 @@ fn collectCmdlineRpmPaths(
         }
     }
     return paths.items;
+}
+
+/// Every installed row the universe holds under `name`, in universe order.
+fn installedPackagesNamed(
+    arena: std.mem.Allocator,
+    universe: *const solver_model.Universe,
+    name: []const u8,
+) ![]const solver_model.PackageId {
+    var found: std.ArrayList(solver_model.PackageId) = .empty;
+    for (universe.packages, 0..) |package, index| {
+        if (package.installed == null) continue;
+        if (!std.mem.eql(u8, package.source.nevra.name, name)) continue;
+        try found.append(arena, @enumFromInt(index));
+    }
+    return found.items;
 }
 
 fn applyInstallReasons(
@@ -1212,6 +1276,59 @@ test "live producer records the queue pair every job was built from" {
     try std.testing.expectEqual(
         solver_model.JobAction.lock,
         solved.jobs[solved.jobs.len - 1].action,
+    );
+}
+
+test "live producer names the package behind every user-installed pair" {
+    var fixture = try Fixture.create();
+    defer fixture.cleanup();
+    try fixture.addInstalled(51, "leaf");
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var cache_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var repositories: [1]RepositoryInput = undefined;
+    var jobs: [1]JobInput = undefined;
+    var input = fixtureInput(
+        &fixture,
+        &root_buffer,
+        &cache_buffer,
+        &repositories,
+        &jobs,
+    );
+    const user_installed_names = [_][]const u8{"leaf"};
+    const user_installed_pairs = [_]?u32{5};
+    input.jobs = &.{};
+    input.user_installed_names = &user_installed_names;
+    input.user_installed_queue_pairs = &user_installed_pairs;
+
+    var solved = try produce(std.testing.allocator, input);
+    defer solved.deinit();
+
+    // The mark reaches the solve as an install reason either way; the job
+    // exists so the published plan can name the package behind pair 5.
+    try std.testing.expectEqual(@as(usize, 1), solved.jobs.len);
+    try std.testing.expectEqual(
+        solver_model.JobAction.user_installed,
+        solved.jobs[0].action,
+    );
+    try std.testing.expectEqual(
+        std.meta.Tag(solver_model.Selection).package,
+        std.meta.activeTag(solved.jobs[0].selection),
+    );
+    try std.testing.expectEqual(@as(?u32, 5), solved.job_origins[0]);
+
+    // Without the pairs the marks stay install-reason only, exactly as every
+    // caller that predates the published plan saw them.
+    input.user_installed_queue_pairs = &.{};
+    var bare = try produce(std.testing.allocator, input);
+    defer bare.deinit();
+    try std.testing.expectEqual(@as(usize, 0), bare.jobs.len);
+
+    // A pair list that does not cover the names is a caller bug.
+    const short_pairs = [_]?u32{ 5, 6 };
+    input.user_installed_queue_pairs = &short_pairs;
+    try std.testing.expectError(
+        error.InvalidInput,
+        produce(std.testing.allocator, input),
     );
 }
 
