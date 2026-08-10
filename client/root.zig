@@ -1,10 +1,12 @@
 pub const updateinfo = @import("client_updateinfo");
 pub const goal = @import("goal.zig");
 pub const resolve = @import("resolve.zig");
+pub const resolve_service = @import("resolve_service.zig");
 pub const api = @import("api.zig");
 
 comptime {
     _ = api;
+    _ = resolve_service;
     _ = @import("repoutils.zig");
     _ = @import("remoterepo.zig");
     _ = @import("utils.zig");

@@ -140,6 +140,22 @@ pub const State = struct {
         return if (self.plan) |plan| plan.model() else null;
     }
 
+    /// Transfers ownership of the published plan to the caller.
+    ///
+    /// The state stops owning the plan, so a resolver can hand a completed
+    /// immutable plan to its caller and then release every piece of resolver
+    /// scratch storage — including this state — without invalidating it. The
+    /// caller becomes responsible for `Plan.destroy`.
+    ///
+    /// Returns null when no plan has been published. A pending, unpublished
+    /// plan is never transferred; it stays owned by the state and is released
+    /// by `clear`/`destroy`.
+    pub fn takePublished(self: *State) ?*transaction_plan.Plan {
+        const plan = self.plan orelse return null;
+        self.plan = null;
+        return plan;
+    }
+
     pub fn canonicalJsonAlloc(
         self: *const State,
         allocator: Allocator,
@@ -3360,4 +3376,129 @@ comptime {
         .name = "TDNFTransactionPlanIntegrationCapturePending",
         .visibility = .hidden,
     });
+}
+
+fn testPlanData(architecture: []const u8) transaction_plan.Data {
+    const zero_sha = "0" ** 64;
+    return .{
+        .actions = &.{},
+        .environment = .{
+            .architecture = architecture,
+            .distro = "test",
+            .policy = .{
+                .allow_erasing = false,
+                .allow_multilib = true,
+                .all_deps = false,
+                .best = true,
+                .clean_requirements_on_remove = false,
+                .excludes = &.{},
+                .force_architecture = null,
+                .include_installed = true,
+                .installonly_limit = 3,
+                .installonly_names = &.{},
+                .install_weak_dependencies = true,
+                .keep_orphans = false,
+                .locked_names = &.{},
+                .min_versions = &.{},
+                .protected_names = &.{},
+                .skip_broken = false,
+            },
+            .releasever = "1",
+            .resolution_status = .resolved,
+            .rpmdb = .{
+                .backend = .sqlite,
+                .cookie_sha256 = zero_sha,
+                .package_set_sha256 = zero_sha,
+            },
+        },
+        .hidden_packages = &.{},
+        .jobs = &.{},
+        .packages = &.{},
+        .problems = &.{},
+        .repositories = &.{},
+        .requests = &.{},
+        .selected = &.{},
+        .skipped = &.{},
+    };
+}
+
+test "takePublished transfers plan ownership out of resolver scratch state" {
+    const allocator = std.testing.allocator;
+    const state = try State.create(allocator);
+    state.setEnabled(true);
+    try std.testing.expectEqual(
+        @as(?*transaction_plan.Plan, null),
+        state.takePublished(),
+    );
+
+    state.pending_plan = try transaction_plan.Plan.create(
+        allocator,
+        testPlanData("aarch64"),
+    );
+    try state.publish();
+
+    const plan = state.takePublished() orelse return error.MissingPlan;
+    defer plan.destroy();
+    try std.testing.expectEqual(@as(?*transaction_plan.Plan, null), state.plan);
+    try std.testing.expectEqual(
+        @as(?*const transaction_plan.Data, null),
+        state.model(),
+    );
+
+    // Releasing every piece of resolver scratch storage must leave the
+    // transferred plan intact and canonically readable.
+    state.destroy();
+    try std.testing.expectEqualStrings(
+        "aarch64",
+        plan.model().environment.architecture,
+    );
+    const json = try plan.canonicalJsonAlloc(allocator);
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        json,
+        "\"schema\":\"" ++ transaction_plan.schema ++ "\"",
+    ) != null);
+}
+
+test "takePublished never transfers an unpublished pending plan" {
+    const allocator = std.testing.allocator;
+    const state = try State.create(allocator);
+    defer state.destroy();
+    state.setEnabled(true);
+
+    state.pending_plan = try transaction_plan.Plan.create(
+        allocator,
+        testPlanData("x86_64"),
+    );
+    try std.testing.expectEqual(
+        @as(?*transaction_plan.Plan, null),
+        state.takePublished(),
+    );
+    try std.testing.expect(state.pending_plan != null);
+}
+
+test "takePublished leaves a republished plan owned by the state" {
+    const allocator = std.testing.allocator;
+    const state = try State.create(allocator);
+    defer state.destroy();
+    state.setEnabled(true);
+
+    state.pending_plan = try transaction_plan.Plan.create(
+        allocator,
+        testPlanData("x86_64"),
+    );
+    try state.publish();
+    const first = state.takePublished() orelse return error.MissingPlan;
+    first.destroy();
+
+    state.pending_plan = try transaction_plan.Plan.create(
+        allocator,
+        testPlanData("riscv64"),
+    );
+    try state.publish();
+    try std.testing.expectEqualStrings(
+        "riscv64",
+        state.model().?.environment.architecture,
+    );
 }

@@ -10,6 +10,7 @@ const abi = @import("client_abi");
 const errors = @import("tdnf_error");
 const options = @import("client_config_options");
 const transaction_plan_abi = @import("transaction_plan_capture_abi");
+const resolve_service = @import("resolve_service.zig");
 
 const c = abi.C;
 const CmdArgs = abi.CmdArgs;
@@ -151,12 +152,6 @@ extern fn TDNFPackageContextInitCommandLine(
     context: ?*anyopaque,
     output: *?*anyopaque,
 ) callconv(.c) u32;
-extern fn TDNFPackageContextAddRpm(
-    context: ?*anyopaque,
-    repository: ?*anyopaque,
-    path: ?[*:0]const u8,
-    output: *u32,
-) callconv(.c) u32;
 
 extern fn TDNFNativeQueryBuildRepoInputs(
     handle: ?*Tdnf,
@@ -192,14 +187,6 @@ extern fn TDNFNativeQueryBuildUpdateInfo(
 extern fn TDNFPkgInfoFilterNewest(
     sack: ?*anyopaque,
     infos: ?*PackageInfo,
-) callconv(.c) u32;
-extern fn TDNFGetAvailableCacheBytes(
-    conf: ?*Conf,
-    available: *u64,
-) callconv(.c) u32;
-extern fn TDNFCheckDownloadCacheBytes(
-    solved: ?*SolvedPackageInfo,
-    available: u64,
 ) callconv(.c) u32;
 
 extern fn TDNFRepoMdNativeListConfig(
@@ -281,30 +268,6 @@ extern fn TDNFRpmExecHistoryTransaction(
     solved: ?*SolvedPackageInfo,
     args: ?*HistoryArgs,
 ) callconv(.c) u32;
-extern fn TDNFPrepareAllPackages(
-    handle: ?*Tdnf,
-    alter_type: *c_uint,
-    unresolved: ?[*]?[*:0]u8,
-    queue: *IdList,
-) callconv(.c) u32;
-extern fn TDNFResolveBuildDependencies(
-    handle: ?*Tdnf,
-    specs: ?[*]?[*:0]u8,
-    unresolved: ?[*]?[*:0]u8,
-    queue: *IdList,
-) callconv(.c) u32;
-extern fn TDNFGoal(
-    handle: ?*Tdnf,
-    queue: *IdList,
-    output: *?*SolvedPackageInfo,
-    alter_type: c_uint,
-    unresolved: c_int,
-) callconv(.c) u32;
-extern fn TDNFGoalNoDeps(
-    handle: ?*Tdnf,
-    queue: *IdList,
-    output: *?*SolvedPackageInfo,
-) callconv(.c) u32;
 extern fn TDNFHistoryGoalWithUnresolved(
     handle: ?*Tdnf,
     install: *IdList,
@@ -356,13 +319,6 @@ extern fn TDNFFindRepoById(
 ) callconv(.c) u32;
 extern fn TDNFTouchFile(path: ?[*:0]const u8) callconv(.c) u32;
 
-extern fn TDNFDownloadPackageToCache(
-    handle: ?*Tdnf,
-    url: ?[*:0]const u8,
-    package_name: ?[*:0]const u8,
-    repo: ?*RepoData,
-    output: *?[*:0]u8,
-) callconv(.c) u32;
 extern fn TDNFDownloadPackageToTree(
     handle: ?*Tdnf,
     location: ?[*:0]const u8,
@@ -397,14 +353,6 @@ extern fn TDNFIsFileOrSymlink(
     exists: *c_int,
 ) callconv(.c) u32;
 extern fn TDNFGetKernelArch(output: *?[*:0]u8) callconv(.c) u32;
-extern fn TDNFUriIsRemote(
-    value: ?[*:0]const u8,
-    remote: *c_int,
-) callconv(.c) u32;
-extern fn TDNFPathFromUri(
-    value: ?[*:0]const u8,
-    output: *?[*:0]u8,
-) callconv(.c) u32;
 
 extern fn TDNFFreePackageInfo(info: ?*PackageInfo) callconv(.c) void;
 extern fn TDNFFreePackageInfoArray(
@@ -493,46 +441,15 @@ extern fn history_set_auto_flag(
     value: c_int,
 ) callconv(.c) c_int;
 
-extern fn TDNFTransactionPlanStateIsEnabled(
-    state: ?*const anyopaque,
-) callconv(.c) u32;
 extern fn TDNFTransactionPlanStateClear(
     state: ?*anyopaque,
 ) callconv(.c) void;
-extern fn TDNFTransactionPlanStatePublish(
-    state: ?*anyopaque,
-) callconv(.c) u32;
-extern fn TDNFTransactionPlanStatePublishProblem(
-    state: ?*anyopaque,
-) callconv(.c) u32;
 extern fn TDNFTransactionPlanStateDestroy(
     state: ?*anyopaque,
 ) callconv(.c) void;
-extern fn TDNFTransactionPlanRequestTraceCreate(
-    alter_type: u32,
-    subjects: ?*const anyopaque,
-    count: u32,
-) callconv(.c) ?*anyopaque;
 extern fn TDNFTransactionPlanRequestTraceCreateHistory() callconv(.c) ?*anyopaque;
 extern fn TDNFTransactionPlanRequestTraceDestroy(
     trace: ?*anyopaque,
-) callconv(.c) void;
-extern fn TDNFTransactionPlanRequestTraceGetError(
-    trace: ?*const anyopaque,
-) callconv(.c) u32;
-extern fn TDNFTransactionPlanRequestTraceRecordGoalRange(
-    trace: ?*anyopaque,
-    ids: ?[*]const i32,
-    start: u32,
-    end: u32,
-    alter_type: u32,
-    reason: u32,
-    request_ref: u32,
-) callconv(.c) void;
-extern fn TDNFTransactionPlanRequestTraceRecordRequestOutcome(
-    trace: ?*anyopaque,
-    request_ref: u32,
-    outcome: u32,
 ) callconv(.c) void;
 extern fn TDNFTransactionPlanRequestTraceRecordHistoryGoal(
     trace: ?*anyopaque,
@@ -545,16 +462,6 @@ extern fn TDNFTransactionPlanRequestTraceRecordHistoryGoal(
     outcome: u32,
 ) callconv(.c) void;
 
-extern fn fnmatch(
-    pattern: [*:0]const u8,
-    value: [*:0]const u8,
-    flags: c_int,
-) callconv(.c) c_int;
-extern fn realpath(
-    path: [*:0]const u8,
-    resolved: ?[*]u8,
-) callconv(.c) ?[*:0]u8;
-extern fn basename(path: [*:0]u8) callconv(.c) [*:0]u8;
 extern fn getcwd(buffer: ?[*]u8, size: usize) callconv(.c) ?[*:0]u8;
 extern fn geteuid() callconv(.c) std.posix.uid_t;
 extern fn remove(path: [*:0]const u8) callconv(.c) c_int;
@@ -592,11 +499,6 @@ fn eqlIgnoreCaseZ(left: [*:0]const u8, right: []const u8) bool {
 }
 
 fn freeString(slot: *?[*:0]u8) void {
-    if (slot.*) |value| TDNFFreeMemory(@ptrCast(value));
-    slot.* = null;
-}
-
-fn freeRaw(comptime T: type, slot: *?[*]T) void {
     if (slot.*) |value| TDNFFreeMemory(@ptrCast(value));
     slot.* = null;
 }
@@ -645,51 +547,6 @@ fn acquireInstanceLock() void {
     if (instance_lock_fd < 0) {
         common.log(LOG_ERR, "Failed to acquire tdnfInstance lock\n", .{});
     }
-}
-
-fn handleResolveError(handle: ?*Tdnf) void {
-    const tdnf = handle orelse return;
-    if (TDNFTransactionPlanStatePublishProblem(tdnf.pTransactionPlanState) == 0) {
-        TDNFTransactionPlanStateClear(tdnf.pTransactionPlanState);
-    }
-}
-
-fn rejectUnsupportedResolve(handle: *Tdnf) u32 {
-    if (TDNFTransactionPlanStateIsEnabled(handle.pTransactionPlanState) == 0)
-        return 0;
-    const args = handle.pArgs.?;
-    if (args.nBuildDeps != 0 or args.nSource != 0 or args.nNoDeps != 0)
-        return errors.ERROR_TDNF_CALL_NOT_SUPPORTED;
-    return 0;
-}
-
-fn rejectRepoFromDir(handle: *Tdnf) u32 {
-    if (TDNFTransactionPlanStateIsEnabled(handle.pTransactionPlanState) == 0)
-        return 0;
-    var ids = handle.ppszRepoFromDirIds;
-    while (ids) |values| {
-        const id = values[0] orelse break;
-        var repo = handle.pRepos;
-        while (repo) |current| : (repo = current.pNext) {
-            if (current.nEnabled != 0 and current.pszId != null and
-                eqlZ(current.pszId.?, std.mem.span(id)))
-            {
-                return errors.ERROR_TDNF_CALL_NOT_SUPPORTED;
-            }
-        }
-        ids = values + 1;
-    }
-    return 0;
-}
-
-fn checkTrace(handle: *Tdnf) u32 {
-    if (TDNFTransactionPlanStateIsEnabled(handle.pTransactionPlanState) == 0)
-        return 0;
-    return TDNFTransactionPlanRequestTraceGetError(handle.pRequestTrace);
-}
-
-fn publishPlan(handle: *Tdnf) u32 {
-    return TDNFTransactionPlanStatePublish(handle.pTransactionPlanState);
 }
 
 pub export fn TDNFInit() callconv(.c) u32 {
@@ -1094,116 +951,6 @@ fn applyRpmDefine(handle_opt: ?*Tdnf, value: ?[*:0]const u8) u32 {
     if (tdnf_rpm_config_apply_define(handle.pRpmConfig, value) != 0) {
         common.log(LOG_ERR, "Invalid rpmdefine '%s': %s\n", .{ value.?, tdnf_rpm_config_last_error() });
         return errors.ERROR_TDNF_RPMRC_FAIL;
-    }
-    return 0;
-}
-
-fn addCmdLinePackages(
-    handle_opt: ?*Tdnf,
-    queue: *IdList,
-    alter_type: c_uint,
-    unresolved_output: *c_int,
-) u32 {
-    const handle = handle_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    unresolved_output.* = 0;
-    const args = handle.pArgs.?;
-
-    TDNFFreeStringArrayWithCount(
-        handle.ppszCmdLinePkgPaths,
-        @intCast(handle.dwCmdLinePkgCount),
-    );
-    handle.ppszCmdLinePkgPaths = null;
-    if (handle.pdwCmdLinePkgIds) |ids| TDNFFreeMemory(@ptrCast(ids));
-    handle.pdwCmdLinePkgIds = null;
-    handle.dwCmdLinePkgCount = 0;
-
-    var path: ?[*:0]u8 = null;
-    defer freeString(&path);
-    var package_copy: ?[*:0]u8 = null;
-    defer freeString(&package_copy);
-
-    var index: c_int = 1;
-    while (index < args.nCmdCount) : (index += 1) {
-        const package_name = args.ppszCmds.?[@intCast(index)].?;
-        if (fnmatch("*.rpm", package_name, 0) != 0) continue;
-        if (fnmatch("*.src.rpm", package_name, 0) == 0 or
-            fnmatch("*.nosrc.rpm", package_name, 0) == 0)
-        {
-            if (args.nSource == 0 and args.nBuildDeps == 0) {
-                common.log(LOG_ERR, "package '%s' appears to be a source rpm - use --source to install, or --builddeps to install its build depenfdencies\n", .{package_name});
-                return errors.ERROR_TDNF_INVALID_PARAMETER;
-            }
-        } else if (args.nSource != 0 or args.nBuildDeps != 0) {
-            common.log(LOG_ERR, "package '%s' appears not to be a source rpm but --source or --builddeps was used\n", .{package_name});
-            return errors.ERROR_TDNF_INVALID_PARAMETER;
-        }
-
-        var is_file: c_int = 0;
-        var result = TDNFIsFileOrSymlink(package_name, &is_file);
-        if (result != 0) return result;
-        if (is_file != 0) {
-            path = realpath(package_name, null);
-            if (path == null) return systemError();
-        } else {
-            var is_remote: c_int = 0;
-            result = TDNFUriIsRemote(package_name, &is_remote);
-            if (result == errors.ERROR_TDNF_URL_INVALID) {
-                if (TDNFTransactionPlanStateIsEnabled(
-                    handle.pTransactionPlanState,
-                ) != 0) {
-                    TDNFTransactionPlanRequestTraceRecordRequestOutcome(
-                        handle.pRequestTrace,
-                        @intCast(index - 1),
-                        transaction_plan_abi.request_outcome.no_candidate,
-                    );
-                    unresolved_output.* += 1;
-                }
-                continue;
-            }
-            if (result != 0) return result;
-            if (is_remote == 0) {
-                result = TDNFPathFromUri(package_name, &path);
-                if (result != 0) return result;
-            } else {
-                result = TDNFAllocateString(package_name, &package_copy);
-                if (result != 0) return result;
-                var repo: ?*RepoData = null;
-                result = TDNFFindRepoById(handle, command_line_repo_name, &repo);
-                if (result != 0) return result;
-                result = TDNFDownloadPackageToCache(
-                    handle,
-                    package_name,
-                    basename(package_copy.?),
-                    repo,
-                    &path,
-                );
-                if (result != 0) return result;
-                freeString(&package_copy);
-            }
-        }
-
-        var package_id: u32 = 0;
-        result = TDNFPackageContextAddRpm(
-            handle.pSack,
-            handle.pCmdLineRepo,
-            path,
-            &package_id,
-        );
-        if (result != 0) return result;
-        result = recordCmdLinePkgPath(handle, package_id, path);
-        if (result != 0) return result;
-        const trace_start = queue.dwCount;
-        result = TDNFIdListPush(queue, @intCast(package_id));
-        if (result != 0) return result;
-        TDNFTransactionPlanRequestTraceRecordGoalRange(
-            handle.pRequestTrace,
-            queue.pnElements,
-            trace_start,
-            queue.dwCount,
-            alter_type,
-            transaction_plan_abi.request_reason.user,
-            @intCast(index - 1),
-        );
     }
     return 0;
 }
@@ -1622,164 +1369,11 @@ pub export fn TDNFResolve(
     requested_alter_type: c_uint,
     output_opt: ?*?*SolvedPackageInfo,
 ) callconv(.c) u32 {
-    if (handle_opt) |handle| {
-        TDNFTransactionPlanStateClear(handle.pTransactionPlanState);
-        TDNFTransactionPlanRequestTraceDestroy(handle.pRequestTrace);
-        handle.pRequestTrace = null;
-    }
-    const handle = handle_opt orelse {
-        if (output_opt) |output| output.* = null;
-        return errors.ERROR_TDNF_INVALID_PARAMETER;
-    };
-    const output = output_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    var alter_type = requested_alter_type;
-    var queue = IdList{};
-    TDNFIdListInit(&queue);
-    defer TDNFIdListFree(&queue);
-    var unresolved: ?[*]?[*:0]u8 = null;
-    var solved: ?*SolvedPackageInfo = null;
-    var package_names: ?[*]?[*:0]u8 = null;
-    defer freeRaw(?[*:0]u8, &package_names);
-    var package_files: ?[*]?[*:0]u8 = null;
-    defer freeRaw(?[*:0]u8, &package_files);
-    var result = rejectUnsupportedResolve(handle);
-
-    const args = handle.pArgs.?;
-    if (result == 0 and alter_type == c.ALTER_UPGRADEALL and
-        TDNFTransactionPlanStateIsEnabled(handle.pTransactionPlanState) != 0)
-    {
-        var option = args.cn_setopts.?.first_child;
-        while (option) |current| : (option = current.next) {
-            const name = current.name orelse continue;
-            if (eqlIgnoreCaseZ(name, "security") or
-                eqlIgnoreCaseZ(name, "sec-severity") or
-                eqlIgnoreCaseZ(name, "reboot-required"))
-            {
-                result = errors.ERROR_TDNF_CALL_NOT_SUPPORTED;
-                break;
-            }
-        }
-    }
-    if (result == 0 and (alter_type == c.ALTER_INSTALL or
-        alter_type == c.ALTER_REINSTALL or alter_type == c.ALTER_ERASE) and
-        args.nCmdCount <= 1)
-        result = errors.ERROR_TDNF_PACKAGE_REQUIRED;
-
-    if (result == 0 and args.nBuildDeps == 0 and args.nSource == 0 and
-        args.nNoDeps == 0)
-    {
-        const subject_count: u32 = if (args.nCmdCount > 1)
-            @intCast(args.nCmdCount - 1)
-        else
-            0;
-        const subjects: ?*const anyopaque = if (args.ppszCmds) |commands|
-            @ptrCast(commands + 1)
-        else
-            null;
-        handle.pRequestTrace = TDNFTransactionPlanRequestTraceCreate(
-            alter_type,
-            subjects,
-            subject_count,
-        );
-    }
-    if (result == 0) result = checkTrace(handle);
-    if (result == 0) result = rejectRepoFromDir(handle);
-    if (result == 0) result = TDNFRefresh(handle);
-
-    var command_line_unresolved: c_int = 0;
-    if (result == 0 and
-        (alter_type == c.ALTER_INSTALL or alter_type == c.ALTER_REINSTALL))
-    {
-        result = addCmdLinePackages(
-            handle,
-            &queue,
-            alter_type,
-            &command_line_unresolved,
-        );
-    }
-
-    const command_count: usize = @intCast(args.nCmdCount);
-    if (result == 0)
-        result = allocatePointerArray(command_count, &package_names);
-    if (result == 0)
-        result = allocatePointerArray(command_count, &package_files);
-    if (result == 0) {
-        var files: usize = 0;
-        var names: usize = 0;
-        var index: usize = 1;
-        while (index < command_count) : (index += 1) {
-            const name = args.ppszCmds.?[index].?;
-            if (fnmatch("*.rpm", name, 0) == 0) {
-                package_files.?[files] = name;
-                files += 1;
-            } else {
-                package_names.?[names] = name;
-                names += 1;
-            }
-        }
-        result = allocatePointerArray(command_count, &unresolved);
-    }
-    if (result == 0) {
-        result = if (args.nBuildDeps == 0)
-            TDNFPrepareAllPackages(handle, &alter_type, unresolved, &queue)
-        else
-            TDNFResolveBuildDependencies(
-                handle,
-                package_names,
-                unresolved,
-                &queue,
-            );
-    }
-
-    var unresolved_count: c_int = 0;
-    if (result == 0) {
-        while (unresolved.?[@intCast(unresolved_count)] != null)
-            unresolved_count += 1;
-        result = if (args.nSource == 0 and args.nNoDeps == 0)
-            TDNFGoal(
-                handle,
-                &queue,
-                &solved,
-                alter_type,
-                unresolved_count + command_line_unresolved,
-            )
-        else
-            TDNFGoalNoDeps(handle, &queue, &solved);
-    }
-    if (result == 0) {
-        const info = solved.?;
-        info.nNeedAction = @intFromBool(
-            info.pPkgsToInstall != null or
-                info.pPkgsToUpgrade != null or
-                info.pPkgsToDowngrade != null or
-                info.pPkgsToRemove != null or
-                info.pPkgsUnNeeded != null or
-                info.pPkgsToReinstall != null or
-                info.pPkgsObsoleted != null,
-        );
-        info.nNeedDownload = @intFromBool(
-            info.pPkgsToInstall != null or
-                info.pPkgsToUpgrade != null or
-                info.pPkgsToDowngrade != null or
-                info.pPkgsToReinstall != null,
-        );
-        var available: u64 = 0;
-        result = TDNFGetAvailableCacheBytes(handle.pConf, &available);
-        if (result == 0 and info.nNeedDownload != 0)
-            result = TDNFCheckDownloadCacheBytes(info, available);
-        if (result == 0) result = publishPlan(handle);
-        if (result == 0) {
-            info.ppszPkgsNotResolved = @ptrCast(unresolved);
-            output.* = info;
-            return 0;
-        }
-    }
-
-    handleResolveError(handle);
-    output.* = null;
-    if (solved != null) TDNFFreeSolvedPackageInfo(solved);
-    freeStringArray(&unresolved);
-    return result;
+    return resolve_service.resolveAlterType(
+        handle_opt,
+        requested_alter_type,
+        output_opt,
+    );
 }
 
 pub export fn TDNFSearchCommand(
@@ -1918,8 +1512,8 @@ pub export fn TDNFHistoryResolve(
     var result: u32 = 0;
     if (args.nCommand != c.HISTORY_CMD_INIT) {
         handle.pRequestTrace = TDNFTransactionPlanRequestTraceCreateHistory();
-        result = checkTrace(handle);
-        if (result == 0) result = rejectRepoFromDir(handle);
+        result = resolve_service.checkTrace(handle);
+        if (result == 0) result = resolve_service.rejectRepoFromDir(handle);
         if (result == 0) result = TDNFRefresh(handle);
     }
 
@@ -1935,7 +1529,7 @@ pub export fn TDNFHistoryResolve(
     if (result == 0 and history_sync_config(ctx, handle.pRpmConfig) != 0)
         result = errors.ERROR_TDNF_HISTORY_ERROR;
     if (result != 0) {
-        handleResolveError(handle);
+        resolve_service.handleResolveError(handle);
         return result;
     }
     if (args.nCommand == c.HISTORY_CMD_INIT) return 0;
@@ -2176,7 +1770,7 @@ pub export fn TDNFHistoryResolve(
             info.nNeedAction = @intFromBool(
                 flags_delta != null and flags_delta.?.count > 0,
             );
-        result = publishPlan(handle);
+        result = resolve_service.publishPlan(handle);
         if (result == 0) {
             info.ppszPkgsNotResolved = @ptrCast(unresolved);
             output.* = info;
@@ -2184,7 +1778,7 @@ pub export fn TDNFHistoryResolve(
         }
     }
 
-    handleResolveError(handle);
+    resolve_service.handleResolveError(handle);
     if (solved != null) TDNFFreeSolvedPackageInfo(solved);
     freeStringArray(&unresolved);
     return result;
