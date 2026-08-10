@@ -4,6 +4,13 @@
 //! installed `tdnf` executable's stdout, then parses the versioned JSON.
 
 const std = @import("std");
+const client = @import("client_root");
+
+comptime {
+    _ = client;
+}
+
+const resolver = client.resolver;
 
 const io = std.testing.io;
 const schema = "tdnf.transaction-plan/v1";
@@ -227,4 +234,153 @@ test "plan command emits parseable versioned JSON" {
         "unsatisfied_requirement",
         problems[0].object.get("kind").?.string,
     );
+}
+
+// The CLI and the supported API must be the same resolver. Both sides are
+// given the same declared facts -- same repository metadata, same install
+// root, same architecture, same release version, same distro, same policy --
+// and the bytes they produce are compared exactly. Anything the CLI still
+// decided for itself would show up here as a diff.
+test "the plan command and the public resolver agree byte for byte" {
+    const allocator = std.testing.allocator;
+    const prefix = std.testing.environ.getAlloc(
+        allocator,
+        "TDNF_CLI_TEST_PREFIX",
+    ) catch try allocator.dupe(u8, "out");
+    defer allocator.free(prefix);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try realPathAlloc(allocator, tmp.dir);
+    defer allocator.free(root);
+
+    try tmp.dir.createDirPath(io, "etc");
+    try tmp.dir.createDirPath(io, "repos");
+    try tmp.dir.createDirPath(io, "cache");
+    try tmp.dir.createDirPath(io, "persist");
+    try tmp.dir.createDirPath(io, "work");
+    try tmp.dir.createDirPath(io, "source/repodata");
+
+    const primary_digest = digestHex(primary_xml);
+    const repomd = try std.fmt.allocPrint(allocator,
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<repomd xmlns="http://linux.duke.edu/metadata/repo">
+        \\  <revision>plan-parity-test</revision>
+        \\  <data type="primary">
+        \\    <checksum type="sha256">{s}</checksum>
+        \\    <open-checksum type="sha256">{s}</open-checksum>
+        \\    <location href="repodata/primary.xml"/>
+        \\    <timestamp>123</timestamp>
+        \\    <size>{d}</size>
+        \\    <open-size>{d}</open-size>
+        \\  </data>
+        \\</repomd>
+        \\
+    , .{ &primary_digest, &primary_digest, primary_xml.len, primary_xml.len });
+    defer allocator.free(repomd);
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "source/repodata/primary.xml",
+        .data = primary_xml,
+    });
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "source/repodata/repomd.xml",
+        .data = repomd,
+    });
+
+    // The CLI derives the distro from the install root's os-release, so the
+    // fixture declares one and the API side declares the same value.
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "etc/os-release",
+        .data =
+        \\ID=plan-parity
+        \\VERSION_ID=1
+        \\
+        ,
+    });
+
+    const source = try std.fs.path.join(allocator, &.{ root, "source" });
+    defer allocator.free(source);
+    const scratch = try std.fs.path.join(allocator, &.{ root, "work" });
+    defer allocator.free(scratch);
+
+    const repo_file = try std.fmt.allocPrint(allocator,
+        \\[base]
+        \\name=base
+        \\baseurl=file://{s}
+        \\enabled=1
+        \\priority=50
+        \\gpgcheck=0
+        \\metadata_expire=never
+        \\skip_if_unavailable=0
+        \\sslverify=1
+        \\
+    , .{source});
+    defer allocator.free(repo_file);
+    try tmp.dir.writeFile(io, .{ .sub_path = "repos/base.repo", .data = repo_file });
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "tdnf.conf",
+        .data =
+        \\[main]
+        \\gpgcheck=0
+        \\plugins=0
+        \\installonly_limit=3
+        \\clean_requirements_on_remove=0
+        \\distrosync_reinstall_changed=0
+        \\repodir=/repos
+        \\cachedir=/cache
+        \\persistdir=/persist
+        \\varsdir=
+        \\
+        ,
+    });
+
+    const tdnf = try std.fs.path.join(allocator, &.{ prefix, "bin", "tdnf" });
+    defer allocator.free(tdnf);
+    const config = try std.fs.path.join(allocator, &.{ root, "tdnf.conf" });
+    defer allocator.free(config);
+
+    var environ: std.process.Environ.Map = .init(allocator);
+    defer environ.deinit();
+    try environ.putPosixBlock(std.testing.environ.block.view());
+
+    const repositories = [_]resolver.Repository{.{
+        .id = "base",
+        .metadata = .{ .local_snapshot = source },
+    }};
+
+    for ([_][]const u8{ "app", "broken" }) |subject| {
+        const cli = try std.process.run(allocator, io, .{
+            .argv = &.{
+                tdnf,          "-c",   config,
+                "--installroot", root, "--releasever",
+                "1",           "--forcearch", "x86_64",
+                "plan",        "install",     subject,
+            },
+            .environ_map = &environ,
+        });
+        defer allocator.free(cli.stdout);
+        defer allocator.free(cli.stderr);
+        try expectExitedZero(cli);
+
+        const subjects = [_][]const u8{subject};
+        const plan = try resolver.resolvePlan(allocator, io, .{
+            .operation = .install,
+            .subjects = &subjects,
+            .repositories = &repositories,
+            .installed = .{ .install_root = root },
+            .environment = .{
+                .architecture = "x86_64",
+                .distro = "plan-parity",
+                .release_version = "1",
+            },
+            .cache_dir = "/cache",
+            .scratch_dir = scratch,
+        });
+        defer plan.destroy();
+
+        const api_json = try plan.canonicalJsonAlloc(allocator);
+        defer allocator.free(api_json);
+        try std.testing.expectEqualStrings(api_json, cli.stdout);
+    }
 }

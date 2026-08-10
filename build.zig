@@ -2045,7 +2045,9 @@ pub fn build(b: *Build) void {
             .root_source_file = b.path("tools/cli/plan_cli_test.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         });
+        plan_cli_test_mod.addImport("client_root", client_mod);
         const plan_cli_tests = b.addTest(.{ .root_module = plan_cli_test_mod });
         const run_plan_cli_tests = b.addRunArtifact(plan_cli_tests);
         run_plan_cli_tests.setEnvironmentVariable(

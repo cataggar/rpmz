@@ -326,57 +326,6 @@ fn TDNFCliInvokeResolve(
     return abi.TDNFResolve(cliHandle(pContext), nAlterType, ppSolvedPkgInfo);
 }
 
-fn planAlterType(
-    pCmdArgs: ?*abi.TDNF_CMD_ARGS,
-    pnAlterType: *abi.TDNF_ALTERTYPE,
-) u32 {
-    const cmd_args = pCmdArgs orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
-    if (cmd_args.nCmdCount < 2) {
-        common.log(LOG_CRIT, "need transaction command as argument\n", .{});
-        return abi.ERROR_TDNF_CLI_NOT_ENOUGH_ARGS;
-    }
-
-    const transaction_count = cmd_args.nCmdCount - 1;
-    const pszTransaction = cmd_args.ppszCmds[1];
-    if (c.strcmp(pszTransaction, "install") == 0) {
-        pnAlterType.* = abi.ALTER_INSTALL;
-    } else if (c.strcmp(pszTransaction, "erase") == 0 or
-        c.strcmp(pszTransaction, "remove") == 0)
-    {
-        pnAlterType.* = abi.ALTER_ERASE;
-    } else if (c.strcmp(pszTransaction, "upgrade") == 0 or
-        c.strcmp(pszTransaction, "update") == 0 or
-        c.strcmp(pszTransaction, "upgrade-to") == 0 or
-        c.strcmp(pszTransaction, "update-to") == 0)
-    {
-        pnAlterType.* = if (transaction_count == 1)
-            abi.ALTER_UPGRADEALL
-        else
-            abi.ALTER_UPGRADE;
-    } else if (c.strcmp(pszTransaction, "downgrade") == 0) {
-        pnAlterType.* = if (transaction_count == 1)
-            abi.ALTER_DOWNGRADEALL
-        else
-            abi.ALTER_DOWNGRADE;
-    } else if (c.strcmp(pszTransaction, "distro-sync") == 0) {
-        pnAlterType.* = abi.ALTER_DISTRO_SYNC;
-    } else if (c.strcmp(pszTransaction, "reinstall") == 0) {
-        pnAlterType.* = abi.ALTER_REINSTALL;
-    } else if (c.strcmp(pszTransaction, "autoerase") == 0 or
-        c.strcmp(pszTransaction, "autoremove") == 0)
-    {
-        pnAlterType.* = if (transaction_count == 1)
-            abi.ALTER_AUTOERASEALL
-        else
-            abi.ALTER_AUTOERASE;
-    } else {
-        common.log(LOG_CRIT, "unsupported transaction plan command '%s'\n", .{pszTransaction});
-        return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
-    }
-
-    return 0;
-}
-
 fn TDNFCliPlanCommand(
     pContext: ?*abi.TDNF_CLI_CONTEXT,
     pCmdArgs: ?*abi.TDNF_CMD_ARGS,
@@ -388,43 +337,21 @@ fn TDNFCliPlanCommand(
         return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    var nAlterType: abi.TDNF_ALTERTYPE = undefined;
-    var dwError = planAlterType(cmd_args, &nAlterType);
-    if (dwError != 0) {
-        return dwError;
-    }
-
-    dwError = abi.TDNFTransactionPlanSetEnabled(handle, 1);
-    if (dwError != 0) {
-        return dwError;
-    }
-
-    const ppszSavedCmds = cmd_args.ppszCmds;
-    const nSavedCmdCount = cmd_args.nCmdCount;
-    cmd_args.ppszCmds += 1;
-    cmd_args.nCmdCount -= 1;
-    defer {
-        cmd_args.ppszCmds = ppszSavedCmds;
-        cmd_args.nCmdCount = nSavedCmdCount;
-    }
-
-    var pSolvedPkgInfo: ?*abi.TDNF_SOLVED_PKG_INFO = null;
-    defer abi.TDNFFreeSolvedPackageInfo(pSolvedPkgInfo);
-
-    const dwResolveError = context.pFnResolve.?(context, nAlterType, &pSolvedPkgInfo);
+    // Everything that decides what the plan says -- verb mapping, capture
+    // lifecycle, problem-plan policy, canonical rendering -- belongs to
+    // libtdnf. The command drops its own `plan` verb and prints the bytes.
     var pszJson: [*c]u8 = null;
-    const dwPlanError = abi.TDNFTransactionPlanGetCanonicalJson(handle, &pszJson);
+    const dwError = abi.TDNFTransactionPlanResolveCanonicalJson(
+        handle,
+        cmd_args.ppszCmds + 1,
+        @intCast(@max(cmd_args.nCmdCount, 1) - 1),
+        &pszJson,
+    );
+    if (dwError != 0) {
+        return dwError;
+    }
     defer abi.TDNFTransactionPlanFreeCanonicalJson(pszJson);
 
-    if (dwPlanError != 0) {
-        return if (dwResolveError != 0) dwResolveError else dwPlanError;
-    }
-    if (pszJson == null) {
-        return abi.ERROR_TDNF_NO_DATA;
-    }
-
-    // Unsatisfied and conflicting requests are reported as structured problem
-    // plans. Once those canonical bytes are emitted, the CLI command succeeded.
     if (c.fputs(pszJson, c.stdout) < 0) {
         return systemOutputError();
     }
