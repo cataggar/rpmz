@@ -1667,6 +1667,7 @@ pub fn build(b: *Build) void {
         "transaction_plan_integration",
         transaction_plan_integration_mod,
     );
+    client_mod.addImport("transaction_plan", transaction_plan_mod);
     client_mod.addImport("client_init", client_init_mod);
     client_mod.addImport("repomd_client_exports", repomd_mod);
     client_mod.addImport("builtin_plugins", builtin_plugins_mod);
@@ -1755,11 +1756,42 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
+    const client_resolver_test_step = b.step(
+        "client-resolver-test",
+        "Run public resolver input validation and resolve tests",
+    );
+    {
+        const tests = b.addTest(.{
+            .name = "client-resolver-validation-test",
+            .root_module = client_mod,
+            .filters = &.{"resolver:"},
+        });
+        const run_tests = b.addRunArtifact(tests);
+        client_resolver_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/resolver_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_root", client_mod);
+        const tests = b.addTest(.{
+            .name = "client-resolver-test",
+            .root_module = test_mod,
+        });
+        const run_tests = b.addRunArtifact(tests);
+        run_tests.has_side_effects = true;
+        client_resolver_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
     const client_gpgcheck_test_step = b.step(
         "client-gpgcheck-test",
         "Run direct client package-signature policy tests",
-    );
-    {
+    );    {
         const test_mod = b.createModule(.{
             .root_source_file = b.path("client/gpgcheck.zig"),
             .target = target,
