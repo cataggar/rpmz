@@ -95,6 +95,16 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const bundle_paths_mod = b.createModule(.{
+        .root_source_file = b.path("client/bundle_paths.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const atomic_publish_mod = b.createModule(.{
+        .root_source_file = b.path("client/atomic_publish.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const transaction_plan_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan.zig"),
         .target = target,
@@ -114,6 +124,13 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const bundle_reader_mod = b.createModule(.{
+        .root_source_file = b.path("client/bundle_reader.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bundle_reader_mod.addImport("content_digest", content_digest_mod);
+    bundle_reader_mod.addImport("transaction_bundle", transaction_bundle_mod);
     transaction_bundle_mod.addImport("canonical_json", canonical_json_mod);
     transaction_bundle_mod.addImport("secret_shape", secret_shape_mod);
     transaction_bundle_mod.addImport("transaction_plan", transaction_plan_mod);
@@ -414,6 +431,21 @@ pub fn build(b: *Build) void {
     }
     {
         const tests = b.addTest(.{ .root_module = content_digest_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const tests = b.addTest(.{ .root_module = bundle_paths_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const tests = b.addTest(.{ .root_module = atomic_publish_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const tests = b.addTest(.{ .root_module = bundle_reader_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);
     }
@@ -1752,6 +1784,9 @@ pub fn build(b: *Build) void {
     client_mod.addImport("transaction_plan", transaction_plan_mod);
     client_mod.addImport("uri_sanitize", uri_sanitize_mod);
     client_mod.addImport("verified_fetch", verified_fetch_mod);
+    client_mod.addImport("bundle_paths", bundle_paths_mod);
+    client_mod.addImport("atomic_publish", atomic_publish_mod);
+    client_mod.addImport("bundle_reader", bundle_reader_mod);
     client_mod.addImport("client_init", client_init_mod);
     client_mod.addImport("repomd_client_exports", repomd_mod);
     client_mod.addImport("builtin_plugins", builtin_plugins_mod);
