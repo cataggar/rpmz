@@ -276,7 +276,7 @@ const Transport = struct {
                 .limited(bundle_writer.max_file_bytes),
             );
             defer self.allocator.free(bytes);
-            try file.writeAll(io, bytes);
+            try file.writeStreamingAll(io, bytes);
             return;
         }
 
@@ -297,7 +297,7 @@ fn isAbsolute(href: []const u8) bool {
 }
 
 fn joinUrl(allocator: Allocator, base: []const u8, href: []const u8) Allocator.Error![]u8 {
-    const trimmed = std.mem.trimRight(u8, base, "/");
+    const trimmed = std.mem.trimEnd(u8, base, "/");
     return std.fmt.allocPrint(allocator, "{s}/{s}", .{ trimmed, href });
 }
 
@@ -439,4 +439,13 @@ fn dirFilePathAlloc(
     const base = try dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(base);
     return std.fmt.allocPrintSentinel(allocator, "{s}/{s}", .{ base, sub_path }, 0);
+}
+
+test {
+    // Nothing in the product calls `exportBundle`, so without this the
+    // compiler never analyzes the bodies in this file and a type error here
+    // ships as a green build. The acceptance tests exercise the behaviour;
+    // this exists so a mistake is caught by `zig build test` rather than by
+    // the first caller.
+    @import("std").testing.refAllDecls(@This());
 }
