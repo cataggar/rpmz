@@ -230,7 +230,10 @@ fn validateRepositories(repositories: []const Repository) ValidationError!void {
         try validateOpaque(repository.snapshot_id);
         if (repository.snapshot_id.len == 0) return error.EmptyId;
         if (repository.revision) |revision| try validateOpaque(revision);
-        if (repository.sources.len == 0) return error.InvalidSource;
+        // An empty source list is meaningful, not missing: a repository
+        // exported from a local snapshot never had a remote source. Requiring
+        // one would force an exporter to invent provenance, which is exactly
+        // the fabrication a bundle exists to rule out.
         for (repository.sources, 0..) |source, source_index| {
             try validateSource(source);
             for (repository.sources[0..source_index]) |earlier| {
@@ -1272,16 +1275,6 @@ test "validate rejects repository entries that break identity or provenance" {
             data.repositories = &repositories.storage;
         }
     }.f);
-    try expectInvalid(error.InvalidSource, struct {
-        fn f(data: *Data) void {
-            const repositories = struct {
-                var storage: [1]Repository = undefined;
-            };
-            repositories.storage[0] = data.repositories[0];
-            repositories.storage[0].sources = &.{};
-            data.repositories = &repositories.storage;
-        }
-    }.f);
     try expectInvalid(error.DuplicateEntry, struct {
         fn f(data: *Data) void {
             const repositories = struct {
@@ -1565,4 +1558,21 @@ test "parsing releases everything on allocation failure" {
             reparsed.destroy();
         }
     }.run, .{json});
+}
+
+test "a repository exported from a local snapshot may record no source" {
+    var data = testData();
+    const repositories = struct {
+        var storage: [1]Repository = undefined;
+    };
+    repositories.storage[0] = data.repositories[0];
+    repositories.storage[0].sources = &.{};
+    data.repositories = &repositories.storage;
+
+    // There was no remote source. Demanding one would make the exporter
+    // fabricate provenance, and a bundle that invents where it came from is
+    // worse than one that admits it came from a local tree.
+    const bundle = try Bundle.create(testing.allocator, data);
+    defer bundle.destroy();
+    try testing.expectEqual(@as(usize, 0), bundle.model().repositories[0].sources.len);
 }
