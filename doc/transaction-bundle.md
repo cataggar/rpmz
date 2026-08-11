@@ -177,3 +177,71 @@ repository must keep working while leaking nothing. Only userinfo is refused
 outright; query and fragment are stripped. `transaction_bundle.validateSource`
 then rejects any remaining `?` or `#`, so an unsanitised URI cannot reach a
 manifest even if a future call site forgets.
+
+## Exporting a bundle
+
+`tdnf.bundle_export.exportBundle` resolves a transaction and publishes the
+bundle for it. It takes the same `resolver.ResolveInput` as `resolvePlan`, so
+the `plan.json` inside a bundle is byte-identical to what `tdnf plan` prints
+for the same inputs: the bundle is a plan plus everything the plan needs, not
+a second, parallel description of the transaction.
+
+```zig
+var result = try tdnf.bundle_export.exportBundle(allocator, io, .{
+    .resolve = resolve_input,
+    .destination = "/var/tmp/tx-bundle",
+    .keys = &.{.{ .path = "/etc/pki/rpm-gpg/RPM-GPG-KEY-example" }},
+});
+defer result.deinit();
+
+switch (result) {
+    .exported => |exported| { /* exported.bundle_digest, exported.plan */ },
+    .problems => |plan| { /* nothing was written; report plan.problems */ },
+}
+```
+
+### What ends up in a bundle
+
+Only the packages the transaction must **fetch**. An upgrade's prior row is an
+installed package: it has no repository, no href, and no checksum, because the
+plan schema requires installed packages to carry none. It stays in `plan.json`
+as a precondition a replay must check, and it is not a file. An erase
+therefore produces a bundle with no RPMs at all, while still capturing the
+repository metadata that made the resolve reproducible.
+
+A command-line RPM is refused rather than exported. Its location is null by
+design, so there is nothing to record that another host could act on; giving
+it a synthetic repository would produce a bundle that claims a
+reproducibility it does not have.
+
+### Failure is all-or-nothing
+
+Every byte is staged outside the destination and the tree is moved into place
+with a single non-replacing rename, so a partially fetched export leaves
+nothing behind and an export onto an existing path is refused by the kernel
+rather than by a check that could race. There is no state in which a
+destination exists and is incomplete.
+
+The failures are kept distinct because they call for different responses:
+
+| Outcome | Meaning |
+| --- | --- |
+| `FetchFailed` | A repository could not be reached. |
+| `IntegrityFailure` | A repository served bytes other than the plan's. |
+| `SignatureRejected` | The bytes were as promised and still not shippable. |
+| `CommandLinePackageUnsupported` | The plan has no coordinates for a package. |
+| `PublishFailed` | The destination exists, or the tree could not be published. |
+
+### Which key a bundle may cite
+
+Signature verification for an export uses the **declared** keys and nothing
+else. The verification path used during a normal install folds in the install
+root's rpmdb keyring, which is ambient local state; a package signed by a key
+that merely happens to be installed on the exporting host has not been vouched
+for by anything the bundle carries. A bundle names the key that validated a
+package or makes no claim about it, and only keys that actually validated
+something are copied into `keys/`.
+
+Attestation runs on the staged file, after its checksum matched, so the claim
+in the manifest is a claim about the bytes a consumer will open rather than
+about some earlier copy.
