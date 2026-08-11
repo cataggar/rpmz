@@ -29,6 +29,8 @@ const item_install: c_uint = 1;
 const item_upgrade: c_uint = 2;
 const item_reinstall: c_uint = 3;
 const item_erase: c_uint = 4;
+const item_downgrade: c_uint = 5;
+const item_obsolete: c_uint = 6;
 
 const install_install: c_int = 0;
 const install_upgrade: c_int = 1;
@@ -638,6 +640,64 @@ fn fixedItemPriors(item: FixedOrderItem) []const FixedOrderRpmDbRow {
     };
 }
 
+fn fixedItemSharesPriors(item: FixedOrderItem) bool {
+    return item == .obsolete;
+}
+
+fn fixedReplacementPrimaryIndex(item: FixedOrderItem) ?usize {
+    const replacement = switch (item) {
+        .upgrade, .downgrade, .reinstall => |value| value,
+        else => return null,
+    };
+    var result: ?usize = null;
+    for (replacement.priors, 0..) |prior, index| {
+        if (!std.mem.eql(
+            u8,
+            replacement.package.identity.name,
+            prior.identity.name,
+        )) continue;
+        if (result != null) return null;
+        result = index;
+    }
+    return result;
+}
+
+fn copyFixedPriorsInExecutionOrder(
+    item: FixedOrderItem,
+    destination: []FixedOrderRpmDbRow,
+) FixedOrderExecutionError!void {
+    const priors = fixedItemPriors(item);
+    if (destination.len != priors.len) return error.InvalidItem;
+    const primary = fixedReplacementPrimaryIndex(item);
+    switch (item) {
+        .upgrade, .downgrade, .reinstall => if (primary == null)
+            return error.InvalidItem,
+        else => {},
+    }
+    if (primary == null) {
+        @memcpy(destination, priors);
+        return;
+    }
+    destination[0] = priors[primary.?];
+    var output_index: usize = 1;
+    for (priors, 0..) |prior, index| {
+        if (index == primary.?) continue;
+        destination[output_index] = prior;
+        output_index += 1;
+    }
+}
+
+fn fixedItemType(item: FixedOrderItem) c_uint {
+    return switch (item) {
+        .install => item_install,
+        .erase => item_erase,
+        .upgrade => item_upgrade,
+        .downgrade => item_downgrade,
+        .reinstall => item_reinstall,
+        .obsolete => item_obsolete,
+    };
+}
+
 fn validateFixedOrderInput(
     transaction: FixedOrderTransaction,
 ) FixedOrderExecutionError!void {
@@ -661,9 +721,11 @@ fn validateFixedOrderInput(
         switch (item) {
             .install => {},
             .erase => |row| if (row.hnum == 0) return error.InvalidItem,
-            .upgrade => if (priors.len != 1) return error.InvalidItem,
-            .downgrade, .reinstall, .obsolete => if (priors.len == 0)
-                return error.InvalidItem,
+            .upgrade, .downgrade, .reinstall => {
+                if (priors.len == 0 or fixedReplacementPrimaryIndex(item) == null)
+                    return error.InvalidItem;
+            },
+            .obsolete => if (priors.len == 0) return error.InvalidItem,
         }
         if (fixedItemPackage(item)) |package| {
             if (package.path.len == 0 or package.path[0] != '/')
@@ -693,7 +755,9 @@ fn validateFixedOrderInput(
                 if (erase_hnum != 0 and erase_hnum == earlier_prior.hnum)
                     return error.InvalidItem;
                 for (priors) |prior| {
-                    if (prior.hnum == earlier_prior.hnum)
+                    if (prior.hnum == earlier_prior.hnum and
+                        !(fixedItemSharesPriors(item) and
+                            fixedItemSharesPriors(earlier_item)))
                         return error.InvalidItem;
                 }
             }
@@ -1103,6 +1167,9 @@ pub fn executeFixedOrder(
     const prior_hnums = allocator.alloc(u32, prior_count) catch
         return error.OutOfMemory;
     defer allocator.free(prior_hnums);
+    const ordered_priors = allocator.alloc(FixedOrderRpmDbRow, prior_count) catch
+        return error.OutOfMemory;
+    defer allocator.free(ordered_priors);
     const expected_items = allocator.alloc(
         FixedOrderExpectedItem,
         transaction.items.len,
@@ -1112,6 +1179,8 @@ pub fn executeFixedOrder(
     var prior_offset: usize = 0;
     for (transaction.items, plan_items, expected_items) |item, *planned, *expected| {
         const priors = fixedItemPriors(item);
+        const ordered = ordered_priors[prior_offset..][0..priors.len];
+        try copyFixedPriorsInExecutionOrder(item, ordered);
         planned.* = .{
             .dwPriorOffset = @intCast(prior_offset),
             .dwPriorCount = @intCast(priors.len),
@@ -1121,9 +1190,9 @@ pub fn executeFixedOrder(
                 .erase => |row| row,
                 else => null,
             },
-            .priors = priors,
+            .priors = ordered,
         };
-        for (priors) |prior| {
+        for (ordered) |prior| {
             prior_hnums[prior_offset] = prior.hnum;
             prior_offset += 1;
         }
@@ -1177,15 +1246,9 @@ pub fn executeFixedOrder(
             return error.PackageIdentityMismatch;
         const evr = try fixedEvrAlloc(package.identity);
         defer allocator.free(evr);
-        const kind: c_uint = switch (item) {
-            .upgrade => item_upgrade,
-            .reinstall => item_reinstall,
-            .install, .downgrade, .obsolete => item_install,
-            .erase => unreachable,
-        };
         const rc = recordItem(
             ts,
-            kind,
+            fixedItemType(item),
             package_binary,
             &rpm_file,
             package.path.ptr,
@@ -1939,9 +2002,6 @@ fn prevalidatePlanStructure(
                 plan.dwPriorHnumCount - planned.dwPriorOffset or
             (planned.dwPriorCount != 0 and plan.pdwPriorHnums == null))
             return fixedValidationError(failure, .invalid_item);
-        if (item.nType == item_upgrade and planned.dwPriorCount > 1)
-            return ERROR_TDNF_RPM_CHECK;
-
         const expected = if (expected_items) |items| &items[input_index] else null;
         if (item.nType == item_erase) {
             const entry = view.find(item.dwRpmDbHnum);
@@ -2372,6 +2432,40 @@ fn eraseOldAfterReplace(
     return 0;
 }
 
+fn installKindForItemType(item_type: c_uint) ?c_uint {
+    return switch (item_type) {
+        item_install, item_obsolete => c.TDNF_RPM_INSTALL_KIND_INSTALL,
+        item_upgrade, item_downgrade => c.TDNF_RPM_INSTALL_KIND_UPGRADE,
+        item_reinstall => c.TDNF_RPM_INSTALL_KIND_REINSTALL,
+        else => null,
+    };
+}
+
+fn selectReplacementPriorIndex(
+    item_type: c_uint,
+    priors: []const PriorEntry,
+    view: *TransactionView,
+) error{InvalidItem}!?usize {
+    return switch (item_type) {
+        item_upgrade, item_downgrade, item_reinstall => blk: {
+            if (priors.len == 0) return error.InvalidItem;
+            const entry = view.find(priors[0].hnum) orelse
+                return error.InvalidItem;
+            if (!entry.active) return error.InvalidItem;
+            break :blk 0;
+        },
+        item_install, item_obsolete => blk: {
+            for (priors, 0..) |prior, index| {
+                const entry = view.find(prior.hnum) orelse
+                    return error.InvalidItem;
+                if (entry.active) break :blk index;
+            }
+            break :blk null;
+        },
+        else => error.InvalidItem,
+    };
+}
+
 fn processInstallItem(
     ts: *c.TDNFRPMTS,
     tdnf: *abi.Tdnf,
@@ -2399,15 +2493,9 @@ fn processInstallItem(
     if (formatted[0] != 0) return formatted[0];
     const nevra = formatted[1];
     defer free(nevra);
-    const install_kind: c_uint = switch (item.nType) {
-        item_install => c.TDNF_RPM_INSTALL_KIND_INSTALL,
-        item_upgrade => c.TDNF_RPM_INSTALL_KIND_UPGRADE,
-        item_reinstall => c.TDNF_RPM_INSTALL_KIND_REINSTALL,
-        else => return errors.ERROR_TDNF_INVALID_PARAMETER,
-    };
+    const install_kind = installKindForItemType(item.nType) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
     const planned = planItem(plan, input_index);
-    if (item.nType == item_upgrade and planned.dwPriorCount > 1)
-        return ERROR_TDNF_RPM_CHECK;
     const prior_count: usize = planned.dwPriorCount;
     var prior_views = allocator.alloc(
         c.tdnf_rpm_install_prior_header,
@@ -2421,7 +2509,6 @@ fn processInstallItem(
         const hnum = plan.pdwPriorHnums[planned.dwPriorOffset + offset];
         const entry = view.find(hnum) orelse
             return errors.ERROR_TDNF_INVALID_PARAMETER;
-        if (!entry.active) return errors.ERROR_TDNF_INVALID_PARAMETER;
         prior_entries[offset] = .{
             .hnum = entry.hnum,
             .blob = entry.blob,
@@ -2431,6 +2518,11 @@ fn processInstallItem(
             .len = entry.blob.len,
         };
     }
+    const replacement_prior_index = selectReplacementPriorIndex(
+        item.nType,
+        prior_entries,
+        view,
+    ) catch return errors.ERROR_TDNF_INVALID_PARAMETER;
     const config = tdnf.pRpmConfig orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var ownership = OwnershipContext{
         .view = view,
@@ -2468,6 +2560,8 @@ fn processInstallItem(
     if (ts.nQuiet == 0) {
         common.log(LOG_INFO, "%s: %s\n", .{ if (item.nType == item_reinstall)
             @as([*:0]const u8, "Reinstalling")
+        else if (item.nType == item_downgrade)
+            @as([*:0]const u8, "Downgrading")
         else if (item.nType == item_upgrade)
             @as([*:0]const u8, "Upgrading")
         else
@@ -2491,10 +2585,10 @@ fn processInstallItem(
         }
         var new_hnum: u32 = 0;
         if ((flags & trans_flags.TDNF_RPMTRANS_FLAG_NODB) == 0) {
-            if (prior_count > 0) {
+            if (replacement_prior_index) |replacement_index| {
                 if (c.tdnf_rpmdb_write_replace_file_config(
                     @ptrCast(config),
-                    plan.pdwPriorHnums[planned.dwPriorOffset],
+                    prior_entries[replacement_index].hnum,
                     file,
                     install_tid,
                     install_time,
@@ -2609,6 +2703,9 @@ fn processInstallItem(
         );
         if (rc != 0) return rc;
         for (prior_entries, 0..) |prior, prior_index| {
+            const entry = view.find(prior.hnum) orelse
+                return errors.ERROR_TDNF_INVALID_PARAMETER;
+            if (!entry.active) continue;
             rc = eraseOldAfterReplace(
                 install_root,
                 config,
@@ -2618,7 +2715,8 @@ fn processInstallItem(
                 prior.blob,
                 @ptrCast(item.pszName),
                 nevra,
-                prior_index > 0,
+                replacement_prior_index == null or
+                    prior_index != replacement_prior_index.?,
                 postun_queue,
                 script_fd,
                 redirect,
@@ -2996,7 +3094,12 @@ fn runTransactionNativeImpl(
             return errors.ERROR_TDNF_INVALID_PARAMETER;
         const item = input_items[input_index];
         rc = switch (item.nType) {
-            item_install, item_upgrade, item_reinstall => processInstallItem(
+            item_install,
+            item_upgrade,
+            item_reinstall,
+            item_downgrade,
+            item_obsolete,
+            => processInstallItem(
                 ts,
                 tdnf,
                 plan,
@@ -3513,7 +3616,14 @@ test "fixed order transaction represents every replay action shape" {
         .path = "/bundle/target.rpm",
         .identity = target,
     };
-    const prior = FixedOrderPackageIdentity{
+    const replaced = FixedOrderPackageIdentity{
+        .name = "target",
+        .epoch = null,
+        .version = "1",
+        .release = "1",
+        .arch = "noarch",
+    };
+    const obsoleted = FixedOrderPackageIdentity{
         .name = "prior",
         .epoch = null,
         .version = "1",
@@ -3522,31 +3632,161 @@ test "fixed order transaction represents every replay action shape" {
     };
     const items = [_]FixedOrderItem{
         .{ .install = local },
-        .{ .erase = .{ .hnum = 10, .identity = prior } },
+        .{ .erase = .{ .hnum = 10, .identity = obsoleted } },
         .{ .upgrade = .{
             .package = local,
-            .priors = &.{.{ .hnum = 11, .identity = prior }},
+            .priors = &.{
+                .{ .hnum = 11, .identity = obsoleted },
+                .{ .hnum = 16, .identity = replaced },
+            },
         } },
         .{ .downgrade = .{
             .package = local,
-            .priors = &.{.{ .hnum = 12, .identity = prior }},
+            .priors = &.{.{ .hnum = 12, .identity = replaced }},
         } },
         .{ .reinstall = .{
             .package = local,
-            .priors = &.{.{ .hnum = 13, .identity = prior }},
+            .priors = &.{.{ .hnum = 13, .identity = replaced }},
         } },
         .{ .obsolete = .{
             .package = local,
             .priors = &.{
-                .{ .hnum = 14, .identity = prior },
-                .{ .hnum = 15, .identity = prior },
+                .{ .hnum = 14, .identity = obsoleted },
+                .{ .hnum = 15, .identity = obsoleted },
+            },
+        } },
+        .{ .obsolete = .{
+            .package = local,
+            .priors = &.{
+                .{ .hnum = 14, .identity = obsoleted },
+                .{ .hnum = 17, .identity = obsoleted },
             },
         } },
     };
     try validateFixedOrderInput(.{
         .items = &items,
-        .order = &.{ 0, 1, 2, 3, 4, 5 },
+        .order = &.{ 0, 1, 2, 3, 4, 5, 6 },
     });
+}
+
+test "fixed order executor compiles against the native engine" {
+    var tdnf = abi.Tdnf{};
+    try std.testing.expectError(error.InvalidContext, executeFixedOrder(
+        &tdnf,
+        .{ .items = &.{}, .order = &.{} },
+    ));
+}
+
+test "fixed upgrade orders its replacement prior before extra obsoletes" {
+    const target = FixedOrderPackageIdentity{
+        .name = "target",
+        .epoch = null,
+        .version = "2",
+        .release = "1",
+        .arch = "noarch",
+    };
+    const item = FixedOrderItem{ .upgrade = .{
+        .package = .{ .path = "/bundle/target.rpm", .identity = target },
+        .priors = &.{
+            .{ .hnum = 20, .identity = .{
+                .name = "retired",
+                .epoch = null,
+                .version = "1",
+                .release = "1",
+                .arch = "noarch",
+            } },
+            .{ .hnum = 21, .identity = .{
+                .name = "target",
+                .epoch = null,
+                .version = "1",
+                .release = "1",
+                .arch = "noarch",
+            } },
+        },
+    } };
+    try validateFixedOrderInput(.{ .items = &.{item}, .order = &.{0} });
+    var ordered: [2]FixedOrderRpmDbRow = undefined;
+    try copyFixedPriorsInExecutionOrder(item, &ordered);
+    try std.testing.expectEqual(@as(u32, 21), ordered[0].hnum);
+    try std.testing.expectEqual(@as(u32, 20), ordered[1].hnum);
+}
+
+test "shared obsolete priors are associated twice but marked once" {
+    var first = std.mem.zeroes(c.TDNF_RPM_TS_ITEM);
+    first.nType = item_obsolete;
+    var second = std.mem.zeroes(c.TDNF_RPM_TS_ITEM);
+    second.nType = item_obsolete;
+    var inputs = [_]*c.TDNF_RPM_TS_ITEM{ &first, &second };
+    var order = [_]u32{ 0, 1 };
+    var plan_items = [_]c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN_ITEM{
+        .{ .dwPriorOffset = 0, .dwPriorCount = 1 },
+        .{ .dwPriorOffset = 1, .dwPriorCount = 1 },
+    };
+    var priors = [_]u32{ 42, 42 };
+    var plan = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN);
+    plan.dwItemCount = inputs.len;
+    plan.pdwOrderIndices = &order;
+    plan.pItems = &plan_items;
+    plan.dwPriorHnumCount = priors.len;
+    plan.pdwPriorHnums = &priors;
+    var view = TransactionView{};
+    defer view.deinit();
+    try view.entries.append(allocator, .{
+        .hnum = 42,
+        .blob = "shared",
+        .order = 0,
+    });
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        markRemovedEntries(&plan, &inputs, &view),
+    );
+    try std.testing.expect(view.entries.items[0].removed);
+    try std.testing.expectEqual(@as(u64, 0), view.entries.items[0].removal_order);
+    try std.testing.expectEqual(@as(u32, 42), priors[0]);
+    try std.testing.expectEqual(@as(u32, 42), priors[1]);
+
+    const execution_priors = [_]PriorEntry{
+        .{ .hnum = 42, .blob = "shared" },
+        .{ .hnum = 43, .blob = "unique" },
+    };
+    try std.testing.expectEqual(
+        @as(?usize, 0),
+        try selectReplacementPriorIndex(item_obsolete, &execution_priors, &view),
+    );
+    view.entries.items[0].active = false;
+    try view.entries.append(allocator, .{
+        .hnum = 43,
+        .blob = "unique",
+        .order = 1,
+    });
+    try std.testing.expectEqual(
+        @as(?usize, 1),
+        try selectReplacementPriorIndex(item_obsolete, &execution_priors, &view),
+    );
+    view.entries.items[1].active = false;
+    try std.testing.expectEqual(
+        @as(?usize, null),
+        try selectReplacementPriorIndex(item_obsolete, &execution_priors, &view),
+    );
+}
+
+test "fixed downgrade retains upgrade installation semantics" {
+    const identity = FixedOrderPackageIdentity{
+        .name = "target",
+        .epoch = null,
+        .version = "1",
+        .release = "1",
+        .arch = "noarch",
+    };
+    const item = FixedOrderItem{ .downgrade = .{
+        .package = .{ .path = "/bundle/target.rpm", .identity = identity },
+        .priors = &.{.{ .hnum = 7, .identity = identity }},
+    } };
+    try std.testing.expectEqual(item_downgrade, fixedItemType(item));
+    try std.testing.expectEqual(
+        @as(?c_uint, c.TDNF_RPM_INSTALL_KIND_UPGRADE),
+        installKindForItemType(fixedItemType(item)),
+    );
 }
 
 test "fixed order rejects missing duplicate and malformed indices" {

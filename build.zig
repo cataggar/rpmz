@@ -1892,6 +1892,9 @@ pub fn build(b: *Build) void {
     transaction_test_mod.addImport("tdnf_error", tdnf_error_mod);
     transaction_test_mod.addIncludePath(b.path("client"));
     transaction_test_mod.addIncludePath(b.path("rpmzig"));
+    transaction_test_mod.linkLibrary(common_lib);
+    transaction_test_mod.linkLibrary(llconf_lib);
+    transaction_test_mod.linkLibrary(rpmzig_lib);
     const transaction_tests = b.addTest(.{ .root_module = transaction_test_mod });
     const run_transaction_tests = b.addRunArtifact(transaction_tests);
     const transaction_test_step = b.step(
