@@ -5,6 +5,13 @@ vendored `libsolv`, with native RPM handling in `rpmzig/` and downloads
 through Zig's HTTP/TLS stack. tdnf is distributed as a Zig package and
 executable; it does not install a C SDK or shared libraries.
 
+Two of its public Zig modules are worth naming up front. `transaction_plan`
+describes a transaction as a canonical, digest-addressed document that can be
+compared across machines; see `doc/transaction-plan-api.md`. `bundle_export`
+turns such a plan into a self-contained directory holding every metadata file
+and RPM the transaction needs, which validates as a closed set long after the
+repository it came from is gone; see `doc/transaction-bundle.md`.
+
 ## Build
 
 Requires Zig 0.16+. SQLite and libsolv are built from the dependencies

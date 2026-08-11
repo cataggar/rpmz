@@ -11,22 +11,31 @@ const tdnf = @import("tdnf");
 
 const resolver = tdnf.resolver;
 const transaction_plan = tdnf.transaction_plan;
+const bundle_export = tdnf.bundle_export;
+const bundle_reader = tdnf.bundle_reader;
 
-const primary_xml =
-    \\<?xml version="1.0" encoding="UTF-8"?>
-    \\<metadata xmlns="http://linux.duke.edu/metadata/common"
-    \\              xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1">
-    \\  <package type="rpm">
-    \\    <name>consumer-app</name>
-    \\    <arch>x86_64</arch>
-    \\    <version epoch="0" ver="1" rel="1"/>
-    \\    <checksum type="sha256" pkgid="YES">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</checksum>
-    \\    <size package="123"/>
-    \\    <location href="packages/consumer-app.rpm"/>
-    \\  </package>
-    \\</metadata>
-    \\
-;
+/// Stands in for a package payload. Its bytes never have to be a real RPM:
+/// what the bundle promises about it is that they arrive unchanged.
+const package_bytes = "public consumer package payload";
+
+fn primaryXml(allocator: std.mem.Allocator) ![]u8 {
+    const package_digest = digestHex(package_bytes);
+    return std.fmt.allocPrint(allocator,
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common"
+        \\              xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1">
+        \\  <package type="rpm">
+        \\    <name>consumer-app</name>
+        \\    <arch>x86_64</arch>
+        \\    <version epoch="0" ver="1" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">{s}</checksum>
+        \\    <size package="{d}"/>
+        \\    <location href="packages/consumer-app.rpm"/>
+        \\  </package>
+        \\</metadata>
+        \\
+    , .{ &package_digest, package_bytes.len });
+}
 
 fn digestHex(bytes: []const u8) [64]u8 {
     var value: [32]u8 = undefined;
@@ -79,11 +88,17 @@ pub fn main() !void {
     try tmp.createDirPath(io, "root");
     try tmp.createDirPath(io, "work");
     try tmp.createDirPath(io, "snapshot/repodata");
+    try tmp.createDirPath(io, "snapshot/packages");
 
+    const primary_xml = try primaryXml(allocator);
     const repomd = try repomdFor(allocator, primary_xml);
     try tmp.writeFile(io, .{
         .sub_path = "snapshot/repodata/primary.xml",
         .data = primary_xml,
+    });
+    try tmp.writeFile(io, .{
+        .sub_path = "snapshot/packages/consumer-app.rpm",
+        .data = package_bytes,
     });
     try tmp.writeFile(io, .{
         .sub_path = "snapshot/repodata/repomd.xml",
@@ -165,9 +180,57 @@ pub fn main() !void {
     if (std.mem.eql(u8, &digest, &other_digest))
         return error.InsensitiveDigest;
 
+    try exportsBundle(allocator, io, tmp, base, request);
+
     // Resolving executes nothing and leaves no scratch state behind.
     var work = try tmp.openDir(io, "work", .{ .iterate = true });
     defer work.close(io);
     var iterator = work.iterate();
     if (try iterator.next(io) != null) return error.ScratchNotRemoved;
+}
+
+/// Exports a bundle for the same transaction and reopens it, which is the
+/// whole point of the feature from outside: a consumer must be able to publish
+/// an input set and later validate it without the repository it came from.
+fn exportsBundle(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    tmp: std.Io.Dir,
+    base: []const u8,
+    request: resolver.ResolveInput,
+) !void {
+    var scoped = request;
+    scoped.scratch_dir = try std.fmt.allocPrint(allocator, "{s}/export-work", .{base});
+    scoped.installed = .{ .install_root = try std.fmt.allocPrint(
+        allocator,
+        "{s}/export-root",
+        .{base},
+    ) };
+    try tmp.createDirPath(io, "export-work");
+    try tmp.createDirPath(io, "export-root");
+
+    const destination = try std.fmt.allocPrint(allocator, "{s}/bundle", .{base});
+    var result = try bundle_export.exportBundle(allocator, io, .{
+        .resolve = scoped,
+        .destination = destination,
+        .gpg_check = false,
+    });
+    defer result.deinit();
+
+    const exported = switch (result) {
+        .exported => |value| value,
+        .problems => return error.UnresolvedPlan,
+    };
+    if (exported.bundle_digest.len != 64) return error.InvalidDigest;
+
+    // Reopening is what makes the export meaningful: the bundle has to be a
+    // closed set on its own terms, not merely a directory the exporter liked.
+    const opened = try bundle_reader.openBundle(allocator, io, destination);
+    defer opened.destroy();
+
+    const model = opened.model();
+    if (model.repositories.len == 0) return error.MissingRepository;
+    if (model.files.len == 0) return error.MissingFiles;
+    if (!std.mem.eql(u8, model.plan.schema, transaction_plan.schema))
+        return error.MissingCanonicalSchema;
 }
