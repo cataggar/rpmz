@@ -85,12 +85,29 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const uri_sanitize_mod = b.createModule(.{
+        .root_source_file = b.path("client/uri_sanitize.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const content_digest_mod = b.createModule(.{
+        .root_source_file = b.path("repomd/content_digest.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const transaction_plan_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan.zig"),
         .target = target,
         .optimize = optimize,
     });
     transaction_plan_mod.addImport("canonical_json", canonical_json_mod);
+    const verified_fetch_mod = b.createModule(.{
+        .root_source_file = b.path("client/verified_fetch.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    verified_fetch_mod.addImport("content_digest", content_digest_mod);
+    verified_fetch_mod.addImport("transaction_plan", transaction_plan_mod);
     transaction_plan_mod.addImport("secret_shape", secret_shape_mod);
     const transaction_bundle_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_bundle.zig"),
@@ -391,6 +408,21 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
     {
+        const tests = b.addTest(.{ .root_module = uri_sanitize_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const tests = b.addTest(.{ .root_module = content_digest_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const tests = b.addTest(.{ .root_module = verified_fetch_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
         const tests = b.addTest(.{ .root_module = transaction_plan_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);
@@ -518,6 +550,7 @@ pub fn build(b: *Build) void {
         .link_libc = true,
     });
     repository_metadata_mod.addImport("xml", xml_mod);
+    repository_metadata_mod.addImport("content_digest", content_digest_mod);
     const transaction_plan_repository_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan_repository.zig"),
         .target = target,
@@ -614,6 +647,7 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     repomd_mod.addImport("xml", xml_mod);
+    repomd_mod.addImport("content_digest", content_digest_mod);
     repomd_mod.addImport("rpm_header", rpmzig_header_mod);
     repomd_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
     repomd_mod.addImport("tdnf_error", tdnf_error_mod);
@@ -837,6 +871,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("xml", xml_mod);
+        test_mod.addImport("content_digest", content_digest_mod);
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
@@ -932,6 +967,7 @@ pub fn build(b: *Build) void {
                 .{ .name = "client_download", .module = client_download_mod },
                 .{ .name = "tdnf_common", .module = common_api_mod },
                 .{ .name = "tdnf_error", .module = tdnf_error_mod },
+                .{ .name = "uri_sanitize", .module = uri_sanitize_mod },
             },
         });
         test_mod.addIncludePath(b.path("client"));
@@ -1714,6 +1750,8 @@ pub fn build(b: *Build) void {
         transaction_plan_integration_mod,
     );
     client_mod.addImport("transaction_plan", transaction_plan_mod);
+    client_mod.addImport("uri_sanitize", uri_sanitize_mod);
+    client_mod.addImport("verified_fetch", verified_fetch_mod);
     client_mod.addImport("client_init", client_init_mod);
     client_mod.addImport("repomd_client_exports", repomd_mod);
     client_mod.addImport("builtin_plugins", builtin_plugins_mod);
@@ -2226,6 +2264,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("xml", xml_mod);
+        test_mod.addImport("content_digest", content_digest_mod);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);
@@ -2301,6 +2340,7 @@ pub fn build(b: *Build) void {
             },
         });
         test_mod.addImport("xml", xml_mod);
+        test_mod.addImport("content_digest", content_digest_mod);
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
@@ -2377,6 +2417,7 @@ pub fn build(b: *Build) void {
             },
         });
         test_mod.addImport("xml", xml_mod);
+        test_mod.addImport("content_digest", content_digest_mod);
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
@@ -2401,6 +2442,7 @@ pub fn build(b: *Build) void {
             },
         });
         test_mod.addImport("xml", xml_mod);
+        test_mod.addImport("content_digest", content_digest_mod);
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
@@ -2444,6 +2486,7 @@ pub fn build(b: *Build) void {
             },
         });
         test_mod.addImport("xml", xml_mod);
+        test_mod.addImport("content_digest", content_digest_mod);
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
@@ -2474,6 +2517,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("xml", xml_mod);
+        test_mod.addImport("content_digest", content_digest_mod);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);

@@ -10,6 +10,7 @@ const builtin = @import("builtin");
 const abi = @import("client_abi");
 const client_download = @import("client_download");
 const errors = @import("tdnf_error");
+const uri_sanitize = @import("uri_sanitize");
 
 const CnfNode = abi.CnfNode;
 const Conf = abi.Conf;
@@ -1257,24 +1258,6 @@ fn downloadErrorIsLocal(err: anyerror) bool {
     };
 }
 
-fn redactUrl(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
-    const scheme = std.mem.indexOf(u8, value, "://") orelse
-        return allocator.dupe(u8, value);
-    const authority_start = scheme + 3;
-    const authority_end = std.mem.indexOfScalarPos(u8, value, authority_start, '/') orelse
-        value.len;
-    const at = std.mem.lastIndexOfScalar(
-        u8,
-        value[authority_start..authority_end],
-        '@',
-    ) orelse return allocator.dupe(u8, value);
-    return std.fmt.allocPrint(
-        allocator,
-        "{s}<redacted>@{s}",
-        .{ value[0..authority_start], value[authority_start + at + 1 ..] },
-    );
-}
-
 fn downloadUrlToFd(
     handle: *Tdnf,
     repo: *RepoData,
@@ -1286,7 +1269,7 @@ fn downloadUrlToFd(
     if (local_failure) |failure| failure.* = false;
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena_state.deinit();
-    const safe_url = redactUrl(arena_state.allocator(), std.mem.span(url)) catch
+    const safe_url = uri_sanitize.redactAlloc(arena_state.allocator(), std.mem.span(url)) catch
         "repository URL";
     var request: DownloadToFdRequest = undefined;
     var no_output = true;
@@ -1375,7 +1358,7 @@ fn downloadFromRepoToFd(
                 if (base_urls[index + 1] == null) return result;
                 var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
                 defer arena_state.deinit();
-                const safe_url = redactUrl(
+                const safe_url = uri_sanitize.redactAlloc(
                     arena_state.allocator(),
                     std.mem.span(url.?),
                 ) catch "repository URL";

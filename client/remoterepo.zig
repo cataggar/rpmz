@@ -11,6 +11,7 @@ const abi = @import("client_abi");
 const download = @import("client_download");
 const errors = @import("tdnf_error");
 const repoutils = @import("repoutils.zig");
+const uri_sanitize = @import("uri_sanitize");
 
 const CmdArgs = abi.CmdArgs;
 const Conf = abi.Conf;
@@ -448,21 +449,6 @@ fn joinUrl(allocator: Allocator, base: []const u8, location: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}/{s}", .{ base_end, location_start });
 }
 
-fn redactUrl(allocator: Allocator, value: []const u8) ![]const u8 {
-    const scheme = std.mem.indexOf(u8, value, "://") orelse
-        return allocator.dupe(u8, value);
-    const authority_start = scheme + 3;
-    const authority_end = std.mem.indexOfScalarPos(u8, value, authority_start, '/') orelse
-        value.len;
-    const at = std.mem.lastIndexOfScalar(u8, value[authority_start..authority_end], '@') orelse
-        return allocator.dupe(u8, value);
-    return std.fmt.allocPrint(
-        allocator,
-        "{s}<redacted>@{s}",
-        .{ value[0..authority_start], value[authority_start + at + 1 ..] },
-    );
-}
-
 fn progressCallbackImpl(
     user_data: ?*anyopaque,
     download_total: i64,
@@ -635,7 +621,7 @@ fn downloadToPinnedParent(
             download.TDNFZigDownloadFile(&request, &status);
         if (result == 0) break;
 
-        const safe_url = redactUrl(allocator, std.mem.span(url)) catch "download URL";
+        const safe_url = uri_sanitize.redactAlloc(allocator, std.mem.span(url)) catch "download URL";
         if (status >= 400) {
             if (!builtin.is_test) common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
             return result;
@@ -748,7 +734,7 @@ fn downloadFileFromRepoPinned(
                 );
                 if (result == 0) return 0;
                 if (base_urls[index + 1] != null) {
-                    const safe_url = redactUrl(allocator, url) catch "download URL";
+                    const safe_url = uri_sanitize.redactAlloc(allocator, url) catch "download URL";
                     if (!builtin.is_test) common.log(LOG_ERR, "Warning: failed to download %.*s, trying next base URL\n", .{ @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
                 } else {
                     return result;

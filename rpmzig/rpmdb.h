@@ -717,6 +717,42 @@ int tdnf_rpm_file_verify_signatures_config(
     int *outcome_out
 );
 
+/** Longest fingerprint this ABI reports (a v6 OpenPGP fingerprint). */
+#define TDNF_RPMZIG_FINGERPRINT_MAX 32
+
+/**
+ * Verify every recognized OpenPGP candidate on an already-parsed RPM against
+ * `key_blobs` AND NOTHING ELSE.
+ *
+ * This is not the `_config` entry point with an empty configuration. That one
+ * always opens the rpmdb keyring and folds it into the trust set, so its
+ * verdict depends on ambient state of the install root. A caller that must
+ * record *which* key vouched for a package -- an exporter producing a
+ * self-contained bundle -- cannot accept that: a package signed by a key that
+ * merely happens to sit in the local rpmdb has not been vouched for by
+ * anything the bundle will carry.
+ *
+ * No rpmdb is opened, nothing is imported, and no file is reopened or
+ * reparsed.
+ *
+ * When exactly one key validated the package, `*signer_index_out` receives its
+ * index into `key_blobs` and `signer_fingerprint_out` receives its raw
+ * fingerprint bytes with the length in `*signer_fingerprint_len_out`.
+ * Otherwise the index is -1 and the length 0. `signer_fingerprint_out`, when
+ * non-NULL, must have room for TDNF_RPMZIG_FINGERPRINT_MAX bytes. Nothing
+ * needs freeing. All four out-parameters are optional.
+ */
+int tdnf_rpm_file_verify_signatures_keys(
+    tdnf_rpm_file *fh,
+    const void *const *key_blobs,
+    const size_t *key_lens,
+    size_t key_count,
+    int *outcome_out,
+    ssize_t *signer_index_out,
+    unsigned char *signer_fingerprint_out,
+    size_t *signer_fingerprint_len_out
+);
+
 /**
  * Decompress the payload (cpio archive) into a fresh malloc'd
  * buffer. On success, writes the pointer to `*out` and the byte

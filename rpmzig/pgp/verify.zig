@@ -64,6 +64,20 @@ pub const DetailedStatus = enum {
     unsupported_openpgp,
 };
 
+/// A verification result that also names the key responsible for it.
+///
+/// `signer` is set only when `status` is `.verified`. A signature that failed,
+/// was malformed, or matched no key has no validated signer, and reporting an
+/// issuer we did not actually verify against would let a caller record a trust
+/// claim the cryptography never made.
+pub const DetailedResult = struct {
+    status: DetailedStatus,
+    signer: ?pubkey.Fingerprint = null,
+    /// Index into the caller's `key_blobs` the signer was found in, so a
+    /// caller can copy the exact blob that established trust.
+    key_blob_index: ?usize = null,
+};
+
 pub const ParseDetachedError = error{
     NoSignature,
     MalformedOpenPgp,
@@ -123,28 +137,41 @@ pub fn verifyDetachedDetailed(
     signed_data: []const u8,
     key_blobs: []const []const u8,
 ) DetailedStatus {
+    return verifyDetachedIdentified(allocator, sig_pkt_bytes, signed_data, key_blobs).status;
+}
+
+/// Same verification as `verifyDetachedDetailed`, additionally reporting which
+/// key validated the signature. Callers that must record *who* signed
+/// something -- an exported bundle, for instance -- need the identity, not
+/// just the verdict.
+pub fn verifyDetachedIdentified(
+    allocator: std.mem.Allocator,
+    sig_pkt_bytes: []const u8,
+    signed_data: []const u8,
+    key_blobs: []const []const u8,
+) DetailedResult {
     // --- 1. Decode the signature packet. ----------------------------
-    const sig = parseDetached(sig_pkt_bytes) catch |err| return switch (err) {
+    const sig = parseDetached(sig_pkt_bytes) catch |err| return .{ .status = switch (err) {
         error.NoSignature => .no_signature,
         error.MalformedOpenPgp => .malformed_openpgp,
         error.UnsupportedOpenPgp => .unsupported_openpgp,
-    };
+    } };
 
     // --- 2. Scope filter. -------------------------------------------
-    if (sig.sig_type != .binary_document) return .unsupported_openpgp;
+    if (sig.sig_type != .binary_document) return .{ .status = .unsupported_openpgp };
     const hash_kind: HashKind = switch (sig.hash_algo) {
         .sha256 => .sha256,
         .sha384 => .sha384,
         .sha512 => .sha512,
-        else => return .unsupported_openpgp,
+        else => return .{ .status = .unsupported_openpgp },
     };
     switch (sig.material) {
         .rsa, .ed25519, .eddsa_legacy, .ecdsa => {},
-        else => return .unsupported_openpgp,
+        else => return .{ .status = .unsupported_openpgp },
     }
     if (sig.version == 6) {
         switch (sig.material) {
-            .eddsa_legacy => return .unsupported_openpgp,
+            .eddsa_legacy => return .{ .status = .unsupported_openpgp },
             else => {},
         }
     }
@@ -161,20 +188,20 @@ pub fn verifyDetachedDetailed(
         const expected_len: usize = switch (issuer.key_version) {
             4 => 20,
             6 => 32,
-            else => return .malformed_openpgp,
+            else => return .{ .status = .malformed_openpgp },
         };
         if (issuer.key_version != sig.version or issuer.bytes.len != expected_len)
-            return .malformed_openpgp;
+            return .{ .status = .malformed_openpgp };
         @memcpy(issuer_fpr_buf[0..expected_len], issuer.bytes);
         issuer_fpr_len = expected_len;
         issuer_key_version = issuer.key_version;
         issuer_kind = .fpr;
     } else if (sig.issuerKeyId()) |kid| {
-        if (sig.version != 4) return .malformed_openpgp;
+        if (sig.version != 4) return .{ .status = .malformed_openpgp };
         issuer_keyid = kid;
         issuer_kind = .kid;
     } else {
-        return .malformed_openpgp;
+        return .{ .status = .malformed_openpgp };
     }
 
     // --- 4. Walk the keyring; find a matching public key. -----------
@@ -193,9 +220,11 @@ pub fn verifyDetachedDetailed(
     // `matched_keyring` to keep the data alive past the loop.
     var matched: ?pubkey.PublicKey = null;
     var matched_keyring: ?keyring.Keyring = null;
+    var matched_fingerprint: ?pubkey.Fingerprint = null;
+    var matched_blob_index: ?usize = null;
     defer if (matched_keyring) |*k| k.deinit();
 
-    outer: for (key_blobs) |raw| {
+    outer: for (key_blobs, 0..) |raw, blob_index| {
         var kr = keyring.parse(allocator, raw) catch continue;
         var consumed = false;
         defer if (!consumed) kr.deinit();
@@ -214,16 +243,20 @@ pub fn verifyDetachedDetailed(
             if (is_match) {
                 matched = entry.key;
                 matched_keyring = kr;
+                // The fingerprint is a fixed-size value, so it outlives the
+                // keyring that produced it without any copy of the blob.
+                matched_fingerprint = entry.fingerprint;
+                matched_blob_index = blob_index;
                 consumed = true;
                 break :outer;
             }
         }
     }
-    const matched_pk = matched orelse return .no_key;
+    const matched_pk = matched orelse return .{ .status = .no_key };
     if (!algorithmsCompatible(sig.pk_algo, matched_pk.algo))
-        return .unsupported_openpgp;
+        return .{ .status = .unsupported_openpgp };
     switch (matched_pk.material) {
-        .unsupported => return .unsupported_openpgp,
+        .unsupported => return .{ .status = .unsupported_openpgp },
         else => {},
     }
 
@@ -287,7 +320,7 @@ pub fn verifyDetachedDetailed(
         },
     };
     if (digest[0] != sig.hash_hint[0] or digest[1] != sig.hash_hint[1])
-        return .bad_signature;
+        return .{ .status = .bad_signature };
 
     // --- 6. Algorithm dispatch. -------------------------------------
     const status: Status = switch (matched_pk.material) {
@@ -307,12 +340,18 @@ pub fn verifyDetachedDetailed(
             verifyEd25519(sig, ed_key, digest),
         .unsupported => .internal,
     };
+    // The signer is attached only on success: a failed or unsupported result
+    // must never carry an identity a caller could mistake for a trust claim.
     return switch (status) {
-        .ok => .verified,
-        .no_sig => .no_signature,
-        .no_key => .no_key,
-        .bad => .bad_signature,
-        .internal => .unsupported_openpgp,
+        .ok => .{
+            .status = .verified,
+            .signer = matched_fingerprint,
+            .key_blob_index = matched_blob_index,
+        },
+        .no_sig => .{ .status = .no_signature },
+        .no_key => .{ .status = .no_key },
+        .bad => .{ .status = .bad_signature },
+        .internal => .{ .status = .unsupported_openpgp },
     };
 }
 

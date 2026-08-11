@@ -38,6 +38,7 @@ const integration = @import("transaction_plan_integration");
 const resolve_service = @import("resolve_service.zig");
 
 pub const transaction_plan = @import("transaction_plan");
+const uri_sanitize = @import("uri_sanitize");
 
 const LOG_CRIT: c_int = 2;
 
@@ -550,14 +551,15 @@ fn validateRepository(repository: Repository) ResolveError!void {
 
 /// `scheme://user:secret@host/...` would put credentials in the scratch
 /// configuration and in every diagnostic that echoes the URL.
+///
+/// A query or fragment is *not* rejected: a repository may legitimately need
+/// one, and `uri_sanitize` removes it from everything that gets printed or
+/// recorded. Userinfo is different -- it has no non-credential use, so it is
+/// refused outright rather than carried any further.
 fn rejectCredentials(url: []const u8) ResolveError!void {
     if (url.len == 0) return error.InvalidRepository;
     if (std.mem.indexOf(u8, url, "\n") != null) return error.InvalidRepository;
-    const scheme_end = std.mem.indexOf(u8, url, "://") orelse return;
-    const rest = url[scheme_end + 3 ..];
-    const authority_end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
-    if (std.mem.indexOfScalar(u8, rest[0..authority_end], '@') != null)
-        return error.CredentialsInUrl;
+    if (uri_sanitize.hasUserinfo(url)) return error.CredentialsInUrl;
 }
 
 /// Overwrites whatever the generated configuration derived with the caller's
