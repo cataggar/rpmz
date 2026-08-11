@@ -1829,6 +1829,7 @@ pub fn build(b: *Build) void {
     client_mod.addImport("client_config_options", client_config_options.createModule());
     client_mod.addImport("client_varsdir", client_varsdir_mod);
     client_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
+    client_mod.addImport("rpm_header", rpmzig_header_mod);
     client_mod.addImport("tdnf_common", common_api_mod);
     client_mod.addImport("tdnf_error", tdnf_error_mod);
     client_mod.addImport("client_updateinfo", client_updateinfo_mod);
@@ -1859,6 +1860,15 @@ pub fn build(b: *Build) void {
     // audits, and packaging. A dependency consumer needs none of it.
     if (!root_build) return;
 
+    const transaction_rpm_package_test_mod = b.createModule(.{
+        .root_source_file = b.path("repomd/rpmpkg.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_rpm_package_test_mod.addImport("rpm_header", rpmzig_header_mod);
+    transaction_rpm_package_test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
+
     const transaction_test_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction.zig"),
         .target = target,
@@ -1873,6 +1883,11 @@ pub fn build(b: *Build) void {
         client_transaction_test_options.createModule(),
     );
     transaction_test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
+    transaction_test_mod.addImport("rpm_header", rpmzig_header_mod);
+    transaction_test_mod.addImport(
+        "rpm_package_test",
+        transaction_rpm_package_test_mod,
+    );
     transaction_test_mod.addImport("tdnf_common", common_api_mod);
     transaction_test_mod.addImport("tdnf_error", tdnf_error_mod);
     transaction_test_mod.addIncludePath(b.path("client"));

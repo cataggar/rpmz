@@ -5,6 +5,8 @@ pub const resolve_service = @import("resolve_service.zig");
 pub const resolver = @import("resolver.zig");
 pub const bundle_export = @import("bundle_export.zig");
 pub const api = @import("api.zig");
+/// Private replay/preflight integration surface; not re-exported by tdnf.zig.
+pub const fixed_order_executor = @import("transaction.zig");
 
 comptime {
     _ = api;
@@ -29,7 +31,7 @@ comptime {
     _ = @import("repositories.zig");
     _ = goal;
     _ = resolve;
-    _ = @import("transaction.zig");
+    _ = fixed_order_executor;
     _ = updateinfo;
     _ = @import("client_varsdir");
 }

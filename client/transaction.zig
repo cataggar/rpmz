@@ -8,6 +8,7 @@ const abi = @import("client_abi");
 const transaction_options = @import("client_transaction_options");
 const errors = @import("tdnf_error");
 const trans_flags = @import("rpmtrans_flags");
+const rpm_header = @import("rpm_header");
 
 const c = abi.C;
 
@@ -39,6 +40,72 @@ const package_nosrc: c_int = 2;
 
 const HistoryCtx = opaque {};
 const allocator = std.heap.c_allocator;
+
+/// Private Zig contract for replaying a preflighted transaction. Package paths
+/// are local, already verified RPMs; this layer never downloads or verifies
+/// them and never invokes either transaction solver.
+pub const FixedOrderPackageIdentity = struct {
+    name: []const u8,
+    epoch: ?u32,
+    version: []const u8,
+    release: []const u8,
+    arch: []const u8,
+};
+
+pub const FixedOrderRpmDbRow = struct {
+    hnum: u32,
+    identity: FixedOrderPackageIdentity,
+};
+
+pub const FixedOrderLocalRpm = struct {
+    path: [:0]const u8,
+    identity: FixedOrderPackageIdentity,
+};
+
+pub const FixedOrderReplacement = struct {
+    package: FixedOrderLocalRpm,
+    priors: []const FixedOrderRpmDbRow,
+};
+
+pub const FixedOrderItem = union(enum) {
+    install: FixedOrderLocalRpm,
+    erase: FixedOrderRpmDbRow,
+    upgrade: FixedOrderReplacement,
+    downgrade: FixedOrderReplacement,
+    reinstall: FixedOrderReplacement,
+    obsolete: FixedOrderReplacement,
+};
+
+pub const FixedOrderTransaction = struct {
+    items: []const FixedOrderItem,
+    /// Input indices in the exact order recorded by the originating run.
+    order: []const u32,
+};
+
+pub const FixedOrderExecutionError = error{
+    InvalidContext,
+    InvalidItem,
+    MalformedOrder,
+    PriorMismatch,
+    PackageOpenFailed,
+    PackageIdentityMismatch,
+    OutOfMemory,
+    RpmCheckFailed,
+    TransactionFailed,
+    ExecutionFailed,
+};
+
+const FixedOrderValidationFailure = enum {
+    none,
+    invalid_item,
+    malformed_order,
+    prior_mismatch,
+};
+
+const FixedOrderExpectedItem = struct {
+    erase: ?FixedOrderRpmDbRow = null,
+    priors: []const FixedOrderRpmDbRow = &.{},
+};
 
 const PathKey = struct {
     path: []const u8,
@@ -556,6 +623,122 @@ fn recordItem(
     return 0;
 }
 
+fn fixedItemPackage(item: FixedOrderItem) ?FixedOrderLocalRpm {
+    return switch (item) {
+        .install => |package| package,
+        .erase => null,
+        .upgrade, .downgrade, .reinstall, .obsolete => |replacement| replacement.package,
+    };
+}
+
+fn fixedItemPriors(item: FixedOrderItem) []const FixedOrderRpmDbRow {
+    return switch (item) {
+        .install, .erase => &.{},
+        .upgrade, .downgrade, .reinstall, .obsolete => |replacement| replacement.priors,
+    };
+}
+
+fn validateFixedOrderInput(
+    transaction: FixedOrderTransaction,
+) FixedOrderExecutionError!void {
+    if (transaction.items.len != transaction.order.len or
+        transaction.items.len > std.math.maxInt(u32))
+        return error.MalformedOrder;
+
+    const seen = allocator.alloc(bool, transaction.items.len) catch
+        return error.OutOfMemory;
+    defer allocator.free(seen);
+    @memset(seen, false);
+    for (transaction.order) |index_u32| {
+        const index: usize = index_u32;
+        if (index >= transaction.items.len or seen[index])
+            return error.MalformedOrder;
+        seen[index] = true;
+    }
+
+    for (transaction.items, 0..) |item, item_index| {
+        const priors = fixedItemPriors(item);
+        switch (item) {
+            .install => {},
+            .erase => |row| if (row.hnum == 0) return error.InvalidItem,
+            .upgrade => if (priors.len != 1) return error.InvalidItem,
+            .downgrade, .reinstall, .obsolete => if (priors.len == 0)
+                return error.InvalidItem,
+        }
+        if (fixedItemPackage(item)) |package| {
+            if (package.path.len == 0 or package.path[0] != '/')
+                return error.InvalidItem;
+        }
+        for (priors, 0..) |prior, prior_index| {
+            if (prior.hnum == 0) return error.InvalidItem;
+            for (priors[0..prior_index]) |earlier| {
+                if (earlier.hnum == prior.hnum) return error.InvalidItem;
+            }
+        }
+
+        const erase_hnum = switch (item) {
+            .erase => |row| row.hnum,
+            else => 0,
+        };
+        for (transaction.items[0..item_index]) |earlier_item| {
+            const earlier_erase = switch (earlier_item) {
+                .erase => |row| row.hnum,
+                else => 0,
+            };
+            if (erase_hnum != 0 and erase_hnum == earlier_erase)
+                return error.InvalidItem;
+            if (earlier_erase != 0 and priorListContains(priors, earlier_erase))
+                return error.InvalidItem;
+            for (fixedItemPriors(earlier_item)) |earlier_prior| {
+                if (erase_hnum != 0 and erase_hnum == earlier_prior.hnum)
+                    return error.InvalidItem;
+                for (priors) |prior| {
+                    if (prior.hnum == earlier_prior.hnum)
+                        return error.InvalidItem;
+                }
+            }
+        }
+    }
+}
+
+fn priorListContains(priors: []const FixedOrderRpmDbRow, hnum: u32) bool {
+    for (priors) |prior| if (prior.hnum == hnum) return true;
+    return false;
+}
+
+fn identityMatchesMetadata(
+    expected: FixedOrderPackageIdentity,
+    metadata: c.tdnf_rpm_file_metadata,
+) bool {
+    const name = metadata.name orelse return false;
+    const version = metadata.version orelse return false;
+    const release = metadata.release orelse return false;
+    const arch = metadata.arch orelse return false;
+    const epoch: ?u32 = if (metadata.has_epoch != 0) metadata.epoch else null;
+    return std.mem.eql(u8, expected.name, std.mem.span(name)) and
+        expected.epoch == epoch and
+        std.mem.eql(u8, expected.version, std.mem.span(version)) and
+        std.mem.eql(u8, expected.release, std.mem.span(release)) and
+        std.mem.eql(u8, expected.arch, std.mem.span(arch));
+}
+
+fn identityMatchesHeader(
+    expected: FixedOrderPackageIdentity,
+    blob: []const u8,
+) bool {
+    const header = rpm_header.Header.parseProbe(blob) catch return false;
+    const name = (header.getStringChecked(.name) catch return false) orelse return false;
+    const version = (header.getStringChecked(.version) catch return false) orelse return false;
+    const release = (header.getStringChecked(.release) catch return false) orelse return false;
+    const arch = (header.getStringChecked(.arch) catch return false) orelse return false;
+    const epoch = header.getU32Checked(.epoch) catch return false;
+    return std.mem.eql(u8, expected.name, name) and
+        expected.epoch == epoch and
+        std.mem.eql(u8, expected.version, version) and
+        std.mem.eql(u8, expected.release, release) and
+        std.mem.eql(u8, expected.arch, arch);
+}
+
 fn digestLength(kind: c_int) ?usize {
     return switch (kind) {
         0 => 16,
@@ -840,6 +1023,196 @@ fn createTransaction(
         return .{ rc, null };
     }
     return .{ 0, ts };
+}
+
+fn fixedEvrAlloc(
+    identity: FixedOrderPackageIdentity,
+) FixedOrderExecutionError![:0]u8 {
+    return if (identity.epoch) |epoch|
+        std.fmt.allocPrintSentinel(
+            allocator,
+            "{d}:{s}-{s}",
+            .{ epoch, identity.version, identity.release },
+            0,
+        ) catch error.OutOfMemory
+    else
+        std.fmt.allocPrintSentinel(
+            allocator,
+            "{s}-{s}",
+            .{ identity.version, identity.release },
+            0,
+        ) catch error.OutOfMemory;
+}
+
+fn mapFixedRecordError(rc: u32) FixedOrderExecutionError {
+    return switch (rc) {
+        errors.ERROR_TDNF_OUT_OF_MEMORY => error.OutOfMemory,
+        errors.ERROR_TDNF_INVALID_PARAMETER => error.InvalidItem,
+        else => error.ExecutionFailed,
+    };
+}
+
+fn mapFixedExecutionError(
+    rc: u32,
+    validation_failure: FixedOrderValidationFailure,
+) FixedOrderExecutionError {
+    return switch (validation_failure) {
+        .malformed_order => error.MalformedOrder,
+        .invalid_item => error.InvalidItem,
+        .prior_mismatch => error.PriorMismatch,
+        .none => switch (rc) {
+            errors.ERROR_TDNF_OUT_OF_MEMORY => error.OutOfMemory,
+            ERROR_TDNF_RPM_CHECK => error.RpmCheckFailed,
+            ERROR_TDNF_TRANSACTION_FAILED => error.TransactionFailed,
+            errors.ERROR_TDNF_INVALID_PARAMETER => error.InvalidItem,
+            else => error.ExecutionFailed,
+        },
+    };
+}
+
+/// Execute an already preflighted local transaction in its recorded order.
+/// Ownership of the caller's paths, identities, and order remains with the
+/// caller. RPM handles opened here are always closed before return.
+pub fn executeFixedOrder(
+    tdnf: *abi.Tdnf,
+    transaction: FixedOrderTransaction,
+) FixedOrderExecutionError!void {
+    if (tdnf.pArgs == null or tdnf.pConf == null or tdnf.pRpmConfig == null)
+        return error.InvalidContext;
+    try validateFixedOrderInput(transaction);
+    if (transaction.items.len == 0) return;
+
+    var prior_count: usize = 0;
+    for (transaction.items) |item| {
+        prior_count = std.math.add(
+            usize,
+            prior_count,
+            fixedItemPriors(item).len,
+        ) catch return error.OutOfMemory;
+    }
+    if (prior_count > std.math.maxInt(u32)) return error.InvalidItem;
+
+    const order = allocator.dupe(u32, transaction.order) catch
+        return error.OutOfMemory;
+    defer allocator.free(order);
+    const plan_items = allocator.alloc(
+        c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN_ITEM,
+        transaction.items.len,
+    ) catch return error.OutOfMemory;
+    defer allocator.free(plan_items);
+    const prior_hnums = allocator.alloc(u32, prior_count) catch
+        return error.OutOfMemory;
+    defer allocator.free(prior_hnums);
+    const expected_items = allocator.alloc(
+        FixedOrderExpectedItem,
+        transaction.items.len,
+    ) catch return error.OutOfMemory;
+    defer allocator.free(expected_items);
+
+    var prior_offset: usize = 0;
+    for (transaction.items, plan_items, expected_items) |item, *planned, *expected| {
+        const priors = fixedItemPriors(item);
+        planned.* = .{
+            .dwPriorOffset = @intCast(prior_offset),
+            .dwPriorCount = @intCast(priors.len),
+        };
+        expected.* = .{
+            .erase = switch (item) {
+                .erase => |row| row,
+                else => null,
+            },
+            .priors = priors,
+        };
+        for (priors) |prior| {
+            prior_hnums[prior_offset] = prior.hnum;
+            prior_offset += 1;
+        }
+    }
+
+    const ts = allocate(c.TDNFRPMTS) orelse return error.OutOfMemory;
+    defer {
+        freeItems(ts);
+        free(ts);
+    }
+    ts.nQuiet = tdnf.pArgs.?.nQuiet;
+    ts.nTransFlags = tdnf.pConf.?.rpmTransFlags;
+
+    for (transaction.items) |item| {
+        if (item == .erase) {
+            const row = item.erase;
+            const name = allocator.dupeZ(u8, row.identity.name) catch
+                return error.OutOfMemory;
+            defer allocator.free(name);
+            const evr = try fixedEvrAlloc(row.identity);
+            defer allocator.free(evr);
+            const arch = allocator.dupeZ(u8, row.identity.arch) catch
+                return error.OutOfMemory;
+            defer allocator.free(arch);
+            const rc = recordItem(
+                ts,
+                item_erase,
+                package_binary,
+                null,
+                null,
+                row.hnum,
+                name.ptr,
+                evr.ptr,
+                arch.ptr,
+            );
+            if (rc != 0) return mapFixedRecordError(rc);
+            continue;
+        }
+
+        const package = fixedItemPackage(item).?;
+        var rpm_file: ?*c.tdnf_rpm_file =
+            c.tdnf_rpm_file_open(package.path.ptr) orelse
+            return error.PackageOpenFailed;
+        var transferred = false;
+        defer if (!transferred) c.tdnf_rpm_file_close(rpm_file);
+        var metadata = std.mem.zeroes(c.tdnf_rpm_file_metadata);
+        if (c.tdnf_rpm_file_get_metadata(rpm_file, &metadata) != 0 or
+            metadata.package_kind != package_binary)
+            return error.PackageOpenFailed;
+        if (!identityMatchesMetadata(package.identity, metadata))
+            return error.PackageIdentityMismatch;
+        const evr = try fixedEvrAlloc(package.identity);
+        defer allocator.free(evr);
+        const kind: c_uint = switch (item) {
+            .upgrade => item_upgrade,
+            .reinstall => item_reinstall,
+            .install, .downgrade, .obsolete => item_install,
+            .erase => unreachable,
+        };
+        const rc = recordItem(
+            ts,
+            kind,
+            package_binary,
+            &rpm_file,
+            package.path.ptr,
+            0,
+            metadata.name,
+            evr.ptr,
+            metadata.arch,
+        );
+        if (rc != 0) return mapFixedRecordError(rc);
+        transferred = true;
+    }
+
+    var plan = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN);
+    plan.dwItemCount = @intCast(transaction.items.len);
+    plan.pdwOrderIndices = order.ptr;
+    plan.pItems = plan_items.ptr;
+    plan.dwPriorHnumCount = @intCast(prior_count);
+    if (prior_count != 0) plan.pdwPriorHnums = prior_hnums.ptr;
+    var validation_failure: FixedOrderValidationFailure = .none;
+    const rc = runTransactionNativeImpl(
+        ts,
+        tdnf,
+        &plan,
+        expected_items,
+        &validation_failure,
+    );
+    if (rc != 0) return mapFixedExecutionError(rc, validation_failure);
 }
 
 fn reportProblems(ts: *c.TDNFRPMTS) void {
@@ -1522,21 +1895,111 @@ fn planItem(
     );
 }
 
+fn fixedValidationError(
+    failure: ?*FixedOrderValidationFailure,
+    kind: FixedOrderValidationFailure,
+) u32 {
+    if (failure) |out| out.* = kind;
+    return errors.ERROR_TDNF_INVALID_PARAMETER;
+}
+
+fn prevalidatePlanStructure(
+    ts: *c.TDNFRPMTS,
+    plan: *const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    input_items: []const *c.TDNF_RPM_TS_ITEM,
+    view: *TransactionView,
+    expected_items: ?[]const FixedOrderExpectedItem,
+    failure: ?*FixedOrderValidationFailure,
+) u32 {
+    if (failure) |out| out.* = .none;
+    if (plan.dwItemCount != ts.dwTransactionItemCount or
+        plan.dwItemCount != input_items.len or
+        plan.dwProblemCount != 0 or plan.pdwOrderIndices == null)
+        return fixedValidationError(failure, .malformed_order);
+    if (plan.pItems == null)
+        return fixedValidationError(failure, .invalid_item);
+    if (expected_items) |expected| {
+        if (expected.len != input_items.len)
+            return fixedValidationError(failure, .invalid_item);
+    }
+
+    const seen = allocator.alloc(bool, input_items.len) catch
+        return errors.ERROR_TDNF_OUT_OF_MEMORY;
+    defer allocator.free(seen);
+    @memset(seen, false);
+    for (plan.pdwOrderIndices[0..plan.dwItemCount]) |input_index_u32| {
+        const input_index: usize = input_index_u32;
+        if (input_index >= input_items.len or seen[input_index])
+            return fixedValidationError(failure, .malformed_order);
+        seen[input_index] = true;
+        const item = input_items[input_index];
+        const planned = planItem(plan, input_index);
+        if (planned.dwPriorOffset > plan.dwPriorHnumCount or
+            planned.dwPriorCount >
+                plan.dwPriorHnumCount - planned.dwPriorOffset or
+            (planned.dwPriorCount != 0 and plan.pdwPriorHnums == null))
+            return fixedValidationError(failure, .invalid_item);
+        if (item.nType == item_upgrade and planned.dwPriorCount > 1)
+            return ERROR_TDNF_RPM_CHECK;
+
+        const expected = if (expected_items) |items| &items[input_index] else null;
+        if (item.nType == item_erase) {
+            const entry = view.find(item.dwRpmDbHnum);
+            if (planned.dwPriorCount != 0 or entry == null or !entry.?.active)
+                return fixedValidationError(
+                    failure,
+                    if (expected != null) .prior_mismatch else .invalid_item,
+                );
+            if (expected) |fixed| {
+                const row = fixed.erase orelse
+                    return fixedValidationError(failure, .invalid_item);
+                if (fixed.priors.len != 0 or row.hnum != item.dwRpmDbHnum or
+                    !identityMatchesHeader(row.identity, entry.?.blob))
+                    return fixedValidationError(failure, .prior_mismatch);
+            }
+        } else if (expected) |fixed| {
+            if (fixed.erase != null or fixed.priors.len != planned.dwPriorCount)
+                return fixedValidationError(failure, .invalid_item);
+        }
+        for (0..planned.dwPriorCount) |offset| {
+            const hnum = plan.pdwPriorHnums[
+                planned.dwPriorOffset + offset
+            ];
+            const entry = view.find(hnum);
+            if (entry == null or !entry.?.active)
+                return fixedValidationError(
+                    failure,
+                    if (expected != null) .prior_mismatch else .invalid_item,
+                );
+            if (expected) |fixed| {
+                const row = fixed.priors[offset];
+                if (row.hnum != hnum or
+                    !identityMatchesHeader(row.identity, entry.?.blob))
+                    return fixedValidationError(failure, .prior_mismatch);
+            }
+        }
+    }
+    return 0;
+}
+
 fn prevalidatePlan(
     ts: *c.TDNFRPMTS,
     plan: *const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
     input_items: []const *c.TDNF_RPM_TS_ITEM,
     view: *TransactionView,
     config: *const anyopaque,
+    expected_items: ?[]const FixedOrderExpectedItem,
+    failure: ?*FixedOrderValidationFailure,
 ) u32 {
-    if (plan.dwItemCount != ts.dwTransactionItemCount or
-        plan.dwProblemCount != 0 or plan.pdwOrderIndices == null or
-        plan.pItems == null)
-        return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const seen = allocator.alloc(bool, input_items.len) catch
-        return errors.ERROR_TDNF_OUT_OF_MEMORY;
-    defer allocator.free(seen);
-    @memset(seen, false);
+    const rc = prevalidatePlanStructure(
+        ts,
+        plan,
+        input_items,
+        view,
+        expected_items,
+        failure,
+    );
+    if (rc != 0) return rc;
     for (view.entries.items) |entry| {
         if (c.tdnf_rpm_header_validate_trigger_scripts_config(
             entry.blob.ptr,
@@ -1549,23 +2012,8 @@ fn prevalidatePlan(
     }
     for (plan.pdwOrderIndices[0..plan.dwItemCount]) |input_index_u32| {
         const input_index: usize = input_index_u32;
-        if (input_index >= input_items.len or seen[input_index])
-            return errors.ERROR_TDNF_INVALID_PARAMETER;
-        seen[input_index] = true;
         const item = input_items[input_index];
-        const planned = planItem(plan, input_index);
-        if (planned.dwPriorOffset > plan.dwPriorHnumCount or
-            planned.dwPriorCount >
-                plan.dwPriorHnumCount - planned.dwPriorOffset or
-            (planned.dwPriorCount != 0 and plan.pdwPriorHnums == null))
-            return errors.ERROR_TDNF_INVALID_PARAMETER;
-        if (item.nType == item_upgrade and planned.dwPriorCount > 1)
-            return ERROR_TDNF_RPM_CHECK;
-        if (item.nType == item_erase) {
-            const entry = view.find(item.dwRpmDbHnum);
-            if (planned.dwPriorCount != 0 or entry == null or !entry.?.active)
-                return errors.ERROR_TDNF_INVALID_PARAMETER;
-        } else {
+        if (item.nType != item_erase) {
             const file = item.pRpmFile orelse
                 return errors.ERROR_TDNF_INVALID_PARAMETER;
             var blob_ptr: [*c]const u8 = null;
@@ -1582,14 +2030,6 @@ fn prevalidatePlan(
                 logRpmzigError("validate transaction trigger metadata");
                 return ERROR_TDNF_TRANSACTION_FAILED;
             }
-        }
-        for (0..planned.dwPriorCount) |offset| {
-            const hnum = plan.pdwPriorHnums[
-                planned.dwPriorOffset + offset
-            ];
-            const entry = view.find(hnum);
-            if (entry == null or !entry.?.active)
-                return errors.ERROR_TDNF_INVALID_PARAMETER;
         }
     }
     return 0;
@@ -2397,11 +2837,24 @@ fn processEraseItem(
     return 0;
 }
 
-fn runTransactionNative(
+const PlanOrderIterator = struct {
+    plan: *const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+    position: usize = 0,
+
+    fn next(self: *PlanOrderIterator) ?usize {
+        if (self.position >= self.plan.dwItemCount) return null;
+        defer self.position += 1;
+        return self.plan.pdwOrderIndices[self.position];
+    }
+};
+
+fn runTransactionNativeImpl(
     ts_opt: ?*c.TDNFRPMTS,
     tdnf_opt: ?*abi.Tdnf,
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
-) callconv(.c) u32 {
+    expected_items: ?[]const FixedOrderExpectedItem,
+    validation_failure: ?*FixedOrderValidationFailure,
+) u32 {
     const ts = ts_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const plan = plan_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -2474,7 +2927,15 @@ fn runTransactionNative(
     var postun_queue = PostunQueue{};
     defer postun_queue.deinit();
 
-    var rc = prevalidatePlan(ts, plan, input_items, &view, tdnf.pRpmConfig.?);
+    var rc = prevalidatePlan(
+        ts,
+        plan,
+        input_items,
+        &view,
+        tdnf.pRpmConfig.?,
+        expected_items,
+        validation_failure,
+    );
     if (rc != 0) return rc;
     rc = markRemovedEntries(plan, input_items, &view);
     if (rc != 0) return rc;
@@ -2529,7 +2990,8 @@ fn runTransactionNative(
     );
     if (rc != 0) return rc;
 
-    for (plan.pdwOrderIndices[0..plan.dwItemCount]) |input_index| {
+    var order_iterator = PlanOrderIterator{ .plan = plan };
+    while (order_iterator.next()) |input_index| {
         if (input_index >= input_items.len)
             return errors.ERROR_TDNF_INVALID_PARAMETER;
         const item = input_items[input_index];
@@ -2609,6 +3071,14 @@ fn runTransactionNative(
         script_fd,
         redirect,
     );
+}
+
+fn runTransactionNative(
+    ts_opt: ?*c.TDNFRPMTS,
+    tdnf_opt: ?*abi.Tdnf,
+    plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+) callconv(.c) u32 {
+    return runTransactionNativeImpl(ts_opt, tdnf_opt, plan_opt, null, null);
 }
 
 fn orderAndCheck(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
@@ -2703,14 +3173,30 @@ fn orderAndCheck(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
 }
 
 fn runTransaction(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
-    var rc = orderAndCheck(ts, tdnf);
+    return runNormalTransactionWith(
+        ts,
+        tdnf,
+        orderAndCheck,
+        runTransactionNative,
+        reportProblems,
+    );
+}
+
+fn runNormalTransactionWith(
+    ts: *c.TDNFRPMTS,
+    tdnf: *abi.Tdnf,
+    prepare: anytype,
+    execute: anytype,
+    report: anytype,
+) u32 {
+    var rc = prepare(ts, tdnf);
     if (rc != 0) {
-        reportProblems(ts);
+        report(ts);
         return rc;
     }
     if (ts.dwTransactionItemCount == 0) return 0;
-    rc = runTransactionNative(ts, tdnf, ts.pNativePlan);
-    if (rc != 0) reportProblems(ts);
+    rc = execute(ts, tdnf, ts.pNativePlan);
+    if (rc != 0) report(ts);
     return rc;
 }
 
@@ -3013,4 +3499,228 @@ test "test-only transactions force all non-mutating native flags" {
     try std.testing.expect(actual & trans_flags.TDNF_RPMTRANS_FLAG_JUSTDB != 0);
     try std.testing.expect(actual & trans_flags.TDNF_RPMTRANS_FLAG_NODB != 0);
     try std.testing.expect(actual & trans_flags.TDNF_RPMTRANS_FLAG_NODOCS != 0);
+}
+
+test "fixed order transaction represents every replay action shape" {
+    const target = FixedOrderPackageIdentity{
+        .name = "target",
+        .epoch = null,
+        .version = "2",
+        .release = "1",
+        .arch = "noarch",
+    };
+    const local = FixedOrderLocalRpm{
+        .path = "/bundle/target.rpm",
+        .identity = target,
+    };
+    const prior = FixedOrderPackageIdentity{
+        .name = "prior",
+        .epoch = null,
+        .version = "1",
+        .release = "1",
+        .arch = "noarch",
+    };
+    const items = [_]FixedOrderItem{
+        .{ .install = local },
+        .{ .erase = .{ .hnum = 10, .identity = prior } },
+        .{ .upgrade = .{
+            .package = local,
+            .priors = &.{.{ .hnum = 11, .identity = prior }},
+        } },
+        .{ .downgrade = .{
+            .package = local,
+            .priors = &.{.{ .hnum = 12, .identity = prior }},
+        } },
+        .{ .reinstall = .{
+            .package = local,
+            .priors = &.{.{ .hnum = 13, .identity = prior }},
+        } },
+        .{ .obsolete = .{
+            .package = local,
+            .priors = &.{
+                .{ .hnum = 14, .identity = prior },
+                .{ .hnum = 15, .identity = prior },
+            },
+        } },
+    };
+    try validateFixedOrderInput(.{
+        .items = &items,
+        .order = &.{ 0, 1, 2, 3, 4, 5 },
+    });
+}
+
+test "fixed order rejects missing duplicate and malformed indices" {
+    const identity = FixedOrderPackageIdentity{
+        .name = "installed",
+        .epoch = null,
+        .version = "1",
+        .release = "1",
+        .arch = "noarch",
+    };
+    const items = [_]FixedOrderItem{
+        .{ .erase = .{ .hnum = 1, .identity = identity } },
+        .{ .erase = .{ .hnum = 2, .identity = identity } },
+    };
+    try std.testing.expectError(error.MalformedOrder, validateFixedOrderInput(.{
+        .items = &items,
+        .order = &.{0},
+    }));
+    try std.testing.expectError(error.MalformedOrder, validateFixedOrderInput(.{
+        .items = &items,
+        .order = &.{ 0, 0 },
+    }));
+    try std.testing.expectError(error.MalformedOrder, validateFixedOrderInput(.{
+        .items = &items,
+        .order = &.{ 0, 2 },
+    }));
+}
+
+test "fixed order iterator preserves the recorded execution sequence" {
+    var order = [_]u32{ 2, 0, 1 };
+    var plan = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN);
+    plan.dwItemCount = order.len;
+    plan.pdwOrderIndices = &order;
+    var iterator = PlanOrderIterator{ .plan = &plan };
+    try std.testing.expectEqual(@as(?usize, 2), iterator.next());
+    try std.testing.expectEqual(@as(?usize, 0), iterator.next());
+    try std.testing.expectEqual(@as(?usize, 1), iterator.next());
+    try std.testing.expectEqual(@as(?usize, null), iterator.next());
+}
+
+test "fixed prior mismatches are rejected before transaction view mutation" {
+    const rpmpkg = @import("rpm_package_test");
+    const blob = try rpmpkg.makeMinimalHeaderForTest(
+        std.testing.allocator,
+        "installed",
+        "1",
+        "1",
+        "noarch",
+    );
+    defer std.testing.allocator.free(blob);
+
+    var item = std.mem.zeroes(c.TDNF_RPM_TS_ITEM);
+    item.nType = item_install;
+    var input_items = [_]*c.TDNF_RPM_TS_ITEM{&item};
+    var order = [_]u32{0};
+    var plan_items = [_]c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN_ITEM{
+        .{ .dwPriorOffset = 0, .dwPriorCount = 1 },
+    };
+    var prior_hnums = [_]u32{42};
+    var plan = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN);
+    plan.dwItemCount = 1;
+    plan.pdwOrderIndices = &order;
+    plan.pItems = &plan_items;
+    plan.dwPriorHnumCount = 1;
+    plan.pdwPriorHnums = &prior_hnums;
+    var ts = std.mem.zeroes(c.TDNFRPMTS);
+    ts.dwTransactionItemCount = 1;
+    var view = TransactionView{};
+    defer view.deinit();
+    try view.entries.append(allocator, .{
+        .hnum = 42,
+        .blob = blob,
+        .order = 0,
+    });
+
+    const mismatched = FixedOrderRpmDbRow{
+        .hnum = 42,
+        .identity = .{
+            .name = "installed",
+            .epoch = null,
+            .version = "different",
+            .release = "1",
+            .arch = "noarch",
+        },
+    };
+    var expected = [_]FixedOrderExpectedItem{
+        .{ .priors = &.{mismatched} },
+    };
+    var failure: FixedOrderValidationFailure = .none;
+    try std.testing.expectEqual(
+        @as(u32, errors.ERROR_TDNF_INVALID_PARAMETER),
+        prevalidatePlanStructure(
+            &ts,
+            &plan,
+            &input_items,
+            &view,
+            &expected,
+            &failure,
+        ),
+    );
+    try std.testing.expectEqual(
+        FixedOrderValidationFailure.prior_mismatch,
+        failure,
+    );
+    try std.testing.expect(view.entries.items[0].active);
+    try std.testing.expect(view.entries.items[0].db_visible);
+    try std.testing.expect(!view.entries.items[0].removed);
+
+    prior_hnums[0] = 43;
+    const missing = FixedOrderRpmDbRow{
+        .hnum = 43,
+        .identity = mismatched.identity,
+    };
+    expected[0].priors = &.{missing};
+    failure = .none;
+    try std.testing.expectEqual(
+        @as(u32, errors.ERROR_TDNF_INVALID_PARAMETER),
+        prevalidatePlanStructure(
+            &ts,
+            &plan,
+            &input_items,
+            &view,
+            &expected,
+            &failure,
+        ),
+    );
+    try std.testing.expectEqual(
+        FixedOrderValidationFailure.prior_mismatch,
+        failure,
+    );
+    try std.testing.expect(view.entries.items[0].active);
+    try std.testing.expect(view.entries.items[0].db_visible);
+    try std.testing.expect(!view.entries.items[0].removed);
+}
+
+test "normal transaction still prepares order and checks before execution" {
+    const Probe = struct {
+        var sequence: [2]u8 = .{ 0, 0 };
+        var count: usize = 0;
+        var plan = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN);
+
+        fn prepare(ts: *c.TDNFRPMTS, _: *abi.Tdnf) u32 {
+            sequence[count] = 1;
+            count += 1;
+            ts.pNativePlan = &plan;
+            return 0;
+        }
+
+        fn execute(
+            _: ?*c.TDNFRPMTS,
+            _: ?*abi.Tdnf,
+            supplied: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+        ) u32 {
+            sequence[count] = if (supplied == &plan) 2 else 9;
+            count += 1;
+            return 0;
+        }
+
+        fn report(_: *c.TDNFRPMTS) void {}
+    };
+    Probe.sequence = .{ 0, 0 };
+    Probe.count = 0;
+    var ts = std.mem.zeroes(c.TDNFRPMTS);
+    ts.dwTransactionItemCount = 1;
+    var tdnf = abi.Tdnf{};
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        runNormalTransactionWith(
+            &ts,
+            &tdnf,
+            Probe.prepare,
+            Probe.execute,
+            Probe.report,
+        ),
+    );
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, &Probe.sequence);
 }
