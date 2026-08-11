@@ -1,6 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const canonical_json = @import("canonical_json");
+const secret_shape = @import("secret_shape");
+
 pub const schema = "tdnf.transaction-plan/v1";
 const digest_prefix = schema ++ "\x00";
 const snapshot_id_prefix = "snapshot-v2-";
@@ -1235,7 +1238,7 @@ fn validateOpaqueText(value: []const u8) ValidationError!void {
 fn isOpaqueText(value: []const u8) bool {
     if (value.len == 0 or !std.unicode.utf8ValidateSlice(value) or
         std.mem.indexOfScalar(u8, value, 0) != null or
-        containsSecretShape(value))
+        secret_shape.containsSecretShape(value))
     {
         return false;
     }
@@ -1290,7 +1293,7 @@ fn decodedRepositoryIdHasForbiddenShape(value: []const u8) bool {
         history[next_slot] = std.ascii.toLower(byte);
         next_slot = (next_slot + 1) % history.len;
         if (history_len < history.len) history_len += 1;
-        if (decodedRingEndsWith(
+        if (secret_shape.decodedRingEndsWith(
             history[0..],
             next_slot,
             history_len,
@@ -1298,8 +1301,8 @@ fn decodedRepositoryIdHasForbiddenShape(value: []const u8) bool {
         )) {
             return true;
         }
-        for (secret_shape_markers) |marker| {
-            if (decodedRingEndsWith(
+        for (secret_shape.markers) |marker| {
+            if (secret_shape.decodedRingEndsWith(
                 history[0..],
                 next_slot,
                 history_len,
@@ -1340,9 +1343,9 @@ fn decodedRepositoryIdHasForbiddenShape(value: []const u8) bool {
 fn nextDecodedRepositoryByte(value: []const u8, index: *usize) u8 {
     const byte = value[index.*];
     if (byte == '%' and index.* + 2 < value.len and
-        isHex(value[index.* + 1]) and isHex(value[index.* + 2]))
+        secret_shape.isHex(value[index.* + 1]) and secret_shape.isHex(value[index.* + 2]))
     {
-        const decoded = hexByte(value[index.* + 1], value[index.* + 2]);
+        const decoded = secret_shape.hexByte(value[index.* + 1], value[index.* + 2]);
         index.* += 3;
         return decoded;
     }
@@ -1388,10 +1391,10 @@ fn validateUriReference(value: []const u8) ValidationError!void {
             return error.InvalidLocation;
         }
         if (byte == '%') {
-            if (index + 2 >= value.len or !isHex(value[index + 1]) or !isHex(value[index + 2])) {
+            if (index + 2 >= value.len or !secret_shape.isHex(value[index + 1]) or !secret_shape.isHex(value[index + 2])) {
                 return error.InvalidLocation;
             }
-            const decoded = hexByte(value[index + 1], value[index + 2]);
+            const decoded = secret_shape.hexByte(value[index + 1], value[index + 2]);
             if (decoded < 0x20 or decoded == 0x7f or decoded == '\\') {
                 return error.InvalidLocation;
             }
@@ -1418,14 +1421,14 @@ fn validateUriReference(value: []const u8) ValidationError!void {
             {
                 return error.InvalidLocation;
             }
-            if (decodedUriHasSecretShape(authority_and_path, authority.len)) {
+            if (secret_shape.decodedUriHasSecretShape(authority_and_path, authority.len)) {
                 return error.InvalidLocation;
             }
             return;
         }
     }
     if (value[0] == '/' or std.mem.startsWith(u8, value, "//") or
-        decodedUriHasSecretShape(value, null))
+        secret_shape.decodedUriHasSecretShape(value, null))
     {
         return error.InvalidLocation;
     }
@@ -1489,118 +1492,6 @@ fn isSchemePrefix(prefix: []const u8) bool {
     return true;
 }
 
-fn isHex(byte: u8) bool {
-    return std.ascii.isDigit(byte) or (byte >= 'a' and byte <= 'f') or (byte >= 'A' and byte <= 'F');
-}
-
-fn hexByte(high: u8, low: u8) u8 {
-    return hexValue(high) * 16 + hexValue(low);
-}
-
-fn hexValue(byte: u8) u8 {
-    return if (std.ascii.isDigit(byte))
-        byte - '0'
-    else if (byte >= 'a' and byte <= 'f')
-        byte - 'a' + 10
-    else
-        byte - 'A' + 10;
-}
-
-const secret_shape_markers = [_][]const u8{
-    "-----begin ",
-    "private key",
-    "api_key=",
-    "apikey=",
-    "access_token=",
-    "client_secret=",
-    "passwd=",
-    "password=",
-    "proxy://",
-    "proxy=",
-    "proxy_password=",
-    "proxy_pass=",
-    "proxy_user=",
-    "******proxy=",
-    "************proxy=",
-    "******secret=",
-    "secret=",
-    "token=",
-};
-
-fn containsSecretShape(value: []const u8) bool {
-    for (secret_shape_markers) |marker| {
-        if (indexOfIgnoreCase(value, marker) != null) return true;
-    }
-    return false;
-}
-
-fn decodedUriByte(value: []const u8, index: *usize) u8 {
-    const byte = value[index.*];
-    index.* += 1;
-    if (byte == '%') {
-        const decoded = hexByte(value[index.*], value[index.* + 1]);
-        index.* += 2;
-        return decoded;
-    }
-    return byte;
-}
-
-/// Scans an absolute URI's authority and path once after percent-decoding.
-/// Callers exclude the outer HTTP(S) scheme so a safe scheme is not a marker.
-fn decodedUriHasSecretShape(
-    value: []const u8,
-    authority_length: ?usize,
-) bool {
-    var history: [64]u8 = undefined;
-    var history_len: usize = 0;
-    var next_slot: usize = 0;
-    var value_index: usize = 0;
-    while (value_index < value.len) {
-        const raw_index = value_index;
-        const byte = decodedUriByte(value, &value_index);
-        if (authority_length) |length| {
-            if (raw_index < length and
-                (byte == '@' or byte == '/' or byte == '\\' or
-                    byte == '?' or byte == '#'))
-            {
-                return true;
-            }
-        }
-
-        history[next_slot] = std.ascii.toLower(byte);
-        next_slot = (next_slot + 1) % history.len;
-        if (history_len < history.len) history_len += 1;
-        for (secret_shape_markers) |marker| {
-            if (decodedRingEndsWith(history[0..], next_slot, history_len, marker)) {
-                return true;
-            }
-        }
-        if (decodedRingEndsWith(history[0..], next_slot, history_len, "://")) {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn decodedRingEndsWith(
-    history: []const u8,
-    next_slot: usize,
-    history_len: usize,
-    marker: []const u8,
-) bool {
-    if (marker.len > history_len) return false;
-    const first_slot = (next_slot + history.len - marker.len) % history.len;
-    for (marker, 0..) |byte, index| {
-        if (history[(first_slot + index) % history.len] != byte) return false;
-    }
-    return true;
-}
-
-fn indexOfIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {
-    if (needle.len > haystack.len) return null;
-    for (0..haystack.len - needle.len + 1) |index| if (std.ascii.eqlIgnoreCase(haystack[index .. index + needle.len], needle)) return index;
-    return null;
-}
 
 fn findRequest(requests: []const Request, id: []const u8) ?*const Request {
     for (requests) |*request| if (std.mem.eql(u8, request.id, id)) return request;
@@ -1974,71 +1865,6 @@ fn lowerHex(bytes: [32]u8) [64]u8 {
     return result;
 }
 
-const CanonicalWriter = struct {
-    allocator: Allocator,
-    bytes: std.ArrayList(u8) = .empty,
-
-    fn init(allocator: Allocator) CanonicalWriter {
-        return .{ .allocator = allocator };
-    }
-    fn deinit(self: *CanonicalWriter) void {
-        self.bytes.deinit(self.allocator);
-    }
-    fn finish(self: *CanonicalWriter) Allocator.Error![]u8 {
-        return self.bytes.toOwnedSlice(self.allocator);
-    }
-    fn appendByte(self: *CanonicalWriter, byte: u8) Allocator.Error!void {
-        try self.bytes.append(self.allocator, byte);
-    }
-    fn append(self: *CanonicalWriter, value: []const u8) Allocator.Error!void {
-        try self.bytes.appendSlice(self.allocator, value);
-    }
-    fn writeBool(self: *CanonicalWriter, value: bool) Allocator.Error!void {
-        try self.append(if (value) "true" else "false");
-    }
-    fn writeUint(self: *CanonicalWriter, value: u64) Allocator.Error!void {
-        var buffer: [20]u8 = undefined;
-        var cursor = buffer.len;
-        var remaining = value;
-        while (true) {
-            cursor -= 1;
-            buffer[cursor] = @as(u8, @intCast(remaining % 10)) + '0';
-            remaining /= 10;
-            if (remaining == 0) break;
-        }
-        try self.append(buffer[cursor..]);
-    }
-    fn writeInt(self: *CanonicalWriter, value: i64) Allocator.Error!void {
-        if (value < 0) {
-            try self.appendByte('-');
-            try self.writeUint(@intCast(-value));
-        } else try self.writeUint(@intCast(value));
-    }
-    fn writeString(self: *CanonicalWriter, value: []const u8) Allocator.Error!void {
-        const hex = "0123456789abcdef";
-        try self.appendByte('"');
-        for (value) |byte| switch (byte) {
-            '"' => try self.append("\\\""),
-            '\\' => try self.append("\\\\"),
-            0x08 => try self.append("\\b"),
-            0x09 => try self.append("\\t"),
-            0x0a => try self.append("\\n"),
-            0x0c => try self.append("\\f"),
-            0x0d => try self.append("\\r"),
-            0x00...0x07, 0x0b, 0x0e...0x1f => {
-                try self.append("\\u00");
-                try self.appendByte(hex[byte >> 4]);
-                try self.appendByte(hex[byte & 0x0f]);
-            },
-            else => try self.appendByte(byte),
-        };
-        try self.appendByte('"');
-    }
-    fn writeOptionalString(self: *CanonicalWriter, value: ?[]const u8) Allocator.Error!void {
-        if (value) |text| try self.writeString(text) else try self.append("null");
-    }
-};
-
 fn canonicalDocument(
     allocator: Allocator,
     data: *const Data,
@@ -2047,7 +1873,7 @@ fn canonicalDocument(
     include_digest: bool,
     digest_value: ?*const [64]u8,
 ) Allocator.Error![]u8 {
-    var writer = CanonicalWriter.init(allocator);
+    var writer = canonical_json.Writer.init(allocator);
     errdefer writer.deinit();
     try writer.append("{\"actions\":");
     try writeActions(&writer, data, package_index, job_index);
@@ -2083,7 +1909,7 @@ fn canonicalDocument(
 }
 
 fn writeActions(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     data: *const Data,
     package_index: *const PackageIndex,
     job_index: *const JobIndex,
@@ -2117,7 +1943,7 @@ fn writeActions(
     try writer.appendByte(']');
 }
 
-fn writeEnvironment(writer: *CanonicalWriter, environment: Environment) Allocator.Error!void {
+fn writeEnvironment(writer: *canonical_json.Writer, environment: Environment) Allocator.Error!void {
     try writer.append("{\"architecture\":");
     try writer.writeString(environment.architecture);
     try writer.append(",\"distro\":");
@@ -2137,7 +1963,7 @@ fn writeEnvironment(writer: *CanonicalWriter, environment: Environment) Allocato
     try writer.append("}}");
 }
 
-fn writePolicy(writer: *CanonicalWriter, policy: Policy) Allocator.Error!void {
+fn writePolicy(writer: *canonical_json.Writer, policy: Policy) Allocator.Error!void {
     try writer.append("{\"all_deps\":");
     try writer.writeBool(policy.all_deps);
     try writer.append(",\"allow_erasing\":");
@@ -2173,7 +1999,7 @@ fn writePolicy(writer: *CanonicalWriter, policy: Policy) Allocator.Error!void {
     try writer.appendByte('}');
 }
 
-fn writeMinVersions(writer: *CanonicalWriter, input: []const MinVersionConstraint) Allocator.Error!void {
+fn writeMinVersions(writer: *canonical_json.Writer, input: []const MinVersionConstraint) Allocator.Error!void {
     const values = try writer.allocator.dupe(MinVersionConstraint, input);
     defer writer.allocator.free(values);
     std.mem.sort(MinVersionConstraint, values, {}, minVersionLessThan);
@@ -2196,7 +2022,7 @@ fn writeMinVersions(writer: *CanonicalWriter, input: []const MinVersionConstrain
 }
 
 fn writeJobs(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     data: *const Data,
     package_index: *const PackageIndex,
     job_index: *const JobIndex,
@@ -2231,7 +2057,7 @@ fn writeJobs(
 }
 
 fn writeSelection(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     package_index: *const PackageIndex,
     selection: Selection,
 ) Allocator.Error!void {
@@ -2256,7 +2082,7 @@ fn writeSelection(
 }
 
 fn writePackages(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     data: *const Data,
     package_index: *const PackageIndex,
 ) Allocator.Error!void {
@@ -2293,7 +2119,7 @@ fn writePackages(
     try writer.appendByte(']');
 }
 
-fn writePackageSource(writer: *CanonicalWriter, source: ?PackageSource) Allocator.Error!void {
+fn writePackageSource(writer: *canonical_json.Writer, source: ?PackageSource) Allocator.Error!void {
     if (source) |value| {
         try writer.append("{\"checksum\":{\"is_pkgid\":");
         try writer.writeBool(value.checksum.is_pkgid);
@@ -2320,7 +2146,7 @@ fn writePackageSource(writer: *CanonicalWriter, source: ?PackageSource) Allocato
 }
 
 fn writeProblems(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     data: *const Data,
     package_index: *const PackageIndex,
     job_index: *const JobIndex,
@@ -2366,7 +2192,7 @@ fn writeProblems(
     try writer.appendByte(']');
 }
 
-fn writeCapability(writer: *CanonicalWriter, capability: ?Capability) Allocator.Error!void {
+fn writeCapability(writer: *canonical_json.Writer, capability: ?Capability) Allocator.Error!void {
     if (capability) |value| {
         try writer.append("{\"comparison\":");
         try writer.writeString(@tagName(value.comparison));
@@ -2388,7 +2214,7 @@ fn writeCapability(writer: *CanonicalWriter, capability: ?Capability) Allocator.
     } else try writer.append("null");
 }
 
-fn writeRepositories(writer: *CanonicalWriter, input: []const Repository) Allocator.Error!void {
+fn writeRepositories(writer: *canonical_json.Writer, input: []const Repository) Allocator.Error!void {
     const repositories = try writer.allocator.dupe(Repository, input);
     defer writer.allocator.free(repositories);
     std.mem.sort(Repository, repositories, {}, repositoryLessThan);
@@ -2428,7 +2254,7 @@ fn writeRepositories(writer: *CanonicalWriter, input: []const Repository) Alloca
     try writer.appendByte(']');
 }
 
-fn writeMetadataRecords(writer: *CanonicalWriter, input: []const MetadataRecord) Allocator.Error!void {
+fn writeMetadataRecords(writer: *canonical_json.Writer, input: []const MetadataRecord) Allocator.Error!void {
     const records = try writer.allocator.dupe(MetadataRecord, input);
     defer writer.allocator.free(records);
     std.mem.sort(MetadataRecord, records, {}, metadataRecordLessThan);
@@ -2458,7 +2284,7 @@ fn writeMetadataRecords(writer: *CanonicalWriter, input: []const MetadataRecord)
     try writer.appendByte(']');
 }
 
-fn writeOptionalChecksum(writer: *CanonicalWriter, checksum: ?Checksum) Allocator.Error!void {
+fn writeOptionalChecksum(writer: *canonical_json.Writer, checksum: ?Checksum) Allocator.Error!void {
     if (checksum) |value| {
         try writer.append("{\"is_pkgid\":");
         try writer.writeBool(value.is_pkgid);
@@ -2470,7 +2296,7 @@ fn writeOptionalChecksum(writer: *CanonicalWriter, checksum: ?Checksum) Allocato
     } else try writer.append("null");
 }
 
-fn writeRequests(writer: *CanonicalWriter, input: []const Request) Allocator.Error!void {
+fn writeRequests(writer: *canonical_json.Writer, input: []const Request) Allocator.Error!void {
     const requests = try writer.allocator.dupe(Request, input);
     defer writer.allocator.free(requests);
     std.mem.sort(Request, requests, {}, requestLessThan);
@@ -2489,7 +2315,7 @@ fn writeRequests(writer: *CanonicalWriter, input: []const Request) Allocator.Err
 }
 
 fn writeSelected(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     data: *const Data,
     package_index: *const PackageIndex,
 ) Allocator.Error!void {
@@ -2507,7 +2333,7 @@ fn writeSelected(
 }
 
 fn writeSkipped(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     job_index: *const JobIndex,
     input: []const Skipped,
 ) Allocator.Error!void {
@@ -2524,7 +2350,7 @@ fn writeSkipped(
     try writer.appendByte(']');
 }
 
-fn writeStringArray(writer: *CanonicalWriter, input: []const []const u8) Allocator.Error!void {
+fn writeStringArray(writer: *canonical_json.Writer, input: []const []const u8) Allocator.Error!void {
     const strings = try writer.allocator.dupe([]const u8, input);
     defer writer.allocator.free(strings);
     std.mem.sort([]const u8, strings, {}, stringLessThan);
@@ -2537,7 +2363,7 @@ fn writeStringArray(writer: *CanonicalWriter, input: []const []const u8) Allocat
 }
 
 fn writePackageRefs(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     package_index: *const PackageIndex,
     input: []const []const u8,
 ) Allocator.Error!void {
@@ -2561,7 +2387,7 @@ fn packageIdLessThan(
 }
 
 fn writePackageRef(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     package_index: *const PackageIndex,
     id: []const u8,
 ) Allocator.Error!void {
@@ -2571,7 +2397,7 @@ fn writePackageRef(
 }
 
 fn writeJobRef(
-    writer: *CanonicalWriter,
+    writer: *canonical_json.Writer,
     job_index: *const JobIndex,
     id: []const u8,
 ) Allocator.Error!void {
@@ -3042,6 +2868,25 @@ fn testData() Data {
 
 fn expectJsonContains(json: []const u8, needle: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, json, needle) != null);
+}
+
+// Pins the canonical form of the fixture against accidental change. The
+// digest is a compatibility promise: every published plan and every consumer
+// digest depends on these exact bytes, so a diff here is either a deliberate
+// schema change or a bug. It is deliberately a literal, not a recomputation.
+test "canonical plan bytes and digest are pinned" {
+    const pinned_digest =
+        "d877e827a85ea4f3c5e0895aab0dd9c4943e424e7d5424a75bbc5c624d8eac71";
+    const instance = try Plan.create(std.testing.allocator, testData());
+    defer instance.destroy();
+    const digest_value = try instance.digest(std.testing.allocator);
+    try std.testing.expectEqualStrings(pinned_digest, &digest_value);
+
+    const json = try instance.canonicalJsonAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(json);
+    // The document embeds the digest it is hashed without.
+    try expectJsonContains(json, "\"value\":\"" ++ pinned_digest ++ "\"");
+    try expectJsonContains(json, "\"domain\":\"" ++ schema ++ "\"");
 }
 
 test "canonical plan is semantic and input-order independent" {

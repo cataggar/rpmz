@@ -75,17 +75,43 @@ pub fn build(b: *Build) void {
         "libsolv-oracle",
         "Enable the opt-in vendored libsolv parity oracle",
     ) orelse false;
+    const canonical_json_mod = b.createModule(.{
+        .root_source_file = b.path("client/canonical_json.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const secret_shape_mod = b.createModule(.{
+        .root_source_file = b.path("client/secret_shape.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const transaction_plan_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan.zig"),
         .target = target,
         .optimize = optimize,
     });
+    transaction_plan_mod.addImport("canonical_json", canonical_json_mod);
+    transaction_plan_mod.addImport("secret_shape", secret_shape_mod);
+    const transaction_bundle_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_bundle.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    transaction_bundle_mod.addImport("canonical_json", canonical_json_mod);
+    transaction_bundle_mod.addImport("secret_shape", secret_shape_mod);
+    transaction_bundle_mod.addImport("transaction_plan", transaction_plan_mod);
     const public_tdnf_mod = b.addModule("tdnf", .{
         .root_source_file = b.path("tdnf.zig"),
         .target = target,
         .optimize = optimize,
     });
     public_tdnf_mod.addImport("transaction_plan", transaction_plan_mod);
+    public_tdnf_mod.addImport("transaction_bundle", transaction_bundle_mod);
+    // Registered so the public-API audit can see the whole compiled closure,
+    // not because `tdnf.zig` re-exports them. They are shared implementation
+    // detail with no stability promise of their own.
+    public_tdnf_mod.addImport("canonical_json", canonical_json_mod);
+    public_tdnf_mod.addImport("secret_shape", secret_shape_mod);
 
     // Zig 0.16 documents an empty Build.pkg_hash as the root package. A
     // dependency consumer needs the resolve module graph, which is built
@@ -355,7 +381,22 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
     {
+        const tests = b.addTest(.{ .root_module = canonical_json_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const tests = b.addTest(.{ .root_module = secret_shape_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
         const tests = b.addTest(.{ .root_module = transaction_plan_mod });
+        const run_tests = b.addRunArtifact(tests);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+    {
+        const tests = b.addTest(.{ .root_module = transaction_bundle_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);
     }
