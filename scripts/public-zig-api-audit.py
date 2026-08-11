@@ -21,7 +21,9 @@ REQUIRED_PUBLIC_FILES = (
     "build.zig.zon",
     "tdnf.zig",
     "client/transaction_plan.zig",
+    "client/transaction_bundle.zig",
     "doc/transaction-plan-api.md",
+    "doc/transaction-bundle.md",
 )
 # Every source file a dependency consumer can reach through the public module
 # graph. `build.zig` returns before it registers anything private, so this is
@@ -29,7 +31,10 @@ REQUIRED_PUBLIC_FILES = (
 # implementation detail regardless of whether it happens to be packaged.
 PUBLIC_SOURCE_FILES = (
     "tdnf.zig",
+    "client/canonical_json.zig",
+    "client/secret_shape.zig",
     "client/transaction_plan.zig",
+    "client/transaction_bundle.zig",
 )
 # Modules the toolchain always provides. Every other module a public source
 # file imports must be registered on the public module in `build.zig`, which
