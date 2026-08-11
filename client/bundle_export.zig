@@ -200,7 +200,19 @@ fn describeRepositories(
     var count: usize = 0;
     for (repositories) |repository| {
         const sources: []const []const u8 = switch (repository.metadata) {
-            .remote => |remote| remote.base_urls,
+            // A declared URL may carry userinfo or a token query. Those are
+            // credentials for reaching the repository, not part of its
+            // identity, so the bundle records the coordinate with them
+            // removed. Passing them through would either publish a secret or,
+            // once the manifest rejected them, fail an export for a reason
+            // that has nothing to do with the transaction.
+            .remote => |remote| blk: {
+                const recorded = try arena.alloc([]const u8, remote.base_urls.len);
+                for (remote.base_urls, 0..) |url, index| {
+                    recorded[index] = try uri_sanitize.recordableAlloc(arena, url);
+                }
+                break :blk recorded;
+            },
             // A local snapshot has no URL to record. The bundle still carries
             // its files; it simply cannot claim a source it never had.
             .local_snapshot => &.{},
