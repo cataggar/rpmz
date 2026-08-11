@@ -133,6 +133,12 @@ fn verifyNoUnlistedEntries(
     var walker = dir.walk(allocator) catch return error.OutOfMemory;
     defer walker.deinit();
 
+    // A tree can be faulty in both ways at once, and directory iteration order
+    // is a property of the filesystem, not of the bundle. Reporting whichever
+    // fault happened to be read first would make a reproducibility tool give
+    // different answers for identical trees, so the walk completes and the
+    // graver fault always wins.
+    var saw_unlisted = false;
     while (walker.next(io) catch return error.BundleUnreadable) |entry| {
         switch (entry.kind) {
             // Empty directories carry no content and are implied by the paths
@@ -147,8 +153,9 @@ fn verifyNoUnlistedEntries(
         // The manifest cannot list its own hash, so it is the one file that
         // is legitimately present and unlisted.
         if (std.mem.eql(u8, entry.path, transaction_bundle.manifest_name)) continue;
-        if (bundle.findFile(entry.path) == null) return error.UnlistedFile;
+        if (bundle.findFile(entry.path) == null) saw_unlisted = true;
     }
+    if (saw_unlisted) return error.UnlistedFile;
 }
 
 fn verifyPlan(
@@ -411,11 +418,34 @@ test "a listed path that resolves through a symlink is not accepted" {
 
     var dir = try fixture.dir();
     defer dir.close(testing.io);
-    // Replace the real package with a link to identical content elsewhere.
+    // Replace the real package with a link to identical content held outside
+    // the bundle, which is the case that matters: the bytes would verify, and
+    // the tree still is not a closure.
     try dir.deleteFile(testing.io, "packages/base/a.rpm");
-    try dir.writeFile(testing.io, .{ .sub_path = "elsewhere", .data = "fake rpm bytes" });
-    try dir.symLink(testing.io, "../../elsewhere", "packages/base/a.rpm", .{});
+    try fixture.tmp.dir.writeFile(testing.io, .{
+        .sub_path = "elsewhere",
+        .data = "fake rpm bytes",
+    });
+    try dir.symLink(testing.io, "../../../elsewhere", "packages/base/a.rpm", .{});
 
+    try testing.expectError(
+        error.UnsafeEntry,
+        openBundle(testing.allocator, testing.io, fixture.directory),
+    );
+}
+
+test "a tree that is both unsafe and unlisted always reports the unsafe entry" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    try fixture.populate();
+
+    var dir = try fixture.dir();
+    defer dir.close(testing.io);
+    try dir.writeFile(testing.io, .{ .sub_path = "stray", .data = "extra" });
+    try dir.symLink(testing.io, "packages/base/a.rpm", "alias.rpm", .{});
+
+    // Which fault a filesystem happens to hand back first is not a property of
+    // the bundle. The same tree must always produce the same verdict.
     try testing.expectError(
         error.UnsafeEntry,
         openBundle(testing.allocator, testing.io, fixture.directory),
