@@ -44,6 +44,10 @@ pub const WriteError = error{
     IntegrityFailure,
     /// A key blob named by the caller could not be read.
     KeyUnreadable,
+    /// Signature verification of a staged package did not permit a claim.
+    /// Kept distinct from an integrity failure: the bytes were what the
+    /// metadata promised, and were still not acceptable to ship.
+    SignatureRejected,
     /// The destination exists, or the staging tree could not be created or
     /// published.
     PublishFailed,
@@ -96,11 +100,37 @@ pub const RepositoryInput = struct {
     sources: []const []const u8,
 };
 
-/// Which key, if any, validated a given package.
-pub const PackageSignature = struct {
-    plan_package_id: []const u8,
+/// What verification concluded about one staged package.
+pub const Attestation = struct {
     outcome: transaction_bundle.SignatureOutcome,
-    key_fingerprint: ?[]const u8,
+    /// Lower-case hex fingerprint of the key that validated the package.
+    /// Borrowed for the duration of the call; the writer copies it.
+    key_fingerprint: ?[]const u8 = null,
+};
+
+/// Decides what a bundle may claim about a package's signature.
+///
+/// It is handed the staged file, not the URL and not a pre-computed verdict,
+/// because the only bytes worth attesting are the bytes that will ship. A
+/// signature checked against an earlier copy proves nothing about the file in
+/// the bundle.
+pub const Attestor = struct {
+    context: *anyopaque,
+    attestFn: *const fn (
+        context: *anyopaque,
+        dir: std.Io.Dir,
+        sub_path: []const u8,
+        repository_id: []const u8,
+    ) anyerror!Attestation,
+
+    fn attest(
+        self: Attestor,
+        dir: std.Io.Dir,
+        sub_path: []const u8,
+        repository_id: []const u8,
+    ) anyerror!Attestation {
+        return self.attestFn(self.context, dir, sub_path, repository_id);
+    }
 };
 
 pub const Options = struct {
@@ -110,7 +140,7 @@ pub const Options = struct {
     plan_digest: []const u8,
     plan_schema: []const u8,
     repositories: []const RepositoryInput,
-    signatures: []const PackageSignature,
+    attestor: Attestor,
     keys: []const KeyInput,
     fetcher: verified_fetch.Fetcher,
     locator: Locator,
@@ -210,8 +240,17 @@ pub fn write(
             .size = capture.size,
         });
 
-        const signature = findSignature(options.signatures, package.plan_package_id) orelse
-            return error.ManifestInvalid;
+        // Attested on the staged bytes, after they matched the plan's
+        // checksum, so the claim in the manifest is about the file that ships.
+        const attestation = options.attestor.attest(
+            staging.dir,
+            package.path,
+            package.repository_id,
+        ) catch return error.SignatureRejected;
+        const fingerprint = if (attestation.key_fingerprint) |value|
+            try arena.dupe(u8, value)
+        else
+            null;
         try packages.append(arena, .{
             .checksum = package.checksum,
             .href = package.href,
@@ -220,8 +259,8 @@ pub fn write(
             .plan_package_id = package.plan_package_id,
             .repository_id = package.repository_id,
             .signature = .{
-                .outcome = signature.outcome,
-                .key_fingerprint = signature.key_fingerprint,
+                .outcome = attestation.outcome,
+                .key_fingerprint = fingerprint,
             },
             .size = package.size,
             .xml_base = package.xml_base,
@@ -372,12 +411,6 @@ fn findRepository(inputs: []const RepositoryInput, id: []const u8) ?RepositoryIn
     return null;
 }
 
-fn findSignature(signatures: []const PackageSignature, id: []const u8) ?PackageSignature {
-    for (signatures) |signature| {
-        if (std.mem.eql(u8, signature.plan_package_id, id)) return signature;
-    }
-    return null;
-}
 
 const testing = std.testing;
 
@@ -456,6 +489,27 @@ const Harness = struct {
     /// Held by the harness rather than built inline: an `Options` built from a
     /// runtime array literal would point at a dead stack temporary.
     keys_storage: [1]KeyInput = undefined,
+    /// When set, attestation refuses instead of vouching.
+    reject_signature: bool = false,
+
+    fn attestor(self: *Harness) Attestor {
+        return .{ .context = self, .attestFn = attest };
+    }
+
+    fn attest(
+        context: *anyopaque,
+        dir: std.Io.Dir,
+        sub_path: []const u8,
+        _: []const u8,
+    ) anyerror!Attestation {
+        const self: *Harness = @ptrCast(@alignCast(context));
+        if (self.reject_signature) return error.BadSignature;
+        // Attestation must see the staged file, so prove it is readable here.
+        var buffer: [4096]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buffer);
+        _ = try dir.readFileAlloc(self.io, sub_path, fba.allocator(), .limited(2048));
+        return .{ .outcome = .verified, .key_fingerprint = test_fingerprint };
+    }
 
     fn init(io: std.Io) !Harness {
         var tmp = std.testing.tmpDir(.{});
@@ -565,11 +619,7 @@ const Harness = struct {
                 .gpg_check = true,
                 .sources = &.{"https://user:pw@mirror.invalid/base"},
             }},
-            .signatures = &.{.{
-                .plan_package_id = "package-0",
-                .outcome = .verified,
-                .key_fingerprint = test_fingerprint,
-            }},
+            .attestor = self.attestor(),
             .keys = self.keys_storage[0..],
             .fetcher = self.fetcher_state.fetcher(),
             .locator = self.fetcher_state.locator(),
@@ -719,7 +769,7 @@ test "exporting onto an existing path is refused" {
     );
 }
 
-test "a package with no signature entry is an internal contradiction" {
+test "a package whose signature is refused is never published" {
     const io = testing.io;
     var harness = try Harness.init(io);
     defer harness.deinit();
@@ -728,13 +778,16 @@ test "a package with no signature entry is an internal contradiction" {
     const dest = try harness.destination(testing.allocator);
     defer testing.allocator.free(dest);
 
-    var options_value = harness.options(key_path, dest);
-    options_value.signatures = &.{};
-    // Publishing a bundle that omits what verification concluded would let a
-    // consumer read a gap as "unsigned".
+    harness.reject_signature = true;
+    // Distinct from an integrity failure: the bytes were exactly what the
+    // metadata promised, and were still not acceptable to ship.
     try testing.expectError(
-        error.ManifestInvalid,
-        write(testing.allocator, io, options_value),
+        error.SignatureRejected,
+        write(testing.allocator, io, harness.options(key_path, dest)),
+    );
+    try testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(io, dest, .{}),
     );
 }
 
