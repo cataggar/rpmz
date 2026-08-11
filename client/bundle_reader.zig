@@ -171,31 +171,44 @@ fn verifyPlan(
     const bytes = try readListed(allocator, io, dir, reference.path);
     defer allocator.free(bytes);
 
-    const embedded = try embeddedString(allocator, bytes, "digest");
+    // The plan carries its digest as an object -- algorithm, domain, value --
+    // because a bare hex string does not say what was hashed or under which
+    // schema. Only the value is comparable to the manifest's reference.
+    const embedded = try embeddedPlanDigest(allocator, bytes);
     defer allocator.free(embedded);
     if (!std.mem.eql(u8, embedded, reference.digest)) return error.PlanMismatch;
 
-    const schema = try embeddedString(allocator, bytes, "schema");
+    const schema = try embeddedString(allocator, bytes, &.{"schema"});
     defer allocator.free(schema);
     if (!std.mem.eql(u8, schema, reference.schema)) return error.PlanMismatch;
+}
+
+fn embeddedPlanDigest(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+) OpenError![]u8 {
+    return embeddedString(allocator, bytes, &.{ "digest", "value" });
 }
 
 fn embeddedString(
     allocator: std.mem.Allocator,
     bytes: []const u8,
-    key: []const u8,
+    path: []const []const u8,
 ) OpenError![]u8 {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, bytes, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.PlanMismatch,
     };
     defer parsed.deinit();
-    const object = switch (parsed.value) {
-        .object => |object| object,
-        else => return error.PlanMismatch,
-    };
-    const value = object.get(key) orelse return error.PlanMismatch;
-    return switch (value) {
+    var current = parsed.value;
+    for (path) |key| {
+        const object = switch (current) {
+            .object => |object| object,
+            else => return error.PlanMismatch,
+        };
+        current = object.get(key) orelse return error.PlanMismatch;
+    }
+    return switch (current) {
         .string => |text| allocator.dupe(u8, text) catch error.OutOfMemory,
         else => error.PlanMismatch,
     };
@@ -218,10 +231,13 @@ const Fixture = struct {
     const fingerprint = "abcdef0123456789abcdef0123456789abcdef01";
     const repomd_sha = "5" ** 64;
 
+    /// Shaped exactly like a real canonical plan: the digest is an object
+    /// naming its algorithm and domain, not a bare string.
     const plan_json =
-        \\{"digest":"666666666666666666666666666666666666666666666666666666666666
+        \\{"digest":{"algorithm":"sha256","domain":"tdnf.transaction-plan/v1","value":"
     ++
-        \\6666","schema":"tdnf.transaction-plan/v1"}
+        plan_digest ++
+        \\"},"schema":"tdnf.transaction-plan/v1"}
     ;
     const package_bytes = "fake rpm bytes";
     const key_bytes = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n";
@@ -519,9 +535,10 @@ test "a plan whose embedded digest disagrees with the manifest is refused" {
     // matches. Only the plan-digest cross-check can catch this, which is why
     // both a file hash and a plan digest are recorded.
     const swapped =
-        \\{"digest":"777777777777777777777777777777777777777777777777777777777777
+        \\{"digest":{"algorithm":"sha256","domain":"tdnf.transaction-plan/v1","value":"
     ++
-        \\7777","schema":"tdnf.transaction-plan/v1"}
+        Fixture.other_digest ++
+        \\"},"schema":"tdnf.transaction-plan/v1"}
     ;
     try fixture.writeContent(swapped);
     const manifest = try Fixture.buildManifest(swapped, Fixture.plan_digest);
@@ -539,9 +556,10 @@ test "a plan naming a different schema is refused" {
     defer fixture.destroy();
 
     const wrong_schema =
-        \\{"digest":"666666666666666666666666666666666666666666666666666666666666
+        \\{"digest":{"algorithm":"sha256","domain":"tdnf.transaction-plan/v1","value":"
     ++
-        \\6666","schema":"tdnf.transaction-plan/v2"}
+        Fixture.plan_digest ++
+        \\"},"schema":"tdnf.transaction-plan/v2"}
     ;
     try fixture.writeContent(wrong_schema);
     const manifest = try Fixture.buildManifest(wrong_schema, Fixture.plan_digest);

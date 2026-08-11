@@ -166,3 +166,15 @@ resolved, that the requested package is in it, that no undeclared repository
 appears, that repeating the request reproduces the bytes and digest, that
 changing the architecture does not, and that the scratch tree is gone when the
 call returns.
+
+## Exporting a plan's inputs
+
+A plan names the packages a transaction needs; it does not carry them. To
+capture the inputs themselves, hand the same declared resolve request to
+`bundle_export.exportBundle`, which resolves it and publishes every metadata
+file and RPM the resulting plan refers to into one directory. The plan is
+written into that directory alongside them, so the bundle records both what was
+decided and everything the decision was made from.
+
+`doc/transaction-bundle.md` describes the layout, what a consumer may rely on,
+and the failures a published bundle is expected to survive.

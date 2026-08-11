@@ -1950,6 +1950,30 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
+    const bundle_export_test_step = b.step(
+        "bundle-export-test",
+        "Run transaction-bundle export acceptance tests",
+    );
+    {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("client/bundle_export_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        test_mod.addImport("client_root", client_mod);
+        test_mod.addImport("bundle_reader", bundle_reader_mod);
+        test_mod.addImport("transaction_bundle", transaction_bundle_mod);
+        const tests = b.addTest(.{
+            .name = "bundle-export-test",
+            .root_module = test_mod,
+        });
+        const run_tests = b.addRunArtifact(tests);
+        run_tests.has_side_effects = true;
+        bundle_export_test_step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
+
     const client_gpgcheck_test_step = b.step(
         "client-gpgcheck-test",
         "Run direct client package-signature policy tests",
