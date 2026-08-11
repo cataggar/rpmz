@@ -3,12 +3,14 @@ pub const goal = @import("goal.zig");
 pub const resolve = @import("resolve.zig");
 pub const resolve_service = @import("resolve_service.zig");
 pub const resolver = @import("resolver.zig");
+pub const bundle_export = @import("bundle_export.zig");
 pub const api = @import("api.zig");
 
 comptime {
     _ = api;
     _ = resolve_service;
     _ = resolver;
+    _ = bundle_export;
     _ = @import("repoutils.zig");
     _ = @import("remoterepo.zig");
     _ = @import("utils.zig");

@@ -160,6 +160,7 @@ pub fn build(b: *Build) void {
     });
     public_tdnf_mod.addImport("transaction_plan", transaction_plan_mod);
     public_tdnf_mod.addImport("transaction_bundle", transaction_bundle_mod);
+    public_tdnf_mod.addImport("bundle_reader", bundle_reader_mod);
     // Registered so the public-API audit can see the whole compiled closure,
     // not because `tdnf.zig` re-exports them. They are shared implementation
     // detail with no stability promise of their own.
