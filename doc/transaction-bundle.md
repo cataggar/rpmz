@@ -112,3 +112,68 @@ carry no fetch coordinates by construction — they have no `source` and are
 identified by their rpmdb header number — so there is nothing to fetch for the
 prior rows of an upgrade. A plan containing a command-line package, which has
 no `location`, cannot be bundled and is rejected.
+
+## How bytes are verified before they enter a bundle
+
+A bundle is a claim about content, so recording a digest computed over bytes
+nobody checked would launder an unverified download into an
+authoritative-looking artifact. `client/verified_fetch.zig` is the only place
+that turns a downloaded file into a bundle `files` entry, and it enforces two
+rules in the type system rather than by convention:
+
+1. **No expectation, no acceptance.** `Expectation.checksum` is not optional
+   and has no default, so there is no "verify if we happen to know how" mode
+   and no flag that switches checking off. A plan metadata record without a
+   checksum yields no expectation at all, forcing the caller to decide
+   explicitly.
+2. **The recorded digest is computed over the verified bytes.** A `Capture` —
+   which carries the SHA-256 a `files` entry records — can only be produced by
+   a function that has already compared the content against its expectation.
+
+An unrecognised checksum algorithm is refused (`UnsupportedChecksum`), never
+skipped: naming an algorithm tdnf cannot compute is exactly how an attacker
+would ask for a file to go unchecked. Hashing and the set of acceptable
+algorithm names live in `repomd/content_digest.zig`, shared with the repomd
+loader, so the two paths cannot come to disagree about what counts as
+verified.
+
+Every failure mode is a distinct error — `ChecksumMismatch`, `SizeMismatch`,
+`OpenChecksumMismatch`, `OpenSizeMismatch`, `UnsupportedChecksum`,
+`StagedFileTooLarge`, `UnreadableStagedFile`, and `FetchFailed` — so a caller
+can tell "could not reach the repository" from "the repository served
+something other than what it promised".
+
+`fetchVerified` stages into a scratch directory and **deletes the staged file
+on any failure**, because leaving unverified bytes behind under their final
+name is how a rejected download becomes a poisoned cache. The transfer itself
+is injected as a `Fetcher`: downloading needs a `TDNF_HANDLE` (proxies,
+mirrors, TLS policy), and taking that dependency would make the verification
+rules untestable in isolation.
+
+`verifyRepomd` pins a fetched `repomd.xml` against the plan's
+`repomd.checksum_sha256`. That check is the root of the metadata trust chain —
+every record checksum relied on afterwards is only as trustworthy as the
+`repomd.xml` it was read from — so it takes a bare 64-character hex SHA-256
+rather than a repository-chosen algorithm, and a short or empty pin is refused
+rather than treated as "no pin required".
+
+An advertised open size is consulted only when the metadata published no open
+checksum. A verified open checksum already proves the exact decompressed
+bytes, so a disagreeing open size indicts the metadata rather than the
+content; this matches the repomd loader, which in turn matches what every
+other package manager tolerates in the wild.
+
+## URIs in a bundle never carry secrets
+
+`client/uri_sanitize.zig` is the single chokepoint for making a URI safe to
+show or to store. It distinguishes two operations that used to be conflated:
+
+- `redactAlloc` marks the removed parts, for diagnostics a human reads.
+- `recordableAlloc` drops userinfo, query, and fragment outright, for URIs
+  written into a manifest.
+
+Repository configuration may legitimately carry a `?token=` query, so such a
+repository must keep working while leaking nothing. Only userinfo is refused
+outright; query and fragment are stripped. `transaction_bundle.validateSource`
+then rejects any remaining `?` or `#`, so an unsanitised URI cannot reach a
+manifest even if a future call site forgets.

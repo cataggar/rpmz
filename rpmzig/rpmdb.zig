@@ -3248,6 +3248,97 @@ fn verifyFileSignatures(
     return 0;
 }
 
+/// Verify package signatures against the caller's key set and nothing else.
+///
+/// This is deliberately not `tdnf_rpm_file_verify_signatures_config` with an
+/// empty config. That entry point always opens the rpmdb keyring and adds it
+/// to the trust set, which makes the result depend on ambient state of the
+/// install root. An exporter recording *which key vouched for this package*
+/// must not do that: a package signed by a key that only happens to sit in
+/// the local rpmdb has not been vouched for by anything the bundle carries.
+///
+/// Nothing here reads or writes an rpmdb, and no key is imported.
+///
+/// On success `outcome_out` receives the aggregate outcome. When a single key
+/// validated the package, `signer_index_out` receives its index into
+/// `key_blobs` and `signer_fingerprint_out`/`signer_fingerprint_len_out`
+/// receive its fingerprint bytes; otherwise the index is set to -1 and the
+/// fingerprint length to 0. The fingerprint is written into the caller's
+/// buffer, which must be at least 32 bytes, so nothing needs freeing.
+export fn tdnf_rpm_file_verify_signatures_keys(
+    fh: ?*FileHandle,
+    key_blobs: ?[*]const ?*const anyopaque,
+    key_lens: ?[*]const usize,
+    key_count: usize,
+    outcome_out: ?*i32,
+    signer_index_out: ?*isize,
+    signer_fingerprint_out: ?[*]u8,
+    signer_fingerprint_len_out: ?*usize,
+) i32 {
+    clearError();
+    const f = fh orelse {
+        setError("null file handle", .{});
+        return -1;
+    };
+    const out = outcome_out orelse {
+        setError("null integrity outcome", .{});
+        return -1;
+    };
+    if (key_count > 0 and (key_blobs == null or key_lens == null)) {
+        setError("null key set with non-zero key count", .{});
+        return -1;
+    }
+
+    var blobs = std.ArrayList([]const u8).empty;
+    defer blobs.deinit(std.heap.c_allocator);
+    if (key_count > 0) {
+        const ptrs = key_blobs.?;
+        const lens = key_lens.?;
+        for (0..key_count) |index| {
+            const key = ptrs[index] orelse {
+                setError("key {d} is null", .{index});
+                return -1;
+            };
+            if (lens[index] == 0) {
+                setError("key {d} is empty", .{index});
+                return -1;
+            }
+            blobs.append(
+                std.heap.c_allocator,
+                @as([*]const u8, @ptrCast(key))[0..lens[index]],
+            ) catch {
+                setError("out of memory collecting keys", .{});
+                return -1;
+            };
+        }
+    }
+
+    var report = integrity.verifySignatures(
+        std.heap.c_allocator,
+        &f.file,
+        .{},
+        blobs.items,
+    ) catch |err| {
+        setError("verify package signatures: {t}", .{err});
+        return -1;
+    };
+    defer report.deinit(std.heap.c_allocator);
+
+    out.* = @intFromEnum(classifySignatures(&report));
+
+    if (signer_index_out) |slot| slot.* = -1;
+    if (signer_fingerprint_len_out) |slot| slot.* = 0;
+    if (report.verifiedSigner()) |signer| {
+        if (signer_index_out) |slot| slot.* = @intCast(signer.key_index);
+        const bytes = signer.fingerprint.slice();
+        if (signer_fingerprint_out) |buffer| {
+            @memcpy(buffer[0..bytes.len], bytes);
+        }
+        if (signer_fingerprint_len_out) |slot| slot.* = bytes.len;
+    }
+    return 0;
+}
+
 /// Verify all package signatures with the complete configured rpmdb trust
 /// set plus the newly approved repository keys.  This intentionally gathers
 /// every key before invoking integrity.verifySignatures exactly once.
@@ -5279,4 +5370,128 @@ test {
     _ = @import("pgp/verify.zig");
     _ = @import("pgp/keyring.zig");
     _ = @import("checksum.zig");
+}
+
+test "key-set signature ABI names the signer and consults no rpmdb" {
+    const fixture = try integrity.makeSignedFixtureForTest(std.testing.allocator);
+    var file = FileHandle{ .file = fixture.rpm };
+    defer file.file.close(std.testing.allocator);
+
+    // A decoy first so a reported index of 1 can only come from matching.
+    const decoy = [_]u8{0xff} ** 8;
+    var blobs = [_]?*const anyopaque{ &decoy, &fixture.key_packet };
+    var lens = [_]usize{ decoy.len, fixture.key_packet.len };
+
+    var outcome: i32 = -1;
+    var signer_index: isize = -99;
+    var fingerprint: [32]u8 = @splat(0);
+    var fingerprint_len: usize = 99;
+    try std.testing.expectEqual(@as(i32, 0), tdnf_rpm_file_verify_signatures_keys(
+        &file,
+        &blobs,
+        &lens,
+        blobs.len,
+        &outcome,
+        &signer_index,
+        &fingerprint,
+        &fingerprint_len,
+    ));
+    try std.testing.expectEqual(@intFromEnum(IntegrityOutcome.ok), outcome);
+    try std.testing.expectEqual(@as(isize, 1), signer_index);
+    try std.testing.expectEqualSlices(
+        u8,
+        fixture.fingerprint.slice(),
+        fingerprint[0..fingerprint_len],
+    );
+}
+
+test "key-set signature ABI grants no ambient trust" {
+    const fixture = try integrity.makeSignedFixtureForTest(std.testing.allocator);
+    var file = FileHandle{ .file = fixture.rpm };
+    defer file.file.close(std.testing.allocator);
+
+    // The very key that would validate this package is deliberately withheld.
+    // `_config` would still find it if it sat in the install root's rpmdb;
+    // this entry point has no rpmdb to find it in, so the answer is no_key.
+    var outcome: i32 = -1;
+    var signer_index: isize = -99;
+    var fingerprint_len: usize = 99;
+    try std.testing.expectEqual(@as(i32, 0), tdnf_rpm_file_verify_signatures_keys(
+        &file,
+        null,
+        null,
+        0,
+        &outcome,
+        &signer_index,
+        null,
+        &fingerprint_len,
+    ));
+    try std.testing.expectEqual(@intFromEnum(IntegrityOutcome.missing), outcome);
+    try std.testing.expectEqual(@as(isize, -1), signer_index);
+    try std.testing.expectEqual(@as(usize, 0), fingerprint_len);
+}
+
+test "key-set signature ABI rejects malformed arguments" {
+    const fixture = try integrity.makeSignedFixtureForTest(std.testing.allocator);
+    var file = FileHandle{ .file = fixture.rpm };
+    defer file.file.close(std.testing.allocator);
+
+    var outcome: i32 = -1;
+    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+        null,
+        null,
+        null,
+        0,
+        &outcome,
+        null,
+        null,
+        null,
+    ));
+    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+        &file,
+        null,
+        null,
+        0,
+        null,
+        null,
+        null,
+        null,
+    ));
+    // A non-zero count with no key array must not be read as an empty set.
+    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+        &file,
+        null,
+        null,
+        2,
+        &outcome,
+        null,
+        null,
+        null,
+    ));
+
+    var blobs = [_]?*const anyopaque{null};
+    var lens = [_]usize{4};
+    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+        &file,
+        &blobs,
+        &lens,
+        1,
+        &outcome,
+        null,
+        null,
+        null,
+    ));
+
+    blobs[0] = &lens;
+    lens[0] = 0;
+    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+        &file,
+        &blobs,
+        &lens,
+        1,
+        &outcome,
+        null,
+        null,
+        null,
+    ));
 }

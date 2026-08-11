@@ -206,6 +206,14 @@ pub const SignatureCandidate = struct {
     outcome: SignatureOutcome,
     /// Parse/verification result before suppression and policy.
     raw_outcome: SignatureOutcome,
+    /// The key that validated this candidate. Set only when `raw_outcome` is
+    /// `.verified`, so it can never be read as a trust claim the
+    /// cryptography did not make. Note it survives suppression by policy:
+    /// `outcome` may be `.suppressed_legacy` while this still names the
+    /// signer, which is exactly what a caller recording provenance wants.
+    signer_fingerprint: ?pgp_pubkey.Fingerprint = null,
+    /// Index into the `key_blobs` slice passed to `verifySignatures`.
+    signer_key_index: ?usize = null,
 
     pub fn isPresent(self: SignatureCandidate) bool {
         return self.raw_outcome != .absent;
@@ -230,6 +238,13 @@ pub const SignatureCoverage = struct {
     fully_verified: bool,
 };
 
+/// The key a package's signatures were actually validated against.
+pub const Signer = struct {
+    fingerprint: pgp_pubkey.Fingerprint,
+    /// Index into the `key_blobs` slice passed to `verifySignatures`.
+    key_index: usize,
+};
+
 pub const SignatureReport = struct {
     candidates: []SignatureCandidate,
     coverage: SignatureCoverage,
@@ -240,6 +255,31 @@ pub const SignatureReport = struct {
     pub fn deinit(self: *SignatureReport, allocator: std.mem.Allocator) void {
         allocator.free(self.candidates);
         self.candidates = &.{};
+    }
+
+    /// The one key that validated this package.
+    ///
+    /// Null when nothing verified, and also null when two candidates verified
+    /// against *different* keys. A package signed by two keys has no single
+    /// answer to "who vouched for this", so rather than picking one
+    /// arbitrarily this reports none and leaves the caller to fail closed.
+    pub fn verifiedSigner(self: *const SignatureReport) ?Signer {
+        var found: ?Signer = null;
+        for (self.candidates) |candidate| {
+            if (candidate.raw_outcome != .verified) continue;
+            const fingerprint = candidate.signer_fingerprint orelse continue;
+            const index = candidate.signer_key_index orelse continue;
+            if (found) |existing| {
+                if (!std.mem.eql(
+                    u8,
+                    existing.fingerprint.slice(),
+                    fingerprint.slice(),
+                )) return null;
+            } else {
+                found = .{ .fingerprint = fingerprint, .key_index = index };
+            }
+        }
+        return found;
     }
 };
 
@@ -386,14 +426,17 @@ pub fn verifySignatures(
             .header_payload => header_payload_bytes,
             .compressed_payload, .uncompressed_payload => unreachable,
         };
-        const result = mapSignatureVerification(pgp_verify.verifyDetachedDetailed(
+        const identified = pgp_verify.verifyDetachedIdentified(
             allocator,
             packet_bytes,
             signed,
             key_blobs,
-        ));
+        );
+        const result = mapSignatureVerification(identified.status);
         candidate.raw_outcome = result;
         candidate.outcome = result;
+        candidate.signer_fingerprint = identified.signer;
+        candidate.signer_key_index = identified.key_blob_index;
     }
 
     const candidates = try allocator.alloc(SignatureCandidate, pending.items.len);
@@ -1424,6 +1467,39 @@ pub fn makeRpm6BadLegacyDigestFixtureForTest(
     });
 }
 
+/// A package carrying one valid v6 Ed25519 OpenPGP signature, together with
+/// the public key that validates it and that key's fingerprint. Exported so
+/// the ABI layer can prove it reports the signer without duplicating the
+/// signing fixture.
+pub const SignedFixture = struct {
+    rpm: pkgfile.RpmFile,
+    key_packet: [44]u8,
+    fingerprint: pgp_pubkey.Fingerprint,
+};
+
+pub fn makeSignedFixtureForTest(
+    allocator: std.mem.Allocator,
+) !SignedFixture {
+    const main = try makeMinimalMain(allocator);
+    defer allocator.free(main);
+    const generated = try generateV6Ed25519Signature(main);
+    const packets = [_][]const u8{&generated.signature_packet};
+    const encoded = try encodeSignatureArray(allocator, &packets);
+    defer allocator.free(encoded);
+    return .{
+        .rpm = try assembleSignatureFixture(allocator, main, &.{
+            .{
+                .tag = @intFromEnum(header.SigTagId.openpgp),
+                .typ = .string_array,
+                .count = 1,
+                .data = encoded,
+            },
+        }, ""),
+        .key_packet = generated.key_packet,
+        .fingerprint = pgp_pubkey.fingerprintV6(generated.key_packet[2..]),
+    };
+}
+
 pub fn makeLz4AlternateDigestFixtureForTest(
     allocator: std.mem.Allocator,
 ) !pkgfile.RpmFile {
@@ -2046,4 +2122,123 @@ test "mixed RPM6 signatures retain no-key bad and verified outcomes" {
         SignatureOutcome.unsupported_openpgp,
         findSignatureCandidate(no_keys, .openpgp, 2).outcome,
     );
+}
+
+test "a verified candidate names the key that validated it" {
+    const main = try makeMinimalMain(std.testing.allocator);
+    defer std.testing.allocator.free(main);
+    const generated = try generateV6Ed25519Signature(main);
+    var bad_packet = generated.signature_packet;
+    bad_packet[bad_packet.len - 1] ^= 1;
+    const packets = [_][]const u8{ &generated.signature_packet, &bad_packet };
+    const encoded = try encodeSignatureArray(std.testing.allocator, &packets);
+    defer std.testing.allocator.free(encoded);
+    var rpm = try assembleSignatureFixture(std.testing.allocator, main, &.{
+        .{
+            .tag = @intFromEnum(header.SigTagId.openpgp),
+            .typ = .string_array,
+            .count = 2,
+            .data = encoded,
+        },
+    }, "");
+    defer rpm.close(std.testing.allocator);
+
+    // A decoy blob sits first so a reported index of 1 can only come from
+    // actually matching, not from defaulting to the first entry.
+    const decoy = [_]u8{0xff} ** 8;
+    const keys = [_][]const u8{ &decoy, &generated.key_packet };
+    var report = try verifySignatures(std.testing.allocator, &rpm, .{}, &keys);
+    defer report.deinit(std.testing.allocator);
+
+    const expected = pgp_pubkey.fingerprintV6(generated.key_packet[2..]);
+    const verified = findSignatureCandidate(report, .openpgp, 0);
+    try std.testing.expectEqual(SignatureOutcome.verified, verified.outcome);
+    try std.testing.expect(verified.signer_fingerprint != null);
+    try std.testing.expectEqualSlices(
+        u8,
+        expected.slice(),
+        verified.signer_fingerprint.?.slice(),
+    );
+    try std.testing.expectEqual(@as(?usize, 1), verified.signer_key_index);
+
+    // A signature that did not verify must not carry an identity, even though
+    // its issuer subpacket names the very same key.
+    const failed = findSignatureCandidate(report, .openpgp, 1);
+    try std.testing.expectEqual(SignatureOutcome.bad_signature, failed.outcome);
+    try std.testing.expect(failed.signer_fingerprint == null);
+    try std.testing.expect(failed.signer_key_index == null);
+
+    const signer = report.verifiedSigner() orelse return error.TestExpectedSigner;
+    try std.testing.expectEqual(@as(usize, 1), signer.key_index);
+    try std.testing.expectEqualSlices(
+        u8,
+        expected.slice(),
+        signer.fingerprint.slice(),
+    );
+}
+
+test "an unmatched key set yields no signer at all" {
+    const main = try makeMinimalMain(std.testing.allocator);
+    defer std.testing.allocator.free(main);
+    const generated = try generateV6Ed25519Signature(main);
+    const packets = [_][]const u8{&generated.signature_packet};
+    const encoded = try encodeSignatureArray(std.testing.allocator, &packets);
+    defer std.testing.allocator.free(encoded);
+    var rpm = try assembleSignatureFixture(std.testing.allocator, main, &.{
+        .{
+            .tag = @intFromEnum(header.SigTagId.openpgp),
+            .typ = .string_array,
+            .count = 1,
+            .data = encoded,
+        },
+    }, "");
+    defer rpm.close(std.testing.allocator);
+
+    var report = try verifySignatures(std.testing.allocator, &rpm, .{}, &.{});
+    defer report.deinit(std.testing.allocator);
+    try std.testing.expectEqual(
+        SignatureOutcome.no_key,
+        findSignatureCandidate(report, .openpgp, 0).outcome,
+    );
+    try std.testing.expect(report.verifiedSigner() == null);
+}
+
+test "verifiedSigner refuses to pick between disagreeing keys" {
+    var first: SignatureCandidate = makeSignatureCandidate(
+        .openpgp,
+        .header_payload,
+        @intFromEnum(header.SigTagId.openpgp),
+        0,
+        true,
+        .verified,
+    );
+    first.signer_fingerprint = .{ .bytes = @splat(0xaa), .len = 32, .version = 6 };
+    first.signer_key_index = 0;
+
+    var second = first;
+    second.array_index = 1;
+    second.signer_fingerprint = .{ .bytes = @splat(0xbb), .len = 32, .version = 6 };
+    second.signer_key_index = 1;
+
+    var agreeing = [_]SignatureCandidate{ first, first };
+    const agreed = SignatureReport{
+        .candidates = &agreeing,
+        .coverage = undefined,
+        .openpgp_suppresses_legacy = false,
+        .rpm6_suppresses_legacy_signature_header = false,
+        .legacy_md5_suppressed = false,
+    };
+    try std.testing.expect(agreed.verifiedSigner() != null);
+
+    // Two keys both vouching gives no single answer to "who signed this", so
+    // the caller is told none rather than handed an arbitrary one.
+    var disagreeing = [_]SignatureCandidate{ first, second };
+    const split = SignatureReport{
+        .candidates = &disagreeing,
+        .coverage = undefined,
+        .openpgp_suppresses_legacy = false,
+        .rpm6_suppresses_legacy_signature_header = false,
+        .legacy_md5_suppressed = false,
+    };
+    try std.testing.expect(split.verifiedSigner() == null);
 }
