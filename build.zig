@@ -131,6 +131,7 @@ pub fn build(b: *Build) void {
     });
     bundle_reader_mod.addImport("content_digest", content_digest_mod);
     bundle_reader_mod.addImport("transaction_bundle", transaction_bundle_mod);
+    bundle_reader_mod.addImport("transaction_plan", transaction_plan_mod);
     const bundle_selection_mod = b.createModule(.{
         .root_source_file = b.path("client/bundle_selection.zig"),
         .target = target,
@@ -393,6 +394,24 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
     });
     client_abi_mod.addImport("tdnf_internal_abi", internal_abi_mod);
+    const transaction_plan_execution_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_plan_execution.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_plan_execution_mod.addImport(
+        "tdnf_internal_abi",
+        internal_abi_mod,
+    );
+    transaction_plan_execution_mod.addImport(
+        "bundle_selection",
+        bundle_selection_mod,
+    );
+    transaction_plan_execution_mod.addImport(
+        "transaction_plan",
+        transaction_plan_mod,
+    );
     const rpmtrans_flags_mod = b.createModule(.{
         .root_source_file = b.path("rpmzig/trans_flags.zig"),
         .target = target,
@@ -1817,6 +1836,10 @@ pub fn build(b: *Build) void {
         transaction_plan_integration_mod,
     );
     client_mod.addImport("transaction_plan", transaction_plan_mod);
+    client_mod.addImport(
+        "transaction_plan_execution",
+        transaction_plan_execution_mod,
+    );
     client_mod.addImport("uri_sanitize", uri_sanitize_mod);
     client_mod.addImport("verified_fetch", verified_fetch_mod);
     client_mod.addImport("bundle_paths", bundle_paths_mod);
@@ -1989,6 +2012,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("client_root", client_mod);
         test_mod.addImport("bundle_reader", bundle_reader_mod);
         test_mod.addImport("transaction_bundle", transaction_bundle_mod);
+        test_mod.addImport("repository_metadata", repomd_mod);
         const tests = b.addTest(.{
             .name = "bundle-export-test",
             .root_module = test_mod,
@@ -2002,7 +2026,8 @@ pub fn build(b: *Build) void {
     const client_gpgcheck_test_step = b.step(
         "client-gpgcheck-test",
         "Run direct client package-signature policy tests",
-    );    {
+    );
+    {
         const test_mod = b.createModule(.{
             .root_source_file = b.path("client/gpgcheck.zig"),
             .target = target,

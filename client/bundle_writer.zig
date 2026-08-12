@@ -133,12 +133,39 @@ pub const Attestor = struct {
     }
 };
 
+pub const MaterializedPlan = struct {
+    json: []const u8,
+    digest: []const u8,
+    schema: []const u8,
+};
+
+pub const PlanMaterializer = struct {
+    context: *anyopaque,
+    materializeFn: *const fn (
+        context: *anyopaque,
+        allocator: Allocator,
+        staging_root: []const u8,
+    ) anyerror!MaterializedPlan,
+
+    fn materialize(
+        self: PlanMaterializer,
+        allocator: Allocator,
+        staging_root: []const u8,
+    ) anyerror!MaterializedPlan {
+        return self.materializeFn(self.context, allocator, staging_root);
+    }
+};
+
 pub const Options = struct {
     selection: *const bundle_selection.Selection,
-    /// Canonical plan bytes, exactly as `tdnf plan` would print them.
+    /// Canonical fixed plan bytes used when `plan_materializer` is null.
     plan_json: []const u8,
     plan_digest: []const u8,
     plan_schema: []const u8,
+    /// When present, the verified staged RPMs are used to produce a v2 plan
+    /// after package fetch and before publication. The fixed v1 fields above
+    /// remain available for resolve-only writer tests and legacy callers.
+    plan_materializer: ?PlanMaterializer = null,
     repositories: []const RepositoryInput,
     attestor: Attestor,
     keys: []const KeyInput,
@@ -171,10 +198,13 @@ pub fn write(
 
     var files: std.ArrayList(transaction_bundle.File) = .empty;
 
-    // The plan is written first. It is the only file in the bundle that is not
-    // fetched, and every other entry exists to serve it.
-    try writeStaged(io, staging.dir, plan_relative, options.plan_json);
-    try recordFile(arena, &files, plan_relative, options.plan_json);
+    var plan_json = options.plan_json;
+    var plan_digest = options.plan_digest;
+    var plan_schema = options.plan_schema;
+    if (options.plan_materializer == null) {
+        try writeStaged(io, staging.dir, plan_relative, plan_json);
+        try recordFile(arena, &files, plan_relative, plan_json);
+    }
 
     var repositories: std.ArrayList(transaction_bundle.Repository) = .empty;
     for (options.selection.repositories) |repository| {
@@ -267,6 +297,20 @@ pub fn write(
         });
     }
 
+    if (options.plan_materializer) |materializer| {
+        const staging_root = staging.realPathAlloc(arena) catch
+            return error.PublishFailed;
+        const materialized = materializer.materialize(
+            arena,
+            staging_root,
+        ) catch return error.ManifestInvalid;
+        plan_json = materialized.json;
+        plan_digest = materialized.digest;
+        plan_schema = materialized.schema;
+        try writeStaged(io, staging.dir, plan_relative, plan_json);
+        try recordFile(arena, &files, plan_relative, plan_json);
+    }
+
     var keys: std.ArrayList(transaction_bundle.Key) = .empty;
     for (options.keys) |key| {
         const path = try std.fmt.allocPrint(
@@ -290,9 +334,9 @@ pub fn write(
         .keys = keys.items,
         .packages = packages.items,
         .plan = .{
-            .digest = options.plan_digest,
+            .digest = plan_digest,
             .path = plan_relative,
-            .schema = options.plan_schema,
+            .schema = plan_schema,
         },
         .repositories = repositories.items,
     };
@@ -410,7 +454,6 @@ fn findRepository(inputs: []const RepositoryInput, id: []const u8) ?RepositoryIn
     }
     return null;
 }
-
 
 const testing = std.testing;
 

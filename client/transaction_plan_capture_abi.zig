@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const abi_version: u32 = 1;
+pub const abi_version: u32 = 2;
 
 pub const request_kind = struct {
     pub const distro_sync: u32 = 0;
@@ -64,6 +64,13 @@ pub const action_reason = struct {
     pub const policy: u32 = 4;
     pub const user: u32 = 5;
     pub const weak_dependency: u32 = 6;
+};
+
+pub const execution_operation = struct {
+    pub const erase: u32 = 0;
+    pub const install: u32 = 1;
+    pub const reinstall: u32 = 2;
+    pub const upgrade: u32 = 3;
 };
 
 pub const problem_kind = struct {
@@ -317,6 +324,12 @@ pub const Action = extern struct {
     prior_count: u32 = 0,
 };
 
+pub const ExecutionInput = extern struct {
+    action_ref: u32 = 0,
+    operation: u32 = 0,
+    package_ref: u32 = 0,
+};
+
 pub const Problem = extern struct {
     capability: Capability = .{},
     count: u32 = 0,
@@ -339,6 +352,7 @@ pub const Capture = extern struct {
     jobs: ?[*]const Job = null,
     packages: ?[*]const Package = null,
     actions: ?[*]const Action = null,
+    native_execution_inputs: ?[*]const ExecutionInput = null,
     prior_package_refs: ?[*]const u32 = null,
     selected_package_refs: ?[*]const u32 = null,
     skipped_job_refs: ?[*]const u32 = null,
@@ -349,6 +363,7 @@ pub const Capture = extern struct {
     job_count: u32 = 0,
     package_count: u32 = 0,
     action_count: u32 = 0,
+    native_execution_input_count: u32 = 0,
     prior_package_ref_count: u32 = 0,
     selected_package_ref_count: u32 = 0,
     skipped_job_ref_count: u32 = 0,

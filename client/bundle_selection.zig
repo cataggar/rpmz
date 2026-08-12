@@ -44,6 +44,8 @@ pub const SelectError = error{
 
 /// One RPM the bundle must contain.
 pub const PackageItem = struct {
+    /// Capture-time package handle used only while materializing native order.
+    capture_package_id: []const u8 = "",
     /// The plan's `package-N` reference.
     plan_package_id: []const u8,
     repository_id: []const u8,
@@ -88,7 +90,7 @@ pub const RepositoryItem = struct {
 /// Everything the fetch loop has to do, decided before it starts.
 pub const Selection = struct {
     arena: std.heap.ArenaAllocator,
-    packages: []const PackageItem,
+    packages: []PackageItem,
     metadata: []const MetadataItem,
     repositories: []const RepositoryItem,
 
@@ -204,6 +206,7 @@ pub fn select(
         // still one file.
         if (containsPackage(packages.items, package.id)) continue;
         try packages.append(scratch, .{
+            .capture_package_id = package.id,
             .plan_package_id = package.id,
             .repository_id = package.repository_id,
             .identity = package.identity,

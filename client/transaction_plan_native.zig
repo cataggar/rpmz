@@ -263,7 +263,18 @@ const BuildState = struct {
         const actions = if (resolved)
             try self.captureActions(package_refs)
         else
-            MaterializedActions{ .values = &.{}, .priors = &.{} };
+            MaterializedActions{
+                .values = &.{},
+                .priors = &.{},
+                .raw_to_captured = &.{},
+            };
+        const execution_inputs = if (resolved)
+            try self.captureNativeExecutionInputs(
+                package_refs,
+                actions.raw_to_captured,
+            )
+        else
+            &.{};
         const selected = if (resolved)
             try self.captureSelected(package_refs)
         else
@@ -283,6 +294,10 @@ const BuildState = struct {
             .jobs = optionalPointer(abi.Job, jobs),
             .packages = optionalPointer(abi.Package, packages),
             .actions = optionalPointer(abi.Action, actions.values),
+            .native_execution_inputs = optionalPointer(
+                abi.ExecutionInput,
+                execution_inputs,
+            ),
             .prior_package_refs = optionalPointer(u32, actions.priors),
             .selected_package_refs = optionalPointer(u32, selected),
             .skipped_job_refs = optionalPointer(u32, skipped),
@@ -293,6 +308,9 @@ const BuildState = struct {
             .job_count = try countU32(jobs.len),
             .package_count = try countU32(packages.len),
             .action_count = try countU32(actions.values.len),
+            .native_execution_input_count = try countU32(
+                execution_inputs.len,
+            ),
             .prior_package_ref_count = try countU32(actions.priors.len),
             .selected_package_ref_count = try countU32(selected.len),
             .skipped_job_ref_count = try countU32(skipped.len),
@@ -702,6 +720,7 @@ const BuildState = struct {
     const MaterializedActions = struct {
         values: []abi.Action,
         priors: []u32,
+        raw_to_captured: []u32,
     };
 
     fn captureActions(
@@ -725,10 +744,12 @@ const BuildState = struct {
             ) catch return error.UnsupportedResult;
         }
         const values = try self.arena.alloc(abi.Action, actions.len);
+        const raw_to_captured = try self.arena.alloc(u32, actions.len);
         const priors = try self.arena.alloc(u32, prior_count);
         var prior_offset: usize = 0;
-        for (order, values) |source_index, *destination| {
+        for (order, values, 0..) |source_index, *destination, captured_index| {
             const action = actions[source_index];
+            raw_to_captured[source_index] = try countU32(captured_index);
             destination.* = .{
                 .target_package_ref = try packageRef(
                     package_refs,
@@ -764,7 +785,148 @@ const BuildState = struct {
                 prior_offset += 1;
             }
         }
-        return .{ .values = values, .priors = priors };
+        return .{
+            .values = values,
+            .priors = priors,
+            .raw_to_captured = raw_to_captured,
+        };
+    }
+
+    const ExecutionCandidate = struct {
+        action_index: usize,
+        operation: u32,
+        package: solver_model.PackageId,
+        requested_by: ?solver_model.JobId,
+    };
+
+    fn captureNativeExecutionInputs(
+        self: *BuildState,
+        package_refs: []const u32,
+        raw_to_captured: []const u32,
+    ) CaptureError![]abi.ExecutionInput {
+        var output = std.ArrayList(abi.ExecutionInput).empty;
+        var erased = std.ArrayList(solver_model.PackageId).empty;
+
+        try self.appendExecutionBucket(
+            &output,
+            &erased,
+            package_refs,
+            raw_to_captured,
+            &.{ .install, .obsolete },
+            false,
+            abi.execution_operation.install,
+            false,
+        );
+        try self.appendExecutionBucket(
+            &output,
+            &erased,
+            package_refs,
+            raw_to_captured,
+            &.{.reinstall},
+            false,
+            abi.execution_operation.reinstall,
+            false,
+        );
+        try self.appendExecutionBucket(
+            &output,
+            &erased,
+            package_refs,
+            raw_to_captured,
+            &.{.upgrade},
+            false,
+            abi.execution_operation.upgrade,
+            false,
+        );
+        try self.appendExecutionBucket(
+            &output,
+            &erased,
+            package_refs,
+            raw_to_captured,
+            &.{ .erase, .obsolete },
+            true,
+            abi.execution_operation.erase,
+            true,
+        );
+        // The legacy executor receives obsoleted priors in a second bucket,
+        // but recordItem deduplicates erases by rpmdb hnum.
+        try self.appendExecutionBucket(
+            &output,
+            &erased,
+            package_refs,
+            raw_to_captured,
+            &.{.obsolete},
+            true,
+            abi.execution_operation.erase,
+            true,
+        );
+        try self.appendExecutionBucket(
+            &output,
+            &erased,
+            package_refs,
+            raw_to_captured,
+            &.{.downgrade},
+            false,
+            abi.execution_operation.install,
+            false,
+        );
+        try self.appendExecutionBucket(
+            &output,
+            &erased,
+            package_refs,
+            raw_to_captured,
+            &.{.downgrade},
+            true,
+            abi.execution_operation.erase,
+            true,
+        );
+        return output.toOwnedSlice(self.arena);
+    }
+
+    fn appendExecutionBucket(
+        self: *BuildState,
+        output: *std.ArrayList(abi.ExecutionInput),
+        erased: *std.ArrayList(solver_model.PackageId),
+        package_refs: []const u32,
+        raw_to_captured: []const u32,
+        kinds: []const solver_model.ActionKind,
+        use_prior: bool,
+        operation: u32,
+        dedupe_erase: bool,
+    ) CaptureError!void {
+        var candidates = std.ArrayList(ExecutionCandidate).empty;
+        for (self.outcome.actions, 0..) |action, action_index| {
+            if (!containsActionKind(kinds, action.kind)) continue;
+            const package = if (use_prior and action.kind != .erase)
+                if (action.priors.len == 0) return error.UnsupportedResult else action.priors[0]
+            else
+                action.package;
+            try candidates.append(self.arena, .{
+                .action_index = action_index,
+                .operation = operation,
+                .package = package,
+                .requested_by = action.requested_by,
+            });
+        }
+        std.sort.pdq(
+            ExecutionCandidate,
+            candidates.items,
+            self.universe,
+            executionCandidateLessThan,
+        );
+        var index = candidates.items.len;
+        while (index > 0) {
+            index -= 1;
+            const candidate = candidates.items[index];
+            if (dedupe_erase and containsPackageId(erased.items, candidate.package)) {
+                continue;
+            }
+            if (dedupe_erase) try erased.append(self.arena, candidate.package);
+            try output.append(self.arena, .{
+                .action_ref = raw_to_captured[candidate.action_index],
+                .operation = candidate.operation,
+                .package_ref = try packageRef(package_refs, candidate.package),
+            });
+        }
     }
 
     fn capturePackageRefs(
@@ -1039,6 +1201,60 @@ const ActionSort = struct {
     actions: []const solver_model.Action,
     package_refs: []const u32,
 };
+
+fn containsActionKind(
+    kinds: []const solver_model.ActionKind,
+    candidate: solver_model.ActionKind,
+) bool {
+    for (kinds) |kind| if (kind == candidate) return true;
+    return false;
+}
+
+fn containsPackageId(
+    packages: []const solver_model.PackageId,
+    candidate: solver_model.PackageId,
+) bool {
+    for (packages) |package| if (package == candidate) return true;
+    return false;
+}
+
+fn executionCandidateLessThan(
+    universe: *const solver_model.Universe,
+    left: BuildState.ExecutionCandidate,
+    right: BuildState.ExecutionCandidate,
+) bool {
+    if ((left.requested_by == null) != (right.requested_by == null)) {
+        return left.requested_by == null;
+    }
+    if (left.requested_by) |left_job| {
+        const right_job = right.requested_by.?;
+        if (left_job != right_job) {
+            return @intFromEnum(left_job) < @intFromEnum(right_job);
+        }
+    }
+    const left_package = universe.package(left.package).?;
+    const right_package = universe.package(right.package).?;
+    const left_nevra = left_package.source.nevra;
+    const right_nevra = right_package.source.nevra;
+    inline for (.{
+        .{ left_nevra.name, right_nevra.name },
+        .{ left_nevra.arch, right_nevra.arch },
+    }) |pair| {
+        const order = std.mem.order(u8, pair[0], pair[1]);
+        if (order != .eq) return order == .lt;
+    }
+    const left_epoch = left_nevra.epoch orelse 0;
+    const right_epoch = right_nevra.epoch orelse 0;
+    if (left_epoch != right_epoch) return left_epoch < right_epoch;
+    inline for (.{
+        .{ left_nevra.version, right_nevra.version },
+        .{ left_nevra.release, right_nevra.release },
+    }) |pair| {
+        const order = std.mem.order(u8, pair[0], pair[1]);
+        if (order != .eq) return order == .lt;
+    }
+    return @intFromEnum(left.package) < @intFromEnum(right.package);
+}
 
 fn actionOrderLessThan(context: ActionSort, left: u32, right: u32) bool {
     const a = context.actions[left];
@@ -1590,6 +1806,15 @@ test "a capture publishes only the packages the transaction references" {
     try testing.expectEqual(@as(u32, 1), facts.action_count);
     try testing.expectEqual(abi.action_kind.install, facts.actions.?[0].kind);
     try testing.expectEqual(abi.action_reason.user, facts.actions.?[0].reason);
+    try testing.expectEqual(@as(u32, 1), facts.native_execution_input_count);
+    try testing.expectEqual(
+        abi.execution_operation.install,
+        facts.native_execution_inputs.?[0].operation,
+    );
+    try testing.expectEqual(
+        facts.actions.?[0].target_package_ref,
+        facts.native_execution_inputs.?[0].package_ref,
+    );
     try testing.expectEqual(
         @as(u32, 1),
         facts.actions.?[0].has_requested_job_ref,

@@ -26,6 +26,7 @@ const download = @import("client_download");
 const resolver = @import("resolver.zig");
 const transaction_bundle = @import("transaction_bundle");
 const transaction_plan = @import("transaction_plan");
+const transaction_plan_execution = @import("transaction_plan_execution");
 const uri_sanitize = @import("uri_sanitize");
 
 const Allocator = std.mem.Allocator;
@@ -62,8 +63,8 @@ pub const KeyInput = struct {
 };
 
 pub const ExportInput = struct {
-    /// The resolve to perform. Reused verbatim, so the plan in the bundle is
-    /// the plan `tdnf plan` would print for the same inputs.
+    /// The resolve to perform. Its v1 semantic plan is preserved verbatim,
+    /// then verified RPM headers materialize the bundled v2 execution order.
     resolve: resolver.ResolveInput,
     /// Where the finished bundle goes. Must not exist.
     destination: []const u8,
@@ -123,9 +124,29 @@ pub fn exportBundle(
         return mapSelectError(err);
     defer selection.deinit();
 
+    var materializer = PlanMaterializer{
+        .allocator = allocator,
+        .source = plan,
+        .selection = &selection,
+        .install_root = switch (input.resolve.installed) {
+            .install_root => |path| path,
+        },
+    };
+    errdefer if (materializer.materialized) |value| value.destroy();
+
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    for (selection.packages) |*package| {
+        const rank = plan.canonicalPackageRank(
+            package.capture_package_id,
+        ) orelse return error.PlanInconsistent;
+        package.plan_package_id = try std.fmt.allocPrint(
+            arena,
+            "package-{d}",
+            .{rank},
+        );
+    }
 
     const plan_json = try plan.canonicalJsonAlloc(arena);
     const plan_digest = try plan.digest(arena);
@@ -146,6 +167,7 @@ pub fn exportBundle(
         .plan_json = plan_json,
         .plan_digest = plan_digest[0..],
         .plan_schema = transaction_plan.schema,
+        .plan_materializer = materializer.interface(),
         .repositories = repositories,
         .attestor = attestor_state.interface(),
         .keys = attestor_state.manifestKeys(),
@@ -154,14 +176,58 @@ pub fn exportBundle(
         .destination = input.destination,
     }) catch |err| return mapWriteError(err);
 
+    const replay_plan = materializer.materialized orelse
+        return error.ManifestInvalid;
+    materializer.materialized = null;
+    const replay_digest = try replay_plan.digest(arena);
+    plan.destroy();
+
     return .{ .exported = .{
         .allocator = allocator,
-        .plan = plan,
+        .plan = replay_plan,
         .bundle_digest = written.digest,
-        .plan_digest = plan_digest,
+        .plan_digest = replay_digest,
         .file_count = written.file_count,
     } };
 }
+
+const PlanMaterializer = struct {
+    allocator: Allocator,
+    source: *const transaction_plan.Plan,
+    selection: *const bundle_selection.Selection,
+    install_root: []const u8,
+    materialized: ?*transaction_plan.Plan = null,
+
+    fn interface(self: *PlanMaterializer) bundle_writer.PlanMaterializer {
+        return .{ .context = self, .materializeFn = materialize };
+    }
+
+    fn materialize(
+        context: *anyopaque,
+        arena: Allocator,
+        staging_root: []const u8,
+    ) anyerror!bundle_writer.MaterializedPlan {
+        const self: *PlanMaterializer = @ptrCast(@alignCast(context));
+        if (self.materialized != null) return error.InvalidInput;
+        const plan = try transaction_plan_execution.materialize(
+            self.allocator,
+            self.source,
+            self.selection,
+            staging_root,
+            self.install_root,
+        );
+        errdefer plan.destroy();
+        const json = try plan.canonicalJsonAlloc(arena);
+        const digest = try plan.digest(arena);
+        const digest_copy = try arena.dupe(u8, &digest);
+        self.materialized = plan;
+        return .{
+            .json = json,
+            .digest = digest_copy,
+            .schema = plan.schemaName(),
+        };
+    }
+};
 
 fn mapSelectError(err: bundle_selection.SelectError) ExportError {
     return switch (err) {

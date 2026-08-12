@@ -2083,6 +2083,7 @@ fn composeData(
     return .{
         .actions = solver_data.actions,
         .environment = environment,
+        .native_execution_inputs = solver_data.native_execution_inputs,
         .hidden_packages = solver_data.hidden_packages,
         .jobs = solver_data.jobs,
         .packages = packages,

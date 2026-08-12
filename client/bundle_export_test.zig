@@ -16,6 +16,7 @@ const std = @import("std");
 const client = @import("client_root");
 const bundle_reader = @import("bundle_reader");
 const transaction_bundle = @import("transaction_bundle");
+const repository_metadata = @import("repository_metadata");
 
 comptime {
     _ = client;
@@ -26,7 +27,15 @@ const resolver = client.resolver;
 const io = std.testing.io;
 const allocator = std.testing.allocator;
 
-const rpm_payload = "not a real rpm, but a real file with a real digest";
+fn rpmPayload(version: []const u8) ![]u8 {
+    return repository_metadata.rpm_package.makeMinimalRpmBytesForTest(
+        allocator,
+        "app",
+        version,
+        "1",
+        "x86_64",
+    );
+}
 
 fn sha256Hex(bytes: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
@@ -36,7 +45,11 @@ fn sha256Hex(bytes: []const u8) [64]u8 {
     return hex;
 }
 
-fn primaryXml(gpa: std.mem.Allocator, version: []const u8) ![]u8 {
+fn primaryXml(
+    gpa: std.mem.Allocator,
+    version: []const u8,
+    rpm_payload: []const u8,
+) ![]u8 {
     const payload_digest = sha256Hex(rpm_payload);
     return std.fmt.allocPrint(gpa,
         \\<?xml version="1.0" encoding="UTF-8"?>
@@ -124,7 +137,9 @@ const Fixture = struct {
     /// Writes a complete, internally consistent repository. `version` lets a
     /// test change what the repository says without changing anything else.
     fn publishRepository(self: *Fixture, version: []const u8) !void {
-        const primary = try primaryXml(allocator, version);
+        const rpm_payload = try rpmPayload(version);
+        defer allocator.free(rpm_payload);
+        const primary = try primaryXml(allocator, version, rpm_payload);
         defer allocator.free(primary);
         const repomd = try repomdFor(allocator, primary);
         defer allocator.free(repomd);
@@ -233,6 +248,41 @@ fn readTree(
     }
 }
 
+fn readManifest(destination: []const u8) !*transaction_bundle.Bundle {
+    var dir = try std.Io.Dir.cwd().openDir(io, destination, .{});
+    defer dir.close(io);
+    const bytes = try dir.readFileAlloc(
+        io,
+        transaction_bundle.manifest_name,
+        allocator,
+        .limited(1 << 20),
+    );
+    defer allocator.free(bytes);
+    return transaction_bundle.parse(allocator, bytes);
+}
+
+fn writeManifest(
+    destination: []const u8,
+    data: transaction_bundle.Data,
+) !void {
+    const bundle = try transaction_bundle.Bundle.create(allocator, data);
+    defer bundle.destroy();
+    const bytes = try bundle.canonicalJsonAlloc(allocator);
+    defer allocator.free(bytes);
+    var dir = try std.Io.Dir.cwd().openDir(io, destination, .{});
+    defer dir.close(io);
+    try dir.writeFile(io, .{
+        .sub_path = transaction_bundle.manifest_name,
+        .data = bytes,
+    });
+}
+
+fn packageFile(
+    bundle: *const transaction_bundle.Bundle,
+) *const transaction_bundle.File {
+    return bundle.findFile(bundle.model().packages[0].path).?;
+}
+
 test "an exported bundle validates as a closed set" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
@@ -241,9 +291,27 @@ test "an exported bundle validates as a closed set" {
     var result = try bundle_export.exportBundle(allocator, io, try fixture.input("bundle"));
     defer result.deinit();
     try std.testing.expect(result == .exported);
+    try std.testing.expect(result.exported.plan.isReplayable());
+    try std.testing.expectEqualStrings(
+        "tdnf.transaction-plan/v2",
+        result.exported.plan.schemaName(),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        result.exported.plan.model().execution_steps.?.len,
+    );
 
     const bundle = try bundle_reader.openBundle(allocator, io, destination);
     defer bundle.destroy();
+    try std.testing.expect(bundle.isReplayable());
+    try std.testing.expectEqualStrings(
+        "tdnf.transaction-bundle/v2",
+        bundle.schemaName(),
+    );
+    try std.testing.expectEqualStrings(
+        &result.exported.plan_digest,
+        bundle.model().plan.digest,
+    );
 
     // The bundle must carry the RPM the plan selected and the metadata the
     // resolve was performed against.
@@ -253,6 +321,246 @@ test "an exported bundle validates as a closed set" {
     try std.testing.expect(bundle.findFile("plan.json") != null);
     try std.testing.expectEqual(@as(usize, 1), bundle.model().packages.len);
     try std.testing.expectEqualStrings("app", bundle.model().packages[0].identity.name);
+}
+
+test "v2 package facts are bound exactly to the plan" {
+    const Mutation = enum {
+        checksum,
+        href,
+        identity,
+        size,
+        xml_base,
+    };
+    const mutations = [_]Mutation{
+        .identity,
+        .checksum,
+        .href,
+        .xml_base,
+        .size,
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    for (mutations) |mutation| {
+        const name = @tagName(mutation);
+        const destination = try fixture.destinationAlloc(name);
+        var result = try bundle_export.exportBundle(
+            allocator,
+            io,
+            try fixture.input(name),
+        );
+        defer result.deinit();
+
+        const source = try readManifest(destination);
+        defer source.destroy();
+        var packages = [_]transaction_bundle.Package{
+            source.model().packages[0],
+        };
+        switch (mutation) {
+            .identity => packages[0].identity.name = "tampered",
+            .checksum => packages[0].checksum.value = "0" ** 64,
+            .href => packages[0].href = "packages/tampered.rpm",
+            .xml_base => packages[0].xml_base = "tampered-base",
+            .size => packages[0].size = (packages[0].size orelse 0) + 1,
+        }
+        var data = source.model().*;
+        data.packages = &packages;
+        try writeManifest(destination, data);
+        try std.testing.expectError(
+            error.PlanMismatch,
+            bundle_reader.openBundle(allocator, io, destination),
+        );
+    }
+}
+
+test "v2 package repository is bound to the plan" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const destination = try fixture.destinationAlloc("repository-binding");
+    var result = try bundle_export.exportBundle(
+        allocator,
+        io,
+        try fixture.input("repository-binding"),
+    );
+    defer result.deinit();
+
+    const source = try readManifest(destination);
+    defer source.destroy();
+    const original_package = source.model().packages[0];
+    const original_file = packageFile(source);
+    var repositories = [_]transaction_bundle.Repository{
+        source.model().repositories[0],
+        source.model().repositories[0],
+    };
+    repositories[1].id = "other";
+    var packages = [_]transaction_bundle.Package{original_package};
+    packages[0].repository_id = "other";
+    packages[0].path = "packages/other/packages/app.rpm";
+    const files = try allocator.dupe(
+        transaction_bundle.File,
+        source.model().files,
+    );
+    defer allocator.free(files);
+    for (files) |*file| {
+        if (std.mem.eql(u8, file.path, original_file.path)) {
+            file.path = packages[0].path;
+        }
+    }
+    var dir = try std.Io.Dir.cwd().openDir(io, destination, .{});
+    defer dir.close(io);
+    const rpm = try dir.readFileAlloc(
+        io,
+        original_package.path,
+        allocator,
+        .limited(1 << 20),
+    );
+    defer allocator.free(rpm);
+    try dir.createDirPath(io, "packages/other/packages");
+    try dir.writeFile(io, .{ .sub_path = packages[0].path, .data = rpm });
+    try dir.deleteFile(io, original_package.path);
+
+    var data = source.model().*;
+    data.files = files;
+    data.packages = &packages;
+    data.repositories = &repositories;
+    try writeManifest(destination, data);
+    try std.testing.expectError(
+        error.PlanMismatch,
+        bundle_reader.openBundle(allocator, io, destination),
+    );
+}
+
+test "v2 plan install target cannot be missing from the manifest" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const destination = try fixture.destinationAlloc("missing-package");
+    var result = try bundle_export.exportBundle(
+        allocator,
+        io,
+        try fixture.input("missing-package"),
+    );
+    defer result.deinit();
+
+    const source = try readManifest(destination);
+    defer source.destroy();
+    const omitted_path = source.model().packages[0].path;
+    var files: std.ArrayList(transaction_bundle.File) = .empty;
+    defer files.deinit(allocator);
+    for (source.model().files) |file| {
+        if (!std.mem.eql(u8, file.path, omitted_path)) {
+            try files.append(allocator, file);
+        }
+    }
+    var data = source.model().*;
+    data.files = files.items;
+    data.packages = &.{};
+    try writeManifest(destination, data);
+    var dir = try std.Io.Dir.cwd().openDir(io, destination, .{});
+    defer dir.close(io);
+    try dir.deleteFile(io, omitted_path);
+    try std.testing.expectError(
+        error.PlanMismatch,
+        bundle_reader.openBundle(allocator, io, destination),
+    );
+}
+
+test "v2 manifest forbids duplicate and extraneous package entries" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+
+    const duplicate_destination = try fixture.destinationAlloc("duplicate");
+    var duplicate_result = try bundle_export.exportBundle(
+        allocator,
+        io,
+        try fixture.input("duplicate"),
+    );
+    defer duplicate_result.deinit();
+    var duplicate_dir = try std.Io.Dir.cwd().openDir(
+        io,
+        duplicate_destination,
+        .{},
+    );
+    defer duplicate_dir.close(io);
+    const manifest = try duplicate_dir.readFileAlloc(
+        io,
+        transaction_bundle.manifest_name,
+        allocator,
+        .limited(1 << 20),
+    );
+    defer allocator.free(manifest);
+    const packages_start = std.mem.indexOf(
+        u8,
+        manifest,
+        "\"packages\":[",
+    ).? + "\"packages\":[".len;
+    const packages_end = std.mem.indexOfPos(
+        u8,
+        manifest,
+        packages_start,
+        "],\"plan\":",
+    ).?;
+    const duplicated = try std.mem.concat(allocator, u8, &.{
+        manifest[0..packages_end],
+        ",",
+        manifest[packages_start..packages_end],
+        manifest[packages_end..],
+    });
+    defer allocator.free(duplicated);
+    try duplicate_dir.writeFile(io, .{
+        .sub_path = transaction_bundle.manifest_name,
+        .data = duplicated,
+    });
+    try std.testing.expectError(
+        error.ManifestNotCanonical,
+        bundle_reader.openBundle(allocator, io, duplicate_destination),
+    );
+
+    const extra_destination = try fixture.destinationAlloc("extraneous");
+    var extra_result = try bundle_export.exportBundle(
+        allocator,
+        io,
+        try fixture.input("extraneous"),
+    );
+    defer extra_result.deinit();
+    const source = try readManifest(extra_destination);
+    defer source.destroy();
+    const original_package = source.model().packages[0];
+    const original_file = packageFile(source);
+    var packages = [_]transaction_bundle.Package{
+        original_package,
+        original_package,
+    };
+    packages[1].path = "packages/base/packages/extra.rpm";
+    packages[1].plan_package_id = "package-999";
+    const files = try allocator.alloc(
+        transaction_bundle.File,
+        source.model().files.len + 1,
+    );
+    defer allocator.free(files);
+    @memcpy(files[0..source.model().files.len], source.model().files);
+    files[source.model().files.len] = .{
+        .path = packages[1].path,
+        .sha256 = original_file.sha256,
+        .size = original_file.size,
+    };
+    var extra_dir = try std.Io.Dir.cwd().openDir(io, extra_destination, .{});
+    defer extra_dir.close(io);
+    const rpm = try extra_dir.readFileAlloc(
+        io,
+        original_package.path,
+        allocator,
+        .limited(1 << 20),
+    );
+    defer allocator.free(rpm);
+    try extra_dir.writeFile(io, .{ .sub_path = packages[1].path, .data = rpm });
+    var data = source.model().*;
+    data.files = files;
+    data.packages = &packages;
+    try writeManifest(extra_destination, data);
+    try std.testing.expectError(
+        error.PlanMismatch,
+        bundle_reader.openBundle(allocator, io, extra_destination),
+    );
 }
 
 test "a bundle still validates after the repository it came from is gone" {
@@ -411,7 +719,9 @@ test "a single flipped byte makes a published bundle stop validating" {
 
     var dir = try std.Io.Dir.cwd().openDir(io, destination, .{ .iterate = true });
     defer dir.close(io);
-    var altered = try allocator.dupe(u8, rpm_payload);
+    const original = try rpmPayload("1");
+    defer allocator.free(original);
+    var altered = try allocator.dupe(u8, original);
     defer allocator.free(altered);
     altered[0] +%= 1;
     try dir.writeFile(io, .{
@@ -459,10 +769,12 @@ test "moving a package between repository trees makes a bundle stop validating" 
 
     var dir = try std.Io.Dir.cwd().openDir(io, destination, .{ .iterate = true });
     defer dir.close(io);
+    const original = try rpmPayload("1");
+    defer allocator.free(original);
     try dir.createDirPath(io, "packages/other/packages");
     try dir.writeFile(io, .{
         .sub_path = "packages/other/packages/app.rpm",
-        .data = rpm_payload,
+        .data = original,
     });
     try dir.deleteFile(io, "packages/base/packages/app.rpm");
 
@@ -477,7 +789,6 @@ test "moving a package between repository trees makes a bundle stop validating" 
         bundle_reader.openBundle(allocator, io, destination),
     );
 }
-
 
 test "an export whose cached metadata no longer matches the repository fails closed" {
     var fixture = try Fixture.create();
@@ -505,7 +816,6 @@ test "an export whose cached metadata no longer matches the repository fails clo
         fixture.tmp.dir.access(io, "stale", .{}),
     );
 }
-
 
 test "a repository declared with a credential in its URL is refused outright" {
     var fixture = try Fixture.create();

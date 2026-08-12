@@ -7,9 +7,10 @@ against, every RPM the plan's actions install, and every public key that
 verified them, laid out in a fixed directory structure under a manifest that
 names and hashes each file.
 
-This document describes the manifest schema, `tdnf.transaction-bundle/v1`. The
-module documentation in `client/transaction_bundle.zig` is the reference; this
-is the contract.
+New exports use `tdnf.transaction-bundle/v2` and reference a
+`tdnf.transaction-plan/v2`. The v1 manifest and plan remain strictly parseable
+for compatibility, but are resolve-only and must not be treated as replayable.
+The module documentation in `client/transaction_bundle.zig` is the reference.
 
 ## What a bundle is
 
@@ -27,7 +28,7 @@ bundle/
 The manifest has six top-level members, emitted in this order:
 
 - **`digest`** — SHA-256 over the canonical bytes of the manifest *without*
-  this member, under the domain `tdnf.transaction-bundle/v1`.
+  this member, under the domain named by `schema`.
 - **`files`** — every file in the bundle except `bundle.json`, each with its
   bundle-relative `path`, `sha256`, and `size`.
 - **`keys`** — the public keys, by full lowercase-hex `fingerprint` and
@@ -40,7 +41,8 @@ The manifest has six top-level members, emitted in this order:
 - **`repositories`** — per repository: `id`, `cost`, `priority`, `gpg_check`,
   the `repomd_sha256` and `snapshot_id` that pin the metadata, the metadata
   `revision` when the repository declares one, and the sanitized `sources`.
-- **`schema`** — always `tdnf.transaction-bundle/v1`.
+- **`schema`** — `tdnf.transaction-bundle/v2` for new replay-capable exports;
+  legacy v1 manifests remain readable.
 
 ## Guarantees
 
@@ -72,6 +74,11 @@ or `unsigned`. `verified` requires a `key_fingerprint` that is present in
 `keys`; `unsigned` forbids one. A bundle can never claim verification without
 shipping the key that performed it.
 
+**Every v2 RPM is bound to its plan package.** The reader requires the
+manifest's identity, repository, repository checksum, href, XML base, and size
+to match the available `package-N` exactly. Every install-side execution step
+must have exactly one manifest RPM, and no other package entry is accepted.
+
 **Sources are sanitized at the model boundary.** Userinfo, query strings, and
 fragments are rejected outright, and both the raw and percent-decoded forms
 are scanned for secret-shaped text. A sanitizer regression fails closed at
@@ -99,6 +106,7 @@ for (bundle.model().files) |file| {
 ```
 
 `Bundle.findFile` looks an entry up by exact bundle-relative path.
+`Bundle.isReplayable()` is true only for a v2 manifest referencing a v2 plan.
 
 ## Relationship to the plan
 
@@ -181,10 +189,11 @@ manifest even if a future call site forgets.
 ## Exporting a bundle
 
 `tdnf.bundle_export.exportBundle` resolves a transaction and publishes the
-bundle for it. It takes the same `resolver.ResolveInput` as `resolvePlan`, so
-the `plan.json` inside a bundle is byte-identical to what `tdnf plan` prints
-for the same inputs: the bundle is a plan plus everything the plan needs, not
-a second, parallel description of the transaction.
+bundle for it. It takes the same `resolver.ResolveInput` as `resolvePlan`.
+The resolve-only result is v1; after verified RPM headers are staged, export
+passes the captured native transaction inputs through the production native
+transaction planner and records its returned order in the bundled v2 plan.
+That order is captured, not reconstructed from canonical action sorting.
 
 ```zig
 var result = try tdnf.bundle_export.exportBundle(allocator, io, .{

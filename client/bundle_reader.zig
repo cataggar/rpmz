@@ -18,6 +18,7 @@
 const std = @import("std");
 const content_digest = @import("content_digest");
 const transaction_bundle = @import("transaction_bundle");
+const transaction_plan = @import("transaction_plan");
 
 pub const OpenError = error{
     /// The directory, or the manifest inside it, could not be read.
@@ -171,6 +172,23 @@ fn verifyPlan(
     const bytes = try readListed(allocator, io, dir, reference.path);
     defer allocator.free(bytes);
 
+    if (std.mem.eql(u8, reference.schema, transaction_plan.schema_v2)) {
+        const plan = transaction_plan.parse(allocator, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.PlanMismatch,
+        };
+        defer plan.destroy();
+        const digest = plan.digest(allocator) catch return error.OutOfMemory;
+        if (!std.mem.eql(u8, &digest, reference.digest) or
+            !std.mem.eql(u8, plan.schemaName(), reference.schema) or
+            !plan.isReplayable())
+        {
+            return error.PlanMismatch;
+        }
+        try verifyPlanPackages(plan.model(), bundle.model().packages);
+        return;
+    }
+
     // The plan carries its digest as an object -- algorithm, domain, value --
     // because a bare hex string does not say what was hashed or under which
     // schema. Only the value is comparable to the manifest's reference.
@@ -181,6 +199,94 @@ fn verifyPlan(
     const schema = try embeddedString(allocator, bytes, &.{"schema"});
     defer allocator.free(schema);
     if (!std.mem.eql(u8, schema, reference.schema)) return error.PlanMismatch;
+}
+
+fn verifyPlanPackages(
+    plan: *const transaction_plan.Data,
+    packages: []const transaction_bundle.Package,
+) OpenError!void {
+    const steps = plan.execution_steps orelse return error.PlanMismatch;
+
+    for (packages) |package| {
+        const planned = findPlanPackage(
+            plan.packages,
+            package.plan_package_id,
+        ) orelse return error.PlanMismatch;
+        if (planned.state != .available or
+            !packageIdentityEqual(package.identity, planned.identity) or
+            !std.mem.eql(u8, package.repository_id, planned.repository_id))
+        {
+            return error.PlanMismatch;
+        }
+        const source = planned.source orelse return error.PlanMismatch;
+        const location = source.location orelse return error.PlanMismatch;
+        if (!checksumEqual(package.checksum, source.checksum) or
+            !std.mem.eql(u8, package.href, location.href) or
+            !optionalStringEqual(package.xml_base, location.xml_base) or
+            package.size != source.size)
+        {
+            return error.PlanMismatch;
+        }
+
+        var target_count: usize = 0;
+        for (steps) |step| {
+            if (step.operation != .erase and
+                std.mem.eql(u8, step.package_id, package.plan_package_id))
+            {
+                target_count += 1;
+            }
+        }
+        if (target_count != 1) return error.PlanMismatch;
+    }
+
+    for (steps) |step| {
+        if (step.operation == .erase) continue;
+        var package_count: usize = 0;
+        for (packages) |package| {
+            if (std.mem.eql(u8, package.plan_package_id, step.package_id)) {
+                package_count += 1;
+            }
+        }
+        if (package_count != 1) return error.PlanMismatch;
+    }
+}
+
+fn findPlanPackage(
+    packages: []const transaction_plan.Package,
+    id: []const u8,
+) ?*const transaction_plan.Package {
+    for (packages) |*package| {
+        if (std.mem.eql(u8, package.id, id)) return package;
+    }
+    return null;
+}
+
+fn packageIdentityEqual(
+    left: transaction_plan.PackageIdentity,
+    right: transaction_plan.PackageIdentity,
+) bool {
+    return std.mem.eql(u8, left.arch, right.arch) and
+        left.epoch == right.epoch and
+        std.mem.eql(u8, left.name, right.name) and
+        std.mem.eql(u8, left.release, right.release) and
+        std.mem.eql(u8, left.version, right.version);
+}
+
+fn checksumEqual(
+    left: transaction_plan.Checksum,
+    right: transaction_plan.Checksum,
+) bool {
+    return left.is_pkgid == right.is_pkgid and
+        std.mem.eql(u8, left.kind, right.kind) and
+        std.mem.eql(u8, left.value, right.value);
+}
+
+fn optionalStringEqual(
+    left: ?[]const u8,
+    right: ?[]const u8,
+) bool {
+    if (left == null or right == null) return left == null and right == null;
+    return std.mem.eql(u8, left.?, right.?);
 }
 
 fn embeddedPlanDigest(

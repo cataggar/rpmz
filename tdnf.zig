@@ -4,7 +4,8 @@
 //! implementation component directories are private and may change without
 //! notice.
 
-/// Versioned, canonical resolve-only transaction plans.
+/// Versioned canonical transaction plans. v1 is resolve-only; replay-capable
+/// bundle exports use v2 with native execution steps.
 pub const transaction_plan = @import("transaction_plan");
 
 /// Versioned, canonical manifest for a reproducible transaction input closure.

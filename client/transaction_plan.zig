@@ -4,8 +4,11 @@ const Allocator = std.mem.Allocator;
 const canonical_json = @import("canonical_json");
 const secret_shape = @import("secret_shape");
 
-pub const schema = "tdnf.transaction-plan/v1";
-const digest_prefix = schema ++ "\x00";
+pub const schema_v1 = "tdnf.transaction-plan/v1";
+pub const schema_v2 = "tdnf.transaction-plan/v2";
+/// The resolve-only schema retained for source compatibility. Replay-capable
+/// callers must inspect `Plan.schemaName()` or `Plan.isReplayable()`.
+pub const schema = schema_v1;
 const snapshot_id_prefix = "snapshot-v2-";
 
 pub const ValidationError = error{
@@ -19,7 +22,10 @@ pub const ValidationError = error{
     InconsistentResolution,
     InvalidAction,
     InvalidChecksum,
+    InvalidDigest,
+    InvalidExecutionOrder,
     InvalidLocation,
+    InvalidSchema,
     InvalidString,
     OutOfMemory,
     UnknownReference,
@@ -83,6 +89,13 @@ pub const ActionReason = enum {
     policy,
     user,
     weak_dependency,
+};
+
+pub const ExecutionOperation = enum {
+    erase,
+    install,
+    reinstall,
+    upgrade,
 };
 
 pub const ProblemKind = enum {
@@ -210,6 +223,15 @@ pub const Action = struct {
     target_package_id: []const u8,
 };
 
+/// One low-level item in the exact order accepted by the native transaction
+/// engine. `action_index` refers to `Data.actions`; canonical v2 documents
+/// remap it to a stable `action-N` reference.
+pub const ExecutionStep = struct {
+    action_index: usize,
+    operation: ExecutionOperation,
+    package_id: []const u8,
+};
+
 pub const Selected = struct {
     /// One member of the final selected package set. This intentionally carries
     /// no request attribution: dependencies and unchanged providers are peers.
@@ -322,6 +344,13 @@ pub const Repository = struct {
 pub const Data = struct {
     actions: []const Action,
     environment: Environment,
+    /// Null is the resolve-only v1 representation. A non-null complete native
+    /// item permutation is the replay-capable v2 representation.
+    execution_steps: ?[]const ExecutionStep = null,
+    /// Authoritative native transaction input sequence captured before the
+    /// v1 semantic action sort. It is an in-memory bridge to bundle export and
+    /// is never serialized; parsed plans therefore leave it empty.
+    native_execution_inputs: []const ExecutionStep = &.{},
     hidden_packages: []const []const u8,
     jobs: []const Job,
     packages: []const Package,
@@ -414,6 +443,7 @@ const JobIndex = struct {
             .packages = packages,
             .package_index = package_index,
         };
+
         std.mem.sort(usize, self.sorted, context, jobIndexLessThan);
         for (self.sorted, 0..) |job_index, rank_index| {
             self.ranks[job_index] = rank_index;
@@ -453,13 +483,52 @@ const JobIndex = struct {
     }
 };
 
-/// Owns one immutable snapshot of a validated resolve-only plan.
+const ActionIndex = struct {
+    allocator: Allocator,
+    sorted: []usize = &.{},
+    ranks: []usize = &.{},
+
+    fn init(
+        allocator: Allocator,
+        actions: []const Action,
+        package_index: *const PackageIndex,
+        job_index: *const JobIndex,
+    ) Allocator.Error!ActionIndex {
+        var self = ActionIndex{ .allocator = allocator };
+        errdefer self.deinit();
+        self.sorted = try allocator.alloc(usize, actions.len);
+        self.ranks = try allocator.alloc(usize, actions.len);
+        for (self.sorted, 0..) |*entry, index| entry.* = index;
+        std.mem.sort(usize, self.sorted, ActionCompareContext{
+            .actions = actions,
+            .package_index = package_index,
+            .job_index = job_index,
+        }, actionIndexLessThan);
+        for (self.sorted, 0..) |action_index, rank_index| {
+            self.ranks[action_index] = rank_index;
+        }
+        return self;
+    }
+
+    fn deinit(self: *ActionIndex) void {
+        self.allocator.free(self.sorted);
+        self.allocator.free(self.ranks);
+        self.* = undefined;
+    }
+
+    fn rank(self: *const ActionIndex, action_index: usize) usize {
+        return self.ranks[action_index];
+    }
+};
+
+/// Owns one immutable snapshot of a validated v1 or v2 plan.
 pub const Plan = struct {
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
     data: Data,
     package_index: PackageIndex,
     job_index: JobIndex,
+    action_index: ActionIndex,
 
     pub fn create(allocator: Allocator, input: Data) InitError!*Plan {
         try validateWithAllocator(allocator, input);
@@ -472,6 +541,7 @@ pub const Plan = struct {
             .data = undefined,
             .package_index = undefined,
             .job_index = undefined,
+            .action_index = undefined,
         };
         errdefer self.arena.deinit();
         self.data = try cloneData(self.arena.allocator(), input);
@@ -484,6 +554,12 @@ pub const Plan = struct {
             self.data.jobs,
             self.data.packages,
             &self.package_index,
+        );
+        self.action_index = try ActionIndex.init(
+            self.arena.allocator(),
+            self.data.actions,
+            &self.package_index,
+            &self.job_index,
         );
         return self;
     }
@@ -498,19 +574,47 @@ pub const Plan = struct {
         return &self.data;
     }
 
+    pub fn schemaName(self: *const Plan) []const u8 {
+        return if (self.data.execution_steps == null) schema_v1 else schema_v2;
+    }
+
+    pub fn isReplayable(self: *const Plan) bool {
+        return self.data.execution_steps != null;
+    }
+
+    pub fn canonicalPackageRank(
+        self: *const Plan,
+        capture_id: []const u8,
+    ) ?usize {
+        if (!self.package_index.by_id.contains(capture_id)) return null;
+        return self.package_index.rank(capture_id);
+    }
+
+    pub fn withExecutionSteps(
+        self: *const Plan,
+        allocator: Allocator,
+        steps: []const ExecutionStep,
+    ) InitError!*Plan {
+        var data = self.data;
+        data.execution_steps = steps;
+        return Plan.create(allocator, data);
+    }
+
     pub fn digest(self: *const Plan, allocator: Allocator) CanonicalError![64]u8 {
         const document = try canonicalDocument(
             allocator,
             &self.data,
             &self.package_index,
             &self.job_index,
+            &self.action_index,
             false,
             null,
         );
         defer allocator.free(document);
         var bytes: [32]u8 = undefined;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(digest_prefix);
+        hasher.update(self.schemaName());
+        hasher.update("\x00");
         hasher.update(document);
         hasher.final(&bytes);
         return lowerHex(bytes);
@@ -523,6 +627,7 @@ pub const Plan = struct {
             &self.data,
             &self.package_index,
             &self.job_index,
+            &self.action_index,
             true,
             &value,
         );
@@ -575,6 +680,13 @@ fn validateWithAllocator(allocator: Allocator, data: Data) ValidationError!void 
         &package_index,
         data.jobs,
         &job_index,
+    );
+    try validateExecution(
+        allocator,
+        data.execution_steps,
+        data.actions,
+        data.packages,
+        &package_index,
     );
     try validateSelected(
         allocator,
@@ -896,6 +1008,7 @@ fn validateActions(
         } else if (action.reason == .user) {
             return error.InvalidAction;
         }
+
         for (action.prior_package_ids, 0..) |prior_id, prior_index| {
             const prior = package_index.find(packages, prior_id) orelse
                 return error.UnknownReference;
@@ -932,6 +1045,83 @@ fn validateActions(
                 return error.InvalidAction;
         }
     }
+}
+
+fn validateExecution(
+    allocator: Allocator,
+    execution_steps: ?[]const ExecutionStep,
+    actions: []const Action,
+    packages: []const Package,
+    package_index: *const PackageIndex,
+) ValidationError!void {
+    const steps = execution_steps orelse return;
+    var expected_count: usize = 0;
+    for (actions) |action| {
+        expected_count += 1;
+        if ((action.kind == .obsolete or action.kind == .downgrade) and
+            action.prior_package_ids.len != 0)
+        {
+            expected_count += 1;
+        }
+    }
+    if (steps.len != expected_count) return error.InvalidExecutionOrder;
+
+    const seen = try allocator.alloc(bool, expected_count);
+    defer allocator.free(seen);
+    @memset(seen, false);
+
+    for (steps) |step| {
+        if (step.action_index >= actions.len) return error.InvalidExecutionOrder;
+        const action = actions[step.action_index];
+        _ = package_index.find(packages, step.package_id) orelse
+            return error.UnknownReference;
+
+        var ordinal: ?usize = null;
+        if (std.mem.eql(u8, step.package_id, action.target_package_id) and
+            step.operation == targetExecutionOperation(action.kind))
+        {
+            ordinal = executionOrdinal(actions, step.action_index, 0);
+        } else if (step.operation == .erase and
+            (action.kind == .obsolete or action.kind == .downgrade))
+        {
+            if (std.mem.eql(
+                u8,
+                action.prior_package_ids[0],
+                step.package_id,
+            )) {
+                ordinal = executionOrdinal(actions, step.action_index, 1);
+            }
+        }
+        const index = ordinal orelse return error.InvalidExecutionOrder;
+        if (seen[index]) return error.InvalidExecutionOrder;
+        seen[index] = true;
+    }
+}
+
+fn targetExecutionOperation(kind: ActionKind) ExecutionOperation {
+    return switch (kind) {
+        .erase => .erase,
+        .reinstall => .reinstall,
+        .upgrade => .upgrade,
+        .downgrade, .install, .obsolete => .install,
+    };
+}
+
+fn executionOrdinal(
+    actions: []const Action,
+    action_index: usize,
+    offset: usize,
+) usize {
+    var ordinal: usize = 0;
+    for (actions[0..action_index]) |action| {
+        ordinal += 1;
+        if ((action.kind == .obsolete or action.kind == .downgrade) and
+            action.prior_package_ids.len != 0)
+        {
+            ordinal += 1;
+        }
+    }
+    return ordinal + offset;
 }
 
 fn actionReasonMatchesJob(action: ActionReason, job: RequestReason) bool {
@@ -1492,7 +1682,6 @@ fn isSchemePrefix(prefix: []const u8) bool {
     return true;
 }
 
-
 fn findRequest(requests: []const Request, id: []const u8) ?*const Request {
     for (requests) |*request| if (std.mem.eql(u8, request.id, id)) return request;
     return null;
@@ -1687,6 +1876,14 @@ fn cloneData(allocator: Allocator, input: Data) Allocator.Error!Data {
     return .{
         .actions = try cloneActions(allocator, input.actions),
         .environment = try cloneEnvironment(allocator, input.environment),
+        .execution_steps = if (input.execution_steps) |steps|
+            try cloneExecutionSteps(allocator, steps)
+        else
+            null,
+        .native_execution_inputs = try cloneExecutionSteps(
+            allocator,
+            input.native_execution_inputs,
+        ),
         .hidden_packages = try cloneStrings(allocator, input.hidden_packages),
         .jobs = try cloneJobs(allocator, input.jobs),
         .packages = try clonePackages(allocator, input.packages),
@@ -1696,6 +1893,21 @@ fn cloneData(allocator: Allocator, input: Data) Allocator.Error!Data {
         .selected = try cloneSelected(allocator, input.selected),
         .skipped = try cloneSkipped(allocator, input.skipped),
     };
+}
+
+fn cloneExecutionSteps(
+    allocator: Allocator,
+    input: []const ExecutionStep,
+) Allocator.Error![]ExecutionStep {
+    const output = try allocator.alloc(ExecutionStep, input.len);
+    for (input, output) |source, *destination| {
+        destination.* = .{
+            .action_index = source.action_index,
+            .operation = source.operation,
+            .package_id = try allocator.dupe(u8, source.package_id),
+        };
+    }
+    return output;
 }
 
 fn cloneRequests(allocator: Allocator, input: []const Request) Allocator.Error![]Request {
@@ -1870,23 +2082,36 @@ fn canonicalDocument(
     data: *const Data,
     package_index: *const PackageIndex,
     job_index: *const JobIndex,
+    action_index: *const ActionIndex,
     include_digest: bool,
     digest_value: ?*const [64]u8,
 ) Allocator.Error![]u8 {
     var writer = canonical_json.Writer.init(allocator);
     errdefer writer.deinit();
     try writer.append("{\"actions\":");
-    try writeActions(&writer, data, package_index, job_index);
+    try writeActions(
+        &writer,
+        data,
+        package_index,
+        job_index,
+        action_index,
+    );
+    const document_schema = if (data.execution_steps == null)
+        schema_v1
+    else
+        schema_v2;
     if (include_digest) {
         try writer.append(",\"digest\":{\"algorithm\":\"sha256\",\"domain\":");
-        try writer.writeString(schema);
+        try writer.writeString(document_schema);
         try writer.append(",\"value\":");
         try writer.writeString(digest_value.?);
         try writer.appendByte('}');
     }
     try writer.append(",\"environment\":");
     try writeEnvironment(&writer, data.environment);
-    try writer.append(",\"execution\":{\"status\":\"unmaterialized\"},\"hidden_packages\":");
+    try writer.append(",\"execution\":");
+    try writeExecution(&writer, data, package_index, action_index);
+    try writer.append(",\"hidden_packages\":");
     try writePackageRefs(&writer, package_index, data.hidden_packages);
     try writer.append(",\"jobs\":");
     try writeJobs(&writer, data, package_index, job_index);
@@ -1899,7 +2124,7 @@ fn canonicalDocument(
     try writer.append(",\"requests\":");
     try writeRequests(&writer, data.requests);
     try writer.append(",\"schema\":");
-    try writer.writeString(schema);
+    try writer.writeString(document_schema);
     try writer.append(",\"selected\":");
     try writeSelected(&writer, data, package_index);
     try writer.append(",\"skipped\":");
@@ -1913,19 +2138,19 @@ fn writeActions(
     data: *const Data,
     package_index: *const PackageIndex,
     job_index: *const JobIndex,
+    action_index: *const ActionIndex,
 ) Allocator.Error!void {
-    const actions = try writer.allocator.dupe(Action, data.actions);
-    defer writer.allocator.free(actions);
-    const context = CompareContext{
-        .package_index = package_index,
-        .job_index = job_index,
-    };
-    std.mem.sort(Action, actions, context, actionLessThan);
     try writer.appendByte('[');
-    for (actions, 0..) |action, index| {
+    for (action_index.sorted, 0..) |position, index| {
+        const action = data.actions[position];
         if (index != 0) try writer.appendByte(',');
         try writer.append("{\"kind\":");
         try writer.writeString(@tagName(action.kind));
+        if (data.execution_steps != null) {
+            try writer.append(",\"id\":\"action-");
+            try writer.writeUint(index);
+            try writer.appendByte('"');
+        }
         try writer.append(",\"prior_package_ids\":");
         try writePackageRefs(writer, package_index, action.prior_package_ids);
         try writer.append(",\"reason\":");
@@ -1941,6 +2166,30 @@ fn writeActions(
         try writer.appendByte('}');
     }
     try writer.appendByte(']');
+}
+
+fn writeExecution(
+    writer: *canonical_json.Writer,
+    data: *const Data,
+    package_index: *const PackageIndex,
+    action_index: *const ActionIndex,
+) Allocator.Error!void {
+    const steps = data.execution_steps orelse {
+        try writer.append("{\"status\":\"unmaterialized\"}");
+        return;
+    };
+    try writer.append("{\"status\":\"materialized\",\"steps\":[");
+    for (steps, 0..) |step, index| {
+        if (index != 0) try writer.appendByte(',');
+        try writer.append("{\"action_id\":\"action-");
+        try writer.writeUint(action_index.rank(step.action_index));
+        try writer.append("\",\"operation\":");
+        try writer.writeString(@tagName(step.operation));
+        try writer.append(",\"package_id\":");
+        try writePackageRef(writer, package_index, step.package_id);
+        try writer.appendByte('}');
+    }
+    try writer.append("]}");
 }
 
 fn writeEnvironment(writer: *canonical_json.Writer, environment: Environment) Allocator.Error!void {
@@ -2406,6 +2655,258 @@ fn writeJobRef(
     try writer.appendByte('"');
 }
 
+pub const ParseError = error{
+    MalformedJson,
+    NotCanonical,
+} || ValidationError || Allocator.Error;
+
+const WireDigest = struct {
+    algorithm: []const u8,
+    domain: []const u8,
+    value: []const u8,
+};
+
+const WireAction = struct {
+    kind: ActionKind,
+    id: ?[]const u8 = null,
+    prior_package_ids: []const []const u8,
+    reason: ActionReason,
+    requested_by_job_id: ?[]const u8,
+    target_package_id: []const u8,
+};
+
+const WireSelectionKind = enum {
+    all,
+    package,
+    name,
+    capability,
+};
+
+const WireSelection = struct {
+    capability: ?Capability = null,
+    kind: WireSelectionKind,
+    name: ?[]const u8 = null,
+    package_id: ?[]const u8 = null,
+};
+
+const WireJob = struct {
+    action: JobAction,
+    flags: JobFlags,
+    id: []const u8,
+    reason: RequestReason,
+    request_id: ?[]const u8,
+    selection: WireSelection,
+};
+
+const WireExecutionStatus = enum {
+    materialized,
+    unmaterialized,
+};
+
+const WireExecutionStep = struct {
+    action_id: []const u8,
+    operation: ExecutionOperation,
+    package_id: []const u8,
+};
+
+const WireExecution = struct {
+    status: WireExecutionStatus,
+    steps: []const WireExecutionStep = &.{},
+};
+
+const WireDocument = struct {
+    actions: []const WireAction,
+    digest: WireDigest,
+    environment: Environment,
+    execution: WireExecution,
+    hidden_packages: []const []const u8,
+    jobs: []const WireJob,
+    packages: []const Package,
+    problems: []const Problem,
+    repositories: []const Repository,
+    requests: []const Request,
+    schema: []const u8,
+    selected: []const Selected,
+    skipped: []const Skipped,
+};
+
+/// Parses only canonical v1 or v2 bytes. Re-serialization is required to match
+/// byte-for-byte, so alternate whitespace, key order, unknown fields, forged
+/// digests, and non-canonical references are all refused.
+pub fn parse(allocator: Allocator, bytes: []const u8) ParseError!*Plan {
+    var parsed = std.json.parseFromSlice(
+        WireDocument,
+        allocator,
+        bytes,
+        .{},
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.MalformedJson,
+    };
+    defer parsed.deinit();
+    const wire = parsed.value;
+
+    const is_v1 = std.mem.eql(u8, wire.schema, schema_v1);
+    const is_v2 = std.mem.eql(u8, wire.schema, schema_v2);
+    if (!is_v1 and !is_v2) return error.InvalidSchema;
+    if (!std.mem.eql(u8, wire.digest.algorithm, "sha256") or
+        !std.mem.eql(u8, wire.digest.domain, wire.schema))
+    {
+        return error.InvalidDigest;
+    }
+    validateSha256(wire.digest.value) catch return error.InvalidDigest;
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const scratch = arena_state.allocator();
+    const actions = try parseActions(scratch, wire.actions, is_v2);
+    const data: Data = .{
+        .actions = actions,
+        .environment = wire.environment,
+        .execution_steps = try parseExecution(
+            scratch,
+            wire.execution,
+            wire.actions,
+            actions,
+            is_v2,
+        ),
+        .native_execution_inputs = &.{},
+        .hidden_packages = wire.hidden_packages,
+        .jobs = try parseJobs(scratch, wire.jobs),
+        .packages = wire.packages,
+        .problems = wire.problems,
+        .repositories = wire.repositories,
+        .requests = wire.requests,
+        .selected = wire.selected,
+        .skipped = wire.skipped,
+    };
+    const plan = try Plan.create(allocator, data);
+    errdefer plan.destroy();
+    if (!std.mem.eql(u8, plan.schemaName(), wire.schema)) {
+        return error.InvalidSchema;
+    }
+    const canonical = try plan.canonicalJsonAlloc(allocator);
+    defer allocator.free(canonical);
+    if (!std.mem.eql(u8, canonical, bytes)) return error.NotCanonical;
+    return plan;
+}
+
+fn parseActions(
+    allocator: Allocator,
+    input: []const WireAction,
+    require_ids: bool,
+) ParseError![]const Action {
+    const output = try allocator.alloc(Action, input.len);
+    for (input, output, 0..) |source, *destination, index| {
+        if (require_ids) {
+            const id = source.id orelse return error.MalformedJson;
+            if (try parseCanonicalRef(id, "action") != index) {
+                return error.NotCanonical;
+            }
+        } else if (source.id != null) {
+            return error.NotCanonical;
+        }
+        destination.* = .{
+            .kind = source.kind,
+            .prior_package_ids = source.prior_package_ids,
+            .reason = source.reason,
+            .requested_by_job_id = source.requested_by_job_id,
+            .target_package_id = source.target_package_id,
+        };
+    }
+    return output;
+}
+
+fn parseJobs(
+    allocator: Allocator,
+    input: []const WireJob,
+) ParseError![]const Job {
+    const output = try allocator.alloc(Job, input.len);
+    for (input, output) |source, *destination| {
+        destination.* = .{
+            .id = source.id,
+            .action = source.action,
+            .selection = try parseSelection(source.selection),
+            .flags = source.flags,
+            .reason = source.reason,
+            .request_id = source.request_id,
+        };
+    }
+    return output;
+}
+
+fn parseSelection(input: WireSelection) ParseError!Selection {
+    return switch (input.kind) {
+        .all => if (input.capability == null and input.name == null and
+            input.package_id == null)
+            .all
+        else
+            error.MalformedJson,
+        .package => if (input.capability == null and input.name == null)
+            .{ .package = input.package_id orelse return error.MalformedJson }
+        else
+            error.MalformedJson,
+        .name => if (input.capability == null and input.package_id == null)
+            .{ .name = input.name orelse return error.MalformedJson }
+        else
+            error.MalformedJson,
+        .capability => if (input.name == null and input.package_id == null)
+            .{ .capability = input.capability orelse return error.MalformedJson }
+        else
+            error.MalformedJson,
+    };
+}
+
+fn parseExecution(
+    allocator: Allocator,
+    input: WireExecution,
+    wire_actions: []const WireAction,
+    actions: []const Action,
+    is_v2: bool,
+) ParseError!?[]const ExecutionStep {
+    if (!is_v2) {
+        if (input.status != .unmaterialized or input.steps.len != 0) {
+            return error.NotCanonical;
+        }
+        return null;
+    }
+    if (input.status != .materialized) return error.NotCanonical;
+    const output = try allocator.alloc(ExecutionStep, input.steps.len);
+    for (input.steps, output) |source, *destination| {
+        const action_index = try parseCanonicalRef(source.action_id, "action");
+        if (action_index >= actions.len or
+            wire_actions[action_index].id == null or
+            !std.mem.eql(
+                u8,
+                wire_actions[action_index].id.?,
+                source.action_id,
+            ))
+        {
+            return error.InvalidExecutionOrder;
+        }
+        destination.* = .{
+            .action_index = action_index,
+            .operation = source.operation,
+            .package_id = source.package_id,
+        };
+    }
+    return output;
+}
+
+fn parseCanonicalRef(
+    value: []const u8,
+    comptime prefix: []const u8,
+) ParseError!usize {
+    const marker = prefix ++ "-";
+    if (!std.mem.startsWith(u8, value, marker) or value.len == marker.len) {
+        return error.MalformedJson;
+    }
+    const digits = value[marker.len..];
+    if (digits.len > 1 and digits[0] == '0') return error.NotCanonical;
+    return std.fmt.parseUnsigned(usize, digits, 10) catch
+        return error.MalformedJson;
+}
+
 fn stringLessThan(_: void, left: []const u8, right: []const u8) bool {
     return std.mem.lessThan(u8, left, right);
 }
@@ -2449,6 +2950,25 @@ const JobCompareContext = struct {
     packages: []const Package,
     package_index: *const PackageIndex,
 };
+
+const ActionCompareContext = struct {
+    actions: []const Action,
+    package_index: *const PackageIndex,
+    job_index: *const JobIndex,
+};
+
+fn actionIndexLessThan(
+    context: ActionCompareContext,
+    left_index: usize,
+    right_index: usize,
+) bool {
+    return compareAction(
+        context.package_index,
+        context.job_index,
+        context.actions[left_index],
+        context.actions[right_index],
+    ) == .lt;
+}
 
 fn jobIndexLessThan(
     context: JobCompareContext,
@@ -2887,6 +3407,60 @@ test "canonical plan bytes and digest are pinned" {
     // The document embeds the digest it is hashed without.
     try expectJsonContains(json, "\"value\":\"" ++ pinned_digest ++ "\"");
     try expectJsonContains(json, "\"domain\":\"" ++ schema ++ "\"");
+}
+
+test "strict parser preserves v1 and replay-capable v2" {
+    const v1 = try Plan.create(std.testing.allocator, testData());
+    defer v1.destroy();
+    const v1_json = try v1.canonicalJsonAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(v1_json);
+    const parsed_v1 = try parse(std.testing.allocator, v1_json);
+    defer parsed_v1.destroy();
+    try std.testing.expect(!parsed_v1.isReplayable());
+    try std.testing.expectEqualStrings(schema_v1, parsed_v1.schemaName());
+
+    const steps = [_]ExecutionStep{
+        .{ .action_index = 1, .operation = .install, .package_id = "extra" },
+        .{ .action_index = 0, .operation = .upgrade, .package_id = "new" },
+    };
+    const v2 = try v1.withExecutionSteps(std.testing.allocator, &steps);
+    defer v2.destroy();
+    const v2_json = try v2.canonicalJsonAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(v2_json);
+    try expectJsonContains(v2_json, "\"schema\":\"" ++ schema_v2 ++ "\"");
+    try expectJsonContains(v2_json, "\"id\":\"action-0\"");
+    try expectJsonContains(v2_json, "\"status\":\"materialized\"");
+
+    const parsed_v2 = try parse(std.testing.allocator, v2_json);
+    defer parsed_v2.destroy();
+    try std.testing.expect(parsed_v2.isReplayable());
+    try std.testing.expectEqualStrings(schema_v2, parsed_v2.schemaName());
+    try std.testing.expectEqual(@as(usize, 2), parsed_v2.model().execution_steps.?.len);
+    try std.testing.expectEqual(
+        ExecutionOperation.install,
+        parsed_v2.model().execution_steps.?[0].operation,
+    );
+
+    const padded = try std.fmt.allocPrint(
+        std.testing.allocator,
+        " {s}",
+        .{v2_json},
+    );
+    defer std.testing.allocator.free(padded);
+    try std.testing.expectError(error.NotCanonical, parse(std.testing.allocator, padded));
+
+    const tampered = try std.mem.replaceOwned(
+        u8,
+        std.testing.allocator,
+        v2_json,
+        "\"operation\":\"install\"",
+        "\"operation\":\"erase\"",
+    );
+    defer std.testing.allocator.free(tampered);
+    try std.testing.expectError(
+        error.InvalidExecutionOrder,
+        parse(std.testing.allocator, tampered),
+    );
 }
 
 test "canonical plan is semantic and input-order independent" {
