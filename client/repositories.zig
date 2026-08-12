@@ -631,7 +631,11 @@ fn openRepoDirectory(path: [*:0]const u8, output: *c_int) u32 {
 
 fn duplicateRepoDirectory(fd: c_int) c_int {
     if (injectScanFailure(.duplicate)) return -1;
-    return std.c.dup(fd);
+    return std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
 }
 
 fn repoFdopendir(fd: c_int) ?*DIR {

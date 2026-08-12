@@ -225,6 +225,9 @@ pub const struct__TDNF_ = extern struct {
     ppszCmdLinePkgPaths: [*c][*c]u8 = null,
     dwCmdLinePkgCount: u32 = 0,
     nTestReloadFailureStage: u32 = 0,
+    pTransactionTargetLock: ?*anyopaque = null,
+    pszPinnedInstallRoot: [*c]u8 = null,
+    pszOriginalInstallRoot: [*c]u8 = null,
 };
 pub const PTDNF = [*c]struct__TDNF_;
 pub const struct__TDNF_PKG_CHANGELOG_ENTRY = extern struct {

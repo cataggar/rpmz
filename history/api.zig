@@ -217,14 +217,26 @@ pub fn Api(comptime Rpmdb: type) type {
         }
 
         fn createHistoryCtxFromDb(opened: history_db.Database) !*HistoryCtx {
-            const db_owner = try allocator.create(history_db.Database);
+            return createHistoryCtxFromDbWithAllocator(opened, allocator);
+        }
+
+        fn createHistoryCtxFromDbWithAllocator(
+            opened: history_db.Database,
+            context_allocator: std.mem.Allocator,
+        ) !*HistoryCtx {
+            const db_owner = context_allocator.create(
+                history_db.Database,
+            ) catch |err| {
+                opened.close();
+                return err;
+            };
             db_owner.* = opened;
             errdefer {
                 db_owner.close();
-                allocator.destroy(db_owner);
+                context_allocator.destroy(db_owner);
             }
-            const ctx = try allocator.create(HistoryCtx);
-            errdefer allocator.destroy(ctx);
+            const ctx = try context_allocator.create(HistoryCtx);
+            errdefer context_allocator.destroy(ctx);
 
             ctx.* = .{
                 .db = db_owner.raw.ptr,
@@ -707,4 +719,48 @@ pub fn Api(comptime Rpmdb: type) type {
             try setCookie(ctx, cookie);
         }
     };
+}
+
+test "history context allocation failure closes the opened database" {
+    const TestApi = Api(struct {
+        pub const Source = void;
+    });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/history.db",
+        .{base},
+        0,
+    );
+    defer std.testing.allocator.free(path);
+
+    for (0..2) |fail_index| {
+        const opened = try history_db.Database.init(path.ptr);
+        const dir_fd = opened.dir_fd;
+        var failing = std.testing.FailingAllocator.init(
+            std.testing.allocator,
+            .{ .fail_index = fail_index },
+        );
+        try std.testing.expectError(
+            error.OutOfMemory,
+            TestApi.createHistoryCtxFromDbWithAllocator(
+                opened,
+                failing.allocator(),
+            ),
+        );
+        try std.testing.expectEqual(
+            @as(c_int, -1),
+            std.c.fcntl(dir_fd, std.c.F.GETFD),
+        );
+        try std.testing.expectEqual(
+            @intFromEnum(std.posix.E.BADF),
+            std.c._errno().*,
+        );
+    }
 }

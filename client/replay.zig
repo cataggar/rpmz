@@ -328,6 +328,7 @@ fn runValidated(
         else => return error.RepositoryMismatch,
     };
     defer selection.deinit();
+    try verifyManifestPackages(bundle.model().packages, selection.packages);
     try verifyRepositories(bundle.model(), plan.model());
     try verifyMetadata(scratch, io, directory, bundle, &selection);
 
@@ -615,6 +616,64 @@ fn verifyRepositories(
         return error.RepositoryMismatch;
 }
 
+fn verifyManifestPackages(
+    manifest: []const transaction_bundle.Package,
+    selected: []const bundle_selection.PackageItem,
+) PreflightError!void {
+    if (manifest.len != selected.len) return error.RpmMismatch;
+    for (selected) |expected| {
+        var package: ?*const transaction_bundle.Package = null;
+        for (manifest) |*candidate| {
+            if (!std.mem.eql(
+                u8,
+                candidate.plan_package_id,
+                expected.plan_package_id,
+            )) continue;
+            if (package != null) return error.RpmMismatch;
+            package = candidate;
+        }
+        const exact = package orelse return error.RpmMismatch;
+        if (!std.mem.eql(u8, exact.repository_id, expected.repository_id) or
+            !exactIdentityEqual(exact.identity, expected.identity) or
+            !checksumEqual(exact.checksum, expected.checksum) or
+            !std.mem.eql(u8, exact.href, expected.href) or
+            !optionalEqual(exact.xml_base, expected.xml_base) or
+            exact.size != expected.size or
+            !std.mem.eql(u8, exact.path, expected.path))
+        {
+            return error.RpmMismatch;
+        }
+    }
+    for (manifest) |package| {
+        var match_count: usize = 0;
+        for (selected) |expected| {
+            if (std.mem.eql(
+                u8,
+                package.plan_package_id,
+                expected.plan_package_id,
+            )) match_count += 1;
+        }
+        if (match_count != 1) return error.RpmMismatch;
+    }
+}
+
+fn checksumEqual(
+    left: transaction_plan.Checksum,
+    right: transaction_plan.Checksum,
+) bool {
+    return left.is_pkgid == right.is_pkgid and
+        std.mem.eql(u8, left.kind, right.kind) and
+        std.mem.eql(u8, left.value, right.value);
+}
+
+fn exactIdentityEqual(left: PackageIdentity, right: PackageIdentity) bool {
+    return left.epoch == right.epoch and
+        std.mem.eql(u8, left.arch, right.arch) and
+        std.mem.eql(u8, left.name, right.name) and
+        std.mem.eql(u8, left.release, right.release) and
+        std.mem.eql(u8, left.version, right.version);
+}
+
 fn verifyMetadata(
     allocator: Allocator,
     io: std.Io,
@@ -884,13 +943,26 @@ fn cloneHeaderIdentity(
     const version = header.getStringChecked(.version) catch return error.TargetUnreadable;
     const release = header.getStringChecked(.release) catch return error.TargetUnreadable;
     const arch = header.getStringChecked(.arch) catch return error.TargetUnreadable;
+    const name_value = name orelse return error.TargetUnreadable;
+    const version_value = version orelse return error.TargetUnreadable;
+    const release_value = release orelse return error.TargetUnreadable;
+    const arch_value = arch orelse return error.TargetUnreadable;
+    try validateRpmdbIdentityText(name_value);
+    try validateRpmdbIdentityText(version_value);
+    try validateRpmdbIdentityText(release_value);
+    try validateRpmdbIdentityText(arch_value);
     return .{
-        .arch = try allocator.dupe(u8, arch orelse return error.TargetUnreadable),
+        .arch = try allocator.dupe(u8, arch_value),
         .epoch = header.getU32Checked(.epoch) catch return error.TargetUnreadable,
-        .name = try allocator.dupe(u8, name orelse return error.TargetUnreadable),
-        .release = try allocator.dupe(u8, release orelse return error.TargetUnreadable),
-        .version = try allocator.dupe(u8, version orelse return error.TargetUnreadable),
+        .name = try allocator.dupe(u8, name_value),
+        .release = try allocator.dupe(u8, release_value),
+        .version = try allocator.dupe(u8, version_value),
     };
+}
+
+fn validateRpmdbIdentityText(value: []const u8) PreflightError!void {
+    if (!std.unicode.utf8ValidateSlice(value))
+        return error.TargetUnreadable;
 }
 
 fn verifyRpmdbIdentity(
@@ -939,38 +1011,50 @@ fn buildFixedOrder(
     verified: []const VerifiedRpm,
 ) PreflightError!BuiltFixedOrder {
     const steps = plan.execution_steps orelse return error.ActionShapeMismatch;
-    const items = try allocator.alloc(fixed.FixedOrderItem, plan.actions.len);
+    const items = try allocator.alloc(fixed.FixedOrderItem, steps.len);
     errdefer allocator.free(items);
-    const order = try allocator.alloc(u32, plan.actions.len);
+    const order = try allocator.alloc(u32, steps.len);
     errdefer allocator.free(order);
-    const item_actions = try allocator.alloc(usize, plan.actions.len);
+    const item_actions = try allocator.alloc(usize, steps.len);
     errdefer allocator.free(item_actions);
-    try collapseExecutionOrder(allocator, plan, steps, order);
-    const obsolete_priors = try ownedObsoletePriors(
-        allocator,
-        plan,
-        order,
-    );
-    defer {
-        for (obsolete_priors) |ids| allocator.free(ids);
-        allocator.free(obsolete_priors);
-    }
     var initialized_items: usize = 0;
     errdefer {
         for (items[0..initialized_items]) |item| freeFixedItem(allocator, item);
     }
-    for (plan.actions, items, item_actions, 0..) |
-        action,
+    for (steps, items, order, item_actions, 0..) |
+        step,
         *item,
+        *order_index,
         *action_index,
         index,
     | {
+        if (step.action_index >= plan.actions.len)
+            return error.ActionShapeMismatch;
+        const action = plan.actions[step.action_index];
         const package = findPlanPackage(
             plan.packages,
-            action.target_package_id,
+            step.package_id,
         ) orelse
             return error.ActionShapeMismatch;
-        action_index.* = index;
+        action_index.* = step.action_index;
+        order_index.* = @intCast(index);
+        if (!std.mem.eql(u8, step.package_id, action.target_package_id) or
+            step.operation != targetExecutionOperation(action.kind))
+        {
+            if (step.operation != .erase or
+                (action.kind != .obsolete and action.kind != .downgrade) or
+                !containsString(action.prior_package_ids, step.package_id) or
+                package.state != .installed)
+            {
+                return error.ActionShapeMismatch;
+            }
+            const hnum = package.rpmdb_hnum orelse
+                return error.ActionShapeMismatch;
+            const row = findRow(rows, hnum) orelse return error.PriorMismatch;
+            item.* = .{ .erase = fixedRow(row.*) };
+            initialized_items = index + 1;
+            continue;
+        }
         item.* = switch (action.kind) {
             .erase => blk: {
                 if (package.state != .installed)
@@ -989,7 +1073,7 @@ fn buildFixedOrder(
                 }
                 break :blk .{ .install = try fixedRpm(package.*, verified) };
             },
-            .upgrade, .downgrade, .reinstall => blk: {
+            .upgrade, .reinstall => blk: {
                 if (package.state != .available or
                     action.prior_package_ids.len == 0)
                     return error.ActionShapeMismatch;
@@ -1004,29 +1088,17 @@ fn buildFixedOrder(
                 };
                 break :blk switch (action.kind) {
                     .upgrade => .{ .upgrade = replacement },
-                    .downgrade => .{ .downgrade = replacement },
                     .reinstall => .{ .reinstall = replacement },
                     else => unreachable,
                 };
             },
-            .obsolete => blk: {
+            .downgrade, .obsolete => blk: {
                 if (package.state != .available or
                     action.prior_package_ids.len == 0)
+                {
                     return error.ActionShapeMismatch;
-                if (obsolete_priors[index].len == 0) {
-                    break :blk .{
-                        .install = try fixedRpm(package.*, verified),
-                    };
                 }
-                break :blk .{ .obsolete = .{
-                    .package = try fixedRpm(package.*, verified),
-                    .priors = try fixedPriors(
-                        allocator,
-                        plan.packages,
-                        rows,
-                        obsolete_priors[index],
-                    ),
-                } };
+                break :blk .{ .install = try fixedRpm(package.*, verified) };
             },
         };
         initialized_items = index + 1;
@@ -1048,93 +1120,6 @@ fn buildFixedOrder(
     };
 }
 
-fn ownedObsoletePriors(
-    allocator: Allocator,
-    plan: *const transaction_plan.Data,
-    order: []const u32,
-) PreflightError![][]const []const u8 {
-    const owned = try allocator.alloc([]const []const u8, plan.actions.len);
-    errdefer allocator.free(owned);
-    for (owned) |*ids| ids.* = &.{};
-    errdefer {
-        for (owned) |ids| allocator.free(ids);
-    }
-    var assigned: std.StringHashMapUnmanaged(void) = .empty;
-    defer assigned.deinit(allocator);
-
-    for (order) |raw_index| {
-        const action_index: usize = @intCast(raw_index);
-        if (action_index >= plan.actions.len) return error.ActionShapeMismatch;
-        const action = plan.actions[action_index];
-        if (action.kind != .obsolete) continue;
-        var ids: std.ArrayList([]const u8) = .empty;
-        defer ids.deinit(allocator);
-        for (action.prior_package_ids) |prior| {
-            const entry = assigned.getOrPut(allocator, prior) catch
-                return error.OutOfMemory;
-            if (!entry.found_existing) {
-                ids.append(allocator, prior) catch return error.OutOfMemory;
-            }
-        }
-        owned[action_index] = ids.toOwnedSlice(allocator) catch
-            return error.OutOfMemory;
-    }
-    return owned;
-}
-
-fn collapseExecutionOrder(
-    allocator: Allocator,
-    plan: *const transaction_plan.Data,
-    steps: []const transaction_plan.ExecutionStep,
-    order: []u32,
-) PreflightError!void {
-    if (order.len != plan.actions.len) return error.ActionShapeMismatch;
-    const seen = try allocator.alloc(bool, plan.actions.len);
-    defer allocator.free(seen);
-    @memset(seen, false);
-
-    var output_index: usize = 0;
-    var step_index: usize = 0;
-    while (step_index < steps.len) {
-        const step = steps[step_index];
-        if (step.action_index >= plan.actions.len or
-            seen[step.action_index])
-        {
-            return error.ActionShapeMismatch;
-        }
-        const action = plan.actions[step.action_index];
-        if (!std.mem.eql(
-            u8,
-            step.package_id,
-            action.target_package_id,
-        ) or step.operation != targetExecutionOperation(action.kind)) {
-            return error.ActionShapeMismatch;
-        }
-        seen[step.action_index] = true;
-        order[output_index] = @intCast(step.action_index);
-        output_index += 1;
-
-        if (action.kind == .downgrade or action.kind == .obsolete) {
-            step_index += 1;
-            if (step_index >= steps.len) return error.ActionShapeMismatch;
-            const companion = steps[step_index];
-            if (companion.action_index != step.action_index or
-                companion.operation != .erase or
-                action.prior_package_ids.len == 0 or
-                !std.mem.eql(
-                    u8,
-                    companion.package_id,
-                    action.prior_package_ids[0],
-                ))
-            {
-                return error.ActionShapeMismatch;
-            }
-        }
-        step_index += 1;
-    }
-    if (output_index != order.len) return error.ActionShapeMismatch;
-}
-
 fn targetExecutionOperation(
     kind: transaction_plan.ActionKind,
 ) transaction_plan.ExecutionOperation {
@@ -1144,6 +1129,13 @@ fn targetExecutionOperation(
         .upgrade => .upgrade,
         .downgrade, .install, .obsolete => .install,
     };
+}
+
+fn containsString(values: []const []const u8, wanted: []const u8) bool {
+    for (values) |value| {
+        if (std.mem.eql(u8, value, wanted)) return true;
+    }
+    return false;
 }
 
 fn fixedRpm(
@@ -1639,6 +1631,95 @@ test "bundle closure failures remain distinct replay validation outcomes" {
     );
 }
 
+test "manifest packages exact-match the plan selection before RPM open" {
+    const expected = bundle_selection.PackageItem{
+        .capture_package_id = "capture",
+        .plan_package_id = "package-0",
+        .repository_id = "base",
+        .identity = .{
+            .name = "app",
+            .epoch = null,
+            .version = "1",
+            .release = "2",
+            .arch = "x86_64",
+        },
+        .checksum = .{
+            .kind = "sha256",
+            .is_pkgid = true,
+            .value = "1" ** 64,
+        },
+        .size = 42,
+        .href = "packages/app.rpm",
+        .xml_base = "content/",
+        .path = "packages/base/packages/app.rpm",
+    };
+    const exact = transaction_bundle.Package{
+        .checksum = expected.checksum,
+        .href = expected.href,
+        .identity = expected.identity,
+        .path = expected.path,
+        .plan_package_id = expected.plan_package_id,
+        .repository_id = expected.repository_id,
+        .signature = .{
+            .outcome = .unsigned,
+            .key_fingerprint = null,
+        },
+        .size = expected.size,
+        .xml_base = expected.xml_base,
+    };
+    try verifyManifestPackages(&.{exact}, &.{expected});
+
+    const Mutation = enum {
+        id,
+        repository,
+        identity,
+        epoch,
+        checksum_kind,
+        checksum_pkgid,
+        checksum_value,
+        href,
+        xml_base,
+        size,
+        path,
+    };
+    inline for (std.meta.tags(Mutation)) |mutation| {
+        var changed = exact;
+        switch (mutation) {
+            .id => changed.plan_package_id = "package-1",
+            .repository => changed.repository_id = "other",
+            .identity => changed.identity.name = "other",
+            .epoch => changed.identity.epoch = 0,
+            .checksum_kind => changed.checksum.kind = "sha512",
+            .checksum_pkgid => changed.checksum.is_pkgid = false,
+            .checksum_value => changed.checksum.value = "2" ** 64,
+            .href => changed.href = "packages/other.rpm",
+            .xml_base => changed.xml_base = null,
+            .size => changed.size = 43,
+            .path => changed.path = "packages/base/packages/other.rpm",
+        }
+        try std.testing.expectError(
+            error.RpmMismatch,
+            verifyManifestPackages(&.{changed}, &.{expected}),
+        );
+    }
+    try std.testing.expectError(
+        error.RpmMismatch,
+        verifyManifestPackages(&.{ exact, exact }, &.{expected}),
+    );
+    try std.testing.expectError(
+        error.RpmMismatch,
+        verifyManifestPackages(&.{}, &.{expected}),
+    );
+}
+
+test "invalid rpmdb identity UTF-8 maps to target unreadable" {
+    try validateRpmdbIdentityText("valid");
+    try std.testing.expectError(
+        error.TargetUnreadable,
+        validateRpmdbIdentityText(&.{ 0xff, 0xfe }),
+    );
+}
+
 test "inventory comparison is exact and independent of rpmdb hnum" {
     const packages = [_]transaction_plan.Package{.{
         .id = "package-0",
@@ -1780,10 +1861,12 @@ test "fixed replay items preserve all authoritative action representations" {
         .{ .action_index = 1, .operation = .erase, .package_id = "erase-old" },
         .{ .action_index = 2, .operation = .upgrade, .package_id = "upgrade-new" },
         .{ .action_index = 3, .operation = .install, .package_id = "down-new" },
-        .{ .action_index = 3, .operation = .erase, .package_id = "down-old" },
         .{ .action_index = 4, .operation = .reinstall, .package_id = "reinstall-new" },
         .{ .action_index = 5, .operation = .install, .package_id = "obsolete-new" },
+        .{ .action_index = 3, .operation = .erase, .package_id = "down-old" },
+        .{ .action_index = 3, .operation = .erase, .package_id = "down-retired" },
         .{ .action_index = 5, .operation = .erase, .package_id = "obsolete-old" },
+        .{ .action_index = 5, .operation = .erase, .package_id = "obsolete-extra" },
     };
     const rows = [_]InstalledPackage{
         .{ .hnum = 1, .identity = installed[0].identity },
@@ -1838,33 +1921,21 @@ test "fixed replay items preserve all authoritative action representations" {
     try std.testing.expect(built.items[0] == .install);
     try std.testing.expect(built.items[1] == .erase);
     try std.testing.expect(built.items[2] == .upgrade);
-    try std.testing.expect(built.items[3] == .downgrade);
+    try std.testing.expect(built.items[3] == .install);
     try std.testing.expect(built.items[4] == .reinstall);
-    try std.testing.expect(built.items[5] == .obsolete);
-    try std.testing.expectEqual(
-        @as(usize, 2),
-        built.items[3].downgrade.priors.len,
-    );
-    try std.testing.expectEqual(
-        @as(u32, 6),
-        built.items[3].downgrade.priors[1].hnum,
-    );
-    try std.testing.expectEqual(
-        @as(usize, 2),
-        built.items[5].obsolete.priors.len,
-    );
-    try std.testing.expectEqual(
-        @as(u32, 7),
-        built.items[5].obsolete.priors[1].hnum,
-    );
+    try std.testing.expect(built.items[5] == .install);
+    try std.testing.expectEqual(@as(u32, 3), built.items[6].erase.hnum);
+    try std.testing.expectEqual(@as(u32, 6), built.items[7].erase.hnum);
+    try std.testing.expectEqual(@as(u32, 5), built.items[8].erase.hnum);
+    try std.testing.expectEqual(@as(u32, 7), built.items[9].erase.hnum);
     try std.testing.expectEqualSlices(
         u32,
-        &.{ 0, 1, 2, 3, 4, 5 },
+        &.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 },
         built.order,
     );
     try std.testing.expectEqualSlices(
         usize,
-        &.{ 0, 1, 2, 3, 4, 5 },
+        &.{ 0, 1, 2, 3, 4, 5, 3, 3, 5, 5 },
         built.item_actions,
     );
 }
@@ -1872,14 +1943,13 @@ test "fixed replay items preserve all authoritative action representations" {
 test "shared obsolete priors collapse to one physical erase" {
     const packages = [_]transaction_plan.Package{
         testPackage("shared-old", "shared-old", "1", .installed, 11),
-        testPackage("unique-old", "unique-old", "1", .installed, 12),
         testPackage("replacement-a", "replacement-a", "1", .available, null),
         testPackage("replacement-b", "replacement-b", "1", .available, null),
     };
     const actions = [_]transaction_plan.Action{
         .{
             .kind = .obsolete,
-            .prior_package_ids = &.{ "shared-old", "unique-old" },
+            .prior_package_ids = &.{"shared-old"},
             .reason = .obsoletes,
             .requested_by_job_id = null,
             .target_package_id = "replacement-a",
@@ -1894,14 +1964,13 @@ test "shared obsolete priors collapse to one physical erase" {
     };
     const steps = [_]transaction_plan.ExecutionStep{
         .{ .action_index = 0, .operation = .install, .package_id = "replacement-a" },
-        .{ .action_index = 0, .operation = .erase, .package_id = "shared-old" },
         .{ .action_index = 1, .operation = .install, .package_id = "replacement-b" },
         .{ .action_index = 1, .operation = .erase, .package_id = "shared-old" },
     };
-    const rows = [_]InstalledPackage{
-        .{ .hnum = 11, .identity = packages[0].identity },
-        .{ .hnum = 12, .identity = packages[1].identity },
-    };
+    const rows = [_]InstalledPackage{.{
+        .hnum = 11,
+        .identity = packages[0].identity,
+    }};
     const fake: *rpm_gpgcheck.FileHandle = @ptrFromInt(
         @alignOf(rpm_gpgcheck.FileHandle),
     );
@@ -1937,17 +2006,10 @@ test "shared obsolete priors collapse to one physical erase" {
         std.testing.allocator.free(built.order);
         std.testing.allocator.free(built.item_actions);
     }
-    try std.testing.expectEqual(@as(usize, 2), built.items.len);
-    try std.testing.expect(built.items[0] == .obsolete);
+    try std.testing.expectEqual(@as(usize, 3), built.items.len);
+    try std.testing.expect(built.items[0] == .install);
     try std.testing.expect(built.items[1] == .install);
-    try std.testing.expectEqual(
-        @as(u32, 11),
-        built.items[0].obsolete.priors[0].hnum,
-    );
-    try std.testing.expectEqual(
-        @as(usize, 2),
-        built.items[0].obsolete.priors.len,
-    );
+    try std.testing.expectEqual(@as(u32, 11), built.items[2].erase.hnum);
 }
 
 test "later primary shared-prior failure is rejected during preflight" {
@@ -2015,7 +2077,7 @@ test "later primary shared-prior failure is rejected during preflight" {
     );
 }
 
-test "unmergeable action order and inventory mismatch fail preflight" {
+test "interleaved raw order is preserved and inventory mismatch fails preflight" {
     const packages = [_]transaction_plan.Package{
         testPackage("old", "pkg", "2", .installed, 21),
         testPackage("new", "pkg", "1", .available, null),
@@ -2057,15 +2119,23 @@ test "unmergeable action order and inventory mismatch fail preflight" {
         },
         .skipped = &.{},
     };
-    try std.testing.expectError(
-        error.ActionShapeMismatch,
-        buildFixedOrder(
-            std.testing.allocator,
-            &plan,
-            &rows,
-            &verified,
-        ),
+    const built = try buildFixedOrder(
+        std.testing.allocator,
+        &plan,
+        &rows,
+        &verified,
     );
+    defer {
+        for (built.items) |item| freeFixedItem(std.testing.allocator, item);
+        std.testing.allocator.free(built.items);
+        std.testing.allocator.free(built.order);
+        std.testing.allocator.free(built.item_actions);
+    }
+    try std.testing.expect(built.items[0] == .install);
+    try std.testing.expect(built.items[1] == .install);
+    try std.testing.expect(built.items[2] == .erase);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1, 2 }, built.order);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 0 }, built.item_actions);
 
     const contiguous = [_]transaction_plan.ExecutionStep{
         .{ .action_index = 0, .operation = .install, .package_id = "new" },

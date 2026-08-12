@@ -967,9 +967,13 @@ test "configuration layouts match the private cross-module ABI" {
     try testing.expectEqual(@as(usize, 216), @sizeOf(CmdArgs));
     try testing.expectEqual(@as(usize, 128), @offsetOf(CmdArgs, "pszArch"));
     try testing.expectEqual(@as(usize, 184), @offsetOf(CmdArgs, "cn_setopts"));
-    try testing.expectEqual(@as(usize, 120), @sizeOf(Tdnf));
+    try testing.expectEqual(@as(usize, 144), @sizeOf(Tdnf));
     try testing.expectEqual(@as(usize, 8), @offsetOf(Tdnf, "pArgs"));
     try testing.expectEqual(@as(usize, 16), @offsetOf(Tdnf, "pConf"));
+    try testing.expectEqual(
+        @as(usize, 120),
+        @offsetOf(Tdnf, "pTransactionTargetLock"),
+    );
     try testing.expectEqual(@as(usize, 104), @offsetOf(Tdnf, "ppszCmdLinePkgPaths"));
 }
 

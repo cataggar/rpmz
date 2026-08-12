@@ -7,6 +7,8 @@
 const std = @import("std");
 const history = @import("history");
 const history_config = @import("history_config");
+const transaction_lock = @import("transaction_lock");
+const txn_config = @import("rpm_txn_config");
 
 const File = opaque {};
 const Option = extern struct {
@@ -105,6 +107,23 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         }
     }
 
+    var rpm_config = txn_config.TxnConfig.init(
+        std.heap.c_allocator,
+        std.mem.span(rpm_root_dir),
+    ) catch {
+        _ = fprintf(stderr, "failed to configure transaction target\n");
+        return 255;
+    };
+    defer rpm_config.deinit();
+    var target = transaction_lock.acquire(
+        std.heap.c_allocator,
+        &rpm_config,
+    ) catch {
+        _ = fprintf(stderr, "failed to lock transaction target\n");
+        return 255;
+    };
+    defer target.deinit();
+
     const ctx = history.create_history_ctx(db_file) orelse {
         _ = fprintf(stderr, "check_ptr failed in main line 95\n");
         return 255;
@@ -124,7 +143,10 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (std.mem.eql(u8, std.mem.span(action), "init") or
         std.mem.eql(u8, std.mem.span(action), "update"))
     {
-        if (checkHistoryRc(history.history_sync(ctx, rpm_root_dir), 112)) |rc| {
+        if (checkHistoryRc(
+            history.history_sync_config(ctx, target.config()),
+            112,
+        )) |rc| {
             return rc;
         }
         return 0;

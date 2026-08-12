@@ -491,7 +491,6 @@ extern fn tdnf_repomd_native_verified_transaction_solve_config(
 extern fn access(?[*:0]const u8, c_int) callconv(.c) c_int;
 extern fn unlink(?[*:0]const u8) callconv(.c) c_int;
 extern fn strerror(c_int) callconv(.c) [*:0]const u8;
-extern fn dup(c_int) callconv(.c) c_int;
 extern fn close(c_int) callconv(.c) c_int;
 extern fn time(?*std.c.time_t) callconv(.c) std.c.time_t;
 
@@ -3230,7 +3229,11 @@ fn runTransactionNativeImpl(
     }
     var redirect: c_int = 0;
     if (tdnf.pArgs.?.nJsonOutput != 0) {
-        script_fd = dup(2);
+        script_fd = std.c.fcntl(
+            2,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 0),
+        );
         if (script_fd < 0) return ERROR_TDNF_RPMTS_FDDUP_FAILED;
         redirect = 1;
     }
@@ -3433,6 +3436,13 @@ fn runWithTransactionTarget(
     context: anytype,
     operation: anytype,
 ) u32 {
+    const config: *txn_config.TxnConfig = @ptrCast(@alignCast(
+        tdnf.pRpmConfig orelse
+            return transactionLockFailure(error.InvalidTarget),
+    ));
+    if (config.targetLockHeld()) {
+        return operation(tdnf, context);
+    }
     const guard = acquireTransactionTarget(tdnf) catch |err|
         return transactionLockFailure(err);
     return runWithAcquiredTransactionTarget(

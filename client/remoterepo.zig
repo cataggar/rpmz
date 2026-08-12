@@ -263,7 +263,11 @@ fn openDirectoryComponents(
     create: bool,
     output: *c_int,
 ) u32 {
-    var current_fd = std.c.dup(root_fd);
+    var current_fd = std.c.fcntl(
+        root_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
     if (current_fd < 0) return systemError(errnoValue());
     defer {
         if (current_fd >= 0) _ = c.close(current_fd);
@@ -684,7 +688,14 @@ fn downloadPackage(
         return systemError(errnoValue());
     }
 
-    var parent = PinnedParent{ .fd = std.c.dup(directory_fd), .name = undefined };
+    var parent = PinnedParent{
+        .fd = std.c.fcntl(
+            directory_fd,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 0),
+        ),
+        .name = undefined,
+    };
     if (parent.fd < 0) return systemError(errnoValue());
     defer parent.deinit();
     @memcpy(parent.name[0..filename.len], filename);

@@ -79,6 +79,7 @@ pub const Database = struct {
             dir_fd = next_fd;
         }
         var db = try openOwnedDirectory(dir_fd, basename, true);
+        errdefer db.close();
         try db.busyTimeout(busy_timeout_ms);
         return db;
     }
@@ -96,14 +97,17 @@ pub const Database = struct {
             persist_dir,
             !must_exist,
         ) catch return error.InvalidDirectory) orelse return error.NotFound;
-        return openOwnedDirectory(
+        var db = openOwnedDirectory(
             dir_fd,
             "history.db",
             !must_exist,
-        ) catch |err| switch (err) {
+        ) catch |err| return switch (err) {
             error.NotFound => error.NotFound,
             else => err,
         };
+        errdefer db.close();
+        try db.busyTimeout(busy_timeout_ms);
+        return db;
     }
 
     pub fn fromPtr(ptr: ?*sqlite.c.sqlite3) Database {
@@ -165,6 +169,14 @@ pub const Database = struct {
     }
 };
 
+fn duplicateFdCloexec(fd: c_int) c_int {
+    return std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+}
+
 fn openOwnedDirectory(
     dir_fd: c_int,
     basename: []const u8,
@@ -198,7 +210,7 @@ fn openOwnedDirectory(
 
 fn openConfigRoot(config: *const txn_config.TxnConfig) Error!c_int {
     if (config.pinnedInstallRootFd()) |fd| {
-        const duplicate = std.c.dup(fd);
+        const duplicate = duplicateFdCloexec(fd);
         if (duplicate < 0) return error.SyscallFailed;
         return duplicate;
     }
@@ -223,11 +235,11 @@ fn openDirectoryTree(
 ) Error!?c_int {
     const path = std.mem.trim(u8, raw_path, "/");
     if (path.len == 0) {
-        const duplicate = std.c.dup(root_fd);
+        const duplicate = duplicateFdCloexec(root_fd);
         if (duplicate < 0) return error.SyscallFailed;
         return duplicate;
     }
-    var current = std.c.dup(root_fd);
+    var current = duplicateFdCloexec(root_fd);
     if (current < 0) return error.SyscallFailed;
     errdefer _ = std.c.close(current);
     var components = std.mem.splitScalar(u8, path, '/');
@@ -439,6 +451,34 @@ test "history config stays under pinned root and rejects database symlinks" {
     );
 
     var db = try Database.initConfig(&pinned, "/var/lib/tdnf", false);
+    try std.testing.expect(
+        (std.c.fcntl(db.dir_fd, std.c.F.GETFD) & std.c.FD_CLOEXEC) != 0,
+    );
+    const main_fd = try db.connection.?.duplicateMainFd();
+    defer _ = std.c.close(main_fd);
+    try std.testing.expect(
+        (std.c.fcntl(main_fd, std.c.F.GETFD) & std.c.FD_CLOEXEC) != 0,
+    );
+    var timeout_statement: ?*sqlite.c.sqlite3_stmt = null;
+    try std.testing.expectEqual(
+        sqlite.c.SQLITE_OK,
+        sqlite.c.sqlite3_prepare_v2(
+            db.raw.ptr,
+            "PRAGMA busy_timeout;",
+            -1,
+            &timeout_statement,
+            null,
+        ),
+    );
+    defer _ = sqlite.c.sqlite3_finalize(timeout_statement);
+    try std.testing.expectEqual(
+        sqlite.c.SQLITE_ROW,
+        sqlite.c.sqlite3_step(timeout_statement),
+    );
+    try std.testing.expectEqual(
+        busy_timeout_ms,
+        sqlite.c.sqlite3_column_int(timeout_statement, 0),
+    );
     try db.exec("CREATE TABLE pinned(value INTEGER);", .{});
     db.close();
     try tmp.dir.access(

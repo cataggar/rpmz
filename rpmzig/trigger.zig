@@ -1354,7 +1354,11 @@ const Db = struct {
         ) catch return error.SqliteOpenFailed;
         errdefer root.deinit();
         const dir_fd = if (config.pinnedRpmDbDirFd()) |pinned_dir| blk: {
-            const duplicate = std.c.dup(pinned_dir);
+            const duplicate = std.c.fcntl(
+                pinned_dir,
+                std.c.F.DUPFD_CLOEXEC,
+                @as(c_int, 0),
+            );
             if (duplicate < 0) return error.SqliteOpenFailed;
             break :blk duplicate;
         } else (root.openDirectory(normalized, false) catch

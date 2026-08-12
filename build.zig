@@ -260,6 +260,21 @@ pub fn build(b: *Build) void {
             .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
         },
     });
+    const sqlite_confined_lib = b.addLibrary(.{
+        .name = "tdnfsqliteconfined",
+        .linkage = .static,
+        .root_module = sqlite_confined_mod,
+    });
+    const sqlite_confined_api_mod = b.createModule(.{
+        .root_source_file = b.path("common/sqlite_confined_api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+        },
+    });
+    sqlite_confined_api_mod.linkLibrary(sqlite_confined_lib);
     const tls_dep = tls_dep_optional.?;
     const zlua_mod = zlua_dep_optional.?.module("zlua");
 
@@ -343,6 +358,26 @@ pub fn build(b: *Build) void {
     run_native_dependency_audit.setCwd(b.path("."));
     run_native_dependency_audit.step.dependOn(b.getInstallStep());
     native_dependency_audit_step.dependOn(&run_native_dependency_audit.step);
+    const sqlite_singleton_audit_step = b.step(
+        "sqlite-confined-singleton-audit",
+        "Require one confined SQLite registry in each installed consumer",
+    );
+    const run_sqlite_singleton_audit = b.addSystemCommand(
+        &.{
+            "python3",
+            "scripts/sqlite-confined-singleton-audit.py",
+            "--prefix",
+            b.getInstallPath(.prefix, ""),
+        },
+    );
+    run_sqlite_singleton_audit.setCwd(b.path("."));
+    run_sqlite_singleton_audit.step.dependOn(b.getInstallStep());
+    sqlite_singleton_audit_step.dependOn(
+        &run_sqlite_singleton_audit.step,
+    );
+    native_dependency_audit_step.dependOn(
+        &run_sqlite_singleton_audit.step,
+    );
     const product_no_libsolv_fetch_audit_step = b.step(
         "product-no-libsolv-fetch-audit",
         "Build the product cleanly with fetching disabled and no libsolv",
@@ -734,7 +769,7 @@ pub fn build(b: *Build) void {
         .link_libc = true,
         .imports = &.{
             .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
-            .{ .name = "confined_sqlite", .module = sqlite_confined_mod },
+            .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
         },
     });
     rpmzig_rpmdb_test_mod.addImport("rpm_header", rpmzig_header_mod);
@@ -898,7 +933,7 @@ pub fn build(b: *Build) void {
             .pic = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
-                .{ .name = "confined_sqlite", .module = sqlite_confined_mod },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
                 .{ .name = "rpm_txn_config", .module = rpmzig_txn_config_mod },
             },
         });
@@ -923,7 +958,7 @@ pub fn build(b: *Build) void {
             .pic = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
-                .{ .name = "confined_sqlite", .module = sqlite_confined_mod },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
             },
         });
         mod.addImport("rpm_header", rpmzig_header_mod);
@@ -1187,7 +1222,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
-                .{ .name = "confined_sqlite", .module = sqlite_confined_mod },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
             },
         });
         test_mod.addImport("rpm_header", rpmzig_header_mod);
@@ -1360,7 +1395,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
-                .{ .name = "confined_sqlite", .module = sqlite_confined_mod },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
                 .{ .name = "rpm_txn_config", .module = rpmzig_txn_config_mod },
             },
         });
@@ -1685,7 +1720,7 @@ pub fn build(b: *Build) void {
             .pic = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
-                .{ .name = "confined_sqlite", .module = sqlite_confined_mod },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
             },
         });
         mod.addImport("rpm_header", rpmzig_header_mod);
@@ -1713,7 +1748,7 @@ pub fn build(b: *Build) void {
             .pic = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
-                .{ .name = "confined_sqlite", .module = sqlite_confined_mod },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
             },
         });
         mod.addImport("rpm_header", rpmzig_header_mod);
@@ -2455,6 +2490,8 @@ pub fn build(b: *Build) void {
         "history_config",
         history_util_options.createModule(),
     );
+    history_util_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    history_util_mod.addImport("transaction_lock", transaction_lock_mod);
     history_util_mod.linkLibrary(rpmzig_lib);
     const history_util_exe = b.addExecutable(.{
         .name = "tdnf-history-util",

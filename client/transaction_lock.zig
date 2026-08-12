@@ -95,6 +95,7 @@ pub fn acquireInDirectory(
         else => error.InvalidTarget,
     };
     errdefer pinned_config.deinit();
+    pinned_config.markTargetLockHeld();
     owns_root_fd = false;
     return .{
         .pinned_config = pinned_config,

@@ -339,18 +339,32 @@ const Fixture = struct {
         try self.publishSharedObsoleteRepository();
         var request = try self.input(name);
         request.resolve.subjects = &.{ "replacement-a", "replacement-b" };
+        try self.installTargetPackage(request, "old");
+        try self.installTargetPackage(request, "retired");
+        return request;
+    }
 
-        const old = try namedRpmPayload("old", "1");
-        defer allocator.free(old);
-        const old_path = try std.fmt.allocPrintSentinel(
+    fn installTargetPackage(
+        self: *Fixture,
+        request: bundle_export.ExportInput,
+        package_name: []const u8,
+    ) !void {
+        const payload = try namedRpmPayload(package_name, "1");
+        defer allocator.free(payload);
+        const relative_path = try std.fmt.allocPrint(
             self.arena.allocator(),
-            "{s}/old.rpm",
-            .{self.base},
+            "{s}.rpm",
+            .{package_name},
+        );
+        const package_path = try std.fmt.allocPrintSentinel(
+            self.arena.allocator(),
+            "{s}/{s}",
+            .{ self.base, relative_path },
             0,
         );
         try self.tmp.dir.writeFile(io, .{
-            .sub_path = "old.rpm",
-            .data = old,
+            .sub_path = relative_path,
+            .data = payload,
         });
         const root_z = try self.arena.allocator().dupeZ(
             u8,
@@ -359,7 +373,7 @@ const Fixture = struct {
         var hnum: u32 = 0;
         if (tdnf_rpmdb_write_install(
             root_z.ptr,
-            old_path.ptr,
+            package_path.ptr,
             1,
             1,
             3,
@@ -390,7 +404,7 @@ const Fixture = struct {
             hnum = 0;
             if (tdnf_rpmdb_write_install_config(
                 config,
-                old_path.ptr,
+                package_path.ptr,
                 1,
                 1,
                 3,
@@ -401,7 +415,6 @@ const Fixture = struct {
                 return error.TestUnexpectedResult;
             }
         }
-        return request;
     }
 };
 
@@ -520,6 +533,10 @@ test "shared obsolete priors export parse bundle and replay end to end" {
 
     const old_id = planPackageIdByName(exported.exported.plan, "old") orelse
         return error.TestUnexpectedResult;
+    const retired_id = planPackageIdByName(
+        exported.exported.plan,
+        "retired",
+    ) orelse return error.TestUnexpectedResult;
     const first_id = planPackageIdByName(
         exported.exported.plan,
         "replacement-a",
@@ -531,7 +548,7 @@ test "shared obsolete priors export parse bundle and replay end to end" {
     const actions = [_]transaction_plan.Action{
         .{
             .kind = .obsolete,
-            .prior_package_ids = &.{old_id},
+            .prior_package_ids = &.{ old_id, retired_id },
             .reason = .obsoletes,
             .requested_by_job_id = null,
             .target_package_id = first_id,
@@ -546,7 +563,7 @@ test "shared obsolete priors export parse bundle and replay end to end" {
     };
     const steps = [_]transaction_plan.ExecutionStep{
         .{ .action_index = 0, .operation = .install, .package_id = first_id },
-        .{ .action_index = 0, .operation = .erase, .package_id = old_id },
+        .{ .action_index = 0, .operation = .erase, .package_id = retired_id },
         .{ .action_index = 1, .operation = .install, .package_id = second_id },
         .{ .action_index = 1, .operation = .erase, .package_id = old_id },
     };
@@ -554,8 +571,11 @@ test "shared obsolete priors export parse bundle and replay end to end" {
     var selected: std.ArrayList(transaction_plan.Selected) = .empty;
     defer selected.deinit(allocator);
     for (plan_data.selected) |selection| {
-        if (!std.mem.eql(u8, selection.package_id, old_id))
+        if (!std.mem.eql(u8, selection.package_id, old_id) and
+            !std.mem.eql(u8, selection.package_id, retired_id))
+        {
             try selected.append(allocator, selection);
+        }
     }
     plan_data.actions = &actions;
     plan_data.execution_steps = &steps;
@@ -576,16 +596,39 @@ test "shared obsolete priors export parse bundle and replay end to end" {
         @as(usize, 4),
         parsed.model().execution_steps.?.len,
     );
-    for (parsed.model().actions) |action| {
-        try std.testing.expectEqual(
-            transaction_plan.ActionKind.obsolete,
-            action.kind,
-        );
-        try std.testing.expectEqual(@as(usize, 1), action.prior_package_ids.len);
-    }
+    try std.testing.expectEqual(
+        transaction_plan.ActionKind.obsolete,
+        parsed.model().actions[0].kind,
+    );
+    try std.testing.expectEqual(
+        transaction_plan.ActionKind.obsolete,
+        parsed.model().actions[1].kind,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        parsed.model().actions[0].prior_package_ids.len,
+    );
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        parsed.model().actions[1].prior_package_ids.len,
+    );
     try std.testing.expectEqualStrings(
         parsed.model().actions[0].prior_package_ids[0],
         parsed.model().actions[1].prior_package_ids[0],
+    );
+    const parsed_retired_id = planPackageIdByName(parsed, "retired") orelse
+        return error.TestUnexpectedResult;
+    const parsed_second_id = planPackageIdByName(
+        parsed,
+        "replacement-b",
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(
+        parsed_retired_id,
+        parsed.model().execution_steps.?[1].package_id,
+    );
+    try std.testing.expectEqualStrings(
+        parsed_second_id,
+        parsed.model().execution_steps.?[2].package_id,
     );
 
     var directory = try std.Io.Dir.cwd().openDir(
@@ -670,6 +713,11 @@ test "shared obsolete priors export parse bundle and replay end to end" {
             u8,
             package.identity.name,
             "old",
+        ));
+        try std.testing.expect(!std.mem.eql(
+            u8,
+            package.identity.name,
+            "retired",
         ));
     }
 }

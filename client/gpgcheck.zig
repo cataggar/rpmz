@@ -266,7 +266,7 @@ fn importKeyWithTargetLock(
     context: anytype,
     import_fn: anytype,
 ) u32 {
-    if (config.pinnedInstallRootFd() != null) {
+    if (config.targetLockHeld()) {
         return import_fn(context, config, data);
     }
     var guard = blk: {

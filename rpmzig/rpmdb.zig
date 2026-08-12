@@ -79,6 +79,14 @@ fn clearError() void {
     last_error_len = 0;
 }
 
+fn duplicateFdCloexec(fd: c_int) c_int {
+    return std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+}
+
 const PinnedReadDb = struct {
     root: ?install_engine.RootDir,
     dir_fd: c_int,
@@ -125,7 +133,7 @@ const PinnedReadDb = struct {
             };
         errdefer root.deinit();
         const dir_fd = if (config.pinnedRpmDbDirFd()) |pinned_dir| blk: {
-            const duplicate = std.c.dup(pinned_dir);
+            const duplicate = duplicateFdCloexec(pinned_dir);
             if (duplicate < 0) return error.SqliteOpenFailed;
             break :blk duplicate;
         } else (try root.openDirectory(db_dir, false)) orelse return .{
@@ -152,6 +160,7 @@ const PinnedReadDb = struct {
                     .exists = false,
                 };
             }
+            setError("confined rpmdb open failed: {t}", .{err});
             return error.SqliteOpenFailed;
         };
         errdefer connection.close();
@@ -625,8 +634,13 @@ pub const Iter = struct {
         const db = pinned.db();
         var stmt: ?*c.sqlite3_stmt = null;
         const sql = "SELECT hnum, blob FROM " ++ PKG_TABLE ++ " ORDER BY hnum";
-        if (c.sqlite3_prepare_v2(db, sql, sql.len, &stmt, null) != c.SQLITE_OK)
+        if (c.sqlite3_prepare_v2(db, sql, sql.len, &stmt, null) != c.SQLITE_OK) {
+            setError(
+                "rpmdb iterator prepare failed: {s}",
+                .{std.mem.span(@as([*:0]const u8, c.sqlite3_errmsg(db)))},
+            );
             return error.SqlitePrepareFailed;
+        }
         errdefer _ = c.sqlite3_finalize(stmt);
         const iter = std.heap.c_allocator.create(Iter) catch
             return error.OutOfMemory;
@@ -766,7 +780,8 @@ export fn tdnf_rpmdb_iter_open_config(config: ?*const TxnConfig) ?*Iter {
         return null;
     };
     return Iter.openConfig(cfg) catch |err| {
-        setError("rpmdb_iter_open_config: {t}", .{err});
+        if (last_error_len == 0)
+            setError("rpmdb_iter_open_config: {t}", .{err});
         return null;
     };
 }

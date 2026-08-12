@@ -344,7 +344,11 @@ fn removeDirectoryContentsWithOps(
     directory_fd: c_int,
     ops: RemoveOps,
 ) u32 {
-    const scan_fd = c.dup(directory_fd);
+    const scan_fd = std.c.fcntl(
+        directory_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
     if (scan_fd < 0) return systemError(errnoValue());
     const stream = c.fdopendir(scan_fd);
     if (stream == null) {
@@ -571,7 +575,11 @@ pub export fn TDNFRemoveSnapshot(
     defer _ = c.close(repo_fd);
     defer _ = c.close(root_fd);
 
-    const scan_fd = c.dup(repo_fd);
+    const scan_fd = std.c.fcntl(
+        repo_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
     if (scan_fd < 0) return systemError(errnoValue());
     const stream = c.fdopendir(scan_fd);
     if (stream == null) {
