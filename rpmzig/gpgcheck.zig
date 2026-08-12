@@ -6,6 +6,7 @@ const integrity = @import("integrity.zig");
 const file_handle = @import("rpm_file_handle");
 
 pub const FileHandle = file_handle.FileHandle;
+pub const SignatureReport = integrity.SignatureReport;
 
 pub const Outcome = enum(i32) {
     ok = 0,
@@ -54,6 +55,21 @@ pub fn verifySignatures(
     );
     defer report.deinit(allocator);
     return classifySignatures(&report);
+}
+
+/// Detailed form used by bundle replay to bind a successful verification to
+/// the exact bundled key fingerprint recorded in the manifest.
+pub fn verifySignatureReport(
+    allocator: std.mem.Allocator,
+    handle: *const FileHandle,
+    key_blobs: []const []const u8,
+) integrity.Error!SignatureReport {
+    return integrity.verifySignatures(
+        allocator,
+        &handle.file,
+        .{},
+        key_blobs,
+    );
 }
 
 fn classifyDigests(report: *const integrity.Report) Outcome {

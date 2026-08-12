@@ -23,6 +23,10 @@ pub const bundle_export = @import("client_root").bundle_export;
 /// Open and validate a published bundle as a closed input set.
 pub const bundle_reader = @import("bundle_reader");
 
+/// Offline, preflighted execution of an exact replay-capable bundle.
+/// See `doc/replay-api.md`.
+pub const replay = @import("client_root").replay;
+
 test {
     @import("std").testing.refAllDecls(@This());
 }

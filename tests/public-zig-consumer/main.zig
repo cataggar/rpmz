@@ -13,6 +13,7 @@ const resolver = tdnf.resolver;
 const transaction_plan = tdnf.transaction_plan;
 const bundle_export = tdnf.bundle_export;
 const bundle_reader = tdnf.bundle_reader;
+const replay = tdnf.replay;
 
 fn primaryXml(
     allocator: std.mem.Allocator,
@@ -307,6 +308,42 @@ pub fn main() !void {
         return error.InsensitiveDigest;
 
     try exportsBundle(allocator, io, tmp, base, request);
+
+    // The replay namespace is part of the installed public module, and input
+    // validation is a machine-readable result rather than a false success.
+    try tmp.writeFile(io, .{
+        .sub_path = "root/replay-preflight-marker",
+        .data = "unchanged",
+    });
+    const rejected = try replay.run(allocator, io, .{
+        .bundle_directory = "relative-bundle",
+        .target = .{
+            .install_root = root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer rejected.deinit();
+    if (rejected.status != .validation_failed or
+        rejected.validation_failure != .invalid_input or
+        rejected.applied_plan_digest != null)
+    {
+        return error.InvalidReplayFailure;
+    }
+    const replay_json = try rejected.canonicalJsonAlloc(allocator);
+    if (std.mem.indexOf(
+        u8,
+        replay_json,
+        "\"schema\":\"tdnf.replay-result/v1\"",
+    ) == null) return error.MissingReplayResultSchema;
+    const marker = try tmp.readFileAlloc(
+        io,
+        "root/replay-preflight-marker",
+        allocator,
+        .limited(32),
+    );
+    if (!std.mem.eql(u8, marker, "unchanged"))
+        return error.ReplayPreflightMutatedTarget;
 
     // Resolving executes nothing and leaves no scratch state behind.
     var work = try tmp.openDir(io, "work", .{ .iterate = true });

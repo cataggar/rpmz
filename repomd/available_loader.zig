@@ -1158,6 +1158,23 @@ fn decompressMetadata(
     );
 }
 
+/// Decode already-authenticated repository metadata for offline replay
+/// verification. This is the same bounded decoder used by repository loading;
+/// it performs no I/O and owns the returned bytes.
+pub fn decompressMetadataForReplay(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    bytes: []const u8,
+    max_output_bytes: usize,
+) DecompressError![]u8 {
+    return decompressMetadata(
+        allocator,
+        path,
+        bytes,
+        max_output_bytes,
+    );
+}
+
 fn decompressMetadataTracked(
     allocator: std.mem.Allocator,
     path: []const u8,

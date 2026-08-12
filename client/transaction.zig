@@ -63,6 +63,10 @@ pub const FixedOrderRpmDbRow = struct {
 pub const FixedOrderLocalRpm = struct {
     path: [:0]const u8,
     identity: FixedOrderPackageIdentity,
+    /// Optional caller-owned parsed RPM handle. Replay preflight uses this to
+    /// retain the exact verified bytes through execution instead of reopening
+    /// a path that could have been substituted after validation.
+    handle: ?*anyopaque = null,
 };
 
 pub const FixedOrderReplacement = struct {
@@ -83,6 +87,15 @@ pub const FixedOrderTransaction = struct {
     items: []const FixedOrderItem,
     /// Input indices in the exact order recorded by the originating run.
     order: []const u32,
+};
+
+pub const FixedOrderExecutionObserver = struct {
+    context: ?*anyopaque = null,
+    completedFn: *const fn (context: ?*anyopaque, input_index: usize) void,
+
+    fn completed(self: FixedOrderExecutionObserver, input_index: usize) void {
+        self.completedFn(self.context, input_index);
+    }
 };
 
 pub const FixedOrderExecutionError = error{
@@ -1174,6 +1187,16 @@ pub fn executeFixedOrder(
     tdnf: *abi.Tdnf,
     transaction: FixedOrderTransaction,
 ) FixedOrderExecutionError!void {
+    return executeFixedOrderObserved(tdnf, transaction, null);
+}
+
+/// Execute a preflighted transaction and report each input item only after
+/// that item's native mutation path has returned successfully.
+pub fn executeFixedOrderObserved(
+    tdnf: *abi.Tdnf,
+    transaction: FixedOrderTransaction,
+    observer: ?FixedOrderExecutionObserver,
+) FixedOrderExecutionError!void {
     if (tdnf.pArgs == null or tdnf.pConf == null or tdnf.pRpmConfig == null)
         return error.InvalidContext;
     try validateFixedOrderInput(transaction);
@@ -1233,6 +1256,7 @@ pub fn executeFixedOrder(
 
     const ts = allocate(c.TDNFRPMTS) orelse return error.OutOfMemory;
     defer {
+        detachBorrowedFixedHandles(ts, transaction.items);
         freeItems(ts);
         free(ts);
     }
@@ -1266,10 +1290,12 @@ pub fn executeFixedOrder(
         }
 
         const package = fixedItemPackage(item).?;
-        var rpm_file: ?*c.tdnf_rpm_file =
+        var rpm_file: ?*c.tdnf_rpm_file = if (package.handle) |handle|
+            @ptrCast(@alignCast(handle))
+        else
             c.tdnf_rpm_file_open(package.path.ptr) orelse
-            return error.PackageOpenFailed;
-        var transferred = false;
+                return error.PackageOpenFailed;
+        var transferred = package.handle != null;
         defer if (!transferred) c.tdnf_rpm_file_close(rpm_file);
         var metadata = std.mem.zeroes(c.tdnf_rpm_file_metadata);
         if (c.tdnf_rpm_file_get_metadata(rpm_file, &metadata) != 0 or
@@ -1307,8 +1333,29 @@ pub fn executeFixedOrder(
         &plan,
         expected_items,
         &validation_failure,
+        observer,
     );
     if (rc != 0) return mapFixedExecutionError(rc, validation_failure);
+}
+
+fn detachBorrowedFixedHandles(
+    ts: *c.TDNFRPMTS,
+    items: []const FixedOrderItem,
+) void {
+    var current = ts.pTransactionItems;
+    while (current) |raw| {
+        const item: *c.TDNF_RPM_TS_ITEM = @ptrCast(raw);
+        current = item.pNext;
+        const handle = item.pRpmFile orelse continue;
+        for (items) |fixed| {
+            const package = fixedItemPackage(fixed) orelse continue;
+            const borrowed = package.handle orelse continue;
+            if (@intFromPtr(handle) == @intFromPtr(borrowed)) {
+                item.pRpmFile = null;
+                break;
+            }
+        }
+    }
 }
 
 fn reportProblems(ts: *c.TDNFRPMTS) void {
@@ -3044,6 +3091,7 @@ fn runTransactionNativeImpl(
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
     expected_items: ?[]const FixedOrderExpectedItem,
     validation_failure: ?*FixedOrderValidationFailure,
+    observer: ?FixedOrderExecutionObserver,
 ) u32 {
     const ts = ts_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -3235,6 +3283,7 @@ fn runTransactionNativeImpl(
             else => errors.ERROR_TDNF_INVALID_PARAMETER,
         };
         if (rc != 0) return rc;
+        if (observer) |value| value.completed(input_index);
     }
     rc = runTransactionScriptletPhase(
         plan,
@@ -3286,7 +3335,7 @@ fn runTransactionNative(
     tdnf_opt: ?*abi.Tdnf,
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32 {
-    return runTransactionNativeImpl(ts_opt, tdnf_opt, plan_opt, null, null);
+    return runTransactionNativeImpl(ts_opt, tdnf_opt, plan_opt, null, null, null);
 }
 
 fn orderAndCheck(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {

@@ -679,6 +679,13 @@ pub fn build(b: *Build) void {
     });
     rpmzig_pkgfile_mod.addImport("rpm_header", rpmzig_header_mod);
 
+    const rpmzig_txn_config_mod = b.createModule(.{
+        .root_source_file = b.path("rpmzig/txn_config.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
     const rpmzig_file_handle_mod = b.createModule(.{
         .root_source_file = b.path("rpmzig/file_handle.zig"),
         .target = target,
@@ -1836,6 +1843,7 @@ pub fn build(b: *Build) void {
         transaction_plan_integration_mod,
     );
     client_mod.addImport("transaction_plan", transaction_plan_mod);
+    client_mod.addImport("transaction_bundle", transaction_bundle_mod);
     client_mod.addImport(
         "transaction_plan_execution",
         transaction_plan_execution_mod,
@@ -1858,6 +1866,9 @@ pub fn build(b: *Build) void {
     client_mod.addImport("client_varsdir", client_varsdir_mod);
     client_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     client_mod.addImport("rpm_header", rpmzig_header_mod);
+    client_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    client_mod.addImport("canonical_json", canonical_json_mod);
+    client_mod.addImport("content_digest", content_digest_mod);
     client_mod.addImport("rpm_evr", rpm_evr_mod);
     client_mod.addImport("tdnf_common", common_api_mod);
     client_mod.addImport("tdnf_error", tdnf_error_mod);
@@ -1933,6 +1944,60 @@ pub fn build(b: *Build) void {
     );
     transaction_test_step.dependOn(&run_transaction_tests.step);
     zig_test_step.dependOn(&run_transaction_tests.step);
+
+    const replay_test_mod = b.createModule(.{
+        .root_source_file = b.path("client/replay.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    replay_test_mod.addImport("client_abi", client_abi_mod);
+    replay_test_mod.addImport(
+        "client_transaction_options",
+        client_transaction_test_options.createModule(),
+    );
+    replay_test_mod.addImport("bundle_reader", bundle_reader_mod);
+    replay_test_mod.addImport("bundle_selection", bundle_selection_mod);
+    replay_test_mod.addImport("canonical_json", canonical_json_mod);
+    replay_test_mod.addImport("content_digest", content_digest_mod);
+    replay_test_mod.addImport("repomd_client_exports", repomd_mod);
+    replay_test_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
+    replay_test_mod.addImport("rpm_header", rpmzig_header_mod);
+    replay_test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    replay_test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
+    replay_test_mod.addImport("rpm_evr", rpm_evr_mod);
+    const replay_rpm_package_test_mod = b.createModule(.{
+        .root_source_file = b.path("client/replay_rpm_package_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    replay_rpm_package_test_mod.addImport(
+        "repomd_client_exports",
+        repomd_mod,
+    );
+    replay_test_mod.addImport(
+        "rpm_package_test",
+        replay_rpm_package_test_mod,
+    );
+    replay_test_mod.addImport("tdnf_common", common_api_mod);
+    replay_test_mod.addImport("tdnf_error", tdnf_error_mod);
+    replay_test_mod.addImport("transaction_bundle", transaction_bundle_mod);
+    replay_test_mod.addImport("transaction_plan", transaction_plan_mod);
+    replay_test_mod.addImport("verified_fetch", verified_fetch_mod);
+    replay_test_mod.addIncludePath(b.path("client"));
+    replay_test_mod.addIncludePath(b.path("rpmzig"));
+    replay_test_mod.linkLibrary(common_lib);
+    replay_test_mod.linkLibrary(llconf_lib);
+    replay_test_mod.linkLibrary(rpmzig_lib);
+    const replay_tests = b.addTest(.{ .root_module = replay_test_mod });
+    const run_replay_tests = b.addRunArtifact(replay_tests);
+    const replay_test_step = b.step(
+        "client-replay-test",
+        "Run offline replay preflight and result tests",
+    );
+    replay_test_step.dependOn(&run_replay_tests.step);
+    zig_test_step.dependOn(&run_replay_tests.step);
+
     const client_repositories_test_step = b.step(
         "client-repositories-test",
         "Run direct repository management production tests",
