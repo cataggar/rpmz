@@ -103,6 +103,7 @@ pub const ResolvePathError = ExpandError || error{
 
 pub const InitError = error{
     InvalidInstallRoot,
+    InstallRootPinFailed,
     OutOfMemory,
 };
 
@@ -173,6 +174,7 @@ const MacroEntry = struct {
 pub const TxnConfig = struct {
     allocator: std.mem.Allocator,
     install_root: []u8,
+    pinned_install_root_fd: ?c_int = null,
     macros: std.ArrayList(MacroEntry),
 
     /// Initializes a config store rooted at `install_root`. Empty input
@@ -182,6 +184,7 @@ pub const TxnConfig = struct {
         var config = TxnConfig{
             .allocator = allocator,
             .install_root = root,
+            .pinned_install_root_fd = null,
             .macros = .empty,
         };
         errdefer config.deinit();
@@ -206,6 +209,10 @@ pub const TxnConfig = struct {
     }
 
     pub fn deinit(self: *TxnConfig) void {
+        if (self.pinned_install_root_fd) |fd| {
+            _ = std.c.close(fd);
+            self.pinned_install_root_fd = null;
+        }
         self.allocator.free(self.install_root);
         for (self.macros.items) |entry| {
             self.allocator.free(entry.name);
@@ -215,10 +222,43 @@ pub const TxnConfig = struct {
     }
 
     pub fn clone(self: *const TxnConfig, allocator: std.mem.Allocator) InitError!TxnConfig {
-        const root = try allocator.dupe(u8, self.install_root);
+        return self.cloneWithRoot(allocator, self.install_root, self.pinned_install_root_fd);
+    }
+
+    /// Clone the macro state while pinning all native filesystem access to
+    /// `root_fd`. `install_root` is the resolved display path for that fd.
+    pub fn cloneWithPinnedInstallRoot(
+        self: *const TxnConfig,
+        allocator: std.mem.Allocator,
+        install_root: []const u8,
+        root_fd: c_int,
+    ) InitError!TxnConfig {
+        return self.cloneWithRoot(allocator, install_root, root_fd);
+    }
+
+    pub fn pinnedInstallRootFd(self: *const TxnConfig) ?c_int {
+        return self.pinned_install_root_fd;
+    }
+
+    fn cloneWithRoot(
+        self: *const TxnConfig,
+        allocator: std.mem.Allocator,
+        install_root: []const u8,
+        pinned_root_fd: ?c_int,
+    ) InitError!TxnConfig {
+        const root = try normalizeInstallRootOwned(allocator, install_root);
+        const duplicated_fd = if (pinned_root_fd) |fd| blk: {
+            const duplicate = std.c.dup(fd);
+            if (duplicate < 0) {
+                allocator.free(root);
+                return error.InstallRootPinFailed;
+            }
+            break :blk @as(?c_int, duplicate);
+        } else null;
         var copy = TxnConfig{
             .allocator = allocator,
             .install_root = root,
+            .pinned_install_root_fd = duplicated_fd,
             .macros = .empty,
         };
         errdefer copy.deinit();

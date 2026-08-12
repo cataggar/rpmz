@@ -195,9 +195,9 @@ pub const Writer = struct {
             "/"
         else
             trimmed_dir;
-        var root = install_engine.RootDir.init(
+        var root = install_engine.RootDir.initConfig(
             std.heap.c_allocator,
-            config.installRoot(),
+            config,
             null,
             null,
         ) catch return error.UnsafePath;

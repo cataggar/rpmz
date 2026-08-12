@@ -157,9 +157,9 @@ pub fn runHeaderTriggers(
             null,
             null,
         );
-    } else try install_engine.RootDir.init(
+    } else try install_engine.RootDir.initConfig(
         allocator,
-        config.installRoot(),
+        &config,
         null,
         null,
     );
@@ -1026,9 +1026,9 @@ pub fn runFileTriggers(
             null,
             null,
         );
-    } else try install_engine.RootDir.init(
+    } else try install_engine.RootDir.initConfig(
         identity_allocator,
-        config.installRoot(),
+        &config,
         null,
         null,
     );

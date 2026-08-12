@@ -103,17 +103,25 @@ const PinnedReadDb = struct {
         const raw_dir = allocated_dir orelse expanded;
         const trimmed = std.mem.trimEnd(u8, raw_dir, "/");
         const db_dir = if (trimmed.len == 0) "/" else trimmed;
-        var root = (try install_engine.RootDir.initExisting(
-            std.heap.c_allocator,
-            config.installRoot(),
-            null,
-            null,
-        )) orelse return .{
-            .root = null,
-            .dir_fd = -1,
-            .path = null,
-            .exists = false,
-        };
+        var root = if (config.pinnedInstallRootFd() != null)
+            try install_engine.RootDir.initConfig(
+                std.heap.c_allocator,
+                config,
+                null,
+                null,
+            )
+        else
+            (try install_engine.RootDir.initExisting(
+                std.heap.c_allocator,
+                config.installRoot(),
+                null,
+                null,
+            )) orelse return .{
+                .root = null,
+                .dir_fd = -1,
+                .path = null,
+                .exists = false,
+            };
         errdefer root.deinit();
         const dir_fd_opt = try root.openDirectory(db_dir, false);
         const dir_fd = dir_fd_opt orelse return .{
@@ -327,9 +335,9 @@ fn rpmConfigOpenRootFd(
     config: ?*const TxnConfig,
 ) callconv(.c) c_int {
     const cfg = config orelse return -1;
-    var root = install_engine.RootDir.init(
+    var root = install_engine.RootDir.initConfig(
         std.heap.c_allocator,
-        cfg.installRoot(),
+        cfg,
         null,
         null,
     ) catch return -1;
@@ -2883,9 +2891,9 @@ fn rpmCanonicalPathConfig(
         setError("null canonical path output", .{});
         return -1;
     };
-    var root = install_engine.RootDir.init(
+    var root = install_engine.RootDir.initConfig(
         std.heap.c_allocator,
-        cfg.installRoot(),
+        cfg,
         null,
         null,
     ) catch |err| {
@@ -2925,9 +2933,9 @@ fn rpmHeaderOwnsPathConfig(
         hdr,
     ) catch return -1;
     defer manifest.deinit();
-    var root = install_engine.RootDir.init(
+    var root = install_engine.RootDir.initConfig(
         std.heap.c_allocator,
-        cfg.installRoot(),
+        cfg,
         null,
         null,
     ) catch return -1;

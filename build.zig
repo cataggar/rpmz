@@ -1817,6 +1817,17 @@ pub fn build(b: *Build) void {
     client_init_mod.addImport("tdnf_common", common_api_mod);
     client_init_mod.addImport("tdnf_error", tdnf_error_mod);
 
+    const transaction_lock_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_lock.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_lock_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    transaction_lock_mod.linkLibrary(common_lib);
+    transaction_lock_mod.linkLibrary(llconf_lib);
+    transaction_lock_mod.linkLibrary(rpmzig_lib);
+
     const client_mod = b.createModule(.{
         .root_source_file = b.path("client/root.zig"),
         .target = target,
@@ -1867,6 +1878,7 @@ pub fn build(b: *Build) void {
     client_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     client_mod.addImport("rpm_header", rpmzig_header_mod);
     client_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    client_mod.addImport("transaction_lock", transaction_lock_mod);
     client_mod.addImport("canonical_json", canonical_json_mod);
     client_mod.addImport("content_digest", content_digest_mod);
     client_mod.addImport("rpm_evr", rpm_evr_mod);
@@ -1925,6 +1937,7 @@ pub fn build(b: *Build) void {
     transaction_test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     transaction_test_mod.addImport("rpm_header", rpmzig_header_mod);
     transaction_test_mod.addImport("rpm_evr", rpm_evr_mod);
+    transaction_test_mod.addImport("transaction_lock", transaction_lock_mod);
     transaction_test_mod.addImport(
         "rpm_package_test",
         transaction_rpm_package_test_mod,
@@ -1964,6 +1977,7 @@ pub fn build(b: *Build) void {
     replay_test_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
     replay_test_mod.addImport("rpm_header", rpmzig_header_mod);
     replay_test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    replay_test_mod.addImport("transaction_lock", transaction_lock_mod);
     replay_test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     replay_test_mod.addImport("rpm_evr", rpm_evr_mod);
     const replay_rpm_package_test_mod = b.createModule(.{
@@ -1997,6 +2011,19 @@ pub fn build(b: *Build) void {
     );
     replay_test_step.dependOn(&run_replay_tests.step);
     zig_test_step.dependOn(&run_replay_tests.step);
+
+    const transaction_lock_tests = b.addTest(.{
+        .root_module = transaction_lock_mod,
+    });
+    const run_transaction_lock_tests = b.addRunArtifact(
+        transaction_lock_tests,
+    );
+    const transaction_lock_test_step = b.step(
+        "client-transaction-lock-test",
+        "Run shared transaction target lock tests",
+    );
+    transaction_lock_test_step.dependOn(&run_transaction_lock_tests.step);
+    zig_test_step.dependOn(&run_transaction_lock_tests.step);
 
     const client_repositories_test_step = b.step(
         "client-repositories-test",

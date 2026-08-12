@@ -38,26 +38,63 @@ fn primaryXml(
 }
 
 fn minimalRpm(allocator: std.mem.Allocator) ![]u8 {
-    const tags = [_]u32{ 1000, 1001, 1002, 1022 };
-    const values = [_][]const u8{ "consumer-app", "1", "1", "x86_64" };
+    const tags = [_]u32{ 1000, 1001, 1002, 1022, 1124, 1125 };
+    const values = [_][]const u8{
+        "consumer-app",
+        "1",
+        "1",
+        "x86_64",
+        "cpio",
+        "none",
+    };
+    const payload =
+        "070701" ++
+        "00000000" ++ // ino
+        "00000000" ++ // mode
+        "00000000" ++ // uid
+        "00000000" ++ // gid
+        "00000001" ++ // nlink
+        "00000000" ++ // mtime
+        "00000000" ++ // filesize
+        "00000000" ++ // devmajor
+        "00000000" ++ // devminor
+        "00000000" ++ // rdevmajor
+        "00000000" ++ // rdevminor
+        "0000000b" ++ // namesize
+        "00000000" ++ // check
+        "TRAILER!!!\x00\x00\x00\x00";
     const main_blob = try stringHeaderBlob(allocator, &tags, &values);
     defer allocator.free(main_blob);
-    const signature_blob = try int32HeaderBlob(allocator, 1000, 0);
+    const main_header = try standaloneHeader(allocator, main_blob, 63);
+    defer allocator.free(main_header);
+    const signed_bytes = try allocator.alloc(
+        u8,
+        main_header.len + payload.len,
+    );
+    defer allocator.free(signed_bytes);
+    @memcpy(signed_bytes[0..main_header.len], main_header);
+    @memcpy(signed_bytes[main_header.len..], payload);
+    var md5: [std.crypto.hash.Md5.digest_length]u8 = undefined;
+    std.crypto.hash.Md5.hash(signed_bytes, &md5, .{});
+    const signature_blob = try binaryHeaderBlob(allocator, 1004, &md5);
     defer allocator.free(signature_blob);
     const signature = try standaloneHeader(allocator, signature_blob, 62);
     defer allocator.free(signature);
-    const main_header = try standaloneHeader(allocator, main_blob, 63);
-    defer allocator.free(main_header);
 
     const padding = (8 - (signature.len % 8)) % 8;
     const bytes = try allocator.alloc(
         u8,
-        96 + signature.len + padding + main_header.len,
+        96 + signature.len + padding + main_header.len + payload.len,
     );
     @memset(bytes, 0);
     @memcpy(bytes[0..4], &[_]u8{ 0xed, 0xab, 0xee, 0xdb });
     @memcpy(bytes[96 .. 96 + signature.len], signature);
-    @memcpy(bytes[96 + signature.len + padding ..], main_header);
+    const main_offset = 96 + signature.len + padding;
+    @memcpy(bytes[main_offset .. main_offset + main_header.len], main_header);
+    @memcpy(
+        bytes[main_offset + main_header.len ..],
+        payload,
+    );
     return bytes;
 }
 
@@ -87,20 +124,20 @@ fn stringHeaderBlob(
     return out.toOwnedSlice();
 }
 
-fn int32HeaderBlob(
+fn binaryHeaderBlob(
     allocator: std.mem.Allocator,
     tag: u32,
-    value: u32,
+    value: []const u8,
 ) ![]u8 {
     var out = std.array_list.Managed(u8).init(allocator);
     errdefer out.deinit();
     try appendBe32(&out, 1);
-    try appendBe32(&out, 4);
+    try appendBe32(&out, @intCast(value.len));
     try appendBe32(&out, tag);
-    try appendBe32(&out, 4);
+    try appendBe32(&out, 7);
     try appendBe32(&out, 0);
-    try appendBe32(&out, 1);
-    try appendBe32(&out, value);
+    try appendBe32(&out, @intCast(value.len));
+    try out.appendSlice(value);
     return out.toOwnedSlice();
 }
 
@@ -364,11 +401,12 @@ fn exportsBundle(
 ) !void {
     var scoped = request;
     scoped.scratch_dir = try std.fmt.allocPrint(allocator, "{s}/export-work", .{base});
-    scoped.installed = .{ .install_root = try std.fmt.allocPrint(
+    const replay_root = try std.fmt.allocPrint(
         allocator,
         "{s}/export-root",
         .{base},
-    ) };
+    );
+    scoped.installed = .{ .install_root = replay_root };
     try tmp.createDirPath(io, "export-work");
     try tmp.createDirPath(io, "export-root");
 
@@ -403,4 +441,29 @@ fn exportsBundle(
     if (model.files.len == 0) return error.MissingFiles;
     if (!std.mem.eql(u8, model.plan.schema, transaction_plan.schema_v2))
         return error.MissingCanonicalSchema;
+
+    // Repository metadata spells epoch 0 while the RPM omits RPMTAG_EPOCH.
+    // Replay compares their effective RPM identity and must execute the bundle.
+    const replayed = try replay.run(allocator, io, .{
+        .bundle_directory = destination,
+        .target = .{
+            .install_root = replay_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    if (replayed.status != .succeeded or
+        replayed.applied_plan_digest == null or
+        replayed.final_inventory == null or
+        replayed.final_inventory.?.len != 1)
+    {
+        return error.ReplayFailed;
+    }
+    const installed = replayed.final_inventory.?[0].identity;
+    if (!std.mem.eql(u8, installed.name, "consumer-app") or
+        (installed.epoch orelse 0) != 0)
+    {
+        return error.InvalidReplayInventory;
+    }
 }

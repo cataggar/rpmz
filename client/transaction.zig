@@ -10,6 +10,7 @@ const errors = @import("tdnf_error");
 const trans_flags = @import("rpmtrans_flags");
 const rpm_header = @import("rpm_header");
 const rpm_evr = @import("rpm_evr");
+const transaction_lock = @import("transaction_lock");
 
 const c = abi.C;
 
@@ -811,6 +812,15 @@ fn validateFixedOrderInput(
     }
 }
 
+/// Validate the complete merged item graph without opening RPMs or touching
+/// the target. Replay uses this during preflight so unsupported graphs never
+/// become transaction-time failures.
+pub fn validateFixedOrder(
+    transaction: FixedOrderTransaction,
+) FixedOrderExecutionError!void {
+    return validateFixedOrderInput(transaction);
+}
+
 fn priorListContains(priors: []const FixedOrderRpmDbRow, hnum: u32) bool {
     for (priors) |prior| if (prior.hnum == hnum) return true;
     return false;
@@ -826,7 +836,7 @@ fn identityMatchesMetadata(
     const arch = metadata.arch orelse return false;
     const epoch: ?u32 = if (metadata.has_epoch != 0) metadata.epoch else null;
     return std.mem.eql(u8, expected.name, std.mem.span(name)) and
-        expected.epoch == epoch and
+        effectiveEpoch(expected.epoch) == effectiveEpoch(epoch) and
         std.mem.eql(u8, expected.version, std.mem.span(version)) and
         std.mem.eql(u8, expected.release, std.mem.span(release)) and
         std.mem.eql(u8, expected.arch, std.mem.span(arch));
@@ -843,10 +853,14 @@ fn identityMatchesHeader(
     const arch = (header.getStringChecked(.arch) catch return false) orelse return false;
     const epoch = header.getU32Checked(.epoch) catch return false;
     return std.mem.eql(u8, expected.name, name) and
-        expected.epoch == epoch and
+        effectiveEpoch(expected.epoch) == effectiveEpoch(epoch) and
         std.mem.eql(u8, expected.version, version) and
         std.mem.eql(u8, expected.release, release) and
         std.mem.eql(u8, expected.arch, arch);
+}
+
+fn effectiveEpoch(epoch: ?u32) u32 {
+    return epoch orelse 0;
 }
 
 fn digestLength(kind: c_int) ?usize {
@@ -3335,6 +3349,32 @@ fn runTransactionNative(
     tdnf_opt: ?*abi.Tdnf,
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32 {
+    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const args = tdnf.pArgs orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    var target_guard = acquireTransactionTarget(tdnf) catch |err|
+        return transactionLockFailure(err);
+    defer target_guard.deinit();
+    const pinned_root = allocator.dupeZ(
+        u8,
+        target_guard.config().installRoot(),
+    ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
+    defer allocator.free(pinned_root);
+    const original_config = tdnf.pRpmConfig;
+    const original_install_root = args.pszInstallRoot;
+    tdnf.pRpmConfig = @ptrCast(target_guard.config());
+    args.pszInstallRoot = @constCast(pinned_root.ptr);
+    defer {
+        args.pszInstallRoot = original_install_root;
+        tdnf.pRpmConfig = original_config;
+    }
+    return runTransactionNativeUnlocked(ts_opt, tdnf, plan_opt);
+}
+
+fn runTransactionNativeUnlocked(
+    ts_opt: ?*c.TDNFRPMTS,
+    tdnf_opt: ?*abi.Tdnf,
+    plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+) callconv(.c) u32 {
     return runTransactionNativeImpl(ts_opt, tdnf_opt, plan_opt, null, null, null);
 }
 
@@ -3434,9 +3474,28 @@ fn runTransaction(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
         ts,
         tdnf,
         orderAndCheck,
-        runTransactionNative,
+        runTransactionNativeUnlocked,
         reportProblems,
     );
+}
+
+fn acquireTransactionTarget(
+    tdnf: *abi.Tdnf,
+) transaction_lock.Error!transaction_lock.Guard {
+    const config = tdnf.pRpmConfig orelse return error.InvalidTarget;
+    return transaction_lock.acquire(
+        allocator,
+        @ptrCast(@alignCast(config)),
+    );
+}
+
+fn transactionLockFailure(err: transaction_lock.Error) u32 {
+    common.log(
+        LOG_ERR,
+        "Unable to lock transaction target: %s\n",
+        .{@errorName(err)},
+    );
+    return ERROR_TDNF_TRANSACTION_FAILED;
 }
 
 fn runNormalTransactionWith(
@@ -3499,6 +3558,22 @@ fn rpmExecTransaction(
     defer cleanupTransaction(tdnf, ts);
     const args = tdnf.pArgs.?;
     if (args.nDownloadOnly != 0) return 0;
+    var target_guard = acquireTransactionTarget(tdnf) catch |err|
+        return transactionLockFailure(err);
+    defer target_guard.deinit();
+    const pinned_root = allocator.dupeZ(
+        u8,
+        target_guard.config().installRoot(),
+    ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
+    defer allocator.free(pinned_root);
+    const original_config = tdnf.pRpmConfig;
+    const original_install_root = args.pszInstallRoot;
+    tdnf.pRpmConfig = @ptrCast(target_guard.config());
+    args.pszInstallRoot = @constCast(pinned_root.ptr);
+    defer {
+        args.pszInstallRoot = original_install_root;
+        tdnf.pRpmConfig = original_config;
+    }
     if (args.nTestOnly != 0) return runTransaction(ts, tdnf);
 
     var history: ?*HistoryCtx = null;
@@ -3531,6 +3606,22 @@ fn rpmExecHistoryTransaction(
     defer cleanupTransaction(tdnf, ts);
     const args = tdnf.pArgs.?;
     if (args.nDownloadOnly != 0) return 0;
+    var target_guard = acquireTransactionTarget(tdnf) catch |err|
+        return transactionLockFailure(err);
+    defer target_guard.deinit();
+    const pinned_root = allocator.dupeZ(
+        u8,
+        target_guard.config().installRoot(),
+    ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
+    defer allocator.free(pinned_root);
+    const original_config = tdnf.pRpmConfig;
+    const original_install_root = args.pszInstallRoot;
+    tdnf.pRpmConfig = @ptrCast(target_guard.config());
+    args.pszInstallRoot = @constCast(pinned_root.ptr);
+    defer {
+        args.pszInstallRoot = original_install_root;
+        tdnf.pRpmConfig = original_config;
+    }
     if (args.nTestOnly != 0) return runTransaction(ts, tdnf);
 
     var history: ?*HistoryCtx = null;
@@ -3829,6 +3920,35 @@ test "fixed order executor compiles against the native engine" {
         &tdnf,
         .{ .items = &.{}, .order = &.{} },
     ));
+}
+
+test "fixed executor accepts explicit zero for omitted RPM epoch" {
+    const rpmpkg = @import("rpm_package_test");
+    const blob = try rpmpkg.makeMinimalHeaderForTest(
+        std.testing.allocator,
+        "epochless",
+        "1",
+        "1",
+        "noarch",
+    );
+    defer std.testing.allocator.free(blob);
+    const identity = FixedOrderPackageIdentity{
+        .name = "epochless",
+        .epoch = 0,
+        .version = "1",
+        .release = "1",
+        .arch = "noarch",
+    };
+    try std.testing.expect(identityMatchesHeader(identity, blob));
+    const metadata = c.tdnf_rpm_file_metadata{
+        .name = "epochless",
+        .version = "1",
+        .release = "1",
+        .arch = "noarch",
+        .epoch = 0,
+        .has_epoch = 0,
+    };
+    try std.testing.expect(identityMatchesMetadata(identity, metadata));
 }
 
 test "auxiliary prior can be shared across replacement action kinds" {

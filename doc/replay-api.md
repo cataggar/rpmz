@@ -33,8 +33,22 @@ number.
 Replay validates the v2 bundle closure, plan binding, metadata and RPM bytes,
 RPM headers, bundled-key signatures, architecture, exact rpmdb snapshot and
 prior rows before mutation. Verified RPM handles remain pinned through native
-fixed-order execution. The instance lock is retained through final inventory
-capture, and success requires exact equality with the plan's selected set.
+fixed-order execution. Downgrade, upgrade, reinstall, and obsolete actions are
+submitted as one semantic item carrying every recorded prior; unsupported
+split orders or projected final inventories are rejected before mutation.
+
+Replay and ordinary tdnf transactions use the same per-target lock. The target
+key is derived from the opened install-root directory identity plus normalized
+`_dbpath`, so `/root`, `/root/.`, and symlink aliases contend while distinct
+targets do not. The resolved root is pinned for the transaction, lock files are
+opened without following links, and replay retains the lock from its initial
+rpmdb snapshot through execution and final inventory capture.
+
+RPM identity comparisons use the effective epoch (`epoch orelse 0`). Canonical
+plans still preserve the metadata distinction between an omitted epoch and an
+explicit zero, while replay accepts an RPM or rpmdb header that omits
+`RPMTAG_EPOCH` when plan metadata records epoch zero. Success requires exact
+semantic equality with the plan's selected set.
 
 Callers should additionally enforce OS-level network isolation as defense in
 depth. The replay API itself accepts no repository or network input.

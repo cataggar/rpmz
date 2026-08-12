@@ -52,10 +52,8 @@ const command_line_repo_name: [*:0]const u8 = "@cmdline";
 const system_repo_name: [*:0]const u8 = "@System";
 const config_file: [*:0]const u8 = "/etc/tdnf/tdnf.conf";
 const config_group: [*:0]const u8 = "main";
-const instance_lock_file: [*:0]const u8 = "/var/run/.tdnf-instance-lockfile";
 
 export var gEuid: std.posix.uid_t = 0;
-var instance_lock_fd: c_int = -1;
 
 extern fn TDNFAllocateMemory(
     count: usize,
@@ -101,8 +99,6 @@ extern fn TDNFStringMatchesOneOf(
 extern fn TDNFIdListInit(list: *IdList) callconv(.c) void;
 extern fn TDNFIdListFree(list: *IdList) callconv(.c) void;
 extern fn TDNFIdListPush(list: *IdList, value: i32) callconv(.c) u32;
-extern fn tdnfLockAcquire(path: ?[*:0]const u8) callconv(.c) c_int;
-extern fn tdnfLockFree(path: ?[*:0]const u8, fd: c_int) callconv(.c) void;
 extern fn GlobalSetQuiet(value: i32) callconv(.c) void;
 extern fn GlobalSetJson(value: i32) callconv(.c) void;
 extern fn GlobalSetDnfCheckUpdateCompat(value: i32) callconv(.c) void;
@@ -536,19 +532,6 @@ fn systemError() u32 {
     return errors.ERROR_TDNF_SYSTEM_BASE + @as(u32, @intCast(std.c._errno().*));
 }
 
-fn exitHandler() void {
-    if (gEuid != 0) return;
-    tdnfLockFree(instance_lock_file, instance_lock_fd);
-}
-
-fn acquireInstanceLock() void {
-    if (gEuid != 0) return;
-    instance_lock_fd = tdnfLockAcquire(instance_lock_file);
-    if (instance_lock_fd < 0) {
-        common.log(LOG_ERR, "Failed to acquire tdnfInstance lock\n", .{});
-    }
-}
-
 pub export fn TDNFInit() callconv(.c) u32 {
     return 0;
 }
@@ -856,7 +839,6 @@ pub export fn TDNFOpenHandle(
     const args = args_opt.?;
     const output = output_opt.?;
     gEuid = geteuid();
-    acquireInstanceLock();
     GlobalSetQuiet(args.nQuiet);
     GlobalSetJson(args.nJsonOutput);
 
@@ -2052,7 +2034,6 @@ pub export fn TDNFCloseHandle(handle_opt: ?*Tdnf) callconv(.c) void {
         TDNFTransactionPlanStateDestroy(handle.pTransactionPlanState);
         TDNFFreeMemory(handle);
     }
-    exitHandler();
 }
 
 pub export fn TDNFGetVersion() callconv(.c) [*:0]const u8 {

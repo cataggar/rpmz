@@ -42,9 +42,9 @@ pub const Context = struct {
         else
             try txn_config.TxnConfig.init(allocator, options.install_root);
         errdefer cfg.deinit();
-        var root = try install_engine.RootDir.init(
+        var root = try install_engine.RootDir.initConfig(
             allocator,
-            cfg.installRoot(),
+            &cfg,
             null,
             null,
         );

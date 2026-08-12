@@ -102,9 +102,9 @@ pub const Context = struct {
         else
             try txn_config.TxnConfig.init(allocator, options.install_root);
         errdefer cfg.deinit();
-        var root = try RootDir.init(
+        var root = try RootDir.initConfig(
             allocator,
-            cfg.installRoot(),
+            &cfg,
             options.mutation_fn,
             options.mutation_ctx,
         );
@@ -910,6 +910,30 @@ pub const RootDir = struct {
             mutation_fn,
             mutation_ctx,
         )) orelse error.SyscallFailed;
+    }
+
+    pub fn initConfig(
+        allocator: Allocator,
+        config: *const txn_config.TxnConfig,
+        mutation_fn: ?MutationFn,
+        mutation_ctx: ?*anyopaque,
+    ) Error!RootDir {
+        if (config.pinnedInstallRootFd()) |fd| {
+            const duplicate = std.c.dup(fd);
+            if (duplicate < 0) return error.SyscallFailed;
+            return initFromOwnedFd(
+                allocator,
+                duplicate,
+                mutation_fn,
+                mutation_ctx,
+            );
+        }
+        return init(
+            allocator,
+            config.installRoot(),
+            mutation_fn,
+            mutation_ctx,
+        );
     }
 
     pub fn initExisting(

@@ -58,9 +58,7 @@ fn tdnfCreateSafeLockFile(pszLockPath: [*:0]const u8) c_int {
         .NOFOLLOW = true,
         .NONBLOCK = true,
     };
-    const oldmask = std.c.umask(@as(std.c.mode_t, 0o77));
     const nLockFd = std.c.open(pszLockPath, oflag, @as(std.c.mode_t, 0o600));
-    _ = std.c.umask(oldmask);
     if (nLockFd < 0) return -1;
 
     var fd_stat = std.mem.zeroes(Stat);
@@ -162,20 +160,26 @@ export fn tdnfLockAcquire(pszLockPathOpt: ?[*:0]const u8) c_int {
     return nLockFd;
 }
 
-/// Acquire a lock without following links or modifying the lock inode.
-///
-/// The caller must place the lock in a directory whose namespace is trusted;
-/// the post-flock identity check then closes replacement races.
-export fn tdnfLockAcquireSafe(pszLockPathOpt: ?[*:0]const u8) c_int {
+fn tdnfLockAcquireSafeMode(
+    pszLockPathOpt: ?[*:0]const u8,
+    wait: bool,
+) c_int {
     const pszLockPath = pszLockPathOpt orelse "";
     if (isNullOrEmptyString(pszLockPathOpt)) return -1;
 
     const nLockFd = tdnfCreateSafeLockFile(pszLockPath);
     if (nLockFd < 0) return -1;
 
-    while (true) {
-        if (flock(nLockFd, LOCK_EX | LOCK_NB) == 0) break;
-        _ = sleep(1);
+    if (wait) {
+        while (true) {
+            if (flock(nLockFd, LOCK_EX | LOCK_NB) == 0) break;
+            _ = sleep(1);
+        }
+    } else if (flock(nLockFd, LOCK_EX | LOCK_NB) != 0) {
+        const err = c.__errno_location().*;
+        _ = close(nLockFd);
+        if (err == c.EWOULDBLOCK or err == c.EAGAIN) return -2;
+        return -1;
     }
     if (!lockPathMatchesFd(pszLockPath, nLockFd)) {
         _ = flock(nLockFd, LOCK_UN);
@@ -183,6 +187,19 @@ export fn tdnfLockAcquireSafe(pszLockPathOpt: ?[*:0]const u8) c_int {
         return -1;
     }
     return nLockFd;
+}
+
+/// Acquire a lock without following links or modifying the lock inode.
+///
+/// The caller must place the lock in a directory whose namespace is trusted;
+/// the post-flock identity check then closes replacement races.
+export fn tdnfLockAcquireSafe(pszLockPathOpt: ?[*:0]const u8) c_int {
+    return tdnfLockAcquireSafeMode(pszLockPathOpt, true);
+}
+
+/// Non-blocking safe acquisition. `-2` means another process owns the lock.
+export fn tdnfLockTryAcquireSafe(pszLockPathOpt: ?[*:0]const u8) c_int {
+    return tdnfLockAcquireSafeMode(pszLockPathOpt, false);
 }
 
 export fn tdnfLockFree(pszLockPathOpt: ?[*:0]const u8, nLockFd: c_int) void {
