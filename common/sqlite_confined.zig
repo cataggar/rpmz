@@ -111,7 +111,7 @@ const SidecarKind = enum {
 };
 
 const Match = struct {
-    handle: *Handle,
+    route: *Route,
     relative: []const u8,
 };
 
@@ -129,13 +129,28 @@ const DatabaseState = struct {
     main_identity: Identity,
     basename: [:0]u8,
     tracked_sidecars: [3]?Identity = .{ null, null, null },
+    routes: ?*Route = null,
     refs: usize = 1,
     next: ?*DatabaseState = null,
+};
+
+const Route = struct {
+    allocator: Allocator,
+    database: *DatabaseState,
+    main_fd: c_int,
+    route_fd: c_int,
+    writable: bool,
+    active: bool = true,
+    route_prefix: [:0]u8,
+    synthetic_path: [:0]u8,
+    next: ?*Route = null,
+    database_next: ?*Route = null,
 };
 
 const Handle = struct {
     allocator: Allocator,
     database: *DatabaseState,
+    route: *Route,
     main_fd: c_int,
     route_fd: c_int,
     writable: bool,
@@ -144,7 +159,20 @@ const Handle = struct {
     vfs_name: [:0]u8,
     base: *c.sqlite3_vfs,
     vfs: c.sqlite3_vfs,
-    next: ?*Handle = null,
+};
+
+const FileBinding = struct {
+    allocator: Allocator,
+    file: *c.sqlite3_file,
+    handle: *Handle,
+    original: *const c.sqlite3_io_methods,
+    methods: c.sqlite3_io_methods,
+    next: ?*FileBinding = null,
+};
+
+const VfsContext = struct {
+    handle: *Handle,
+    shared_node: bool,
 };
 
 pub const Connection = struct {
@@ -179,9 +207,11 @@ pub const Connection = struct {
 
 var registry_mutex: std.atomic.Mutex = .unlocked;
 threadlocal var registry_lock_depth: usize = 0;
-var registry_head: ?*Handle = null;
+var registry_head: ?*Route = null;
 var directory_head: ?*DirectoryPin = null;
 var database_head: ?*DatabaseState = null;
+var file_head: ?*FileBinding = null;
+threadlocal var vfs_context: ?VfsContext = null;
 var hooks_installed = false;
 var next_vfs_id: u64 = 1;
 var original_open: c.sqlite3_syscall_ptr = null;
@@ -269,7 +299,10 @@ pub fn openAt(
             return error.UnsafeFile;
         return error.SyscallFailed;
     }
-    errdefer _ = std.c.close(main_fd);
+    var owns_main_fd = true;
+    errdefer {
+        if (owns_main_fd) _ = std.c.close(main_fd);
+    }
     const main_stat = try regularSingleLinkStat(main_fd);
     if (options.pinned_main_fd != null) {
         const path_stat = statRelativeFd(
@@ -293,23 +326,33 @@ pub fn openAt(
     );
     owns_directory = false;
     errdefer releaseDatabaseState(database);
+    try trackExistingWalSidecars(database);
     const route_fd = duplicateFdCloexec(database.directory.fd);
     if (route_fd < 0) return error.SyscallFailed;
-    errdefer _ = std.c.close(route_fd);
+    var owns_route_fd = true;
+    errdefer {
+        if (owns_route_fd) _ = std.c.close(route_fd);
+    }
     const route_prefix = std.fmt.allocPrintSentinel(
         allocator,
         "/proc/self/fd/{d}/",
         .{route_fd},
         0,
     ) catch return error.OutOfMemory;
-    errdefer allocator.free(route_prefix);
+    var owns_route_prefix = true;
+    errdefer {
+        if (owns_route_prefix) allocator.free(route_prefix);
+    }
     const synthetic_path = std.fmt.allocPrintSentinel(
         allocator,
         "{s}{s}",
         .{ route_prefix, database.basename },
         0,
     ) catch return error.OutOfMemory;
-    errdefer allocator.free(synthetic_path);
+    var owns_synthetic_path = true;
+    errdefer {
+        if (owns_synthetic_path) allocator.free(synthetic_path);
+    }
     const vfs_id = allocateVfsId();
     const vfs_name = std.fmt.allocPrintSentinel(
         allocator,
@@ -318,11 +361,36 @@ pub fn openAt(
         0,
     ) catch return error.OutOfMemory;
     errdefer allocator.free(vfs_name);
+    const route = allocator.create(Route) catch return error.OutOfMemory;
+    var owns_route = true;
+    errdefer {
+        if (owns_route) allocator.destroy(route);
+    }
+    route.* = .{
+        .allocator = allocator,
+        .database = database,
+        .main_fd = main_fd,
+        .route_fd = route_fd,
+        .writable = options.mode == .read_write,
+        .route_prefix = route_prefix,
+        .synthetic_path = synthetic_path,
+    };
+    addRoute(route);
+    owns_main_fd = false;
+    owns_route_fd = false;
+    owns_route_prefix = false;
+    owns_synthetic_path = false;
+    owns_route = false;
+    var route_added = true;
+    errdefer {
+        if (route_added) retireRoute(route);
+    }
     const handle = allocator.create(Handle) catch return error.OutOfMemory;
     errdefer allocator.destroy(handle);
     handle.* = .{
         .allocator = allocator,
         .database = database,
+        .route = route,
         .main_fd = main_fd,
         .route_fd = route_fd,
         .writable = options.mode == .read_write,
@@ -338,11 +406,6 @@ pub fn openAt(
     var registered = true;
     errdefer {
         if (registered) _ = c.sqlite3_vfs_unregister(&handle.vfs);
-    }
-    addHandle(handle);
-    var listed = true;
-    errdefer {
-        if (listed) removeHandle(handle);
     }
 
     if (options.before_sqlite_open) |callback|
@@ -368,7 +431,7 @@ pub fn openAt(
     _ = c.sqlite3_commit_hook(db, commitHook, handle);
 
     registered = false;
-    listed = false;
+    route_added = false;
     return .{ .db = db, .handle = handle };
 }
 
@@ -494,13 +557,9 @@ fn makeVfs(
 
 fn destroyHandle(handle: *Handle) void {
     _ = c.sqlite3_vfs_unregister(&handle.vfs);
-    removeHandle(handle);
-    _ = std.c.close(handle.main_fd);
-    _ = std.c.close(handle.route_fd);
+    retireRoute(handle.route);
     releaseDatabaseState(handle.database);
     const allocator = handle.allocator;
-    allocator.free(handle.route_prefix);
-    allocator.free(handle.synthetic_path);
     allocator.free(handle.vfs_name);
     allocator.destroy(handle);
 }
@@ -655,11 +714,60 @@ fn releaseDatabaseState(database: *DatabaseState) void {
         }
         cursor = &current.next;
     }
+    var routes = database.routes;
+    database.routes = null;
+    var route_cursor = routes;
+    while (route_cursor) |route| : (route_cursor = route.database_next) {
+        var registered = &registry_head;
+        while (registered.*) |current| {
+            if (current == route) {
+                registered.* = current.next;
+                break;
+            }
+            registered = &current.next;
+        }
+        route.next = null;
+    }
     unlockRegistry();
+    while (routes) |route| {
+        routes = route.database_next;
+        _ = std.c.close(route.main_fd);
+        _ = std.c.close(route.route_fd);
+        const route_allocator = route.allocator;
+        route_allocator.free(route.route_prefix);
+        route_allocator.free(route.synthetic_path);
+        route_allocator.destroy(route);
+    }
     releaseDirectoryPin(database.directory);
     const allocator = database.allocator;
     allocator.free(database.basename);
     allocator.destroy(database);
+}
+
+fn trackExistingWalSidecars(database: *DatabaseState) Error!void {
+    lockRegistry();
+    defer unlockRegistry();
+    for ([_]SidecarKind{ .wal, .shm }) |kind| {
+        var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+        const name = std.fmt.bufPrint(
+            &name_buffer,
+            "{s}-{s}",
+            .{ database.basename, @tagName(kind) },
+        ) catch return error.InvalidPath;
+        const slot = &database.tracked_sidecars[sidecarIndex(kind)];
+        const st = statRelativeDatabase(database, name) orelse {
+            if (slot.* != null) return error.PathChanged;
+            continue;
+        };
+        if ((st.mode & s_ifmt) != s_ifreg or st.nlink != 1)
+            return error.UnsafeFile;
+        const identity = Identity.fromStat(st);
+        if (slot.*) |expected| {
+            if (!expected.eql(identity)) return error.PathChanged;
+        } else {
+            slot.* = identity;
+        }
+    }
 }
 
 fn allocateVfsId() u64 {
@@ -670,25 +778,19 @@ fn allocateVfsId() u64 {
     return result;
 }
 
-fn addHandle(handle: *Handle) void {
+fn addRoute(route: *Route) void {
     lockRegistry();
     defer unlockRegistry();
-    handle.next = registry_head;
-    registry_head = handle;
+    route.next = registry_head;
+    registry_head = route;
+    route.database_next = route.database.routes;
+    route.database.routes = route;
 }
 
-fn removeHandle(handle: *Handle) void {
+fn retireRoute(route: *Route) void {
     lockRegistry();
     defer unlockRegistry();
-    var cursor = &registry_head;
-    while (cursor.*) |current| {
-        if (current == handle) {
-            cursor.* = current.next;
-            handle.next = null;
-            return;
-        }
-        cursor = &current.next;
-    }
+    route.active = false;
 }
 
 fn installHooks() Error!*c.sqlite3_vfs {
@@ -775,14 +877,14 @@ fn classifyPathLocked(
 ) PathClassification {
     var recognized = false;
     var cursor = registry_head;
-    while (cursor) |handle| : (cursor = handle.next) {
-        const prefix = handle.route_prefix;
+    while (cursor) |route| : (cursor = route.next) {
+        const prefix = route.route_prefix;
         if (std.mem.startsWith(u8, path, prefix)) {
             recognized = true;
             const relative = path[prefix.len..];
-            if (allowedRelative(handle, relative)) {
+            if (allowedRelative(route, relative)) {
                 return .{ .match = .{
-                    .handle = handle,
+                    .route = route,
                     .relative = relative,
                 } };
             }
@@ -792,7 +894,7 @@ fn classifyPathLocked(
 }
 
 const DirectoryClassification = union(enum) {
-    match: *Handle,
+    match: *Route,
     rejected,
     unrelated,
 };
@@ -802,18 +904,18 @@ fn classifyDirectoryLocked(
 ) DirectoryClassification {
     var recognized = false;
     var cursor = registry_head;
-    while (cursor) |handle| : (cursor = handle.next) {
-        const prefix = handle.route_prefix;
+    while (cursor) |route| : (cursor = route.next) {
+        const prefix = route.route_prefix;
         const directory = prefix[0 .. prefix.len - 1];
         if (!std.mem.eql(u8, path, directory)) continue;
         recognized = true;
-        return .{ .match = handle };
+        return .{ .match = route };
     }
     return if (recognized) .rejected else .unrelated;
 }
 
-fn allowedRelative(handle: *const Handle, relative: []const u8) bool {
-    const basename = handle.database.basename;
+fn allowedRelative(route: *const Route, relative: []const u8) bool {
+    const basename = route.database.basename;
     if (relative.len == 0 or std.mem.indexOfScalar(u8, relative, '/') != null)
         return false;
     if (std.mem.eql(u8, relative, basename)) return true;
@@ -824,8 +926,8 @@ fn allowedRelative(handle: *const Handle, relative: []const u8) bool {
         std.mem.eql(u8, suffix, "-shm");
 }
 
-fn sidecarKind(handle: *const Handle, relative: []const u8) ?SidecarKind {
-    const basename = handle.database.basename;
+fn sidecarKind(route: *const Route, relative: []const u8) ?SidecarKind {
+    const basename = route.database.basename;
     if (!std.mem.startsWith(u8, relative, basename)) return null;
     const suffix = relative[basename.len..];
     if (std.mem.eql(u8, suffix, "-journal")) return .journal;
@@ -839,12 +941,12 @@ fn sidecarIndex(kind: SidecarKind) usize {
 }
 
 fn trackedWalSidecar(
-    handle: *const Handle,
+    route: *const Route,
     kind: ?SidecarKind,
 ) bool {
     const sidecar = kind orelse return false;
     if (sidecar != .wal and sidecar != .shm) return false;
-    return handle.database.tracked_sidecars[sidecarIndex(sidecar)] != null;
+    return route.database.tracked_sidecars[sidecarIndex(sidecar)] != null;
 }
 
 fn validBasename(value: []const u8) bool {
@@ -899,7 +1001,14 @@ fn fileStat(st: linux.Statx) FileStat {
 }
 
 fn statRelative(
-    handle: *const Handle,
+    route: *const Route,
+    relative: []const u8,
+) ?FileStat {
+    return statRelativeDatabase(route.database, relative);
+}
+
+fn statRelativeDatabase(
+    database: *const DatabaseState,
     relative: []const u8,
 ) ?FileStat {
     var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
@@ -907,14 +1016,15 @@ fn statRelative(
     @memcpy(name_buffer[0..relative.len], relative);
     name_buffer[relative.len] = 0;
     return statRelativeFd(
-        handle.database.directory.fd,
+        database.directory.fd,
         @ptrCast(&name_buffer),
     );
 }
 
 fn verifyTrackedLocked(handle: *const Handle) bool {
     const database = handle.database;
-    const main = statRelative(handle, database.basename) orelse return false;
+    const main = statRelative(handle.route, database.basename) orelse
+        return false;
     if ((main.mode & s_ifmt) != s_ifreg or
         main.nlink != 1 or
         !Identity.fromStat(main).eql(database.main_identity))
@@ -929,7 +1039,7 @@ fn verifyTrackedLocked(handle: *const Handle) bool {
                 "{s}-{s}",
                 .{ database.basename, @tagName(kind) },
             ) catch return false;
-            const st = statRelative(handle, name) orelse return false;
+            const st = statRelative(handle.route, name) orelse return false;
             if ((st.mode & s_ifmt) != s_ifreg or
                 st.nlink != 1 or
                 !Identity.fromStat(st).eql(identity))
@@ -954,6 +1064,19 @@ fn commitHook(context: ?*anyopaque) callconv(.c) c_int {
 
 fn setErrno(value: c_int) void {
     std.c._errno().* = value;
+}
+
+fn contextMatches(route: *const Route) bool {
+    const context = vfs_context orelse return false;
+    return context.handle.database == route.database;
+}
+
+fn routeCanWrite(route: *const Route) bool {
+    if (vfs_context) |context| {
+        return context.handle.database == route.database and
+            context.handle.writable;
+    }
+    return route.active and route.writable;
 }
 
 fn original(comptime T: type, pointer: c.sqlite3_syscall_ptr) T {
@@ -981,21 +1104,32 @@ fn confinedOpen(
             mode,
         ),
     };
-    const handle = match.handle;
-    const kind = sidecarKind(handle, match.relative);
-    // SQLite requests O_RDWR|O_CREAT for existing WAL coordination files even
-    // on SQLITE_OPEN_READONLY connections. Grant only the originating
-    // connection access to already identity-tracked WAL/SHM files, and strip
-    // creation; main database and rollback-journal writes remain forbidden.
-    const read_only_wal_sidecar = require_writable and !handle.writable and
-        trackedWalSidecar(handle, kind);
-    if (require_writable and !handle.writable and !read_only_wal_sidecar) {
+    const route = match.route;
+    const kind = sidecarKind(route, match.relative);
+    if (!route.active and !contextMatches(route)) {
         setErrno(@intFromEnum(std.posix.E.ACCES));
         return -1;
     }
-    const database = handle.database;
+    // SQLite's process-shared unixShmNode requests O_RDWR|O_CREAT even when
+    // the connection that first maps an existing SHM file is read-only.
+    // Grant that narrowly scoped internal map access only after the sidecar
+    // identity has been pinned, and never grant creation through a reader.
+    const context = vfs_context;
+    const read_only_shared_shm = require_writable and !routeCanWrite(route) and
+        context != null and context.?.shared_node and
+        context.?.handle.database == route.database and
+        !context.?.handle.writable and kind == .shm and
+        trackedWalSidecar(route, kind);
+    if (require_writable and
+        !routeCanWrite(route) and
+        !read_only_shared_shm)
+    {
+        setErrno(@intFromEnum(std.posix.E.ACCES));
+        return -1;
+    }
+    const database = route.database;
     if (std.mem.eql(u8, match.relative, database.basename)) {
-        const current = statRelative(handle, database.basename) orelse {
+        const current = statRelative(route, database.basename) orelse {
             setErrno(@intFromEnum(std.posix.E.STALE));
             return -1;
         };
@@ -1006,11 +1140,17 @@ fn confinedOpen(
             setErrno(@intFromEnum(std.posix.E.STALE));
             return -1;
         }
-        if (!handle.writable and (flags & o_accmode) != o_rdonly) {
+        const owns_route = if (context) |call_context|
+            call_context.handle.route == route
+        else
+            route.active;
+        if (!owns_route or
+            ((flags & o_accmode) != o_rdonly and !routeCanWrite(route)))
+        {
             setErrno(@intFromEnum(std.posix.E.ACCES));
             return -1;
         }
-        return duplicateFdCloexec(handle.main_fd);
+        return duplicateFdCloexec(route.main_fd);
     }
 
     var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
@@ -1023,7 +1163,7 @@ fn confinedOpen(
     const fd = openat(
         database.directory.fd,
         @ptrCast(&name_buffer),
-        (if (read_only_wal_sidecar) flags & ~o_creat else flags) |
+        (if (read_only_shared_shm) flags & ~o_creat else flags) |
             o_cloexec | o_nofollow,
         @intCast(mode),
     );
@@ -1057,8 +1197,10 @@ fn confinedAccess(
     defer unlockRegistry();
     const path = std.mem.span(raw_path);
     switch (classifyDirectoryLocked(path)) {
-        .match => |handle| {
-            if (mode == w_ok and !handle.writable) {
+        .match => |route| {
+            if ((!route.active and !contextMatches(route)) or
+                (mode == w_ok and !routeCanWrite(route)))
+            {
                 setErrno(@intFromEnum(std.posix.E.ACCES));
                 return -1;
             }
@@ -1081,19 +1223,26 @@ fn confinedAccess(
             mode,
         ),
     };
-    const st = statRelative(match.handle, match.relative) orelse return -1;
+    if (!match.route.active and !contextMatches(match.route)) {
+        setErrno(@intFromEnum(std.posix.E.ACCES));
+        return -1;
+    }
+    const st = statRelative(match.route, match.relative) orelse return -1;
     if ((st.mode & s_ifmt) != s_ifreg or st.nlink != 1) {
         setErrno(@intFromEnum(std.posix.E.LOOP));
         return -1;
     }
-    if (mode == w_ok and !match.handle.writable and
-        !trackedWalSidecar(
-            match.handle,
-            sidecarKind(match.handle, match.relative),
-        ))
-    {
-        setErrno(@intFromEnum(std.posix.E.ACCES));
-        return -1;
+    if (mode == w_ok and !routeCanWrite(match.route)) {
+        const context = vfs_context;
+        const kind = sidecarKind(match.route, match.relative);
+        const shared_reader = context != null and context.?.shared_node and
+            context.?.handle.database == match.route.database and
+            !context.?.handle.writable and kind == .shm and
+            trackedWalSidecar(match.route, kind);
+        if (!shared_reader) {
+            setErrno(@intFromEnum(std.posix.E.ACCES));
+            return -1;
+        }
     }
     return 0;
 }
@@ -1109,19 +1258,21 @@ fn confinedUnlink(raw_path: [*:0]const u8) callconv(.c) c_int {
         },
         .unrelated => return original(UnlinkFn, original_unlink)(raw_path),
     };
-    if (!match.handle.writable) {
+    if ((!match.route.active and !contextMatches(match.route)) or
+        !routeCanWrite(match.route))
+    {
         setErrno(@intFromEnum(std.posix.E.ACCES));
         return -1;
     }
     if (std.mem.eql(
         u8,
         match.relative,
-        match.handle.database.basename,
+        match.route.database.basename,
     )) {
         setErrno(@intFromEnum(std.posix.E.PERM));
         return -1;
     }
-    if (statRelative(match.handle, match.relative)) |st| {
+    if (statRelative(match.route, match.relative)) |st| {
         if ((st.mode & s_ifmt) != s_ifreg or st.nlink != 1) {
             setErrno(@intFromEnum(std.posix.E.LOOP));
             return -1;
@@ -1135,13 +1286,13 @@ fn confinedUnlink(raw_path: [*:0]const u8) callconv(.c) c_int {
     @memcpy(name_buffer[0..match.relative.len], match.relative);
     name_buffer[match.relative.len] = 0;
     const rc = unlinkat(
-        match.handle.database.directory.fd,
+        match.route.database.directory.fd,
         @ptrCast(&name_buffer),
         0,
     );
     if (rc == 0) {
-        if (sidecarKind(match.handle, match.relative)) |kind|
-            match.handle.database.tracked_sidecars[sidecarIndex(kind)] = null;
+        if (sidecarKind(match.route, match.relative)) |kind|
+            match.route.database.tracked_sidecars[sidecarIndex(kind)] = null;
     }
     return rc;
 }
@@ -1152,7 +1303,7 @@ fn confinedOpenDirectory(
 ) callconv(.c) c_int {
     lockRegistry();
     defer unlockRegistry();
-    const handle = switch (classifyDirectoryLocked(std.mem.span(raw_path))) {
+    const route = switch (classifyDirectoryLocked(std.mem.span(raw_path))) {
         .match => |value| value,
         .rejected => {
             setErrno(@intFromEnum(std.posix.E.ACCES));
@@ -1163,7 +1314,11 @@ fn confinedOpenDirectory(
             out,
         ),
     };
-    const fd = duplicateFdCloexec(handle.database.directory.fd);
+    if (!route.active and !contextMatches(route)) {
+        setErrno(@intFromEnum(std.posix.E.ACCES));
+        return -1;
+    }
+    const fd = duplicateFdCloexec(route.database.directory.fd);
     if (fd < 0) return -1;
     out.* = fd;
     return 0;
@@ -1173,10 +1328,117 @@ fn vfsHandle(vfs: [*c]c.sqlite3_vfs) *Handle {
     return @ptrCast(@alignCast(vfs.*.pAppData.?));
 }
 
+fn addFileBinding(binding: *FileBinding) void {
+    lockRegistry();
+    defer unlockRegistry();
+    binding.next = file_head;
+    file_head = binding;
+}
+
+fn findFileBinding(file: *c.sqlite3_file) ?*FileBinding {
+    lockRegistry();
+    defer unlockRegistry();
+    var cursor = file_head;
+    while (cursor) |binding| : (cursor = binding.next) {
+        if (binding.file == file) return binding;
+    }
+    return null;
+}
+
+fn takeFileBinding(file: *c.sqlite3_file) ?*FileBinding {
+    lockRegistry();
+    defer unlockRegistry();
+    var cursor = &file_head;
+    while (cursor.*) |binding| {
+        if (binding.file == file) {
+            cursor.* = binding.next;
+            binding.next = null;
+            return binding;
+        }
+        cursor = &binding.next;
+    }
+    return null;
+}
+
+fn bindMainFile(
+    handle: *Handle,
+    raw_file: [*c]c.sqlite3_file,
+) c_int {
+    const file: *c.sqlite3_file = @ptrCast(raw_file);
+    const original_methods = file.pMethods;
+    if (original_methods == null or original_methods.*.iVersion < 2 or
+        original_methods.*.xClose == null or
+        original_methods.*.xShmMap == null or
+        original_methods.*.xShmUnmap == null)
+    {
+        return c.SQLITE_IOERR;
+    }
+    const binding = handle.allocator.create(FileBinding) catch {
+        _ = original_methods.*.xClose.?(raw_file);
+        file.pMethods = null;
+        return c.SQLITE_NOMEM;
+    };
+    binding.* = .{
+        .allocator = handle.allocator,
+        .file = file,
+        .handle = handle,
+        .original = original_methods,
+        .methods = original_methods.*,
+    };
+    binding.methods.xClose = boundClose;
+    binding.methods.xShmMap = boundShmMap;
+    binding.methods.xShmUnmap = boundShmUnmap;
+    addFileBinding(binding);
+    file.pMethods = &binding.methods;
+    return c.SQLITE_OK;
+}
+
+fn boundClose(raw_file: [*c]c.sqlite3_file) callconv(.c) c_int {
+    const file: *c.sqlite3_file = @ptrCast(raw_file);
+    const binding = takeFileBinding(file) orelse return c.SQLITE_IOERR_CLOSE;
+    file.pMethods = binding.original;
+    const result = binding.original.xClose.?(raw_file);
+    binding.allocator.destroy(binding);
+    return result;
+}
+
+fn boundShmMap(
+    raw_file: [*c]c.sqlite3_file,
+    page: c_int,
+    page_size: c_int,
+    extend: c_int,
+    output: [*c]?*volatile anyopaque,
+) callconv(.c) c_int {
+    const binding = findFileBinding(@ptrCast(raw_file)) orelse
+        return c.SQLITE_IOERR_SHMMAP;
+    const previous = vfs_context;
+    vfs_context = .{ .handle = binding.handle, .shared_node = true };
+    defer vfs_context = previous;
+    return binding.original.xShmMap.?(
+        raw_file,
+        page,
+        page_size,
+        extend,
+        output,
+    );
+}
+
+fn boundShmUnmap(
+    raw_file: [*c]c.sqlite3_file,
+    delete_flag: c_int,
+) callconv(.c) c_int {
+    const binding = findFileBinding(@ptrCast(raw_file)) orelse
+        return c.SQLITE_IOERR_SHMOPEN;
+    const previous = vfs_context;
+    vfs_context = .{ .handle = binding.handle, .shared_node = true };
+    defer vfs_context = previous;
+    return binding.original.xShmUnmap.?(raw_file, delete_flag);
+}
+
 fn pathAllowedForHandle(handle: *const Handle, path: []const u8) bool {
     const prefix = handle.route_prefix;
     return std.mem.startsWith(u8, path, prefix) and
-        allowedRelative(handle, path[prefix.len..]);
+        allowedRelative(handle.route, path[prefix.len..]);
 }
 
 fn vfsOpen(
@@ -1192,13 +1454,22 @@ fn vfsOpen(
     {
         return c.SQLITE_CANTOPEN;
     }
-    return handle.base.xOpen.?(
+    const previous = vfs_context;
+    vfs_context = .{ .handle = handle, .shared_node = false };
+    defer vfs_context = previous;
+    const result = handle.base.xOpen.?(
         handle.base,
         name,
         file,
         flags | c.SQLITE_OPEN_NOFOLLOW,
         out_flags,
     );
+    if (result != c.SQLITE_OK or
+        (flags & c.SQLITE_OPEN_MAIN_DB) == 0)
+    {
+        return result;
+    }
+    return bindMainFile(handle, file);
 }
 
 fn vfsDelete(
@@ -1213,6 +1484,9 @@ fn vfsDelete(
         return c.SQLITE_CANTOPEN;
     }
     if (!handle.writable) return c.SQLITE_READONLY;
+    const previous = vfs_context;
+    vfs_context = .{ .handle = handle, .shared_node = false };
+    defer vfs_context = previous;
     if (confinedUnlink(@ptrCast(name)) != 0) {
         if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
             return c.SQLITE_OK;
@@ -1244,6 +1518,9 @@ fn vfsAccess(
         out.* = 0;
         return c.SQLITE_OK;
     }
+    const previous = vfs_context;
+    vfs_context = .{ .handle = handle, .shared_node = false };
+    defer vfs_context = previous;
     out.* = @intFromBool(confinedAccess(@ptrCast(name), mode) == 0);
     return c.SQLITE_OK;
 }
@@ -1382,6 +1659,47 @@ fn vfsNextSystemCall(
         delegate(base, name)
     else
         null;
+}
+
+fn createPersistentWal(path: [*:0]const u8) !void {
+    var db: ?*c.sqlite3 = null;
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_open_v2(
+            path,
+            &db,
+            c.SQLITE_OPEN_READWRITE | c.SQLITE_OPEN_CREATE,
+            null,
+        ),
+    );
+    var persist: c_int = 1;
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_file_control(
+            db,
+            "main",
+            c.SQLITE_FCNTL_PERSIST_WAL,
+            @ptrCast(&persist),
+        ),
+    );
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            db,
+            "PRAGMA journal_mode=WAL;" ++
+                "PRAGMA wal_autocheckpoint=0;" ++
+                "CREATE TABLE values_table(value INTEGER);" ++
+                "INSERT INTO values_table VALUES (1);",
+            null,
+            null,
+            null,
+        ),
+    );
+    try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_close(db));
+}
+
+fn sidecarExists(dir_fd: c_int, name: [*:0]const u8) bool {
+    return statRelativeFd(dir_fd, name) != null;
 }
 
 test "confined SQLite rejects main replacement between pin and VFS open" {
@@ -1867,6 +2185,437 @@ test "WAL connections share a stable CLOEXEC directory pin" {
     third.close();
 }
 
+test "read-only WAL opens existing sidecars before and after a writer" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const db_path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/db.sqlite",
+        .{base},
+        0,
+    );
+    defer std.testing.allocator.free(db_path);
+    try createPersistentWal(db_path.ptr);
+
+    const dir_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(dir_fd >= 0);
+    defer _ = std.c.close(dir_fd);
+    try std.testing.expect(sidecarExists(dir_fd, "db.sqlite-wal"));
+    try std.testing.expect(sidecarExists(dir_fd, "db.sqlite-shm"));
+
+    var reader = try openAt(
+        std.testing.allocator,
+        dir_fd,
+        "db.sqlite",
+        .{ .mode = .read_only },
+    );
+    const reader_shm = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}db.sqlite-shm",
+        .{reader.handle.route_prefix},
+        0,
+    );
+    defer std.testing.allocator.free(reader_shm);
+    inline for (.{ o_rdwr, o_rdwr | o_creat }) |flags| {
+        try std.testing.expectEqual(
+            @as(c_int, -1),
+            confinedOpen(reader_shm.ptr, flags, 0o644),
+        );
+        try std.testing.expectEqual(
+            @intFromEnum(std.posix.E.ACCES),
+            std.c._errno().*,
+        );
+    }
+    try std.testing.expectEqual(
+        @as(c_int, -1),
+        confinedUnlink(reader_shm.ptr),
+    );
+    try std.testing.expectEqual(
+        @intFromEnum(std.posix.E.ACCES),
+        std.c._errno().*,
+    );
+    try std.testing.expect(sidecarExists(dir_fd, "db.sqlite-shm"));
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            reader.db,
+            "SELECT * FROM values_table;",
+            null,
+            null,
+            null,
+        ),
+    );
+
+    var writer = try openAt(
+        std.testing.allocator,
+        dir_fd,
+        "db.sqlite",
+        .{ .mode = .read_write },
+    );
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            writer.db,
+            "INSERT INTO values_table VALUES (2);",
+            null,
+            null,
+            null,
+        ),
+    );
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            reader.db,
+            "SELECT * FROM values_table;",
+            null,
+            null,
+            null,
+        ),
+    );
+    reader.close();
+    writer.close();
+
+    var writer_first = try openAt(
+        std.testing.allocator,
+        dir_fd,
+        "db.sqlite",
+        .{ .mode = .read_write },
+    );
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            writer_first.db,
+            "SELECT * FROM values_table;",
+            null,
+            null,
+            null,
+        ),
+    );
+    var reader_second = try openAt(
+        std.testing.allocator,
+        dir_fd,
+        "db.sqlite",
+        .{ .mode = .read_only },
+    );
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            reader_second.db,
+            "SELECT * FROM values_table;",
+            null,
+            null,
+            null,
+        ),
+    );
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            writer_first.db,
+            "INSERT INTO values_table VALUES (3);",
+            null,
+            null,
+            null,
+        ),
+    );
+    reader_second.close();
+    writer_first.close();
+}
+
+test "read-only WAL identity-checks existing sidecars" {
+    const Mutation = struct {
+        dir_fd: c_int,
+
+        fn run(raw: ?*anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            _ = renameat(
+                self.dir_fd,
+                "db.sqlite-shm",
+                self.dir_fd,
+                "saved.sqlite-shm",
+            );
+            _ = renameat(
+                self.dir_fd,
+                "outside.sqlite-shm",
+                self.dir_fd,
+                "db.sqlite-shm",
+            );
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const db_path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/db.sqlite",
+        .{base},
+        0,
+    );
+    defer std.testing.allocator.free(db_path);
+    try createPersistentWal(db_path.ptr);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "outside.sqlite-shm",
+        .data = "outside",
+    });
+
+    const dir_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(dir_fd >= 0);
+    defer _ = std.c.close(dir_fd);
+    var mutation = Mutation{ .dir_fd = dir_fd };
+    try std.testing.expectError(
+        error.PathChanged,
+        openAt(std.testing.allocator, dir_fd, "db.sqlite", .{
+            .mode = .read_only,
+            .before_sqlite_open = Mutation.run,
+            .mutation_context = &mutation,
+        }),
+    );
+    const outside = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "db.sqlite-shm",
+        std.testing.allocator,
+        .unlimited,
+    );
+    defer std.testing.allocator.free(outside);
+    try std.testing.expectEqualStrings("outside", outside);
+}
+
+test "read-only WAL never creates absent sidecars" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const db_path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/db.sqlite",
+        .{base},
+        0,
+    );
+    defer std.testing.allocator.free(db_path);
+    try createPersistentWal(db_path.ptr);
+
+    const dir_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(dir_fd >= 0);
+    defer _ = std.c.close(dir_fd);
+    try tmp.dir.deleteFile(std.testing.io, "db.sqlite-wal");
+    try tmp.dir.deleteFile(std.testing.io, "db.sqlite-shm");
+    try std.testing.expect(!sidecarExists(dir_fd, "db.sqlite-wal"));
+    try std.testing.expect(!sidecarExists(dir_fd, "db.sqlite-shm"));
+
+    var reader = try openAt(
+        std.testing.allocator,
+        dir_fd,
+        "db.sqlite",
+        .{ .mode = .read_only },
+    );
+    defer reader.close();
+    _ = c.sqlite3_exec(
+        reader.db,
+        "SELECT * FROM values_table;",
+        null,
+        null,
+        null,
+    );
+    inline for (.{ "db.sqlite-wal", "db.sqlite-shm" }) |name| {
+        const path = try std.fmt.allocPrintSentinel(
+            std.testing.allocator,
+            "{s}{s}",
+            .{ reader.handle.route_prefix, name },
+            0,
+        );
+        defer std.testing.allocator.free(path);
+        try std.testing.expectEqual(
+            @as(c_int, -1),
+            confinedOpen(path.ptr, o_rdwr | o_creat, 0o644),
+        );
+        try std.testing.expectEqual(
+            @intFromEnum(std.posix.E.ACCES),
+            std.c._errno().*,
+        );
+        try std.testing.expect(!sidecarExists(dir_fd, name));
+    }
+}
+
+test "WAL cleanup retains its route across deterministic FD reuse" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "first");
+    try tmp.dir.createDirPath(std.testing.io, "second");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const first_path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/first",
+        .{base},
+        0,
+    );
+    defer std.testing.allocator.free(first_path);
+    const second_path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/second",
+        .{base},
+        0,
+    );
+    defer std.testing.allocator.free(second_path);
+    const first_dir_fd = std.c.open(first_path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(first_dir_fd >= 0);
+    defer _ = std.c.close(first_dir_fd);
+    const second_dir_fd = std.c.open(second_path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(second_dir_fd >= 0);
+    defer _ = std.c.close(second_dir_fd);
+
+    var first = try openAt(
+        std.testing.allocator,
+        first_dir_fd,
+        "db.sqlite",
+        .{ .mode = .read_write, .create = true },
+    );
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            first.db,
+            "PRAGMA journal_mode=WAL;" ++
+                "CREATE TABLE values_table(value INTEGER);",
+            null,
+            null,
+            null,
+        ),
+    );
+    var first_peer = try openAt(
+        std.testing.allocator,
+        first_dir_fd,
+        "db.sqlite",
+        .{ .mode = .read_write },
+    );
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            first_peer.db,
+            "SELECT * FROM values_table;",
+            null,
+            null,
+            null,
+        ),
+    );
+    var second = try openAt(
+        std.testing.allocator,
+        second_dir_fd,
+        "db.sqlite",
+        .{ .mode = .read_write, .create = true },
+    );
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            second.db,
+            "PRAGMA journal_mode=WAL;" ++
+                "CREATE TABLE values_table(value INTEGER);",
+            null,
+            null,
+            null,
+        ),
+    );
+    const second_shm_before = statRelativeFd(
+        second_dir_fd,
+        "db.sqlite-shm",
+    ) orelse return error.TestUnexpectedResult;
+    const retained_fd = first.handle.route_fd;
+    const retained_path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}db.sqlite-shm",
+        .{first.handle.route_prefix},
+    );
+    defer std.testing.allocator.free(retained_path);
+
+    first.close();
+    try std.testing.expect(std.c.fcntl(retained_fd, std.c.F.GETFD) >= 0);
+    lockRegistry();
+    const retained_classification = classifyPathLocked(retained_path);
+    const retained_authorization = switch (retained_classification) {
+        .match => |match| match.route.database == first_peer.handle.database,
+        else => false,
+    };
+    unlockRegistry();
+    try std.testing.expect(retained_authorization);
+    const blocked_reuse = std.c.fcntl(
+        second_dir_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        retained_fd,
+    );
+    try std.testing.expect(blocked_reuse > retained_fd);
+    _ = std.c.close(blocked_reuse);
+    try std.testing.expect(
+        Identity.fromStat(second_shm_before).eql(Identity.fromStat(
+            statRelativeFd(second_dir_fd, "db.sqlite-shm") orelse
+                return error.TestUnexpectedResult,
+        )),
+    );
+
+    first_peer.close();
+    try std.testing.expectEqual(
+        @as(c_int, -1),
+        std.c.fcntl(retained_fd, std.c.F.GETFD),
+    );
+    const reused = std.c.fcntl(
+        second_dir_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        retained_fd,
+    );
+    try std.testing.expectEqual(retained_fd, reused);
+    defer _ = std.c.close(reused);
+    lockRegistry();
+    const classification = classifyPathLocked(retained_path);
+    unlockRegistry();
+    try std.testing.expect(classification == .unrelated);
+    try std.testing.expect(
+        Identity.fromStat(second_shm_before).eql(Identity.fromStat(
+            statRelativeFd(second_dir_fd, "db.sqlite-shm") orelse
+                return error.TestUnexpectedResult,
+        )),
+    );
+    second.close();
+}
+
 test "outstanding statements retain VFS state until a successful close" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1923,6 +2672,7 @@ test "outstanding statements retain VFS state until a successful close" {
     try std.testing.expect(std.c.fcntl(route_fd, std.c.F.GETFD) >= 0);
     try std.testing.expect(registry_head != null);
     try std.testing.expect(database_head != null);
+    try std.testing.expect(file_head != null);
 
     try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_finalize(statement));
     statement = null;
@@ -1949,4 +2699,5 @@ test "outstanding statements retain VFS state until a successful close" {
     try std.testing.expect(registry_head == null);
     try std.testing.expect(database_head == null);
     try std.testing.expect(directory_head == null);
+    try std.testing.expect(file_head == null);
 }

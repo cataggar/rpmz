@@ -172,8 +172,9 @@ pub const SecretProvider = struct {
 
 /// Where a repository's metadata comes from.
 pub const MetadataSource = union(enum) {
-    /// An absolute path to a caller-selected directory that already holds a
-    /// `repodata/` tree. Nothing is downloaded for this repository.
+    /// A lexically exact absolute path to a caller-selected directory that
+    /// already holds a `repodata/` tree. Nothing is downloaded for this
+    /// repository.
     local_snapshot: []const u8,
     /// Caller-supplied remote configuration. Metadata is fetched into the
     /// caller-selected cache directory.
@@ -276,11 +277,14 @@ pub const ResolveError = error{
     DuplicateRepositoryId,
     /// A repository URL embedded credentials. Use `SecretProvider` instead.
     CredentialsInUrl,
-    /// The install root, cache directory, or scratch directory is not an
-    /// absolute path.
+    /// An install-root, cache, scratch, or local-snapshot path is not a
+    /// lexically exact absolute path.
     InvalidPath,
-    /// Architecture, distro, or release version is empty.
+    /// Architecture, distro, or release version is empty or contains a
+    /// control byte.
     InvalidEnvironment,
+    /// A caller-supplied policy value cannot be represented safely.
+    InvalidPolicy,
     /// The scratch configuration could not be created or removed.
     ScratchStorageFailed,
     /// A declared repository could not be read.
@@ -496,13 +500,19 @@ fn validate(input: ResolveInput) ResolveError!void {
     if (input.operation.requiresSubjects() and input.subjects.len == 0)
         return error.InvalidSubjects;
     for (input.subjects) |subject| {
-        if (subject.len == 0) return error.InvalidSubjects;
+        if (subject.len == 0 or hasUnsafeControl(subject))
+            return error.InvalidSubjects;
     }
 
     const environment = input.environment;
     if (environment.architecture.len == 0 or environment.distro.len == 0 or
-        environment.release_version.len == 0)
+        environment.release_version.len == 0 or
+        hasUnsafeControl(environment.architecture) or
+        hasUnsafeControl(environment.distro) or
+        hasUnsafeControl(environment.release_version))
+    {
         return error.InvalidEnvironment;
+    }
 
     switch (input.installed) {
         .install_root => |path| {
@@ -513,6 +523,24 @@ fn validate(input: ResolveInput) ResolveError!void {
     if (!isExactAbsolutePath(input.cache_dir) or
         !isExactAbsolutePath(input.scratch_dir))
         return error.InvalidPath;
+
+    inline for (.{
+        input.policy.excludes,
+        input.policy.installonly_names,
+        input.policy.locked_names,
+        input.policy.protected_names,
+    }) |values| {
+        for (values) |value| {
+            if (hasUnsafeControl(value)) return error.InvalidPolicy;
+        }
+    }
+    for (input.policy.min_versions) |constraint| {
+        if (hasUnsafeControl(constraint.name) or
+            hasUnsafeControl(constraint.evr))
+        {
+            return error.InvalidPolicy;
+        }
+    }
 
     for (input.repositories, 0..) |repository, index| {
         try validateRepository(repository);
@@ -525,7 +553,7 @@ fn validate(input: ResolveInput) ResolveError!void {
 
 fn isExactAbsolutePath(path: []const u8) bool {
     if (path.len == 0 or path[0] != '/' or
-        std.mem.indexOfScalar(u8, path, 0) != null or
+        hasUnsafeControl(path) or
         std.ascii.isWhitespace(path[path.len - 1]) or
         (path.len > 1 and path[path.len - 1] == '/'))
     {
@@ -557,7 +585,7 @@ fn validateRepository(repository: Repository) ResolveError!void {
 
     switch (repository.metadata) {
         .local_snapshot => |path| {
-            if (!std.fs.path.isAbsolute(path)) return error.InvalidPath;
+            if (!isExactAbsolutePath(path)) return error.InvalidPath;
         },
         .remote => |remote| {
             if (remote.base_urls.len == 0 and remote.metalink == null)
@@ -578,8 +606,15 @@ fn validateRepository(repository: Repository) ResolveError!void {
 /// refused outright rather than carried any further.
 fn rejectCredentials(url: []const u8) ResolveError!void {
     if (url.len == 0) return error.InvalidRepository;
-    if (std.mem.indexOf(u8, url, "\n") != null) return error.InvalidRepository;
+    if (hasUnsafeControl(url)) return error.InvalidRepository;
     if (uri_sanitize.hasUserinfo(url)) return error.CredentialsInUrl;
+}
+
+fn hasUnsafeControl(value: []const u8) bool {
+    for (value) |byte| {
+        if (byte < 0x20 or byte == 0x7f) return true;
+    }
+    return false;
 }
 
 /// Overwrites whatever the generated configuration derived with the caller's
@@ -929,6 +964,8 @@ test "resolver: explicit environment values are required" {
     input.environment.distro = "photon";
     input.environment.release_version = "";
     try testing.expectError(error.InvalidEnvironment, validate(input));
+    input.environment.release_version = "5.0\nplugins=1";
+    try testing.expectError(error.InvalidEnvironment, validate(input));
 }
 
 test "resolver: relative install roots, caches, and scratch directories are rejected" {
@@ -959,12 +996,20 @@ test "resolver: relative install roots, caches, and scratch directories are reje
         "/scratch/../root",
         "/scratch/root ",
         "/scratch/root\x00hidden",
+        "/scratch/root\nplugins=1",
+        "/scratch/root\rplugins=1",
+        "/scratch/root\tother",
     }) |invalid| {
         input.installed = .{ .install_root = invalid };
         try testing.expectError(error.InvalidPath, validate(input));
     }
     input.installed = .{ .install_root = "/scratch/root" };
     input.cache_dir = "/var/cache/tdnf\x00hidden";
+    try testing.expectError(error.InvalidPath, validate(input));
+    input.cache_dir = "/var/cache/tdnf\nplugins=1";
+    try testing.expectError(error.InvalidPath, validate(input));
+    input.cache_dir = "/var/cache/tdnf";
+    input.scratch_dir = "/scratch/work\n[evil]";
     try testing.expectError(error.InvalidPath, validate(input));
 }
 
@@ -1010,6 +1055,18 @@ test "resolver: repository identity, cost, and credential rules" {
     var relative = remote;
     relative.metadata = .{ .local_snapshot = "snapshot" };
     try testing.expectError(error.InvalidPath, validateRepository(relative));
+    inline for (.{
+        "/snapshot/base/",
+        "/snapshot//base",
+        "/snapshot/./base",
+        "/snapshot/../base",
+        "/snapshot/base ",
+        "/snapshot/base\x00hidden",
+        "/snapshot/base\nbaseurl=https://example.invalid/evil",
+    }) |invalid| {
+        relative.metadata = .{ .local_snapshot = invalid };
+        try testing.expectError(error.InvalidPath, validateRepository(relative));
+    }
 }
 
 test "resolver: duplicate repository ids are rejected" {
@@ -1043,6 +1100,70 @@ test "resolver: credential detection only inspects the authority" {
         error.CredentialsInUrl,
         rejectCredentials("https://user:pass@example.invalid"),
     );
+}
+
+test "resolver: generated configuration rejects control-byte injection" {
+    inline for (.{
+        "https://example.invalid/base\x00hidden",
+        "https://example.invalid/base\rmetalink=https://example.invalid/evil",
+        "https://example.invalid/base\n[evil]",
+        "https://example.invalid/base\tcontinued",
+        "https://example.invalid/base\x7f",
+    }) |invalid| {
+        try testing.expectError(
+            error.InvalidRepository,
+            rejectCredentials(invalid),
+        );
+    }
+
+    const local = Repository{
+        .id = "base",
+        .metadata = .{ .local_snapshot = "/snapshot/base" },
+    };
+    var repositories = [_]Repository{local};
+    var input = ResolveInput{
+        .operation = .install,
+        .subjects = &.{"pkg"},
+        .repositories = &repositories,
+        .installed = .{ .install_root = "/scratch/root" },
+        .environment = .{
+            .architecture = "x86_64",
+            .distro = "photon",
+            .release_version = "5.0",
+        },
+        .scratch_dir = "/scratch/work",
+    };
+
+    input.subjects = &.{"pkg\ninstall evil"};
+    try testing.expectError(error.InvalidSubjects, validate(input));
+    input.subjects = &.{"pkg"};
+    input.policy.excludes = &.{"safe\nplugins=1"};
+    try testing.expectError(error.InvalidPolicy, validate(input));
+    input.policy.excludes = &.{};
+    input.policy.locked_names = &.{"safe\r[evil]"};
+    try testing.expectError(error.InvalidPolicy, validate(input));
+    input.policy.locked_names = &.{};
+    input.policy.min_versions = &.{.{
+        .name = "safe",
+        .evr = "1\nbaseurl=https://example.invalid/evil",
+    }};
+    try testing.expectError(error.InvalidPolicy, validate(input));
+    input.policy.min_versions = &.{};
+
+    repositories[0].id = "base\n[evil]";
+    try testing.expectError(error.InvalidRepository, validate(input));
+    repositories[0] = local;
+    repositories[0].metadata = .{ .remote = .{
+        .base_urls = &.{
+            "https://example.invalid/base\nbaseurl=https://example.invalid/evil",
+        },
+    } };
+    try testing.expectError(error.InvalidRepository, validate(input));
+    repositories[0] = local;
+    repositories[0].gpg_keys = &.{
+        "file:///keys/repo.gpg\nbaseurl=https://example.invalid/evil",
+    };
+    try testing.expectError(error.InvalidRepository, validate(input));
 }
 
 test "resolver: every public operation maps onto exactly one service operation" {
@@ -1109,7 +1230,7 @@ test "resolver: every transaction verb maps to exactly one operation" {
     }
 
     for ([_][]const u8{
-        "",         "plan",   "check",  "list",
+        "",         "plan",    "check", "list",
         "INSTALL",  "remove ", "up",    "distro_sync",
         "obsolete", "history",
     }) |unsupported| {
