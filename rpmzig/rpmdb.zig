@@ -337,6 +337,21 @@ export fn tdnf_rpm_config_destroy(config: ?*TxnConfig) void {
     std.heap.c_allocator.destroy(cfg);
 }
 
+export fn tdnf_rpm_config_finalize_rpmdb_pin(
+    config: ?*TxnConfig,
+) c_int {
+    clearError();
+    const cfg = config orelse {
+        setError("null rpm configuration", .{});
+        return -1;
+    };
+    cfg.finalizeRpmDbPin() catch |err| {
+        setError("rpm_config_finalize_rpmdb_pin: {t}", .{err});
+        return -1;
+    };
+    return 0;
+}
+
 fn rpmConfigInstallRoot(
     config: ?*const TxnConfig,
 ) callconv(.c) ?[*:0]u8 {

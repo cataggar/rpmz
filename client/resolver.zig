@@ -506,13 +506,12 @@ fn validate(input: ResolveInput) ResolveError!void {
 
     switch (input.installed) {
         .install_root => |path| {
-            if (!std.fs.path.isAbsolute(path) or
-                std.mem.eql(u8, path, "/"))
+            if (!isExactAbsolutePath(path) or std.mem.eql(u8, path, "/"))
                 return error.InvalidPath;
         },
     }
-    if (!std.fs.path.isAbsolute(input.cache_dir) or
-        !std.fs.path.isAbsolute(input.scratch_dir))
+    if (!isExactAbsolutePath(input.cache_dir) or
+        !isExactAbsolutePath(input.scratch_dir))
         return error.InvalidPath;
 
     for (input.repositories, 0..) |repository, index| {
@@ -522,6 +521,27 @@ fn validate(input: ResolveInput) ResolveError!void {
                 return error.DuplicateRepositoryId;
         }
     }
+}
+
+fn isExactAbsolutePath(path: []const u8) bool {
+    if (path.len == 0 or path[0] != '/' or
+        std.mem.indexOfScalar(u8, path, 0) != null or
+        std.ascii.isWhitespace(path[path.len - 1]) or
+        (path.len > 1 and path[path.len - 1] == '/'))
+    {
+        return false;
+    }
+    if (std.mem.eql(u8, path, "/")) return true;
+    var components = std.mem.splitScalar(u8, path[1..], '/');
+    while (components.next()) |component| {
+        if (component.len == 0 or
+            std.mem.eql(u8, component, ".") or
+            std.mem.eql(u8, component, ".."))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn validateRepository(repository: Repository) ResolveError!void {
@@ -930,6 +950,21 @@ test "resolver: relative install roots, caches, and scratch directories are reje
     try testing.expectError(error.InvalidPath, validate(input));
     input.cache_dir = "/var/cache/tdnf";
     input.scratch_dir = "work";
+    try testing.expectError(error.InvalidPath, validate(input));
+    input.scratch_dir = "/scratch/work";
+    inline for (.{
+        "/scratch/root/",
+        "/scratch//root",
+        "/scratch/./root",
+        "/scratch/../root",
+        "/scratch/root ",
+        "/scratch/root\x00hidden",
+    }) |invalid| {
+        input.installed = .{ .install_root = invalid };
+        try testing.expectError(error.InvalidPath, validate(input));
+    }
+    input.installed = .{ .install_root = "/scratch/root" };
+    input.cache_dir = "/var/cache/tdnf\x00hidden";
     try testing.expectError(error.InvalidPath, validate(input));
 }
 

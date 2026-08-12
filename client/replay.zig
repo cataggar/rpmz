@@ -413,6 +413,11 @@ fn runValidated(
         before.rows,
         verified.items,
     );
+    const expected_final_inventory = (try projectFinalInventory(
+        arena,
+        plan.model(),
+        before.rows,
+    )) orelse return error.ActionShapeMismatch;
 
     const install_root_z = arena.dupeZ(
         u8,
@@ -430,13 +435,15 @@ fn runValidated(
     };
     var progress = Progress{
         .outcomes = result.actions,
+        .plan = plan.model(),
         .item_actions = built.item_actions,
         .completed = try arena.alloc(usize, result.actions.len),
         .expected = try arena.alloc(usize, result.actions.len),
     };
     @memset(progress.completed, 0);
     @memset(progress.expected, 0);
-    for (built.item_actions) |action_index| progress.expected[action_index] += 1;
+    for (built.item_actions, 0..) |_, input_index|
+        progressExpected(&progress, input_index);
 
     fixed.executeFixedOrderObserved(
         &handle,
@@ -465,18 +472,7 @@ fn runValidated(
         return;
     };
     result.final_inventory = after.inventory;
-    const inventory_matches = inventoryMatchesPlan(
-        arena,
-        plan.model(),
-        after.inventory,
-    ) catch {
-        markIndeterminate(result.actions);
-        result.status = .transaction_failed;
-        result.validation_failure = null;
-        result.transaction_failure = .execution_failed;
-        return;
-    };
-    if (!inventory_matches) {
+    if (!inventoriesEqual(expected_final_inventory, after.inventory)) {
         markIndeterminate(result.actions);
         result.status = .transaction_failed;
         result.validation_failure = null;
@@ -505,16 +501,35 @@ fn captureFailedFinalInventory(
 }
 
 fn validateInput(input: Input) PreflightError!void {
-    if (input.bundle_directory.len == 0 or
-        !std.fs.path.isAbsolute(input.bundle_directory) or
-        input.target.install_root.len == 0 or
-        !std.fs.path.isAbsolute(input.target.install_root) or
-        input.target.rpmdb_path.len == 0 or
-        !std.fs.path.isAbsolute(input.target.rpmdb_path) or
+    if (!isExactAbsolutePath(input.bundle_directory) or
+        !isExactAbsolutePath(input.target.install_root) or
+        !isExactAbsolutePath(input.target.rpmdb_path) or
         input.target.architecture.len == 0)
     {
         return error.InvalidInput;
     }
+}
+
+fn isExactAbsolutePath(path: []const u8) bool {
+    if (path.len == 0 or path[0] != '/' or
+        std.mem.indexOfScalar(u8, path, 0) != null or
+        std.ascii.isWhitespace(path[0]) or
+        std.ascii.isWhitespace(path[path.len - 1]) or
+        (path.len > 1 and path[path.len - 1] == '/'))
+    {
+        return false;
+    }
+    if (std.mem.eql(u8, path, "/")) return true;
+    var components = std.mem.splitScalar(u8, path[1..], '/');
+    while (components.next()) |component| {
+        if (component.len == 0 or
+            std.mem.eql(u8, component, ".") or
+            std.mem.eql(u8, component, ".."))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn mapBundleOpenError(err: bundle_reader.OpenError) PreflightError {
@@ -1188,6 +1203,21 @@ fn projectedInventoryMatchesPlan(
     plan: *const transaction_plan.Data,
     rows: []const InstalledPackage,
 ) Allocator.Error!bool {
+    const projected = (try projectFinalInventory(
+        allocator,
+        plan,
+        rows,
+    )) orelse return false;
+    defer allocator.free(projected);
+    if (try inventoryMatchesPlan(allocator, plan, projected)) return true;
+    return !plan.environment.policy.include_installed;
+}
+
+fn projectFinalInventory(
+    allocator: Allocator,
+    plan: *const transaction_plan.Data,
+    rows: []const InstalledPackage,
+) Allocator.Error!?[]InstalledPackage {
     const retained = try allocator.alloc(bool, rows.len);
     defer allocator.free(retained);
     @memset(retained, true);
@@ -1200,9 +1230,9 @@ fn projectedInventoryMatchesPlan(
                 const package = findPlanPackage(
                     plan.packages,
                     action.target_package_id,
-                ) orelse return false;
-                const hnum = package.rpmdb_hnum orelse return false;
-                const index = findRowIndex(rows, hnum) orelse return false;
+                ) orelse return null;
+                const hnum = package.rpmdb_hnum orelse return null;
+                const index = findRowIndex(rows, hnum) orelse return null;
                 retained[index] = false;
             },
             .install => {},
@@ -1211,9 +1241,9 @@ fn projectedInventoryMatchesPlan(
                     const prior = findPlanPackage(
                         plan.packages,
                         prior_id,
-                    ) orelse return false;
-                    const hnum = prior.rpmdb_hnum orelse return false;
-                    const index = findRowIndex(rows, hnum) orelse return false;
+                    ) orelse return null;
+                    const hnum = prior.rpmdb_hnum orelse return null;
+                    const index = findRowIndex(rows, hnum) orelse return null;
                     retained[index] = false;
                 }
             },
@@ -1222,7 +1252,7 @@ fn projectedInventoryMatchesPlan(
             const target = findPlanPackage(
                 plan.packages,
                 action.target_package_id,
-            ) orelse return false;
+            ) orelse return null;
             try projected.append(allocator, .{
                 .hnum = 0,
                 .identity = target.identity,
@@ -1238,7 +1268,7 @@ fn projectedInventoryMatchesPlan(
         {},
         installedPackageLessThan,
     );
-    return inventoryMatchesPlan(allocator, plan, projected.items);
+    return try projected.toOwnedSlice(allocator);
 }
 
 fn fixedRow(row: InstalledPackage) fixed.FixedOrderRpmDbRow {
@@ -1257,15 +1287,50 @@ fn fixedIdentity(identity: PackageIdentity) fixed.FixedOrderPackageIdentity {
 
 const Progress = struct {
     outcomes: []ActionOutcome,
+    plan: *const transaction_plan.Data,
     item_actions: []const usize,
     completed: []usize,
     expected: []usize,
 };
 
+fn progressExpected(progress: *Progress, input_index: usize) void {
+    progressForStep(progress, input_index, incrementExpected);
+}
+
 fn progressCompleted(context: ?*anyopaque, input_index: usize) void {
     const progress: *Progress = @ptrCast(@alignCast(context orelse return));
     if (input_index >= progress.item_actions.len) return;
+    progressForStep(progress, input_index, incrementCompleted);
+}
+
+fn progressForStep(
+    progress: *Progress,
+    input_index: usize,
+    update: *const fn (*Progress, usize) void,
+) void {
+    if (input_index >= progress.item_actions.len) return;
     const action_index = progress.item_actions[input_index];
+    update(progress, action_index);
+    const steps = progress.plan.execution_steps orelse return;
+    if (input_index >= steps.len or steps[input_index].operation != .erase)
+        return;
+    const erased_id = steps[input_index].package_id;
+    for (progress.plan.actions, 0..) |action, candidate_index| {
+        if (candidate_index == action_index or
+            (action.kind != .downgrade and action.kind != .obsolete) or
+            !containsString(action.prior_package_ids, erased_id))
+        {
+            continue;
+        }
+        update(progress, candidate_index);
+    }
+}
+
+fn incrementExpected(progress: *Progress, action_index: usize) void {
+    progress.expected[action_index] += 1;
+}
+
+fn incrementCompleted(progress: *Progress, action_index: usize) void {
     progress.completed[action_index] += 1;
     if (progress.completed[action_index] == progress.expected[action_index])
         findActionOutcome(progress.outcomes, action_index).?.status = .applied;
@@ -1311,6 +1376,17 @@ fn inventoryMatchesPlan(
     std.mem.sort(PackageIdentity, expected.items, {}, identityLessThan);
     for (expected.items, actual) |identity, installed| {
         if (!identityEqual(identity, installed.identity)) return false;
+    }
+    return true;
+}
+
+fn inventoriesEqual(
+    expected: []const InstalledPackage,
+    actual: []const InstalledPackage,
+) bool {
+    if (expected.len != actual.len) return false;
+    for (expected, actual) |wanted, installed| {
+        if (!identityEqual(wanted.identity, installed.identity)) return false;
     }
     return true;
 }
@@ -1579,6 +1655,45 @@ test "architecture validation accepts noarch and rejects source packages" {
     try std.testing.expect(!architectureAllows("x86_64", "src"));
 }
 
+test "target and bundle paths must already be exact absolute paths" {
+    const valid = Input{
+        .bundle_directory = "/bundle",
+        .target = .{
+            .install_root = "/target",
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    };
+    try validateInput(valid);
+    var changed = valid;
+    inline for (.{
+        "",
+        "relative",
+        " /target",
+        "/target ",
+        "/target/",
+        "/target//nested",
+        "/target/./nested",
+        "/target/../nested",
+        "/target\x00hidden",
+    }) |invalid| {
+        changed.target.install_root = invalid;
+        try std.testing.expectError(error.InvalidInput, validateInput(changed));
+    }
+    changed = valid;
+    changed.target.rpmdb_path = "/var/lib/rpm/";
+    try std.testing.expectError(error.InvalidInput, validateInput(changed));
+    changed = valid;
+    changed.target.rpmdb_path = "/var/\x00lib/rpm";
+    try std.testing.expectError(error.InvalidInput, validateInput(changed));
+    changed = valid;
+    changed.bundle_directory = "/bundle/../elsewhere";
+    try std.testing.expectError(error.InvalidInput, validateInput(changed));
+    changed = valid;
+    changed.bundle_directory = "/bundle\x00/elsewhere";
+    try std.testing.expectError(error.InvalidInput, validateInput(changed));
+}
+
 test "replay semantic identity treats omitted epoch as zero" {
     const rpmpkg = @import("rpm_package_test");
     const blob = try rpmpkg.makeMinimalHeaderForTest(
@@ -1737,7 +1852,7 @@ test "inventory comparison is exact and independent of rpmdb hnum" {
     }};
     const plan = transaction_plan.Data{
         .actions = &.{},
-        .environment = undefined,
+        .environment = testEnvironment(true),
         .hidden_packages = &.{},
         .jobs = &.{},
         .packages = &packages,
@@ -1889,7 +2004,7 @@ test "fixed replay items preserve all authoritative action representations" {
     };
     const data = transaction_plan.Data{
         .actions = &actions,
-        .environment = undefined,
+        .environment = testEnvironment(true),
         .execution_steps = &steps,
         .hidden_packages = &.{},
         .jobs = &.{},
@@ -1980,7 +2095,7 @@ test "shared obsolete priors collapse to one physical erase" {
     };
     const plan = transaction_plan.Data{
         .actions = &actions,
-        .environment = undefined,
+        .environment = testEnvironment(true),
         .execution_steps = &steps,
         .hidden_packages = &.{},
         .jobs = &.{},
@@ -2010,6 +2125,45 @@ test "shared obsolete priors collapse to one physical erase" {
     try std.testing.expect(built.items[0] == .install);
     try std.testing.expect(built.items[1] == .install);
     try std.testing.expectEqual(@as(u32, 11), built.items[2].erase.hnum);
+
+    var outcomes = [_]ActionOutcome{
+        .{ .index = 0, .kind = .obsolete, .status = .not_attempted },
+        .{ .index = 1, .kind = .obsolete, .status = .not_attempted },
+    };
+    var completed = [_]usize{ 0, 0 };
+    var expected = [_]usize{ 0, 0 };
+    var progress = Progress{
+        .outcomes = &outcomes,
+        .plan = &plan,
+        .item_actions = built.item_actions,
+        .completed = &completed,
+        .expected = &expected,
+    };
+    for (built.item_actions, 0..) |_, input_index|
+        progressExpected(&progress, input_index);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 2 }, &expected);
+    progressCompleted(&progress, 0);
+    progressCompleted(&progress, 1);
+    try std.testing.expectEqual(
+        ActionStatus.not_attempted,
+        outcomes[0].status,
+    );
+    try std.testing.expectEqual(
+        ActionStatus.not_attempted,
+        outcomes[1].status,
+    );
+    markIndeterminate(&outcomes);
+    try std.testing.expectEqual(ActionStatus.indeterminate, outcomes[0].status);
+    try std.testing.expectEqual(ActionStatus.indeterminate, outcomes[1].status);
+
+    outcomes[0].status = .not_attempted;
+    outcomes[1].status = .not_attempted;
+    @memset(&completed, 0);
+    progressCompleted(&progress, 0);
+    progressCompleted(&progress, 1);
+    progressCompleted(&progress, 2);
+    try std.testing.expectEqual(ActionStatus.applied, outcomes[0].status);
+    try std.testing.expectEqual(ActionStatus.applied, outcomes[1].status);
 }
 
 test "later primary shared-prior failure is rejected during preflight" {
@@ -2052,7 +2206,7 @@ test "later primary shared-prior failure is rejected during preflight" {
     };
     const plan = transaction_plan.Data{
         .actions = &actions,
-        .environment = undefined,
+        .environment = testEnvironment(true),
         .execution_steps = &steps,
         .hidden_packages = &.{},
         .jobs = &.{},
@@ -2105,7 +2259,7 @@ test "interleaved raw order is preserved and inventory mismatch fails preflight"
     };
     var plan = transaction_plan.Data{
         .actions = &actions,
-        .environment = undefined,
+        .environment = testEnvironment(true),
         .execution_steps = &interleaved,
         .hidden_packages = &.{},
         .jobs = &.{},
@@ -2155,6 +2309,90 @@ test "interleaved raw order is preserved and inventory mismatch fails preflight"
     );
 }
 
+test "plans without installed selection project from the target snapshot" {
+    const packages = [_]transaction_plan.Package{
+        testPackage("new", "new", "1", .available, null),
+    };
+    const actions = [_]transaction_plan.Action{.{
+        .kind = .install,
+        .prior_package_ids = &.{},
+        .reason = .user,
+        .requested_by_job_id = null,
+        .target_package_id = "new",
+    }};
+    const steps = [_]transaction_plan.ExecutionStep{.{
+        .action_index = 0,
+        .operation = .install,
+        .package_id = "new",
+    }};
+    const retained = InstalledPackage{
+        .hnum = 71,
+        .identity = .{
+            .name = "retained",
+            .epoch = null,
+            .version = "1",
+            .release = "1",
+            .arch = "noarch",
+        },
+    };
+    const fake: *rpm_gpgcheck.FileHandle = @ptrFromInt(
+        @alignOf(rpm_gpgcheck.FileHandle),
+    );
+    const verified = [_]VerifiedRpm{.{
+        .plan_package_id = "new",
+        .path = "/bundle/new.rpm",
+        .handle = fake,
+    }};
+    var plan = transaction_plan.Data{
+        .actions = &actions,
+        .environment = testEnvironment(false),
+        .execution_steps = &steps,
+        .hidden_packages = &.{},
+        .jobs = &.{},
+        .packages = &packages,
+        .problems = &.{},
+        .repositories = &.{},
+        .requests = &.{},
+        .selected = &.{.{ .package_id = "new" }},
+        .skipped = &.{},
+    };
+    const projected = (try projectFinalInventory(
+        std.testing.allocator,
+        &plan,
+        &.{retained},
+    )).?;
+    defer std.testing.allocator.free(projected);
+    try std.testing.expectEqual(@as(usize, 2), projected.len);
+    try std.testing.expectEqualStrings("new", projected[0].identity.name);
+    try std.testing.expectEqualStrings(
+        "retained",
+        projected[1].identity.name,
+    );
+
+    const built = try buildFixedOrder(
+        std.testing.allocator,
+        &plan,
+        &.{retained},
+        &verified,
+    );
+    defer {
+        for (built.items) |item| freeFixedItem(std.testing.allocator, item);
+        std.testing.allocator.free(built.items);
+        std.testing.allocator.free(built.order);
+        std.testing.allocator.free(built.item_actions);
+    }
+    plan.environment = testEnvironment(true);
+    try std.testing.expectError(
+        error.ActionShapeMismatch,
+        buildFixedOrder(
+            std.testing.allocator,
+            &plan,
+            &.{retained},
+            &verified,
+        ),
+    );
+}
+
 fn testPackage(
     id: []const u8,
     name: []const u8,
@@ -2175,5 +2413,39 @@ fn testPackage(
         .rpmdb_hnum = hnum,
         .source = null,
         .state = state,
+    };
+}
+
+fn testEnvironment(
+    include_installed: bool,
+) transaction_plan.Environment {
+    return .{
+        .architecture = "x86_64",
+        .distro = "test",
+        .policy = .{
+            .allow_erasing = false,
+            .allow_multilib = true,
+            .all_deps = !include_installed,
+            .best = true,
+            .clean_requirements_on_remove = false,
+            .excludes = &.{},
+            .force_architecture = null,
+            .include_installed = include_installed,
+            .installonly_limit = 3,
+            .installonly_names = &.{},
+            .install_weak_dependencies = true,
+            .keep_orphans = true,
+            .locked_names = &.{},
+            .min_versions = &.{},
+            .protected_names = &.{},
+            .skip_broken = false,
+        },
+        .releasever = "1",
+        .resolution_status = .resolved,
+        .rpmdb = .{
+            .backend = .sqlite,
+            .cookie_sha256 = "0" ** 64,
+            .package_set_sha256 = "0" ** 64,
+        },
     };
 }

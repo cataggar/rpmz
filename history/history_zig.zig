@@ -11,7 +11,7 @@ fn transactionPlanTestWriteHistoryFixture(
     raw_path: ?[*:0]const u8,
 ) callconv(.c) c_int {
     const path = raw_path orelse return -1;
-    const db = history_db.Database.init(path) catch return -1;
+    var db = history_db.Database.init(path) catch return -1;
     defer db.close();
     history_store.ensureAllTables(db) catch return -1;
     inline for (.{
@@ -57,7 +57,7 @@ fn transactionPlanTestWriteExcludedHistoryFixture(
 ) callconv(.c) c_int {
     if (transactionPlanTestWriteHistoryFixture(raw_path) != 0) return -1;
     const path = raw_path orelse return -1;
-    const db = history_db.Database.init(path) catch return -1;
+    var db = history_db.Database.init(path) catch return -1;
     defer db.close();
     db.exec("DELETE FROM trans_items;", .{}) catch return -1;
     db.exec("DELETE FROM rpms;", .{}) catch return -1;

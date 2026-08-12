@@ -43,7 +43,7 @@ extern fn tdnf_sqlite_confined_open_at(
 ) callconv(.c) c_int;
 extern fn tdnf_sqlite_confined_close(
     connection: *RawConnection,
-) callconv(.c) void;
+) callconv(.c) c_int;
 extern fn tdnf_sqlite_confined_verify(
     connection: *const RawConnection,
 ) callconv(.c) c_int;
@@ -56,9 +56,15 @@ pub const Connection = struct {
     handle: ?*anyopaque,
 
     pub fn close(self: *Connection) void {
+        _ = self.tryClose();
+    }
+
+    pub fn tryClose(self: *Connection) bool {
         var raw = RawConnection{ .db = self.db, .handle = self.handle };
-        tdnf_sqlite_confined_close(&raw);
-        self.* = undefined;
+        if (tdnf_sqlite_confined_close(&raw) != c.SQLITE_OK)
+            return false;
+        self.* = .{ .db = null, .handle = null };
+        return true;
     }
 
     pub fn verify(self: *const Connection) Error!void {

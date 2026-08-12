@@ -228,6 +228,7 @@ pub const TxnConfig = struct {
     pinned_install_root_fd: ?c_int = null,
     pinned_rpmdb_dir_fd: ?c_int = null,
     pinned_rpmdb_main_fd: ?c_int = null,
+    rpmdb_pin_finalized: bool = false,
     target_lock_held: bool = false,
     macros: std.ArrayList(MacroEntry),
 
@@ -241,6 +242,7 @@ pub const TxnConfig = struct {
             .pinned_install_root_fd = null,
             .pinned_rpmdb_dir_fd = null,
             .pinned_rpmdb_main_fd = null,
+            .rpmdb_pin_finalized = false,
             .target_lock_held = false,
             .macros = .empty,
         };
@@ -287,7 +289,12 @@ pub const TxnConfig = struct {
     }
 
     pub fn clone(self: *const TxnConfig, allocator: std.mem.Allocator) InitError!TxnConfig {
-        return self.cloneWithRoot(allocator, self.install_root, self.pinned_install_root_fd);
+        return self.cloneWithRoot(
+            allocator,
+            self.install_root,
+            self.pinned_install_root_fd,
+            self.rpmdb_pin_finalized,
+        );
     }
 
     /// Clone the macro state while pinning all native filesystem access to
@@ -298,7 +305,16 @@ pub const TxnConfig = struct {
         install_root: []const u8,
         root_fd: c_int,
     ) InitError!TxnConfig {
-        return self.cloneWithRoot(allocator, install_root, root_fd);
+        return self.cloneWithRoot(allocator, install_root, root_fd, true);
+    }
+
+    pub fn cloneWithPinnedInstallRootDeferredRpmDb(
+        self: *const TxnConfig,
+        allocator: std.mem.Allocator,
+        install_root: []const u8,
+        root_fd: c_int,
+    ) InitError!TxnConfig {
+        return self.cloneWithRoot(allocator, install_root, root_fd, false);
     }
 
     pub fn pinnedInstallRootFd(self: *const TxnConfig) ?c_int {
@@ -319,6 +335,14 @@ pub const TxnConfig = struct {
 
     pub fn markTargetLockHeld(self: *TxnConfig) void {
         self.target_lock_held = true;
+    }
+
+    pub fn finalizeRpmDbPin(self: *TxnConfig) InitError!void {
+        if (self.rpmdb_pin_finalized) return;
+        if (self.pinned_install_root_fd == null)
+            return error.InstallRootPinFailed;
+        try self.pinRpmDb();
+        self.rpmdb_pin_finalized = true;
     }
 
     pub fn adoptPinnedRpmDbDirFd(
@@ -365,6 +389,7 @@ pub const TxnConfig = struct {
         allocator: std.mem.Allocator,
         install_root: []const u8,
         pinned_root_fd: ?c_int,
+        finalize_rpmdb: bool,
     ) InitError!TxnConfig {
         const root = try normalizeInstallRootOwned(allocator, install_root);
         const duplicated_fd = if (pinned_root_fd) |fd| blk: {
@@ -381,6 +406,7 @@ pub const TxnConfig = struct {
             .pinned_install_root_fd = duplicated_fd,
             .pinned_rpmdb_dir_fd = null,
             .pinned_rpmdb_main_fd = null,
+            .rpmdb_pin_finalized = false,
             .target_lock_held = false,
             .macros = .empty,
         };
@@ -394,7 +420,8 @@ pub const TxnConfig = struct {
                 };
             };
         }
-        if (duplicated_fd != null) try copy.pinRpmDb();
+        if (duplicated_fd != null and finalize_rpmdb)
+            try copy.finalizeRpmDbPin();
         return copy;
     }
 
@@ -408,6 +435,15 @@ pub const TxnConfig = struct {
             else => error.RpmDbPinFailed,
         };
         defer self.allocator.free(expanded);
+        if (std.mem.indexOfScalar(u8, expanded, 0) != null or
+            !std.mem.eql(
+                u8,
+                expanded,
+                std.mem.trim(u8, expanded, " \t\r\n"),
+            ))
+        {
+            return error.RpmDbPinFailed;
+        }
         const relative = std.mem.trim(u8, expanded, "/");
         if (relative.len != 0) {
             var components = std.mem.splitScalar(u8, relative, '/');
@@ -444,7 +480,6 @@ pub const TxnConfig = struct {
         defer self.allocator.free(dir_path);
         if (!pathIsWithin(root_path, dir_path))
             return error.RpmDbPinFailed;
-        self.pinned_rpmdb_dir_fd = dir_fd;
 
         const main_fd = std.c.openat(
             dir_fd,
@@ -456,12 +491,16 @@ pub const TxnConfig = struct {
             },
         );
         if (main_fd < 0) {
-            if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT)) return;
+            if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT)) {
+                self.pinned_rpmdb_dir_fd = dir_fd;
+                return;
+            }
             return error.RpmDbPinFailed;
         }
         errdefer _ = std.c.close(main_fd);
         try self.adoptPinnedRpmDbMainFd(main_fd);
         _ = std.c.close(main_fd);
+        self.pinned_rpmdb_dir_fd = dir_fd;
     }
 
     fn resolvedFdPathAlloc(
@@ -567,6 +606,11 @@ pub const TxnConfig = struct {
     ) SetMacroError!void {
         const normalized_name = std.mem.trim(u8, name, " \t\r\n");
         if (!isValidMacroName(normalized_name)) return error.InvalidMacroName;
+        if (self.rpmdb_pin_finalized and
+            std.mem.eql(u8, normalized_name, Macro.dbpath.name()))
+        {
+            return error.InvalidMacroValue;
+        }
 
         const normalized_value = std.mem.trim(u8, macro_value, " \t\r\n");
         if (normalized_value.len == 0) return error.InvalidMacroValue;
@@ -877,11 +921,30 @@ pub fn buildDefaultRpmDbSqlitePath(
 }
 
 fn normalizeInstallRootOwned(allocator: std.mem.Allocator, input: []const u8) InitError![]u8 {
-    var trimmed = std.mem.trim(u8, input, " \t\r\n");
-    if (trimmed.len == 0) trimmed = DEFAULT_INSTALL_ROOT;
-    if (trimmed[0] != '/') return error.InvalidInstallRoot;
-    trimmed = trimTrailingSlashKeepRoot(trimmed);
-    return allocator.dupe(u8, trimmed);
+    const root = if (input.len == 0) DEFAULT_INSTALL_ROOT else input;
+    if (!isExactAbsolutePath(root)) return error.InvalidInstallRoot;
+    return allocator.dupe(u8, root);
+}
+
+fn isExactAbsolutePath(path: []const u8) bool {
+    if (path.len == 0 or path[0] != '/' or
+        std.mem.indexOfScalar(u8, path, 0) != null or
+        std.ascii.isWhitespace(path[path.len - 1]) or
+        (path.len > 1 and path[path.len - 1] == '/'))
+    {
+        return false;
+    }
+    if (std.mem.eql(u8, path, "/")) return true;
+    var components = std.mem.splitScalar(u8, path[1..], '/');
+    while (components.next()) |component| {
+        if (component.len == 0 or
+            std.mem.eql(u8, component, ".") or
+            std.mem.eql(u8, component, ".."))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn isValidMacroName(name: []const u8) bool {
@@ -927,12 +990,6 @@ fn trimRootPrefix(input: []const u8) []const u8 {
     return trimmed;
 }
 
-fn trimTrailingSlashKeepRoot(input: []const u8) []const u8 {
-    var trimmed = std.mem.trimEnd(u8, input, "/");
-    if (trimmed.len == 0) trimmed = DEFAULT_INSTALL_ROOT;
-    return trimmed;
-}
-
 test "parseRpmDefine accepts whitespace form" {
     const parsed = try parseRpmDefine("_dbpath /usr/lib/sysimage/rpm/");
     try std.testing.expectEqual(Macro.dbpath, parsed.macro.?);
@@ -961,10 +1018,10 @@ test "TxnConfig retains arbitrary rpmdefines" {
 }
 
 test "TxnConfig resolves rooted dbpath override" {
-    var cfg = try TxnConfig.init(std.testing.allocator, "/mnt/sysroot/");
+    var cfg = try TxnConfig.init(std.testing.allocator, "/mnt/sysroot");
     defer cfg.deinit();
 
-    try std.testing.expect(try cfg.applyRpmDefine("_dbpath=/usr/lib/sysimage/rpm/"));
+    try std.testing.expect(try cfg.applyRpmDefine("_dbpath=/usr/lib/sysimage/rpm"));
 
     var buf: [256]u8 = undefined;
     const db_dir = try cfg.resolvePath(.dbpath, &buf);
@@ -1081,6 +1138,134 @@ test "pinned config descriptors are CLOEXEC and identity is read-only" {
     try std.testing.expectEqual(@as(c_int, 0), status_flags & 3);
 }
 
+test "deferred rpmdb pin uses the final macro and then freezes it" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/var/lib/rpm");
+    try tmp.dir.createDirPath(std.testing.io, "root/custom/rpm");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/var/lib/rpm/rpmdb.sqlite",
+        .data = "",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/custom/rpm/rpmdb.sqlite",
+        .data = "",
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+
+    var config = try TxnConfig.init(std.testing.allocator, root);
+    defer config.deinit();
+    var pinned = try config.cloneWithPinnedInstallRootDeferredRpmDb(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer pinned.deinit();
+    try std.testing.expect(pinned.pinnedRpmDbDirFd() == null);
+    try pinned.setMacro(.dbpath, "/custom/rpm");
+    try pinned.finalizeRpmDbPin();
+    const custom_fd = std.c.openat(root_fd, "custom/rpm", .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(custom_fd >= 0);
+    defer _ = std.c.close(custom_fd);
+    const expected = fdStat(custom_fd) orelse
+        return error.TestUnexpectedResult;
+    const actual = fdStat(pinned.pinnedRpmDbDirFd().?) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(expected.identity.eql(actual.identity));
+    try std.testing.expectError(
+        error.InvalidMacroValue,
+        pinned.setMacro(.dbpath, "/var/lib/rpm"),
+    );
+}
+
+test "failed rpmdb finalization never adopts a closed descriptor" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/custom/rpm");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "outside",
+        .data = "",
+    });
+    try tmp.dir.symLink(
+        std.testing.io,
+        "../../../outside",
+        "root/custom/rpm/rpmdb.sqlite",
+        .{},
+    );
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var config = try TxnConfig.init(std.testing.allocator, root);
+    defer config.deinit();
+
+    inline for (0..2) |failure_kind| {
+        var pinned = try config.cloneWithPinnedInstallRootDeferredRpmDb(
+            std.testing.allocator,
+            root,
+            root_fd,
+        );
+        defer pinned.deinit();
+        try pinned.setMacro(.dbpath, "/custom/rpm");
+        try std.testing.expectError(
+            error.RpmDbPinFailed,
+            pinned.finalizeRpmDbPin(),
+        );
+        try std.testing.expect(pinned.pinnedRpmDbDirFd() == null);
+        try std.testing.expect(pinned.pinnedRpmDbMainFd() == null);
+        try std.testing.expect(std.c.fcntl(root_fd, std.c.F.GETFD) >= 0);
+
+        if (failure_kind == 0) {
+            try tmp.dir.deleteFile(
+                std.testing.io,
+                "root/custom/rpm/rpmdb.sqlite",
+            );
+            try tmp.dir.createDir(
+                std.testing.io,
+                "root/custom/rpm/rpmdb.sqlite",
+                .default_dir,
+            );
+        }
+    }
+}
+
 test "rpmdb symlinks resolve only within the pinned install root" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1165,10 +1350,21 @@ test "TxnConfig parses declarative macro file entries" {
 }
 
 test "TxnConfig rejects relative installroots" {
-    try std.testing.expectError(
-        error.InvalidInstallRoot,
-        TxnConfig.init(std.testing.allocator, "relative/root"),
-    );
+    inline for (.{
+        "relative/root",
+        " /root",
+        "/root ",
+        "/root/",
+        "/root//nested",
+        "/root/./nested",
+        "/root/../nested",
+        "/root\x00hidden",
+    }) |invalid| {
+        try std.testing.expectError(
+            error.InvalidInstallRoot,
+            TxnConfig.init(std.testing.allocator, invalid),
+        );
+    }
 }
 
 test "buildDefaultRpmDbSqlitePath keeps root slash semantics" {

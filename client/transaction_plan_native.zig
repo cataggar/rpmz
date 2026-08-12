@@ -896,16 +896,24 @@ const BuildState = struct {
         var candidates = std.ArrayList(ExecutionCandidate).empty;
         for (self.outcome.actions, 0..) |action, action_index| {
             if (!containsActionKind(kinds, action.kind)) continue;
-            const package = if (use_prior and action.kind != .erase)
-                if (action.priors.len == 0) return error.UnsupportedResult else action.priors[0]
-            else
-                action.package;
-            try candidates.append(self.arena, .{
-                .action_index = action_index,
-                .operation = operation,
-                .package = package,
-                .requested_by = action.requested_by,
-            });
+            if (use_prior and action.kind != .erase) {
+                if (action.priors.len == 0) return error.UnsupportedResult;
+                for (action.priors) |prior| {
+                    try candidates.append(self.arena, .{
+                        .action_index = action_index,
+                        .operation = operation,
+                        .package = prior,
+                        .requested_by = action.requested_by,
+                    });
+                }
+            } else {
+                try candidates.append(self.arena, .{
+                    .action_index = action_index,
+                    .operation = operation,
+                    .package = action.package,
+                    .requested_by = action.requested_by,
+                });
+            }
         }
         std.sort.pdq(
             ExecutionCandidate,
@@ -2866,6 +2874,32 @@ test "highest same-name prior determines replacement kind with extra obsoletes" 
     try testing.expectEqual(abi.action_kind.downgrade, facts.actions.?[0].kind);
     try testing.expectEqual(@as(u32, 3), facts.actions.?[0].prior_count);
     try expectPriorNames(facts, facts.actions.?[0], &.{ "pkg", "pkg", "legacy" });
+    try testing.expectEqual(
+        @as(u32, 4),
+        facts.native_execution_input_count,
+    );
+    const expected_execution = [_]struct {
+        operation: u32,
+        name: []const u8,
+        evr: []const u8,
+    }{
+        .{ .operation = abi.execution_operation.install, .name = "pkg", .evr = "2-1" },
+        .{ .operation = abi.execution_operation.erase, .name = "pkg", .evr = "3-1" },
+        .{ .operation = abi.execution_operation.erase, .name = "pkg", .evr = "1-1" },
+        .{ .operation = abi.execution_operation.erase, .name = "legacy", .evr = "1-1" },
+    };
+    for (
+        facts.native_execution_inputs.?[0..facts.native_execution_input_count],
+        expected_execution,
+    ) |input, expected| {
+        try testing.expectEqual(expected.operation, input.operation);
+        const package = facts.packages.?[input.package_ref];
+        try testing.expectEqualStrings(
+            expected.name,
+            bytesOrEmpty(package.identity.name),
+        );
+        try expectPackageEvr(&package, metadata.splitEvrQuery(expected.evr));
+    }
 }
 
 test "obsoletes retain multiple priors and permit a shared prior" {
@@ -2961,6 +2995,36 @@ test "obsoletes retain multiple priors and permit a shared prior" {
         );
         try testing.expectEqual(@as(u32, 2), facts.actions.?[0].prior_count);
         try expectPriorNames(facts, facts.actions.?[0], &.{ "old-a", "old-b" });
+        try testing.expectEqual(
+            @as(u32, 3),
+            facts.native_execution_input_count,
+        );
+        const expected_names = [_][]const u8{
+            "replacement",
+            "old-b",
+            "old-a",
+        };
+        for (
+            facts.native_execution_inputs.?[
+                0..facts.native_execution_input_count
+            ],
+            expected_names,
+            0..,
+        ) |input, expected_name, index| {
+            try testing.expectEqual(
+                if (index == 0)
+                    abi.execution_operation.install
+                else
+                    abi.execution_operation.erase,
+                input.operation,
+            );
+            try testing.expectEqualStrings(
+                expected_name,
+                bytesOrEmpty(
+                    facts.packages.?[input.package_ref].identity.name,
+                ),
+            );
+        }
     }
 
     {

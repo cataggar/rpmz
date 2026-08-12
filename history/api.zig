@@ -221,9 +221,10 @@ pub fn Api(comptime Rpmdb: type) type {
         }
 
         fn createHistoryCtxFromDbWithAllocator(
-            opened: history_db.Database,
+            opened_value: history_db.Database,
             context_allocator: std.mem.Allocator,
         ) !*HistoryCtx {
+            var opened = opened_value;
             const db_owner = context_allocator.create(
                 history_db.Database,
             ) catch |err| {
@@ -273,7 +274,8 @@ pub fn Api(comptime Rpmdb: type) type {
                         allocator.destroy(db_owner);
                         value.db_owner = null;
                     } else {
-                        ctxDb(value).close();
+                        var db = ctxDb(value);
+                        db.close();
                     }
                 }
                 freeIntArray(value.installed_ids, @intCast(value.installed_count));

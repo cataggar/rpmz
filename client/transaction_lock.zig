@@ -40,7 +40,14 @@ pub fn acquire(
     allocator: Allocator,
     config: *const txn_config.TxnConfig,
 ) Error!Guard {
-    return acquireInDirectory(allocator, config, "", true);
+    return acquireInDirectoryMode(allocator, config, "", true, true);
+}
+
+pub fn acquireRoot(
+    allocator: Allocator,
+    config: *const txn_config.TxnConfig,
+) Error!Guard {
+    return acquireInDirectoryMode(allocator, config, "", true, false);
 }
 
 pub fn tryAcquireInDirectory(
@@ -48,7 +55,13 @@ pub fn tryAcquireInDirectory(
     config: *const txn_config.TxnConfig,
     lock_directory: []const u8,
 ) Error!Guard {
-    return acquireInDirectory(allocator, config, lock_directory, false);
+    return acquireInDirectoryMode(
+        allocator,
+        config,
+        lock_directory,
+        false,
+        true,
+    );
 }
 
 pub fn acquireInDirectory(
@@ -56,6 +69,22 @@ pub fn acquireInDirectory(
     config: *const txn_config.TxnConfig,
     lock_directory: []const u8,
     wait: bool,
+) Error!Guard {
+    return acquireInDirectoryMode(
+        allocator,
+        config,
+        lock_directory,
+        wait,
+        true,
+    );
+}
+
+fn acquireInDirectoryMode(
+    allocator: Allocator,
+    config: *const txn_config.TxnConfig,
+    lock_directory: []const u8,
+    wait: bool,
+    finalize_rpmdb: bool,
 ) Error!Guard {
     _ = lock_directory;
     const root_path = try allocator.dupeZ(u8, config.installRoot());
@@ -86,11 +115,18 @@ pub fn acquireInDirectory(
     }
     errdefer _ = flock(root_fd, lock_unlock);
 
-    var pinned_config = config.cloneWithPinnedInstallRoot(
-        allocator,
-        canonical_root,
-        root_fd,
-    ) catch |err| return switch (err) {
+    var pinned_config = (if (finalize_rpmdb)
+        config.cloneWithPinnedInstallRoot(
+            allocator,
+            canonical_root,
+            root_fd,
+        )
+    else
+        config.cloneWithPinnedInstallRootDeferredRpmDb(
+            allocator,
+            canonical_root,
+            root_fd,
+        )) catch |err| return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.InvalidTarget,
     };
@@ -195,11 +231,10 @@ test "aliases and database paths share one install-root lock" {
         root_a,
     );
     defer normal_config.deinit();
-    var dot_config = try txn_config.TxnConfig.init(
-        std.testing.allocator,
-        root_dot,
+    try std.testing.expectError(
+        error.InvalidInstallRoot,
+        txn_config.TxnConfig.init(std.testing.allocator, root_dot),
     );
-    defer dot_config.deinit();
     var replay_config = try txn_config.TxnConfig.init(
         std.testing.allocator,
         root_link,
@@ -224,14 +259,6 @@ test "aliases and database paths share one install-root lock" {
         true,
     );
     defer normal.deinit();
-    try std.testing.expectError(
-        error.WouldBlock,
-        tryAcquireInDirectory(
-            std.testing.allocator,
-            &dot_config,
-            lock_directory,
-        ),
-    );
     try std.testing.expectError(
         error.WouldBlock,
         tryAcquireInDirectory(

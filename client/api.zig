@@ -88,7 +88,7 @@ fn bindTransactionTarget(handle: *Tdnf) u32 {
     const raw_config = handle.pRpmConfig orelse
         return errors.ERROR_TDNF_RPMRC_FAIL;
     const config: *txn_config.TxnConfig = @ptrCast(@alignCast(raw_config));
-    const acquired = transaction_lock.acquire(
+    const acquired = transaction_lock.acquireRoot(
         std.heap.c_allocator,
         config,
     ) catch |err| {
@@ -229,6 +229,9 @@ extern fn tdnf_rpm_config_destroy(config: ?*anyopaque) callconv(.c) void;
 extern fn tdnf_rpm_config_apply_define(
     config: ?*anyopaque,
     value: ?[*:0]const u8,
+) callconv(.c) c_int;
+extern fn tdnf_rpm_config_finalize_rpmdb_pin(
+    config: ?*anyopaque,
 ) callconv(.c) c_int;
 extern fn tdnf_rpm_config_last_error() callconv(.c) [*:0]const u8;
 
@@ -952,25 +955,50 @@ pub export fn TDNFOpenHandle(
     defer freeString(&conf_path);
     var rooted_conf_path: ?[*:0]u8 = null;
     defer freeString(&rooted_conf_path);
+    var pinned_conf_path: ?[:0]u8 = null;
+    defer if (pinned_conf_path) |path| std.heap.c_allocator.free(path);
 
     handle.pRpmConfig = tdnf_rpm_config_create(args.pszInstallRoot);
     if (handle.pRpmConfig == null) {
         common.log(LOG_ERR, "Failed to initialize native rpm configuration: %s\n", .{tdnf_rpm_config_last_error()});
         result = errors.ERROR_TDNF_RPMRC_FAIL;
     }
+    if (result == 0 and commandRequiresTargetLock(args))
+        result = bindTransactionTarget(handle);
 
     if (result == 0 and isNullOrEmpty(args.pszConfFile) and
         !isNullOrEmpty(args.pszInstallRoot) and
         !eqlZ(args.pszInstallRoot.?, "/"))
     {
-        const nodes = [_]?[*:0]const u8{ args.pszInstallRoot, config_file };
-        result = joinPath(&rooted_conf_path, &nodes);
+        const config: *const txn_config.TxnConfig = @ptrCast(@alignCast(
+            handle.pRpmConfig.?,
+        ));
+        if (config.pinnedInstallRootFd()) |root_fd| {
+            pinned_conf_path = std.fmt.allocPrintSentinel(
+                std.heap.c_allocator,
+                "/proc/self/fd/{d}{s}",
+                .{ root_fd, std.mem.span(config_file) },
+                0,
+            ) catch blk: {
+                result = errors.ERROR_TDNF_OUT_OF_MEMORY;
+                break :blk null;
+            };
+        } else {
+            const nodes = [_]?[*:0]const u8{
+                args.pszInstallRoot,
+                config_file,
+            };
+            result = joinPath(&rooted_conf_path, &nodes);
+        }
         var exists: c_int = 0;
-        if (result == 0)
-            result = TDNFIsFileOrSymlink(rooted_conf_path, &exists);
+        const candidate: ?[*:0]const u8 = if (pinned_conf_path) |path|
+            path.ptr
+        else
+            rooted_conf_path;
+        if (result == 0) result = TDNFIsFileOrSymlink(candidate, &exists);
         if (result == 0) {
             result = TDNFAllocateString(
-                if (exists != 0) rooted_conf_path else config_file,
+                if (exists != 0) candidate else config_file,
                 &conf_path,
             );
         }
@@ -992,9 +1020,9 @@ pub export fn TDNFOpenHandle(
             }
         }
     }
+    if (result == 0 and handle.pTransactionTargetLock != null)
+        result = finalizeTransactionRpmDb(handle);
     if (result == 0) result = TDNFConfigExpandVars(handle);
-    if (result == 0 and commandRequiresTargetLock(args))
-        result = bindTransactionTarget(handle);
     if (result == 0) {
         GlobalSetDnfCheckUpdateCompat(handle.pConf.?.nCheckUpdateCompat);
         result = TDNFLoadPlugins(handle);
@@ -1031,6 +1059,18 @@ fn applyRpmDefine(handle_opt: ?*Tdnf, value: ?[*:0]const u8) u32 {
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (tdnf_rpm_config_apply_define(handle.pRpmConfig, value) != 0) {
         common.log(LOG_ERR, "Invalid rpmdefine '%s': %s\n", .{ value.?, tdnf_rpm_config_last_error() });
+        return errors.ERROR_TDNF_RPMRC_FAIL;
+    }
+    return 0;
+}
+
+fn finalizeTransactionRpmDb(handle: *Tdnf) u32 {
+    if (tdnf_rpm_config_finalize_rpmdb_pin(handle.pRpmConfig) != 0) {
+        common.log(
+            LOG_ERR,
+            "Failed to pin native rpm database: %s\n",
+            .{tdnf_rpm_config_last_error()},
+        );
         return errors.ERROR_TDNF_RPMRC_FAIL;
     }
     return 0;
@@ -2382,7 +2422,11 @@ test "record command-line path clears parallel arrays on every allocation failur
 test "normal handle target lock spans the handle lifetime" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, "root");
+    try tmp.dir.createDirPath(std.testing.io, "root/custom/rpm");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/custom/rpm/rpmdb.sqlite",
+        .data = "",
+    });
     var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
     const base = base_buffer[0..try tmp.dir.realPath(
         std.testing.io,
@@ -2411,6 +2455,17 @@ test "normal handle target lock spans the handle lifetime" {
         handle.pRpmConfig.?,
     ));
     try std.testing.expect(pinned.pinnedInstallRootFd() != null);
+    try std.testing.expect(pinned.pinnedRpmDbDirFd() == null);
+    try pinned.setMacro(.dbpath, "/custom/rpm");
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        finalizeTransactionRpmDb(&handle),
+    );
+    try std.testing.expect(pinned.pinnedRpmDbDirFd() != null);
+    try std.testing.expectError(
+        error.InvalidMacroValue,
+        pinned.setMacro(.dbpath, "/var/lib/rpm"),
+    );
 
     var contender = try txn_config.TxnConfig.init(
         std.testing.allocator,

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sqlite = @import("sqlite");
 const confined_sqlite = @import("confined_sqlite");
 const txn_config = @import("rpm_txn_config");
@@ -10,6 +11,9 @@ extern fn mkdirat(
 ) callconv(.c) c_int;
 
 pub const busy_timeout_ms: c_int = 5000;
+
+var test_dir_close_probe: ?*const fn (?*anyopaque, c_int) void = null;
+var test_dir_close_probe_context: ?*anyopaque = null;
 
 pub const Error = sqlite.Error || error{
     BusyTimeoutFailed,
@@ -26,6 +30,13 @@ pub const Database = struct {
     connection: ?confined_sqlite.Connection,
 
     pub fn init(path: [*:0]const u8) Error!Database {
+        return initWithBusyTimeout(path, applyDefaultBusyTimeout);
+    }
+
+    fn initWithBusyTimeout(
+        path: [*:0]const u8,
+        apply_timeout: *const fn (*Database) Error!void,
+    ) Error!Database {
         const path_slice = std.mem.span(path);
         const slash = std.mem.lastIndexOfScalar(u8, path_slice, '/');
         const absolute = path_slice.len != 0 and path_slice[0] == '/';
@@ -54,7 +65,10 @@ pub const Database = struct {
         });
         if (start_fd < 0) return error.SyscallFailed;
         var dir_fd = start_fd;
-        errdefer _ = std.c.close(dir_fd);
+        var owns_dir_fd = true;
+        errdefer {
+            if (owns_dir_fd) _ = std.c.close(dir_fd);
+        }
         var components = std.mem.splitScalar(u8, parent_path, '/');
         while (components.next()) |component| {
             if (component.len == 0 or
@@ -78,9 +92,10 @@ pub const Database = struct {
             _ = std.c.close(dir_fd);
             dir_fd = next_fd;
         }
+        owns_dir_fd = false;
         var db = try openOwnedDirectory(dir_fd, basename, true);
         errdefer db.close();
-        try db.busyTimeout(busy_timeout_ms);
+        try apply_timeout(&db);
         return db;
     }
 
@@ -118,14 +133,33 @@ pub const Database = struct {
         };
     }
 
-    pub fn close(self: Database) void {
-        if (self.connection) |connection_value| {
-            var connection = connection_value;
-            connection.close();
+    pub fn close(self: *Database) void {
+        _ = self.tryClose();
+    }
+
+    pub fn tryClose(self: *Database) bool {
+        if (self.connection) |*connection| {
+            if (!connection.tryClose()) return false;
+            self.connection = null;
+            self.raw.ptr = null;
         } else {
-            self.raw.close();
+            if (self.raw.ptr != null and
+                sqlite.c.sqlite3_close(self.raw.ptr) != sqlite.c.SQLITE_OK)
+            {
+                return false;
+            }
+            self.raw.ptr = null;
         }
-        if (self.dir_fd >= 0) _ = std.c.close(self.dir_fd);
+        if (self.dir_fd >= 0) {
+            const closed_fd = self.dir_fd;
+            _ = std.c.close(closed_fd);
+            self.dir_fd = -1;
+            if (builtin.is_test) {
+                if (test_dir_close_probe) |probe|
+                    probe(test_dir_close_probe_context, closed_fd);
+            }
+        }
+        return true;
     }
 
     pub fn busyTimeout(self: Database, milliseconds: c_int) Error!void {
@@ -168,6 +202,10 @@ pub const Database = struct {
         return if (self.raw.errmsg()) |msg| std.mem.span(msg) else "";
     }
 };
+
+fn applyDefaultBusyTimeout(db: *Database) Error!void {
+    try db.busyTimeout(busy_timeout_ms);
+}
 
 fn duplicateFdCloexec(fd: c_int) c_int {
     return std.c.fcntl(
@@ -317,6 +355,67 @@ pub fn errorToDwError(err: anyerror) u32 {
     return switch (err) {
         else => 1,
     };
+}
+
+test "history init transfers its directory before a later timeout failure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/history.db",
+        .{base},
+        0,
+    );
+    defer std.testing.allocator.free(path);
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const source_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(source_fd >= 0);
+    defer _ = std.c.close(source_fd);
+
+    const ProbeContext = struct {
+        source_fd: c_int,
+        reused_fd: c_int = -1,
+    };
+    const Probe = struct {
+        fn run(raw: ?*anyopaque, closed_fd: c_int) void {
+            const context: *ProbeContext = @ptrCast(@alignCast(raw.?));
+            context.reused_fd = std.c.fcntl(
+                context.source_fd,
+                std.c.F.DUPFD_CLOEXEC,
+                closed_fd,
+            );
+        }
+
+        fn fail(_: *Database) Error!void {
+            return error.BusyTimeoutFailed;
+        }
+    };
+    var context = ProbeContext{ .source_fd = source_fd };
+    test_dir_close_probe = Probe.run;
+    test_dir_close_probe_context = &context;
+    defer {
+        test_dir_close_probe = null;
+        test_dir_close_probe_context = null;
+    }
+    try std.testing.expectError(
+        error.BusyTimeoutFailed,
+        Database.initWithBusyTimeout(path.ptr, Probe.fail),
+    );
+    try std.testing.expect(context.reused_fd >= 0);
+    defer _ = std.c.close(context.reused_fd);
+    try std.testing.expect(
+        std.c.fcntl(context.reused_fd, std.c.F.GETFD) >= 0,
+    );
 }
 
 test "history database stays in pinned no-follow parent" {
@@ -470,7 +569,6 @@ test "history config stays under pinned root and rejects database symlinks" {
             null,
         ),
     );
-    defer _ = sqlite.c.sqlite3_finalize(timeout_statement);
     try std.testing.expectEqual(
         sqlite.c.SQLITE_ROW,
         sqlite.c.sqlite3_step(timeout_statement),
@@ -480,7 +578,25 @@ test "history config stays under pinned root and rejects database symlinks" {
         sqlite.c.sqlite3_column_int(timeout_statement, 0),
     );
     try db.exec("CREATE TABLE pinned(value INTEGER);", .{});
-    db.close();
+    const retained_dir_fd = db.dir_fd;
+    try std.testing.expect(!db.tryClose());
+    try std.testing.expect(
+        std.c.fcntl(retained_dir_fd, std.c.F.GETFD) >= 0,
+    );
+    try std.testing.expectEqual(
+        sqlite.c.SQLITE_OK,
+        sqlite.c.sqlite3_finalize(timeout_statement),
+    );
+    timeout_statement = null;
+    try std.testing.expect(db.tryClose());
+    try std.testing.expectEqual(
+        @as(c_int, -1),
+        std.c.fcntl(retained_dir_fd, std.c.F.GETFD),
+    );
+    try std.testing.expectEqual(
+        @intFromEnum(std.posix.E.BADF),
+        std.c._errno().*,
+    );
     try tmp.dir.access(
         std.testing.io,
         "parked/var/lib/tdnf/history.db",

@@ -93,6 +93,10 @@ fn sharedObsoletePrimaryXml(
         \\    <location href="packages/replacement-a.rpm"/>
         \\    <format>
         \\      <rpm:provides><rpm:entry name="replacement-a" flags="EQ" epoch="0" ver="1" rel="1"/></rpm:provides>
+        \\      <rpm:obsoletes>
+        \\        <rpm:entry name="old"/>
+        \\        <rpm:entry name="retired"/>
+        \\      </rpm:obsoletes>
         \\    </format>
         \\  </package>
         \\  <package type="rpm">
@@ -104,6 +108,7 @@ fn sharedObsoletePrimaryXml(
         \\    <location href="packages/replacement-b.rpm"/>
         \\    <format>
         \\      <rpm:provides><rpm:entry name="replacement-b" flags="EQ" epoch="0" ver="1" rel="1"/></rpm:provides>
+        \\      <rpm:obsoletes><rpm:entry name="old"/></rpm:obsoletes>
         \\    </format>
         \\  </package>
         \\</metadata>
@@ -483,6 +488,13 @@ fn planPackageIdByName(
     return null;
 }
 
+fn containsString(values: []const []const u8, wanted: []const u8) bool {
+    for (values) |value| {
+        if (std.mem.eql(u8, value, wanted)) return true;
+    }
+    return false;
+}
+
 test "an exported bundle validates as a closed set" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
@@ -523,6 +535,42 @@ test "an exported bundle validates as a closed set" {
     try std.testing.expectEqualStrings("app", bundle.model().packages[0].identity.name);
 }
 
+test "alldeps replay projects actions onto a nonempty target" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    var input = try fixture.input("alldeps-nonempty");
+    input.resolve.policy.all_deps = true;
+    try fixture.installTargetPackage(input, "retained");
+
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+    try std.testing.expect(
+        !exported.exported.plan.model().environment.policy.include_installed,
+    );
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+    try std.testing.expectEqual(@as(usize, 2), replayed.final_inventory.?.len);
+    var saw_app = false;
+    var saw_retained = false;
+    for (replayed.final_inventory.?) |package| {
+        if (std.mem.eql(u8, package.identity.name, "app")) saw_app = true;
+        if (std.mem.eql(u8, package.identity.name, "retained"))
+            saw_retained = true;
+    }
+    try std.testing.expect(saw_app);
+    try std.testing.expect(saw_retained);
+}
+
 test "shared obsolete priors export parse bundle and replay end to end" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
@@ -531,62 +579,7 @@ test "shared obsolete priors export parse bundle and replay end to end" {
     defer exported.deinit();
     try std.testing.expect(exported == .exported);
 
-    const old_id = planPackageIdByName(exported.exported.plan, "old") orelse
-        return error.TestUnexpectedResult;
-    const retired_id = planPackageIdByName(
-        exported.exported.plan,
-        "retired",
-    ) orelse return error.TestUnexpectedResult;
-    const first_id = planPackageIdByName(
-        exported.exported.plan,
-        "replacement-a",
-    ) orelse return error.TestUnexpectedResult;
-    const second_id = planPackageIdByName(
-        exported.exported.plan,
-        "replacement-b",
-    ) orelse return error.TestUnexpectedResult;
-    const actions = [_]transaction_plan.Action{
-        .{
-            .kind = .obsolete,
-            .prior_package_ids = &.{ old_id, retired_id },
-            .reason = .obsoletes,
-            .requested_by_job_id = null,
-            .target_package_id = first_id,
-        },
-        .{
-            .kind = .obsolete,
-            .prior_package_ids = &.{old_id},
-            .reason = .obsoletes,
-            .requested_by_job_id = null,
-            .target_package_id = second_id,
-        },
-    };
-    const steps = [_]transaction_plan.ExecutionStep{
-        .{ .action_index = 0, .operation = .install, .package_id = first_id },
-        .{ .action_index = 0, .operation = .erase, .package_id = retired_id },
-        .{ .action_index = 1, .operation = .install, .package_id = second_id },
-        .{ .action_index = 1, .operation = .erase, .package_id = old_id },
-    };
-    var plan_data = exported.exported.plan.model().*;
-    var selected: std.ArrayList(transaction_plan.Selected) = .empty;
-    defer selected.deinit(allocator);
-    for (plan_data.selected) |selection| {
-        if (!std.mem.eql(u8, selection.package_id, old_id) and
-            !std.mem.eql(u8, selection.package_id, retired_id))
-        {
-            try selected.append(allocator, selection);
-        }
-    }
-    plan_data.actions = &actions;
-    plan_data.execution_steps = &steps;
-    plan_data.native_execution_inputs = &.{};
-    plan_data.selected = selected.items;
-    const shared_plan = try transaction_plan.Plan.create(
-        allocator,
-        plan_data,
-    );
-    defer shared_plan.destroy();
-    const plan_json = try shared_plan.canonicalJsonAlloc(allocator);
+    const plan_json = try exported.exported.plan.canonicalJsonAlloc(allocator);
     defer allocator.free(plan_json);
     const parsed = try transaction_plan.parse(allocator, plan_json);
     defer parsed.destroy();
@@ -604,65 +597,61 @@ test "shared obsolete priors export parse bundle and replay end to end" {
         transaction_plan.ActionKind.obsolete,
         parsed.model().actions[1].kind,
     );
-    try std.testing.expectEqual(
-        @as(usize, 2),
-        parsed.model().actions[0].prior_package_ids.len,
-    );
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        parsed.model().actions[1].prior_package_ids.len,
-    );
-    try std.testing.expectEqualStrings(
-        parsed.model().actions[0].prior_package_ids[0],
-        parsed.model().actions[1].prior_package_ids[0],
-    );
-    const parsed_retired_id = planPackageIdByName(parsed, "retired") orelse
+    const old_id = planPackageIdByName(parsed, "old") orelse
         return error.TestUnexpectedResult;
-    const parsed_second_id = planPackageIdByName(
-        parsed,
-        "replacement-b",
-    ) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings(
-        parsed_retired_id,
-        parsed.model().execution_steps.?[1].package_id,
-    );
-    try std.testing.expectEqualStrings(
-        parsed_second_id,
-        parsed.model().execution_steps.?[2].package_id,
-    );
-
-    var directory = try std.Io.Dir.cwd().openDir(
-        io,
-        input.destination,
-        .{},
-    );
-    defer directory.close(io);
-    try directory.writeFile(io, .{
-        .sub_path = transaction_bundle.plan_name,
-        .data = plan_json,
-    });
-    const original_manifest = try readManifest(input.destination);
-    defer original_manifest.destroy();
-    var manifest_data = original_manifest.model().*;
-    const files = try allocator.dupe(
-        transaction_bundle.File,
-        manifest_data.files,
-    );
-    defer allocator.free(files);
-    const plan_sha = sha256Hex(plan_json);
-    var found_plan = false;
-    for (files) |*file| {
-        if (std.mem.eql(u8, file.path, transaction_bundle.plan_name)) {
-            file.sha256 = &plan_sha;
-            file.size = plan_json.len;
-            found_plan = true;
-        }
+    const retired_id = planPackageIdByName(parsed, "retired") orelse
+        return error.TestUnexpectedResult;
+    const first_id = planPackageIdByName(parsed, "replacement-a") orelse
+        return error.TestUnexpectedResult;
+    const second_id = planPackageIdByName(parsed, "replacement-b") orelse
+        return error.TestUnexpectedResult;
+    var saw_two_priors = false;
+    var saw_shared_prior = false;
+    for (parsed.model().actions) |action| {
+        try std.testing.expectEqual(
+            transaction_plan.ActionKind.obsolete,
+            action.kind,
+        );
+        if (action.prior_package_ids.len == 2) saw_two_priors = true;
+        if (containsString(action.prior_package_ids, old_id))
+            saw_shared_prior = true;
     }
-    try std.testing.expect(found_plan);
-    const shared_digest = try shared_plan.digest(allocator);
-    manifest_data.files = files;
-    manifest_data.plan.digest = &shared_digest;
-    try writeManifest(input.destination, manifest_data);
+    try std.testing.expect(saw_two_priors);
+    try std.testing.expect(saw_shared_prior);
+    var old_erases: usize = 0;
+    var retired_erases: usize = 0;
+    for (parsed.model().execution_steps.?) |step| {
+        if (step.operation != .erase) continue;
+        if (std.mem.eql(u8, step.package_id, old_id)) old_erases += 1;
+        if (std.mem.eql(u8, step.package_id, retired_id))
+            retired_erases += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), old_erases);
+    try std.testing.expectEqual(@as(usize, 1), retired_erases);
+    const captured_steps = parsed.model().execution_steps.?;
+    try std.testing.expectEqual(
+        transaction_plan.ExecutionOperation.install,
+        captured_steps[0].operation,
+    );
+    try std.testing.expectEqualStrings(second_id, captured_steps[0].package_id);
+    try std.testing.expectEqual(
+        transaction_plan.ExecutionOperation.install,
+        captured_steps[1].operation,
+    );
+    try std.testing.expectEqualStrings(first_id, captured_steps[1].package_id);
+    try std.testing.expectEqual(
+        transaction_plan.ExecutionOperation.erase,
+        captured_steps[2].operation,
+    );
+    try std.testing.expectEqualStrings(old_id, captured_steps[2].package_id);
+    try std.testing.expectEqual(
+        transaction_plan.ExecutionOperation.erase,
+        captured_steps[3].operation,
+    );
+    try std.testing.expectEqualStrings(
+        retired_id,
+        captured_steps[3].package_id,
+    );
 
     const bundle = try bundle_reader.openBundle(
         allocator,
