@@ -117,14 +117,22 @@ pub fn extract(
     config: *const txn_config.TxnConfig,
     trans_flags: u32,
 ) Error!void {
-    var plan = try buildPlan(allocator, rpm, config);
+    var root = try install.RootDir.initConfig(
+        allocator,
+        config,
+        null,
+        null,
+    );
+    defer root.deinit();
+    var plan = try buildPlan(allocator, rpm, config, &root);
     defer plan.deinit();
 
     if ((trans_flags & rpmtrans.TDNF_RPMTRANS_FLAG_JUSTDB) != 0) return;
 
-    try writePlan(
+    try writePlanWithRoot(
         allocator,
         plan.entries,
+        &root,
         config.installRoot(),
         plan.spec_dir,
         plan.source_dir,
@@ -135,6 +143,7 @@ fn buildPlan(
     allocator: Allocator,
     rpm: *const pkgfile.RpmFile,
     config: *const txn_config.TxnConfig,
+    root: *const install.RootDir,
 ) Error!Plan {
     if (rpm.packageKind() == .binary) return error.NotSourcePackage;
 
@@ -179,12 +188,12 @@ fn buildPlan(
     const payload = try rpm.decompressPayload(allocator);
     errdefer allocator.free(payload);
 
-    const entries = try matchPayload(
+    const entries = try matchPayloadWithRoot(
         allocator,
         payload,
         manifest,
         spec_index,
-        child.installRoot(),
+        root,
     );
     errdefer allocator.free(entries);
     try validatePlanPaths(allocator, entries, spec_dir, source_dir);
@@ -308,6 +317,29 @@ fn matchPayload(
     spec_index: usize,
     install_root: []const u8,
 ) Error![]PlannedEntry {
+    var root = try install.RootDir.init(
+        allocator,
+        install_root,
+        null,
+        null,
+    );
+    defer root.deinit();
+    return matchPayloadWithRoot(
+        allocator,
+        payload,
+        manifest,
+        spec_index,
+        &root,
+    );
+}
+
+fn matchPayloadWithRoot(
+    allocator: Allocator,
+    payload: []const u8,
+    manifest: []const ManifestEntry,
+    spec_index: usize,
+    root: *const install.RootDir,
+) Error![]PlannedEntry {
     var indexes = std.StringHashMap(usize).init(allocator);
     defer indexes.deinit();
     for (manifest, 0..) |entry, index| {
@@ -333,8 +365,7 @@ fn matchPayload(
             return error.GhostPayloadEntry;
         }
         const metadata = try install.resolveFileMetadata(
-            allocator,
-            install_root,
+            root,
             manifest_entry.mode,
             manifest_entry.mtime,
             manifest_entry.username,
@@ -408,18 +439,43 @@ fn writePlan(
     spec_dir: []const u8,
     source_dir: []const u8,
 ) Error!void {
+    var root = try install.RootDir.init(
+        allocator,
+        install_root,
+        null,
+        null,
+    );
+    defer root.deinit();
+    return writePlanWithRoot(
+        allocator,
+        entries,
+        &root,
+        install_root,
+        spec_dir,
+        source_dir,
+    );
+}
+
+fn writePlanWithRoot(
+    allocator: Allocator,
+    entries: []const PlannedEntry,
+    root: *const install.RootDir,
+    install_root: []const u8,
+    spec_dir: []const u8,
+    source_dir: []const u8,
+) Error!void {
     try validatePlanPaths(allocator, entries, spec_dir, source_dir);
     for (entries) |entry| {
-        try install.validateRegularFileDestinationBeneath(
-            allocator,
+        try install.validateRegularFileDestinationBeneathRoot(
+            root,
             install_root,
             if (entry.spec) spec_dir else source_dir,
             entry.relative_path,
         );
     }
     for (entries) |entry| {
-        try install.writeRegularFileBeneath(
-            allocator,
+        try install.writeRegularFileBeneathRoot(
+            root,
             install_root,
             if (entry.spec) spec_dir else source_dir,
             entry.relative_path,

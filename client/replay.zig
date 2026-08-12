@@ -1820,6 +1820,71 @@ test "shared obsolete priors collapse to complete semantic items" {
     );
 }
 
+test "later primary shared-prior failure is rejected during preflight" {
+    const packages = [_]transaction_plan.Package{
+        testPackage("shared-old", "shared", "1", .installed, 11),
+        testPackage("replacement", "replacement", "1", .available, null),
+        testPackage("shared-new", "shared", "2", .available, null),
+    };
+    const actions = [_]transaction_plan.Action{
+        .{
+            .kind = .obsolete,
+            .prior_package_ids = &.{"shared-old"},
+            .reason = .obsoletes,
+            .requested_by_job_id = null,
+            .target_package_id = "replacement",
+        },
+        .{
+            .kind = .upgrade,
+            .prior_package_ids = &.{"shared-old"},
+            .reason = .dependency,
+            .requested_by_job_id = null,
+            .target_package_id = "shared-new",
+        },
+    };
+    const steps = [_]transaction_plan.ExecutionStep{
+        .{ .action_index = 0, .operation = .install, .package_id = "replacement" },
+        .{ .action_index = 0, .operation = .erase, .package_id = "shared-old" },
+        .{ .action_index = 1, .operation = .upgrade, .package_id = "shared-new" },
+    };
+    const rows = [_]InstalledPackage{.{
+        .hnum = 11,
+        .identity = packages[0].identity,
+    }};
+    const fake: *rpm_gpgcheck.FileHandle = @ptrFromInt(
+        @alignOf(rpm_gpgcheck.FileHandle),
+    );
+    const verified = [_]VerifiedRpm{
+        .{ .plan_package_id = "replacement", .path = "/bundle/replacement.rpm", .handle = fake },
+        .{ .plan_package_id = "shared-new", .path = "/bundle/shared-new.rpm", .handle = fake },
+    };
+    const plan = transaction_plan.Data{
+        .actions = &actions,
+        .environment = undefined,
+        .execution_steps = &steps,
+        .hidden_packages = &.{},
+        .jobs = &.{},
+        .packages = &packages,
+        .problems = &.{},
+        .repositories = &.{},
+        .requests = &.{},
+        .selected = &.{
+            .{ .package_id = "replacement" },
+            .{ .package_id = "shared-new" },
+        },
+        .skipped = &.{},
+    };
+    try std.testing.expectError(
+        error.ActionShapeMismatch,
+        buildFixedOrder(
+            std.testing.allocator,
+            &plan,
+            &rows,
+            &verified,
+        ),
+    );
+}
+
 test "unmergeable action order and inventory mismatch fail preflight" {
     const packages = [_]transaction_plan.Package{
         testPackage("old", "pkg", "2", .installed, 21),

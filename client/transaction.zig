@@ -10,6 +10,7 @@ const errors = @import("tdnf_error");
 const trans_flags = @import("rpmtrans_flags");
 const rpm_header = @import("rpm_header");
 const rpm_evr = @import("rpm_evr");
+const txn_config = @import("rpm_txn_config");
 const transaction_lock = @import("transaction_lock");
 
 const c = abi.C;
@@ -752,12 +753,18 @@ fn validateFixedOrderInput(
     const seen = allocator.alloc(bool, transaction.items.len) catch
         return error.OutOfMemory;
     defer allocator.free(seen);
+    const execution_positions = allocator.alloc(
+        usize,
+        transaction.items.len,
+    ) catch return error.OutOfMemory;
+    defer allocator.free(execution_positions);
     @memset(seen, false);
-    for (transaction.order) |index_u32| {
+    for (transaction.order, 0..) |index_u32, execution_position| {
         const index: usize = index_u32;
         if (index >= transaction.items.len or seen[index])
             return error.MalformedOrder;
         seen[index] = true;
+        execution_positions[index] = execution_position;
     }
 
     for (transaction.items, 0..) |item, item_index| {
@@ -780,6 +787,18 @@ fn validateFixedOrderInput(
             if (prior.hnum == 0) return error.InvalidItem;
             for (priors[0..prior_index]) |earlier| {
                 if (earlier.hnum == prior.hnum) return error.InvalidItem;
+            }
+            for (transaction.items, 0..) |owner, owner_index| {
+                if (owner_index == item_index) continue;
+                const owner_primary_index =
+                    fixedReplacementPrimaryIndex(owner) orelse continue;
+                if (fixedItemPriors(owner)[owner_primary_index].hnum ==
+                    prior.hnum and
+                    execution_positions[owner_index] >
+                        execution_positions[item_index])
+                {
+                    return error.InvalidItem;
+                }
             }
         }
 
@@ -3344,30 +3363,105 @@ fn runTransactionNativeImpl(
     );
 }
 
+const PinnedTransactionTarget = struct {
+    tdnf: *abi.Tdnf,
+    args: *abi.CmdArgs,
+    guard: transaction_lock.Guard,
+    pinned_root: [:0]u8,
+    original_config: ?*anyopaque,
+    original_install_root: ?[*:0]u8,
+
+    fn init(
+        tdnf: *abi.Tdnf,
+        acquired_guard: transaction_lock.Guard,
+    ) transaction_lock.Error!PinnedTransactionTarget {
+        var guard = acquired_guard;
+        errdefer guard.deinit();
+        const args = tdnf.pArgs orelse return error.InvalidTarget;
+        const pinned_root = allocator.dupeZ(
+            u8,
+            guard.config().installRoot(),
+        ) catch return error.OutOfMemory;
+        errdefer allocator.free(pinned_root);
+        const original_config = tdnf.pRpmConfig;
+        const original_install_root = args.pszInstallRoot;
+        tdnf.pRpmConfig = @ptrCast(guard.config());
+        args.pszInstallRoot = @constCast(pinned_root.ptr);
+        return .{
+            .tdnf = tdnf,
+            .args = args,
+            .guard = guard,
+            .pinned_root = pinned_root,
+            .original_config = original_config,
+            .original_install_root = original_install_root,
+        };
+    }
+
+    fn deinit(self: *PinnedTransactionTarget) void {
+        self.args.pszInstallRoot = self.original_install_root;
+        self.tdnf.pRpmConfig = self.original_config;
+        allocator.free(self.pinned_root);
+        self.guard.deinit();
+    }
+};
+
+fn runWithAcquiredTransactionTarget(
+    tdnf: *abi.Tdnf,
+    acquired_guard: transaction_lock.Guard,
+    context: anytype,
+    operation: anytype,
+) u32 {
+    var target = PinnedTransactionTarget.init(
+        tdnf,
+        acquired_guard,
+    ) catch |err| return transactionLockFailure(err);
+    defer target.deinit();
+    return operation(tdnf, context);
+}
+
+fn runWithTransactionTarget(
+    tdnf: *abi.Tdnf,
+    context: anytype,
+    operation: anytype,
+) u32 {
+    const guard = acquireTransactionTarget(tdnf) catch |err|
+        return transactionLockFailure(err);
+    return runWithAcquiredTransactionTarget(
+        tdnf,
+        guard,
+        context,
+        operation,
+    );
+}
+
+const NativeRunContext = struct {
+    ts: ?*c.TDNFRPMTS,
+    plan: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+};
+
+fn runTransactionNativeLocked(
+    tdnf: *abi.Tdnf,
+    context: *const NativeRunContext,
+) u32 {
+    return runTransactionNativeUnlocked(context.ts, tdnf, context.plan);
+}
+
 fn runTransactionNative(
     ts_opt: ?*c.TDNFRPMTS,
     tdnf_opt: ?*abi.Tdnf,
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32 {
     const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const args = tdnf.pArgs orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    var target_guard = acquireTransactionTarget(tdnf) catch |err|
-        return transactionLockFailure(err);
-    defer target_guard.deinit();
-    const pinned_root = allocator.dupeZ(
-        u8,
-        target_guard.config().installRoot(),
-    ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
-    defer allocator.free(pinned_root);
-    const original_config = tdnf.pRpmConfig;
-    const original_install_root = args.pszInstallRoot;
-    tdnf.pRpmConfig = @ptrCast(target_guard.config());
-    args.pszInstallRoot = @constCast(pinned_root.ptr);
-    defer {
-        args.pszInstallRoot = original_install_root;
-        tdnf.pRpmConfig = original_config;
-    }
-    return runTransactionNativeUnlocked(ts_opt, tdnf, plan_opt);
+    if (tdnf.pArgs == null) return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const context = NativeRunContext{
+        .ts = ts_opt,
+        .plan = plan_opt,
+    };
+    return runWithTransactionTarget(
+        tdnf,
+        &context,
+        runTransactionNativeLocked,
+    );
 }
 
 fn runTransactionNativeUnlocked(
@@ -3545,35 +3639,15 @@ fn buildCommandLine(args: *abi.CmdArgs, output: *?[*:0]u8) u32 {
     return TDNFJoinArrayToString(args.ppszArgv.? + 1, " ", args.nArgc, output);
 }
 
-fn rpmExecTransaction(
-    tdnf_opt: ?*abi.Tdnf,
-    solved_opt: ?*c.TDNF_SOLVED_PKG_INFO,
-) callconv(.c) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const solved = solved_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf.pArgs == null or tdnf.pConf == null)
-        return errors.ERROR_TDNF_INVALID_PARAMETER;
+fn rpmExecTransactionLocked(
+    tdnf: *abi.Tdnf,
+    solved: *c.TDNF_SOLVED_PKG_INFO,
+) u32 {
     const created = createTransaction(tdnf, solved);
     const ts = created[1] orelse return created[0];
     defer cleanupTransaction(tdnf, ts);
     const args = tdnf.pArgs.?;
     if (args.nDownloadOnly != 0) return 0;
-    var target_guard = acquireTransactionTarget(tdnf) catch |err|
-        return transactionLockFailure(err);
-    defer target_guard.deinit();
-    const pinned_root = allocator.dupeZ(
-        u8,
-        target_guard.config().installRoot(),
-    ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
-    defer allocator.free(pinned_root);
-    const original_config = tdnf.pRpmConfig;
-    const original_install_root = args.pszInstallRoot;
-    tdnf.pRpmConfig = @ptrCast(target_guard.config());
-    args.pszInstallRoot = @constCast(pinned_root.ptr);
-    defer {
-        args.pszInstallRoot = original_install_root;
-        tdnf.pRpmConfig = original_config;
-    }
     if (args.nTestOnly != 0) return runTransaction(ts, tdnf);
 
     var history: ?*HistoryCtx = null;
@@ -3591,37 +3665,36 @@ fn rpmExecTransaction(
     return TDNFMarkAutoInstalled(tdnf, history, solved, 0);
 }
 
-fn rpmExecHistoryTransaction(
+fn rpmExecTransaction(
     tdnf_opt: ?*abi.Tdnf,
     solved_opt: ?*c.TDNF_SOLVED_PKG_INFO,
-    history_args_opt: ?*c.TDNF_HISTORY_ARGS,
 ) callconv(.c) u32 {
     const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const solved = solved_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const history_args = history_args_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (tdnf.pArgs == null or tdnf.pConf == null)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
+    // Preparation can import rpmdb keys or extract source RPMs. Pin and lock
+    // the target before createTransaction so those mutations share the same
+    // lifetime as native execution and history updates.
+    return runWithTransactionTarget(tdnf, solved, rpmExecTransactionLocked);
+}
+
+const HistoryTransactionRunContext = struct {
+    solved: *c.TDNF_SOLVED_PKG_INFO,
+    history_args: *c.TDNF_HISTORY_ARGS,
+};
+
+fn rpmExecHistoryTransactionLocked(
+    tdnf: *abi.Tdnf,
+    context: *const HistoryTransactionRunContext,
+) u32 {
+    const solved = context.solved;
+    const history_args = context.history_args;
     const created = createTransaction(tdnf, solved);
     const ts = created[1] orelse return created[0];
     defer cleanupTransaction(tdnf, ts);
     const args = tdnf.pArgs.?;
     if (args.nDownloadOnly != 0) return 0;
-    var target_guard = acquireTransactionTarget(tdnf) catch |err|
-        return transactionLockFailure(err);
-    defer target_guard.deinit();
-    const pinned_root = allocator.dupeZ(
-        u8,
-        target_guard.config().installRoot(),
-    ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
-    defer allocator.free(pinned_root);
-    const original_config = tdnf.pRpmConfig;
-    const original_install_root = args.pszInstallRoot;
-    tdnf.pRpmConfig = @ptrCast(target_guard.config());
-    args.pszInstallRoot = @constCast(pinned_root.ptr);
-    defer {
-        args.pszInstallRoot = original_install_root;
-        tdnf.pRpmConfig = original_config;
-    }
     if (args.nTestOnly != 0) return runTransaction(ts, tdnf);
 
     var history: ?*HistoryCtx = null;
@@ -3651,6 +3724,27 @@ fn rpmExecHistoryTransaction(
         else => 0,
     };
     return if (history_rc == 0) 0 else errors.ERROR_TDNF_HISTORY_ERROR;
+}
+
+fn rpmExecHistoryTransaction(
+    tdnf_opt: ?*abi.Tdnf,
+    solved_opt: ?*c.TDNF_SOLVED_PKG_INFO,
+    history_args_opt: ?*c.TDNF_HISTORY_ARGS,
+) callconv(.c) u32 {
+    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const solved = solved_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const history_args = history_args_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (tdnf.pArgs == null or tdnf.pConf == null)
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const context = HistoryTransactionRunContext{
+        .solved = solved,
+        .history_args = history_args,
+    };
+    return runWithTransactionTarget(
+        tdnf,
+        &context,
+        rpmExecHistoryTransactionLocked,
+    );
 }
 
 comptime {
@@ -4010,6 +4104,58 @@ test "auxiliary prior can be shared across replacement action kinds" {
     try validateFixedOrderInput(.{
         .items = &items,
         .order = &.{ 0, 1 },
+    });
+}
+
+test "shared prior cannot wait for a later primary before failure reporting" {
+    const prior = FixedOrderRpmDbRow{
+        .hnum = 49,
+        .identity = .{
+            .name = "retired",
+            .epoch = null,
+            .version = "1",
+            .release = "1",
+            .arch = "noarch",
+        },
+    };
+    const items = [_]FixedOrderItem{
+        .{ .obsolete = .{
+            .package = .{
+                .path = "/bundle/replacement.rpm",
+                .identity = .{
+                    .name = "replacement",
+                    .epoch = null,
+                    .version = "1",
+                    .release = "1",
+                    .arch = "noarch",
+                },
+            },
+            .priors = &.{prior},
+        } },
+        .{ .upgrade = .{
+            .package = .{
+                .path = "/bundle/retired.rpm",
+                .identity = .{
+                    .name = "retired",
+                    .epoch = null,
+                    .version = "2",
+                    .release = "1",
+                    .arch = "noarch",
+                },
+            },
+            .priors = &.{prior},
+        } },
+    };
+    try std.testing.expectError(
+        error.InvalidItem,
+        validateFixedOrderInput(.{
+            .items = &items,
+            .order = &.{ 0, 1 },
+        }),
+    );
+    try validateFixedOrderInput(.{
+        .items = &items,
+        .order = &.{ 1, 0 },
     });
 }
 
@@ -4374,4 +4520,116 @@ test "normal transaction still prepares order and checks before execution" {
         ),
     );
     try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, &Probe.sequence);
+}
+
+test "normal preparation mutation probes hold the replay target lock" {
+    const Probe = struct {
+        replay_config: *const txn_config.TxnConfig,
+        lock_directory: []const u8,
+        key_import_blocked: bool = false,
+        source_extract_blocked: bool = false,
+        pinned_config_seen: bool = false,
+        failed: bool = false,
+
+        fn observe(self: *@This(), key_import: bool) void {
+            var contender = transaction_lock.tryAcquireInDirectory(
+                std.testing.allocator,
+                self.replay_config,
+                self.lock_directory,
+            ) catch |err| {
+                if (err != error.WouldBlock) {
+                    self.failed = true;
+                } else if (key_import) {
+                    self.key_import_blocked = true;
+                } else {
+                    self.source_extract_blocked = true;
+                }
+                return;
+            };
+            contender.deinit();
+            self.failed = true;
+        }
+
+        fn run(tdnf: *abi.Tdnf, self: *@This()) u32 {
+            const raw_config = tdnf.pRpmConfig orelse {
+                self.failed = true;
+                return 1;
+            };
+            const config: *const txn_config.TxnConfig =
+                @ptrCast(@alignCast(raw_config));
+            self.pinned_config_seen = config.pinnedInstallRootFd() != null;
+            self.observe(true);
+            self.observe(false);
+            return @intFromBool(self.failed);
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "locks");
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const lock_directory = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "locks" },
+    );
+    defer std.testing.allocator.free(lock_directory);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+
+    var normal_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer normal_config.deinit();
+    var replay_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer replay_config.deinit();
+    try replay_config.setMacro(.dbpath, "/var/lib/replay-rpm");
+    const acquired = try transaction_lock.acquireInDirectory(
+        std.testing.allocator,
+        &normal_config,
+        lock_directory,
+        true,
+    );
+
+    var args = abi.CmdArgs{ .pszInstallRoot = root_z.ptr };
+    var conf = abi.Conf{};
+    var tdnf = abi.Tdnf{
+        .pArgs = &args,
+        .pConf = &conf,
+        .pRpmConfig = @ptrCast(&normal_config),
+    };
+    const original_config = tdnf.pRpmConfig;
+    const original_root = args.pszInstallRoot;
+    var probe = Probe{
+        .replay_config = &replay_config,
+        .lock_directory = lock_directory,
+    };
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        runWithAcquiredTransactionTarget(
+            &tdnf,
+            acquired,
+            &probe,
+            Probe.run,
+        ),
+    );
+    try std.testing.expect(probe.pinned_config_seen);
+    try std.testing.expect(probe.key_import_blocked);
+    try std.testing.expect(probe.source_extract_blocked);
+    try std.testing.expect(!probe.failed);
+    try std.testing.expectEqual(original_config, tdnf.pRpmConfig);
+    try std.testing.expectEqual(original_root, args.pszInstallRoot);
 }

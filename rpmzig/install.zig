@@ -277,8 +277,7 @@ pub const Context = struct {
         entry: cpio.Entry,
     ) Error!Metadata {
         return resolveFileMetadata(
-            self.allocator,
-            self.config.installRoot(),
+            &self.root,
             file.mode,
             file.mtime,
             file.username,
@@ -498,11 +497,10 @@ pub const Metadata = struct {
     gid: u32,
 };
 
-/// Resolve header ownership names under the install root, falling back to the
-/// cpio numeric metadata exactly as the native binary installer does.
+/// Resolve header ownership names through the pinned install root, falling
+/// back to the cpio numeric metadata exactly as the native installer does.
 pub fn resolveFileMetadata(
-    allocator: Allocator,
-    install_root: []const u8,
+    root: *const RootDir,
     mode: u32,
     mtime: ?u32,
     username: ?[]const u8,
@@ -513,11 +511,11 @@ pub fn resolveFileMetadata(
     fallback_gid: u32,
 ) Error!Metadata {
     const uid = if (username) |name|
-        (try lookupUserId(allocator, install_root, name)) orelse fallback_uid
+        (try lookupUserId(root, name)) orelse fallback_uid
     else
         fallback_uid;
     const gid = if (groupname) |name|
-        (try lookupGroupId(allocator, install_root, name)) orelse fallback_gid
+        (try lookupGroupId(root, name)) orelse fallback_gid
     else
         fallback_gid;
 
@@ -818,6 +816,26 @@ pub fn writeRegularFileBeneath(
         null,
     );
     defer root.deinit();
+    return writeRegularFileBeneathRoot(
+        &root,
+        install_root,
+        base_path,
+        relative_path,
+        data,
+        metadata,
+    );
+}
+
+pub fn writeRegularFileBeneathRoot(
+    root: *const RootDir,
+    install_root: []const u8,
+    base_path: []const u8,
+    relative_path: []const u8,
+    data: []const u8,
+    metadata: Metadata,
+) Error!void {
+    const allocator = root.allocator;
+    if (!isSafeRelativePath(relative_path)) return error.UnsafeExtractionPath;
     const logical_base = try root.logicalPathFromFullOwned(
         install_root,
         base_path,
@@ -851,6 +869,22 @@ pub fn validateRegularFileDestinationBeneath(
         null,
     );
     defer root.deinit();
+    return validateRegularFileDestinationBeneathRoot(
+        &root,
+        install_root,
+        base_path,
+        relative_path,
+    );
+}
+
+pub fn validateRegularFileDestinationBeneathRoot(
+    root: *const RootDir,
+    install_root: []const u8,
+    base_path: []const u8,
+    relative_path: []const u8,
+) Error!void {
+    const allocator = root.allocator;
+    if (!isSafeRelativePath(relative_path)) return error.UnsafeExtractionPath;
     const logical_base = try root.logicalPathFromFullOwned(
         install_root,
         base_path,
@@ -1466,6 +1500,50 @@ pub const RootDir = struct {
         return (try self.statAt(&parent, basename_z.ptr)) != null;
     }
 
+    fn readRegularFileOwned(
+        self: *const RootDir,
+        path: []const u8,
+    ) Error!?[]u8 {
+        var parent = (try self.openParent(path, false)) orelse return null;
+        defer parent.deinit();
+        const basename_z = try self.basenameZ(parent.basename);
+        defer self.allocator.free(basename_z);
+        const fd = std.c.openat(parent.fd, basename_z.ptr, .{
+            .ACCMODE = .RDONLY,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+        if (fd < 0) {
+            return switch (std.c.errno(fd)) {
+                .NOENT => null,
+                .LOOP, .NOTDIR => error.UnsafeExtractionPath,
+                else => error.SyscallFailed,
+            };
+        }
+        defer _ = c.close(fd);
+
+        var st: c.struct_stat = undefined;
+        if (c.fstat(fd, &st) != 0) return error.SyscallFailed;
+        if ((st.st_mode & c.S_IFMT) != c.S_IFREG)
+            return error.UnsafeExtractionPath;
+        if (st.st_size < 0) return error.SyscallFailed;
+        const size: usize = @intCast(st.st_size);
+        const contents = try self.allocator.alloc(u8, size);
+        errdefer self.allocator.free(contents);
+        var offset: usize = 0;
+        while (offset < contents.len) {
+            const read_count = c.read(
+                fd,
+                contents.ptr + offset,
+                contents.len - offset,
+            );
+            if (read_count < 0 and std.c.errno(read_count) == .INTR) continue;
+            if (read_count <= 0) return error.SyscallFailed;
+            offset += @intCast(read_count);
+        }
+        return contents;
+    }
+
     pub fn writeRegularFile(
         self: *const RootDir,
         path: []const u8,
@@ -2065,41 +2143,31 @@ fn encodeHexLower(buf: []u8, bytes: []const u8) []const u8 {
 }
 
 fn lookupUserId(
-    allocator: Allocator,
-    install_root: []const u8,
+    root: *const RootDir,
     name: []const u8,
-) Allocator.Error!?u32 {
-    return lookupNamedId(allocator, install_root, "/etc/passwd", name, .passwd);
+) Error!?u32 {
+    return lookupNamedId(root, "/etc/passwd", name);
 }
 
 fn lookupGroupId(
-    allocator: Allocator,
-    install_root: []const u8,
+    root: *const RootDir,
     name: []const u8,
-) Allocator.Error!?u32 {
-    return lookupNamedId(allocator, install_root, "/etc/group", name, .group);
+) Error!?u32 {
+    return lookupNamedId(root, "/etc/group", name);
 }
 
-const LookupKind = enum {
-    passwd,
-    group,
-};
-
 fn lookupNamedId(
-    allocator: Allocator,
-    install_root: []const u8,
+    root: *const RootDir,
     relative_path: []const u8,
     name: []const u8,
-    kind: LookupKind,
-) Allocator.Error!?u32 {
+) Error!?u32 {
     if (parseNumericId(name)) |numeric| {
         return numeric;
     }
 
-    const full_path = try joinInstallRootAndPathOwned(allocator, install_root, relative_path);
-    defer allocator.free(full_path);
-    const contents = (try readFileOwned(allocator, full_path)) orelse return null;
-    defer allocator.free(contents);
+    const contents = (try root.readRegularFileOwned(relative_path)) orelse
+        return null;
+    defer root.allocator.free(contents);
 
     var lines = std.mem.splitScalar(u8, contents, '\n');
     while (lines.next()) |line_raw| {
@@ -2115,13 +2183,7 @@ fn lookupNamedId(
             continue;
         }
 
-        const id_field = switch (kind) {
-            .passwd => fields.next() orelse continue,
-            .group => blk: {
-                _ = fields.next() orelse continue;
-                break :blk fields.next() orelse continue;
-            },
-        };
+        const id_field = fields.next() orelse continue;
         return std.fmt.parseUnsigned(u32, id_field, 10) catch null;
     }
 
@@ -2207,6 +2269,63 @@ test "chooseConfigAction handles noreplace" {
     try std.testing.expectEqual(ConfigAction.skip, chooseConfigAction(false, true, true));
     try std.testing.expectEqual(ConfigAction.rpmnew, chooseConfigAction(false, false, true));
     try std.testing.expectEqual(ConfigAction.rpmsave, chooseConfigAction(false, false, false));
+}
+
+test "ownership lookup stays on pinned root after pathname replacement" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/etc");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/passwd",
+        .data = "package-user:x:1201:1202::/:/sbin/nologin\n",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/group",
+        .data = "package-group:x:1202:\n",
+    });
+
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root_path);
+    var root = try RootDir.init(
+        std.testing.allocator,
+        root_path,
+        null,
+        null,
+    );
+    defer root.deinit();
+
+    try tmp.dir.rename("root", tmp.dir, "parked", std.testing.io);
+    try tmp.dir.createDirPath(std.testing.io, "root/etc");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/passwd",
+        .data = "package-user:x:2201:2202::/:/sbin/nologin\n",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/group",
+        .data = "package-group:x:2202:\n",
+    });
+
+    const metadata = try resolveFileMetadata(
+        &root,
+        S_IFREG_U32 | 0o640,
+        1234,
+        "package-user",
+        "package-group",
+        S_IFREG_U32 | 0o600,
+        1,
+        42,
+        43,
+    );
+    try std.testing.expectEqual(@as(u32, 1201), metadata.uid);
+    try std.testing.expectEqual(@as(u32, 1202), metadata.gid);
 }
 
 test "special file metadata stays on pinned created object" {

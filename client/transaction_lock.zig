@@ -5,7 +5,7 @@ const txn_config = @import("rpm_txn_config");
 
 const Allocator = std.mem.Allocator;
 const runtime_lock_directory = "/var/run";
-const identity_domain = "tdnf.transaction-target/v1";
+const identity_domain = "tdnf.transaction-target/v2";
 const deleted_suffix = " (deleted)";
 const mode_type_mask: u16 = 0o170000;
 const mode_directory: u16 = 0o040000;
@@ -74,13 +74,10 @@ pub fn acquireInDirectory(
 
     const canonical_root = try resolvedRootAlloc(allocator, root_fd);
     defer allocator.free(canonical_root);
-    const dbpath = try normalizedDbPathAlloc(allocator, config);
-    defer allocator.free(dbpath);
     const lock_path = try targetLockPath(
         allocator,
         lock_directory,
         root_identity,
-        dbpath,
     );
     errdefer allocator.free(lock_path);
 
@@ -132,45 +129,10 @@ fn resolvedRootAlloc(
     return allocator.dupe(u8, resolved);
 }
 
-fn normalizedDbPathAlloc(
-    allocator: Allocator,
-    config: *const txn_config.TxnConfig,
-) Error![]u8 {
-    const expanded = config.expandMacroAlloc(
-        allocator,
-        .dbpath,
-    ) catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.InvalidTarget,
-    };
-    defer allocator.free(expanded);
-
-    var output: std.ArrayList(u8) = .empty;
-    errdefer output.deinit(allocator);
-    try output.append(allocator, '/');
-    var components = std.mem.splitScalar(
-        u8,
-        std.mem.trim(u8, expanded, "/"),
-        '/',
-    );
-    var count: usize = 0;
-    while (components.next()) |component| {
-        if (component.len == 0 or std.mem.eql(u8, component, "."))
-            continue;
-        if (std.mem.eql(u8, component, ".."))
-            return error.InvalidTarget;
-        if (count != 0) try output.append(allocator, '/');
-        try output.appendSlice(allocator, component);
-        count += 1;
-    }
-    return output.toOwnedSlice(allocator);
-}
-
 fn targetLockPath(
     allocator: Allocator,
     lock_directory: []const u8,
     identity: TargetIdentity,
-    dbpath: []const u8,
 ) Error![:0]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(identity_domain);
@@ -182,8 +144,6 @@ fn targetLockPath(
         .{ identity.dev_major, identity.dev_minor, identity.inode },
     ) catch return error.InvalidTarget;
     hasher.update(identity_text);
-    hasher.update("\x00");
-    hasher.update(dbpath);
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
     const hex = std.fmt.bytesToHex(digest, .lower);
@@ -223,7 +183,7 @@ fn fdIdentity(fd: c_int) Error!TargetIdentity {
     };
 }
 
-test "normal and replay aliases share one target lock" {
+test "aliases and database paths share one install-root lock" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.createDirPath(std.testing.io, "locks");
@@ -319,12 +279,14 @@ test "normal and replay aliases share one target lock" {
         lock_directory,
     );
     distinct.deinit();
-    var distinct_db = try tryAcquireInDirectory(
-        std.testing.allocator,
-        &distinct_db_config,
-        lock_directory,
+    try std.testing.expectError(
+        error.WouldBlock,
+        tryAcquireInDirectory(
+            std.testing.allocator,
+            &distinct_db_config,
+            lock_directory,
+        ),
     );
-    distinct_db.deinit();
 }
 
 test "resolved symlink target stays pinned after alias retarget" {

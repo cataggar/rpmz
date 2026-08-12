@@ -1937,6 +1937,7 @@ pub fn build(b: *Build) void {
     transaction_test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     transaction_test_mod.addImport("rpm_header", rpmzig_header_mod);
     transaction_test_mod.addImport("rpm_evr", rpm_evr_mod);
+    transaction_test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
     transaction_test_mod.addImport("transaction_lock", transaction_lock_mod);
     transaction_test_mod.addImport(
         "rpm_package_test",
