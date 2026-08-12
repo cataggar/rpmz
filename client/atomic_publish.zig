@@ -141,6 +141,17 @@ pub const Staging = struct {
         syncDir(self.io, self.parent) catch return error.SyncFailed;
     }
 
+    pub fn realPathAlloc(
+        self: *const Staging,
+        allocator: std.mem.Allocator,
+    ) anyerror![:0]u8 {
+        return self.parent.realPathFileAlloc(
+            self.io,
+            self.staging_name,
+            allocator,
+        );
+    }
+
     /// Remove the staged tree. Safe to call more than once.
     pub fn abandon(self: *Staging) void {
         if (self.published) return;

@@ -18,6 +18,7 @@
 const std = @import("std");
 const content_digest = @import("content_digest");
 const transaction_bundle = @import("transaction_bundle");
+const transaction_plan = @import("transaction_plan");
 
 pub const OpenError = error{
     /// The directory, or the manifest inside it, could not be read.
@@ -170,6 +171,22 @@ fn verifyPlan(
     // file hash and a plan digest are different claims.
     const bytes = try readListed(allocator, io, dir, reference.path);
     defer allocator.free(bytes);
+
+    if (std.mem.eql(u8, reference.schema, transaction_plan.schema_v2)) {
+        const plan = transaction_plan.parse(allocator, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.PlanMismatch,
+        };
+        defer plan.destroy();
+        const digest = plan.digest(allocator) catch return error.OutOfMemory;
+        if (!std.mem.eql(u8, &digest, reference.digest) or
+            !std.mem.eql(u8, plan.schemaName(), reference.schema) or
+            !plan.isReplayable())
+        {
+            return error.PlanMismatch;
+        }
+        return;
+    }
 
     // The plan carries its digest as an object -- algorithm, domain, value --
     // because a bare hex string does not say what was hashed or under which

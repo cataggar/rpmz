@@ -17,16 +17,19 @@ A plan is a complete, self-describing record of one resolve:
 - **`jobs`** — what the resolver turned each request into.
 - **`packages`** — every package the plan refers to, available or installed,
   with its identity, repository, and source location.
-- **`actions`** — the authoritative outcome: install, erase, upgrade,
+- **`actions`** — the semantic outcome: install, erase, upgrade,
   downgrade, reinstall, or obsolete, each naming its target and its exact
   prior rows.
+- **`execution`** — v1 records `unmaterialized`; v2 records the exact ordered
+  low-level install, erase, reinstall, and upgrade items accepted by the native
+  transaction engine, each tied back to an `action-N` and `package-N`.
 - **`problems`** — structured solver contradictions.
 - **`skipped`** — jobs dropped by a skip policy.
 - **`repositories`** — the metadata snapshot each repository was read at.
 - **`environment`** — architecture, distro, release version, policy, rpmdb
   identity, and the resolution status.
 - **`digest`** — a SHA-256 over the canonical bytes, under the domain
-  `tdnf.transaction-plan/v1`.
+  the schema named by the document.
 
 Obsoletion is one action, not two: `kind` is `obsolete`, the target is the
 obsoleting package, and `prior_package_ids` names the rows it replaces.
@@ -153,8 +156,11 @@ This layer resolves. It does not download packages and it does not execute.
   [#188](https://github.com/cataggar/tdnf/issues/188). Replay does not resolve
   again; the plan is the authority.
 
-There is deliberately no canonical-JSON parser, no query API over the plan
-model, and no public C ABI for this surface.
+`transaction_plan.parse` accepts canonical v1 and v2 documents. It validates,
+re-serializes, and requires byte identity, so reordered keys, extra fields,
+alternate whitespace, malformed references, and forged digests are rejected.
+Use `Plan.isReplayable()` rather than assuming any parsed plan can execute.
+There is no public C ABI for this surface.
 
 ## How this is proven
 
@@ -172,9 +178,11 @@ call returns.
 A plan names the packages a transaction needs; it does not carry them. To
 capture the inputs themselves, hand the same declared resolve request to
 `bundle_export.exportBundle`, which resolves it and publishes every metadata
-file and RPM the resulting plan refers to into one directory. The plan is
-written into that directory alongside them, so the bundle records both what was
-decided and everything the decision was made from.
+file and RPM the resulting plan refers to into one directory. After those RPMs
+are verified, export asks the
+same native transaction planner used by execution for its authoritative order
+and writes a v2 plan. A standalone resolve remains v1 because execution order
+cannot be known before the RPM headers are present.
 
 `doc/transaction-bundle.md` describes the layout, what a consumer may rely on,
 and the failures a published bundle is expected to survive.

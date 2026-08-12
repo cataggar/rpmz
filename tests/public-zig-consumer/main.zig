@@ -14,11 +14,10 @@ const transaction_plan = tdnf.transaction_plan;
 const bundle_export = tdnf.bundle_export;
 const bundle_reader = tdnf.bundle_reader;
 
-/// Stands in for a package payload. Its bytes never have to be a real RPM:
-/// what the bundle promises about it is that they arrive unchanged.
-const package_bytes = "public consumer package payload";
-
-fn primaryXml(allocator: std.mem.Allocator) ![]u8 {
+fn primaryXml(
+    allocator: std.mem.Allocator,
+    package_bytes: []const u8,
+) ![]u8 {
     const package_digest = digestHex(package_bytes);
     return std.fmt.allocPrint(allocator,
         \\<?xml version="1.0" encoding="UTF-8"?>
@@ -35,6 +34,132 @@ fn primaryXml(allocator: std.mem.Allocator) ![]u8 {
         \\</metadata>
         \\
     , .{ &package_digest, package_bytes.len });
+}
+
+fn minimalRpm(allocator: std.mem.Allocator) ![]u8 {
+    const tags = [_]u32{ 1000, 1001, 1002, 1022 };
+    const values = [_][]const u8{ "consumer-app", "1", "1", "x86_64" };
+    const main_blob = try stringHeaderBlob(allocator, &tags, &values);
+    defer allocator.free(main_blob);
+    const signature_blob = try int32HeaderBlob(allocator, 1000, 0);
+    defer allocator.free(signature_blob);
+    const signature = try standaloneHeader(allocator, signature_blob, 62);
+    defer allocator.free(signature);
+    const main_header = try standaloneHeader(allocator, main_blob, 63);
+    defer allocator.free(main_header);
+
+    const padding = (8 - (signature.len % 8)) % 8;
+    const bytes = try allocator.alloc(
+        u8,
+        96 + signature.len + padding + main_header.len,
+    );
+    @memset(bytes, 0);
+    @memcpy(bytes[0..4], &[_]u8{ 0xed, 0xab, 0xee, 0xdb });
+    @memcpy(bytes[96 .. 96 + signature.len], signature);
+    @memcpy(bytes[96 + signature.len + padding ..], main_header);
+    return bytes;
+}
+
+fn stringHeaderBlob(
+    allocator: std.mem.Allocator,
+    tags: []const u32,
+    values: []const []const u8,
+) ![]u8 {
+    var data = std.array_list.Managed(u8).init(allocator);
+    defer data.deinit();
+    var index = std.array_list.Managed(u8).init(allocator);
+    defer index.deinit();
+    for (tags, values) |tag, value| {
+        try appendBe32(&index, tag);
+        try appendBe32(&index, 6);
+        try appendBe32(&index, @intCast(data.items.len));
+        try appendBe32(&index, 1);
+        try data.appendSlice(value);
+        try data.append(0);
+    }
+    var out = std.array_list.Managed(u8).init(allocator);
+    errdefer out.deinit();
+    try appendBe32(&out, @intCast(tags.len));
+    try appendBe32(&out, @intCast(data.items.len));
+    try out.appendSlice(index.items);
+    try out.appendSlice(data.items);
+    return out.toOwnedSlice();
+}
+
+fn int32HeaderBlob(
+    allocator: std.mem.Allocator,
+    tag: u32,
+    value: u32,
+) ![]u8 {
+    var out = std.array_list.Managed(u8).init(allocator);
+    errdefer out.deinit();
+    try appendBe32(&out, 1);
+    try appendBe32(&out, 4);
+    try appendBe32(&out, tag);
+    try appendBe32(&out, 4);
+    try appendBe32(&out, 0);
+    try appendBe32(&out, 1);
+    try appendBe32(&out, value);
+    return out.toOwnedSlice();
+}
+
+fn standaloneHeader(
+    allocator: std.mem.Allocator,
+    blob: []const u8,
+    region_tag: u32,
+) ![]u8 {
+    const count = readBe32(blob[0..4]);
+    const data_size = readBe32(blob[4..8]);
+    const new_count = count + 1;
+    const bytes = try allocator.alloc(
+        u8,
+        8 + 8 + @as(usize, new_count) * 16 + data_size + 16,
+    );
+    @memcpy(bytes[0..8], &[_]u8{ 0x8e, 0xad, 0xe8, 0x01, 0, 0, 0, 0 });
+    const raw = bytes[8..];
+    writeBe32(raw[0..4], new_count);
+    writeBe32(raw[4..8], data_size + 16);
+    writeBe32(raw[8..12], region_tag);
+    writeBe32(raw[12..16], 7);
+    writeBe32(raw[16..20], data_size);
+    writeBe32(raw[20..24], 16);
+    const old_index_len = @as(usize, count) * 16;
+    @memcpy(raw[24 .. 24 + old_index_len], blob[8 .. 8 + old_index_len]);
+    const data_start = 8 + @as(usize, new_count) * 16;
+    @memcpy(
+        raw[data_start .. data_start + data_size],
+        blob[8 + old_index_len ..][0..data_size],
+    );
+    const trailer = raw[data_start + data_size ..][0..16];
+    writeBe32(trailer[0..4], region_tag);
+    writeBe32(trailer[4..8], 7);
+    writeBe32(
+        trailer[8..12],
+        @bitCast(-@as(i32, @intCast(new_count * 16))),
+    );
+    writeBe32(trailer[12..16], 16);
+    return bytes;
+}
+
+fn appendBe32(list: *std.array_list.Managed(u8), value: u32) !void {
+    try list.append(@intCast((value >> 24) & 0xff));
+    try list.append(@intCast((value >> 16) & 0xff));
+    try list.append(@intCast((value >> 8) & 0xff));
+    try list.append(@intCast(value & 0xff));
+}
+
+fn readBe32(bytes: []const u8) u32 {
+    return @as(u32, bytes[0]) << 24 |
+        @as(u32, bytes[1]) << 16 |
+        @as(u32, bytes[2]) << 8 |
+        @as(u32, bytes[3]);
+}
+
+fn writeBe32(bytes: []u8, value: u32) void {
+    bytes[0] = @intCast((value >> 24) & 0xff);
+    bytes[1] = @intCast((value >> 16) & 0xff);
+    bytes[2] = @intCast((value >> 8) & 0xff);
+    bytes[3] = @intCast(value & 0xff);
 }
 
 fn digestHex(bytes: []const u8) [64]u8 {
@@ -90,7 +215,8 @@ pub fn main() !void {
     try tmp.createDirPath(io, "snapshot/repodata");
     try tmp.createDirPath(io, "snapshot/packages");
 
-    const primary_xml = try primaryXml(allocator);
+    const package_bytes = try minimalRpm(allocator);
+    const primary_xml = try primaryXml(allocator, package_bytes);
     const repomd = try repomdFor(allocator, primary_xml);
     try tmp.writeFile(io, .{
         .sub_path = "snapshot/repodata/primary.xml",
@@ -222,15 +348,22 @@ fn exportsBundle(
         .problems => return error.UnresolvedPlan,
     };
     if (exported.bundle_digest.len != 64) return error.InvalidDigest;
+    if (!exported.plan.isReplayable()) return error.MissingExecutionOrder;
+    if (!std.mem.eql(
+        u8,
+        exported.plan.schemaName(),
+        transaction_plan.schema_v2,
+    )) return error.MissingCanonicalSchema;
 
     // Reopening is what makes the export meaningful: the bundle has to be a
     // closed set on its own terms, not merely a directory the exporter liked.
     const opened = try bundle_reader.openBundle(allocator, io, destination);
     defer opened.destroy();
+    if (!opened.isReplayable()) return error.MissingExecutionOrder;
 
     const model = opened.model();
     if (model.repositories.len == 0) return error.MissingRepository;
     if (model.files.len == 0) return error.MissingFiles;
-    if (!std.mem.eql(u8, model.plan.schema, transaction_plan.schema))
+    if (!std.mem.eql(u8, model.plan.schema, transaction_plan.schema_v2))
         return error.MissingCanonicalSchema;
 }

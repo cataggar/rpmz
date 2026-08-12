@@ -119,6 +119,11 @@ pub fn decodeData(
         input.actions,
         input.action_count,
     );
+    const raw_execution_inputs = try borrowedArray(
+        abi.ExecutionInput,
+        input.native_execution_inputs,
+        input.native_execution_input_count,
+    );
     const raw_priors = try borrowedArray(
         u32,
         input.prior_package_refs,
@@ -172,13 +177,21 @@ pub fn decodeData(
         job_handles,
     );
 
+    const actions = try decodeActions(
+        allocator,
+        raw_actions,
+        raw_priors,
+        package_handles,
+        job_handles,
+    );
+
     return .{
-        .actions = try decodeActions(
+        .actions = actions,
+        .native_execution_inputs = try decodeExecutionInputs(
             allocator,
-            raw_actions,
-            raw_priors,
+            raw_execution_inputs,
+            actions,
             package_handles,
-            job_handles,
         ),
         .environment = try decodeEnvironment(allocator, input.environment),
         .hidden_packages = try decodeHandleRefs(
@@ -208,6 +221,33 @@ pub fn decodeData(
             job_handles,
         ),
     };
+}
+
+fn decodeExecutionInputs(
+    allocator: Allocator,
+    raw: []const abi.ExecutionInput,
+    actions: []const transaction_plan.Action,
+    package_handles: []const []const u8,
+) DecodeError![]const transaction_plan.ExecutionStep {
+    const output = try allocator.alloc(transaction_plan.ExecutionStep, raw.len);
+    for (raw, output) |source, *destination| {
+        if (source.action_ref >= actions.len) return error.InvalidAbi;
+        destination.* = .{
+            .action_index = source.action_ref,
+            .operation = switch (source.operation) {
+                abi.execution_operation.erase => .erase,
+                abi.execution_operation.install => .install,
+                abi.execution_operation.reinstall => .reinstall,
+                abi.execution_operation.upgrade => .upgrade,
+                else => return error.InvalidAbi,
+            },
+            .package_id = try referencedHandle(
+                package_handles,
+                source.package_ref,
+            ),
+        };
+    }
+    return output;
 }
 
 fn decodeEnvironment(

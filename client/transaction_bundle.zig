@@ -23,8 +23,9 @@ const canonical_json = @import("canonical_json");
 const secret_shape = @import("secret_shape");
 const transaction_plan = @import("transaction_plan");
 
-pub const schema = "tdnf.transaction-bundle/v1";
-const digest_prefix = schema ++ "\x00";
+pub const schema_v1 = "tdnf.transaction-bundle/v1";
+pub const schema_v2 = "tdnf.transaction-bundle/v2";
+pub const schema = schema_v1;
 
 /// The manifest's own filename. It is excluded from the file table by
 /// construction, not by convention.
@@ -147,9 +148,45 @@ pub const Bundle = struct {
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
     data: Data,
+    schema_name: []const u8,
 
     pub fn create(allocator: Allocator, input: Data) InitError!*Bundle {
+        const schema_name = if (std.mem.eql(
+            u8,
+            input.plan.schema,
+            transaction_plan.schema_v1,
+        ))
+            schema_v1
+        else if (std.mem.eql(
+            u8,
+            input.plan.schema,
+            transaction_plan.schema_v2,
+        ))
+            schema_v2
+        else
+            return error.InvalidSchema;
+        return createForSchema(allocator, input, schema_name);
+    }
+
+    fn createForSchema(
+        allocator: Allocator,
+        input: Data,
+        schema_name: []const u8,
+    ) InitError!*Bundle {
         try validate(input);
+        const owned_schema = if (std.mem.eql(u8, schema_name, schema_v1))
+            schema_v1
+        else if (std.mem.eql(u8, schema_name, schema_v2))
+            schema_v2
+        else
+            return error.InvalidSchema;
+        if ((std.mem.eql(u8, owned_schema, schema_v1) and
+            !std.mem.eql(u8, input.plan.schema, transaction_plan.schema_v1)) or
+            (std.mem.eql(u8, owned_schema, schema_v2) and
+                !std.mem.eql(u8, input.plan.schema, transaction_plan.schema_v2)))
+        {
+            return error.InvalidSchema;
+        }
 
         const self = try allocator.create(Bundle);
         errdefer allocator.destroy(self);
@@ -157,6 +194,7 @@ pub const Bundle = struct {
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .data = undefined,
+            .schema_name = owned_schema,
         };
         errdefer self.arena.deinit();
         self.data = try cloneData(self.arena.allocator(), input);
@@ -173,12 +211,26 @@ pub const Bundle = struct {
         return &self.data;
     }
 
+    pub fn schemaName(self: *const Bundle) []const u8 {
+        return self.schema_name;
+    }
+
+    pub fn isReplayable(self: *const Bundle) bool {
+        return std.mem.eql(u8, self.schema_name, schema_v2);
+    }
+
     pub fn digest(self: *const Bundle, allocator: Allocator) CanonicalError![64]u8 {
-        const document = try canonicalDocument(allocator, &self.data, null);
+        const document = try canonicalDocument(
+            allocator,
+            &self.data,
+            self.schema_name,
+            null,
+        );
         defer allocator.free(document);
         var bytes: [32]u8 = undefined;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(digest_prefix);
+        hasher.update(self.schema_name);
+        hasher.update("\x00");
         hasher.update(document);
         hasher.final(&bytes);
         return lowerHex(bytes);
@@ -186,7 +238,12 @@ pub const Bundle = struct {
 
     pub fn canonicalJsonAlloc(self: *const Bundle, allocator: Allocator) CanonicalError![]u8 {
         const value = try self.digest(allocator);
-        return canonicalDocument(allocator, &self.data, &value);
+        return canonicalDocument(
+            allocator,
+            &self.data,
+            self.schema_name,
+            &value,
+        );
     }
 
     /// Looks up a file table entry by exact bundle-relative path.
@@ -207,7 +264,9 @@ pub fn validate(data: Data) ValidationError!void {
 }
 
 fn validatePlanReference(plan: PlanReference) ValidationError!void {
-    if (!std.mem.eql(u8, plan.schema, transaction_plan.schema)) {
+    if (!std.mem.eql(u8, plan.schema, transaction_plan.schema_v1) and
+        !std.mem.eql(u8, plan.schema, transaction_plan.schema_v2))
+    {
         return error.InvalidSchema;
     }
     if (!std.mem.eql(u8, plan.path, plan_name)) return error.InvalidPath;
@@ -614,6 +673,7 @@ fn lessPackage(_: void, left: Package, right: Package) bool {
 fn canonicalDocument(
     allocator: Allocator,
     data: *const Data,
+    schema_name: []const u8,
     digest_value: ?*const [64]u8,
 ) Allocator.Error![]u8 {
     var writer = canonical_json.Writer.init(allocator);
@@ -622,7 +682,7 @@ fn canonicalDocument(
     try writer.append("{");
     if (digest_value) |value| {
         try writer.append("\"digest\":{\"algorithm\":\"sha256\",\"domain\":");
-        try writer.writeString(schema);
+        try writer.writeString(schema_name);
         try writer.append(",\"value\":");
         try writer.writeString(value);
         try writer.append("},");
@@ -639,7 +699,7 @@ fn canonicalDocument(
     try writer.append(",\"repositories\":");
     try writeRepositories(&writer, data.repositories);
     try writer.append(",\"schema\":");
-    try writer.writeString(schema);
+    try writer.writeString(schema_name);
     try writer.append("}");
     return writer.finish();
 }
@@ -797,7 +857,10 @@ pub fn parse(allocator: Allocator, bytes: []const u8) ParseError!*Bundle {
     const scratch = arena.allocator();
 
     const root = try expectObject(parsed.value);
-    if (!std.mem.eql(u8, try expectString(root.get("schema")), schema)) {
+    const schema_name = try expectString(root.get("schema"));
+    if (!std.mem.eql(u8, schema_name, schema_v1) and
+        !std.mem.eql(u8, schema_name, schema_v2))
+    {
         return error.InvalidSchema;
     }
 
@@ -805,7 +868,11 @@ pub fn parse(allocator: Allocator, bytes: []const u8) ParseError!*Bundle {
     if (!std.mem.eql(u8, try expectString(digest_object.get("algorithm")), "sha256")) {
         return error.InvalidDigest;
     }
-    if (!std.mem.eql(u8, try expectString(digest_object.get("domain")), schema)) {
+    if (!std.mem.eql(
+        u8,
+        try expectString(digest_object.get("domain")),
+        schema_name,
+    )) {
         return error.InvalidDigest;
     }
     try validateSha256(try expectString(digest_object.get("value")));
@@ -818,7 +885,7 @@ pub fn parse(allocator: Allocator, bytes: []const u8) ParseError!*Bundle {
         .repositories = try parseRepositories(scratch, root.get("repositories")),
     };
 
-    const bundle = try Bundle.create(allocator, data);
+    const bundle = try Bundle.createForSchema(allocator, data, schema_name);
     errdefer bundle.destroy();
 
     const round_trip = try bundle.canonicalJsonAlloc(allocator);
@@ -1148,6 +1215,8 @@ test "manifest round-trips through the strict parser" {
 
     const reparsed = try parse(allocator, json);
     defer reparsed.destroy();
+    try testing.expect(!reparsed.isReplayable());
+    try testing.expectEqualStrings(schema_v1, reparsed.schemaName());
     const again = try reparsed.canonicalJsonAlloc(allocator);
     defer allocator.free(again);
     try testing.expectEqualStrings(json, again);

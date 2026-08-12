@@ -16,6 +16,7 @@ const std = @import("std");
 const client = @import("client_root");
 const bundle_reader = @import("bundle_reader");
 const transaction_bundle = @import("transaction_bundle");
+const repository_metadata = @import("repository_metadata");
 
 comptime {
     _ = client;
@@ -26,7 +27,15 @@ const resolver = client.resolver;
 const io = std.testing.io;
 const allocator = std.testing.allocator;
 
-const rpm_payload = "not a real rpm, but a real file with a real digest";
+fn rpmPayload(version: []const u8) ![]u8 {
+    return repository_metadata.rpm_package.makeMinimalRpmBytesForTest(
+        allocator,
+        "app",
+        version,
+        "1",
+        "x86_64",
+    );
+}
 
 fn sha256Hex(bytes: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
@@ -36,7 +45,11 @@ fn sha256Hex(bytes: []const u8) [64]u8 {
     return hex;
 }
 
-fn primaryXml(gpa: std.mem.Allocator, version: []const u8) ![]u8 {
+fn primaryXml(
+    gpa: std.mem.Allocator,
+    version: []const u8,
+    rpm_payload: []const u8,
+) ![]u8 {
     const payload_digest = sha256Hex(rpm_payload);
     return std.fmt.allocPrint(gpa,
         \\<?xml version="1.0" encoding="UTF-8"?>
@@ -124,7 +137,9 @@ const Fixture = struct {
     /// Writes a complete, internally consistent repository. `version` lets a
     /// test change what the repository says without changing anything else.
     fn publishRepository(self: *Fixture, version: []const u8) !void {
-        const primary = try primaryXml(allocator, version);
+        const rpm_payload = try rpmPayload(version);
+        defer allocator.free(rpm_payload);
+        const primary = try primaryXml(allocator, version, rpm_payload);
         defer allocator.free(primary);
         const repomd = try repomdFor(allocator, primary);
         defer allocator.free(repomd);
@@ -241,9 +256,27 @@ test "an exported bundle validates as a closed set" {
     var result = try bundle_export.exportBundle(allocator, io, try fixture.input("bundle"));
     defer result.deinit();
     try std.testing.expect(result == .exported);
+    try std.testing.expect(result.exported.plan.isReplayable());
+    try std.testing.expectEqualStrings(
+        "tdnf.transaction-plan/v2",
+        result.exported.plan.schemaName(),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        result.exported.plan.model().execution_steps.?.len,
+    );
 
     const bundle = try bundle_reader.openBundle(allocator, io, destination);
     defer bundle.destroy();
+    try std.testing.expect(bundle.isReplayable());
+    try std.testing.expectEqualStrings(
+        "tdnf.transaction-bundle/v2",
+        bundle.schemaName(),
+    );
+    try std.testing.expectEqualStrings(
+        &result.exported.plan_digest,
+        bundle.model().plan.digest,
+    );
 
     // The bundle must carry the RPM the plan selected and the metadata the
     // resolve was performed against.
@@ -411,7 +444,9 @@ test "a single flipped byte makes a published bundle stop validating" {
 
     var dir = try std.Io.Dir.cwd().openDir(io, destination, .{ .iterate = true });
     defer dir.close(io);
-    var altered = try allocator.dupe(u8, rpm_payload);
+    const original = try rpmPayload("1");
+    defer allocator.free(original);
+    var altered = try allocator.dupe(u8, original);
     defer allocator.free(altered);
     altered[0] +%= 1;
     try dir.writeFile(io, .{
@@ -459,10 +494,12 @@ test "moving a package between repository trees makes a bundle stop validating" 
 
     var dir = try std.Io.Dir.cwd().openDir(io, destination, .{ .iterate = true });
     defer dir.close(io);
+    const original = try rpmPayload("1");
+    defer allocator.free(original);
     try dir.createDirPath(io, "packages/other/packages");
     try dir.writeFile(io, .{
         .sub_path = "packages/other/packages/app.rpm",
-        .data = rpm_payload,
+        .data = original,
     });
     try dir.deleteFile(io, "packages/base/packages/app.rpm");
 
@@ -477,7 +514,6 @@ test "moving a package between repository trees makes a bundle stop validating" 
         bundle_reader.openBundle(allocator, io, destination),
     );
 }
-
 
 test "an export whose cached metadata no longer matches the repository fails closed" {
     var fixture = try Fixture.create();
@@ -505,7 +541,6 @@ test "an export whose cached metadata no longer matches the repository fails clo
         fixture.tmp.dir.access(io, "stale", .{}),
     );
 }
-
 
 test "a repository declared with a credential in its URL is refused outright" {
     var fixture = try Fixture.create();
