@@ -582,6 +582,14 @@ pub const Plan = struct {
         return self.data.execution_steps != null;
     }
 
+    pub fn canonicalPackageRank(
+        self: *const Plan,
+        capture_id: []const u8,
+    ) ?usize {
+        if (!self.package_index.by_id.contains(capture_id)) return null;
+        return self.package_index.rank(capture_id);
+    }
+
     pub fn withExecutionSteps(
         self: *const Plan,
         allocator: Allocator,

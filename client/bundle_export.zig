@@ -137,6 +137,16 @@ pub fn exportBundle(
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    for (selection.packages) |*package| {
+        const rank = plan.canonicalPackageRank(
+            package.capture_package_id,
+        ) orelse return error.PlanInconsistent;
+        package.plan_package_id = try std.fmt.allocPrint(
+            arena,
+            "package-{d}",
+            .{rank},
+        );
+    }
 
     const plan_json = try plan.canonicalJsonAlloc(arena);
     const plan_digest = try plan.digest(arena);

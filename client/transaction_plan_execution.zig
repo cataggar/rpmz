@@ -137,7 +137,7 @@ fn findPackagePath(
     id: []const u8,
 ) ?[]const u8 {
     for (packages) |package| {
-        if (std.mem.eql(u8, package.plan_package_id, id)) {
+        if (std.mem.eql(u8, package.capture_package_id, id)) {
             return package.path;
         }
     }

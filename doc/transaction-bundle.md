@@ -74,6 +74,11 @@ or `unsigned`. `verified` requires a `key_fingerprint` that is present in
 `keys`; `unsigned` forbids one. A bundle can never claim verification without
 shipping the key that performed it.
 
+**Every v2 RPM is bound to its plan package.** The reader requires the
+manifest's identity, repository, repository checksum, href, XML base, and size
+to match the available `package-N` exactly. Every install-side execution step
+must have exactly one manifest RPM, and no other package entry is accepted.
+
 **Sources are sanitized at the model boundary.** Userinfo, query strings, and
 fragments are rejected outright, and both the raw and percent-decoded forms
 are scanned for secret-shaped text. A sanitizer regression fails closed at
