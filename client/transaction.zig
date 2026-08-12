@@ -2257,6 +2257,46 @@ fn formatNevra(item: *const c.TDNF_RPM_TS_ITEM) struct { u32, ?[*:0]u8 } {
     return .{ rc, result };
 }
 
+const RemovedPackageArguments = struct {
+    name: [:0]u8,
+    nevra: [:0]u8,
+
+    fn deinit(self: RemovedPackageArguments) void {
+        allocator.free(self.name);
+        allocator.free(self.nevra);
+    }
+};
+
+fn removedPackageArguments(
+    blob: []const u8,
+) error{ OutOfMemory, InvalidHeader }!RemovedPackageArguments {
+    const header = rpm_header.Header.parseProbe(blob) catch
+        return error.InvalidHeader;
+    const name = (header.getStringChecked(.name) catch
+        return error.InvalidHeader) orelse return error.InvalidHeader;
+    const owned_name = allocator.dupeZ(u8, name) catch
+        return error.OutOfMemory;
+    errdefer allocator.free(owned_name);
+    const nevra = (header.allocNevra(allocator) catch
+        return error.OutOfMemory) orelse return error.InvalidHeader;
+    defer allocator.free(nevra);
+    const owned_nevra = allocator.dupeZ(u8, nevra) catch
+        return error.OutOfMemory;
+    return .{
+        .name = owned_name,
+        .nevra = owned_nevra,
+    };
+}
+
+fn countAfterRemoval(
+    view: *TransactionView,
+    name: [:0]const u8,
+) ?c_int {
+    const current_count = view.countName(name.ptr);
+    if (current_count <= 0) return null;
+    return current_count - 1;
+}
+
 fn eraseOldAfterReplace(
     install_root: [*:0]const u8,
     config: *const anyopaque,
@@ -2264,8 +2304,6 @@ fn eraseOldAfterReplace(
     view: *TransactionView,
     old_hnum: u32,
     old_blob: []const u8,
-    name: ?[*:0]const u8,
-    nevra: ?[*:0]const u8,
     erase_db_row: bool,
     postun_queue: *PostunQueue,
     script_fd: c_int,
@@ -2275,9 +2313,13 @@ fn eraseOldAfterReplace(
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     const old_entry = view.entries.items[old_index];
     if (!old_entry.active) return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const current_count = view.countName(name);
-    if (current_count <= 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const count_after = current_count - 1;
+    const removed = removedPackageArguments(old_blob) catch |err| return switch (err) {
+        error.OutOfMemory => errors.ERROR_TDNF_OUT_OF_MEMORY,
+        error.InvalidHeader => errors.ERROR_TDNF_INVALID_PARAMETER,
+    };
+    defer removed.deinit();
+    const count_after = countAfterRemoval(view, removed.name) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
     var ignored = [_]u32{old_hnum};
     var ownership = OwnershipContext{
         .view = view,
@@ -2338,7 +2380,7 @@ fn eraseOldAfterReplace(
         old_blob,
         c.TDNF_RPM_SCRIPTLET_PHASE_PREUN,
         "%preun",
-        nevra,
+        removed.nevra.ptr,
         install_root,
         config,
         flags,
@@ -2411,7 +2453,7 @@ fn eraseOldAfterReplace(
         old_blob,
         c.TDNF_RPM_SCRIPTLET_PHASE_POSTUN,
         "%postun",
-        nevra,
+        removed.nevra.ptr,
         install_root,
         config,
         flags,
@@ -2766,8 +2808,6 @@ fn processInstallItem(
                 view,
                 prior.hnum,
                 prior.blob,
-                @ptrCast(item.pszName),
-                nevra,
                 !is_replacement,
                 postun_queue,
                 script_fd,
@@ -3969,6 +4009,61 @@ test "fixed downgrade retains upgrade installation semantics" {
     try std.testing.expectEqual(
         @as(?c_uint, c.TDNF_RPM_INSTALL_KIND_UPGRADE),
         installKindForItemType(fixedItemType(item)),
+    );
+}
+
+test "obsolete prior counts and script arguments use removed package identity" {
+    const rpmpkg = @import("rpm_package_test");
+    const legacy_blob = try rpmpkg.makeMinimalHeaderForTest(
+        std.testing.allocator,
+        "legacy",
+        "1",
+        "1",
+        "noarch",
+    );
+    defer std.testing.allocator.free(legacy_blob);
+    const replacement_blob = try rpmpkg.makeMinimalHeaderForTest(
+        std.testing.allocator,
+        "replacement",
+        "2",
+        "1",
+        "noarch",
+    );
+    defer std.testing.allocator.free(replacement_blob);
+
+    var view = TransactionView{};
+    defer view.deinit();
+    try view.entries.append(allocator, .{
+        .hnum = 1,
+        .blob = legacy_blob,
+        .order = 0,
+    });
+    try view.entries.append(allocator, .{
+        .hnum = 2,
+        .blob = legacy_blob,
+        .order = 1,
+    });
+    try view.entries.append(allocator, .{
+        .hnum = 3,
+        .blob = replacement_blob,
+        .added = true,
+        .order = 2,
+    });
+
+    const removed = try removedPackageArguments(legacy_blob);
+    defer removed.deinit();
+    try std.testing.expectEqualStrings("legacy", removed.name);
+    try std.testing.expectEqualStrings(
+        "legacy-1-1.noarch",
+        removed.nevra,
+    );
+    try std.testing.expectEqual(
+        @as(?c_int, 1),
+        countAfterRemoval(&view, removed.name),
+    );
+    try std.testing.expectEqual(
+        @as(c_int, 1),
+        view.countName("replacement"),
     );
 }
 
