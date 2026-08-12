@@ -21,8 +21,7 @@ const verified_fetch = @import("verified_fetch");
 
 const Allocator = std.mem.Allocator;
 const rpmdb_package_set_domain = "tdnf.rpmdb-package-set/v1";
-const system_instance_lock_file: [:0]const u8 =
-    "/var/run/.tdnf-instance-lockfile";
+const instance_lock_directory = "/var/run";
 
 const RpmdbIterator = opaque {};
 extern fn TDNFTransactionPlanRpmdbSnapshotOpenConfig(
@@ -37,7 +36,7 @@ extern fn tdnf_rpmdb_iter_next_header_blob_hnum(
     length: *usize,
 ) i32;
 extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
-extern fn tdnfLockAcquire(path: ?[*:0]const u8) c_int;
+extern fn tdnfLockAcquireSafe(path: ?[*:0]const u8) c_int;
 extern fn tdnfLockFree(path: ?[*:0]const u8, fd: c_int) void;
 
 pub const result_schema = "tdnf.replay-result/v1";
@@ -398,8 +397,7 @@ fn runValidated(
         .rpmdb_path = input.target.rpmdb_path,
         .architecture = input.target.architecture,
     });
-    const lock_fd = tdnfLockAcquire(lock_path.ptr);
-    if (lock_fd < 0) return error.LockFailed;
+    const lock_fd = try acquireTargetLock(lock_path);
     defer tdnfLockFree(lock_path.ptr, lock_fd);
 
     const before = try captureSnapshot(arena, &rpm_config);
@@ -506,18 +504,14 @@ fn targetLockPath(
     allocator: Allocator,
     target: Target,
 ) PreflightError![:0]const u8 {
-    if (std.mem.eql(u8, target.install_root, "/"))
-        return system_instance_lock_file;
     const normalized_root = std.mem.trimEnd(
         u8,
         target.install_root,
         "/",
     );
-    if (normalized_root.len == 0) return system_instance_lock_file;
-    const parent = std.fs.path.dirname(normalized_root) orelse
-        return error.InvalidInput;
+    const canonical_root = if (normalized_root.len == 0) "/" else normalized_root;
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(normalized_root);
+    hasher.update(canonical_root);
     hasher.update("\x00");
     hasher.update(target.rpmdb_path);
     var digest: [32]u8 = undefined;
@@ -526,9 +520,15 @@ fn targetLockPath(
     return std.fmt.allocPrintSentinel(
         allocator,
         "{s}/.tdnf-instance-lock-{s}",
-        .{ parent, hex[0..16] },
+        .{ instance_lock_directory, &hex },
         0,
     ) catch error.OutOfMemory;
+}
+
+fn acquireTargetLock(path: [:0]const u8) PreflightError!c_int {
+    const fd = tdnfLockAcquireSafe(path.ptr);
+    if (fd < 0) return error.LockFailed;
+    return fd;
 }
 
 fn mapBundleOpenError(err: bundle_reader.OpenError) PreflightError {
@@ -1356,7 +1356,7 @@ test "bundle closure failures remain distinct replay validation outcomes" {
     );
 }
 
-test "non-system target lock is stable and outside the install root" {
+test "target lock is stable in the trusted runtime directory" {
     const path = try targetLockPath(std.testing.allocator, .{
         .install_root = "/workspace/image-root/",
         .rpmdb_path = "/var/lib/rpm",
@@ -1366,8 +1366,49 @@ test "non-system target lock is stable and outside the install root" {
     try std.testing.expect(std.mem.startsWith(
         u8,
         path,
-        "/workspace/.tdnf-instance-lock-",
+        "/var/run/.tdnf-instance-lock-",
     ));
+}
+
+test "replay lock rejection precedes target mutation" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "target-state",
+        .data = "unchanged",
+    });
+    try tmp.dir.symLink(std.testing.io, "target-state", "lock", .{});
+
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(
+        &path_buffer,
+        ".zig-cache/tmp/{s}/lock",
+        .{tmp.sub_path},
+    );
+    try std.testing.expectError(error.LockFailed, acquireTargetLock(path));
+    var contents = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "target-state",
+        std.testing.allocator,
+        .limited(32),
+    );
+    try std.testing.expectEqualStrings("unchanged", contents);
+    std.testing.allocator.free(contents);
+
+    try tmp.dir.deleteFile(std.testing.io, "lock");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "lock",
+        .data = "foreign",
+    });
+    try std.testing.expectError(error.LockFailed, acquireTargetLock(path));
+    contents = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "lock",
+        std.testing.allocator,
+        .limited(32),
+    );
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("foreign", contents);
 }
 
 test "inventory comparison is exact and independent of rpmdb hnum" {
