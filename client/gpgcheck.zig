@@ -10,11 +10,13 @@ const abi = @import("client_abi");
 const options = @import("client_gpgcheck_options");
 const errors = @import("tdnf_error");
 const rpm = @import("rpm_gpgcheck");
+const txn_config = @import("rpm_txn_config");
+const transaction_lock = @import("transaction_lock");
 
 const Repo = abi.C.TDNF_REPO_DATA;
 const Tdnf = abi.Tdnf;
 const FileHandle = rpm.FileHandle;
-const TxnConfig = opaque {};
+const TxnConfig = txn_config.TxnConfig;
 const PubkeyIter = opaque {};
 
 const ERROR_TDNF_INVALID_PUBKEY_FILE: u32 = 1505;
@@ -230,6 +232,20 @@ fn productionImportKey(
     config: *TxnConfig,
     data: []const u8,
 ) u32 {
+    return importKeyWithTargetLock(
+        config,
+        data,
+        null,
+        {},
+        importKeyMutation,
+    );
+}
+
+fn importKeyMutation(
+    _: void,
+    config: *TxnConfig,
+    data: []const u8,
+) u32 {
     var imported: usize = 0;
     if (tdnf_rpmdb_import_pubkeys_config(
         config,
@@ -241,6 +257,48 @@ fn productionImportKey(
         return ERROR_TDNF_INVALID_PUBKEY_FILE;
     }
     return 0;
+}
+
+fn importKeyWithTargetLock(
+    config: *TxnConfig,
+    data: []const u8,
+    lock_directory: ?[]const u8,
+    context: anytype,
+    import_fn: anytype,
+) u32 {
+    if (config.pinnedInstallRootFd() != null) {
+        return import_fn(context, config, data);
+    }
+    var guard = blk: {
+        if (lock_directory) |directory| {
+            break :blk transaction_lock.acquireInDirectory(
+                std.heap.c_allocator,
+                config,
+                directory,
+                true,
+            ) catch |err| {
+                common.log(
+                    LOG_ERR,
+                    "Unable to lock rpmdb key import target: %s\n",
+                    .{@errorName(err)},
+                );
+                return ERROR_TDNF_RPM_CHECK;
+            };
+        }
+        break :blk transaction_lock.acquire(
+            std.heap.c_allocator,
+            config,
+        ) catch |err| {
+            common.log(
+                LOG_ERR,
+                "Unable to lock rpmdb key import target: %s\n",
+                .{@errorName(err)},
+            );
+            return ERROR_TDNF_RPM_CHECK;
+        };
+    };
+    defer guard.deinit();
+    return import_fn(context, guard.config(), data);
 }
 
 fn productionVerifyDigests(
@@ -1214,6 +1272,96 @@ test "signature policy handles unsigned skip and trusted rpmdb key" {
     ));
     try std.testing.expectEqual(@as(usize, 1), mock.signature_calls);
     try std.testing.expectEqual(@as(usize, 0), mock.import_calls);
+}
+
+test "RepoSync key import acquires the shared pinned target lock" {
+    const Probe = struct {
+        contender: *const TxnConfig,
+        lock_directory: []const u8,
+        pinned: bool = false,
+        blocked: bool = false,
+
+        fn run(
+            self: *@This(),
+            config: *TxnConfig,
+            _: []const u8,
+        ) u32 {
+            self.pinned = config.pinnedInstallRootFd() != null;
+            var contender = transaction_lock.tryAcquireInDirectory(
+                std.testing.allocator,
+                self.contender,
+                self.lock_directory,
+            ) catch |err| {
+                self.blocked = err == error.WouldBlock;
+                return @intFromBool(!self.pinned or !self.blocked);
+            };
+            contender.deinit();
+            return 1;
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "locks");
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const lock_directory = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "locks" },
+    );
+    defer std.testing.allocator.free(lock_directory);
+    var config = try TxnConfig.init(std.testing.allocator, root);
+    defer config.deinit();
+    var contender = try TxnConfig.init(std.testing.allocator, root);
+    defer contender.deinit();
+    var probe = Probe{
+        .contender = &contender,
+        .lock_directory = lock_directory,
+    };
+
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        importKeyWithTargetLock(
+            &config,
+            "key",
+            lock_directory,
+            &probe,
+            Probe.run,
+        ),
+    );
+    try std.testing.expect(probe.pinned);
+    try std.testing.expect(probe.blocked);
+
+    var outer = try transaction_lock.acquireInDirectory(
+        std.testing.allocator,
+        &config,
+        lock_directory,
+        true,
+    );
+    defer outer.deinit();
+    probe.pinned = false;
+    probe.blocked = false;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        importKeyWithTargetLock(
+            outer.config(),
+            "key",
+            lock_directory,
+            &probe,
+            Probe.run,
+        ),
+    );
+    try std.testing.expect(probe.pinned);
+    try std.testing.expect(probe.blocked);
 }
 
 test "approved keys retain binary lengths duplicates and verify after all imports" {

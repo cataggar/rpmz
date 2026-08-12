@@ -686,6 +686,23 @@ const TestHeaderEntry = union(enum) {
     },
 };
 
+const minimal_test_payload =
+    "070701" ++
+    "00000000" ++
+    "00000000" ++
+    "00000000" ++
+    "00000000" ++
+    "00000001" ++
+    "00000000" ++
+    "00000000" ++
+    "00000000" ++
+    "00000000" ++
+    "00000000" ++
+    "00000000" ++
+    "0000000b" ++
+    "00000000" ++
+    "TRAILER!!!\x00\x00\x00\x00";
+
 fn buildHeaderBlob(
     allocator: std.mem.Allocator,
     entries: []const TestHeaderEntry,
@@ -824,10 +841,36 @@ fn buildMinimalRpmBytes(
     allocator: std.mem.Allocator,
     main_header_blob: []const u8,
 ) ![]u8 {
+    const main_standalone = try buildStandaloneHeader(
+        allocator,
+        main_header_blob,
+        .immutable,
+    );
+    defer allocator.free(main_standalone);
+    var header_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(
+        main_standalone,
+        &header_digest,
+        .{},
+    );
+    const header_hex = std.fmt.bytesToHex(header_digest, .lower);
+    var md5_hasher = std.crypto.hash.Md5.init(.{});
+    md5_hasher.update(main_standalone);
+    md5_hasher.update(minimal_test_payload);
+    var md5: [std.crypto.hash.Md5.digest_length]u8 = undefined;
+    md5_hasher.final(&md5);
     const sig_header_blob = try buildHeaderBlob(allocator, &.{
         .{ .int32 = .{
             .tag = @intFromEnum(rpm_header.SigTagId.size),
             .value = 0,
+        } },
+        .{ .string = .{
+            .tag = @intFromEnum(rpm_header.SigTagId.sha256),
+            .value = &header_hex,
+        } },
+        .{ .bin = .{
+            .tag = @intFromEnum(rpm_header.SigTagId.md5),
+            .value = &md5,
         } },
     });
     defer allocator.free(sig_header_blob);
@@ -839,15 +882,9 @@ fn buildMinimalRpmBytes(
     );
     defer allocator.free(sig_standalone);
 
-    const main_standalone = try buildStandaloneHeader(
-        allocator,
-        main_header_blob,
-        .immutable,
-    );
-    defer allocator.free(main_standalone);
-
     const sig_pad = (8 - (sig_standalone.len % 8)) % 8;
-    const total = 96 + sig_standalone.len + sig_pad + main_standalone.len;
+    const total = 96 + sig_standalone.len + sig_pad +
+        main_standalone.len + minimal_test_payload.len;
     const bytes = try allocator.alloc(u8, total);
     @memset(bytes, 0);
     bytes[0] = 0xed;
@@ -860,6 +897,7 @@ fn buildMinimalRpmBytes(
         bytes[96 + sig_standalone.len + sig_pad .. 96 + sig_standalone.len + sig_pad + main_standalone.len],
         main_standalone,
     );
+    @memcpy(bytes[total - minimal_test_payload.len ..], minimal_test_payload);
     return bytes;
 }
 
@@ -907,11 +945,23 @@ pub fn makeMinimalRpmBytesForTest(
     release: []const u8,
     arch: []const u8,
 ) ![]u8 {
+    var payload_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(
+        minimal_test_payload,
+        &payload_digest,
+        .{},
+    );
+    const payload_hex = std.fmt.bytesToHex(payload_digest, .lower);
+    const payload_values = [_][]const u8{&payload_hex};
     const header_blob = try buildHeaderBlob(allocator, &.{
         .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.name), .value = name } },
         .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.version), .value = version } },
         .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.release), .value = release } },
         .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.arch), .value = arch } },
+        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.payload_format), .value = "cpio" } },
+        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.payload_compressor), .value = "none" } },
+        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.payloadsha256), .values = &payload_values } },
+        .{ .int32 = .{ .tag = @intFromEnum(rpm_header.TagId.payloadsha256algo), .value = 8 } },
     });
     defer allocator.free(header_blob);
     return buildMinimalRpmBytes(allocator, header_blob);

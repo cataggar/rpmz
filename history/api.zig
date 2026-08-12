@@ -10,6 +10,7 @@ extern fn time(tloc: ?*std.posix.time_t) std.posix.time_t;
 
 pub const HistoryCtx = extern struct {
     db: ?*sqlite.c.sqlite3,
+    db_owner: ?*anyopaque,
     installed_ids: ?[*]c_int,
     installed_count: c_int,
     cookie: ?[*:0]u8,
@@ -57,6 +58,9 @@ const DiffArraysResult = struct {
 };
 
 fn ctxDb(ctx: *HistoryCtx) history_db.Database {
+    if (ctx.db_owner) |owner| {
+        return @as(*history_db.Database, @ptrCast(@alignCast(owner))).*;
+    }
     return history_db.Database.fromPtr(ctx.db);
 }
 
@@ -193,20 +197,45 @@ fn stateIdsAt(db: history_db.Database, trans_id: c_int) ![]c_int {
 pub fn Api(comptime Rpmdb: type) type {
     return struct {
         pub fn createHistoryCtx(db_filename: [*:0]const u8) !*HistoryCtx {
-            var db = try history_db.Database.init(db_filename);
-            errdefer db.close();
+            return createHistoryCtxFromDb(
+                try history_db.Database.init(db_filename),
+            );
+        }
 
+        pub fn createHistoryCtxConfig(
+            config: *const @import("rpm_txn_config").TxnConfig,
+            persist_dir: []const u8,
+            must_exist: bool,
+        ) !*HistoryCtx {
+            return createHistoryCtxFromDb(
+                try history_db.Database.initConfig(
+                    config,
+                    persist_dir,
+                    must_exist,
+                ),
+            );
+        }
+
+        fn createHistoryCtxFromDb(opened: history_db.Database) !*HistoryCtx {
+            const db_owner = try allocator.create(history_db.Database);
+            db_owner.* = opened;
+            errdefer {
+                db_owner.close();
+                allocator.destroy(db_owner);
+            }
             const ctx = try allocator.create(HistoryCtx);
             errdefer allocator.destroy(ctx);
 
             ctx.* = .{
-                .db = db.raw.ptr,
+                .db = db_owner.raw.ptr,
+                .db_owner = db_owner,
                 .installed_ids = null,
                 .installed_count = 0,
                 .cookie = null,
                 .trans_id = 0,
             };
 
+            const db = db_owner.*;
             if (try store.tableExists(db, "transactions")) {
                 if (try store.latestTransaction(db)) |latest_value| {
                     var latest = latest_value;
@@ -225,7 +254,15 @@ pub fn Api(comptime Rpmdb: type) type {
         pub fn destroyHistoryCtx(ctx: ?*HistoryCtx) void {
             if (ctx) |value| {
                 if (value.db != null) {
-                    ctxDb(value).close();
+                    if (value.db_owner) |owner| {
+                        const db_owner: *history_db.Database =
+                            @ptrCast(@alignCast(owner));
+                        db_owner.close();
+                        allocator.destroy(db_owner);
+                        value.db_owner = null;
+                    } else {
+                        ctxDb(value).close();
+                    }
                 }
                 freeIntArray(value.installed_ids, @intCast(value.installed_count));
                 history_db.freeZ(value.cookie);

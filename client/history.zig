@@ -12,38 +12,14 @@ pub const Conf = abi.Conf;
 pub const Tdnf = abi.Tdnf;
 
 pub const HistoryCtx = opaque {};
+const TxnConfig = opaque {};
 
-extern fn TDNFJoinPathFromArray(
-    ppszPath: ?*?[*:0]u8,
-    ppszNodes: [*c]?[*:0]u8,
-    nCount: c_int,
-) u32;
-extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
-extern fn TDNFIsFileOrSymlink(
-    pszPath: ?[*:0]const u8,
-    pnPathIsFile: ?*c_int,
-) u32;
-extern fn TDNFUtilsMakeDirs(pszPath: ?[*:0]const u8) u32;
-extern fn create_history_ctx(
-    db_filename: ?[*:0]const u8,
-) ?*HistoryCtx;
-
-fn freeString(value: ?[*:0]u8) void {
-    if (value) |pointer| TDNFFreeMemory(@ptrCast(pointer));
-}
-
-fn joinPath(
-    out: *?[*:0]u8,
-    nodes: []const ?[*:0]u8,
-) u32 {
-    var count: usize = 0;
-    while (count < nodes.len and nodes[count] != null) : (count += 1) {}
-    return TDNFJoinPathFromArray(
-        out,
-        @ptrCast(@constCast(nodes.ptr)),
-        @intCast(count),
-    );
-}
+extern fn history_open_config(
+    config: ?*const TxnConfig,
+    persist_dir: ?[*:0]const u8,
+    must_exist: c_int,
+    output: ?*?*HistoryCtx,
+) c_int;
 
 pub export fn TDNFGetHistoryCtx(
     pTdnf: ?*Tdnf,
@@ -55,42 +31,20 @@ pub export fn TDNFGetHistoryCtx(
     }
 
     const tdnf = pTdnf.?;
-    const args = tdnf.pArgs.?;
-    const conf = tdnf.pConf.?;
-    var data_dir: ?[*:0]u8 = null;
-    defer freeString(data_dir);
-    var history_db: ?[*:0]u8 = null;
-    defer freeString(history_db);
-
-    const data_nodes = [_]?[*:0]u8{
-        args.pszInstallRoot,
+    const conf = tdnf.pConf orelse
+        return tdnf_error.ERROR_TDNF_INVALID_PARAMETER;
+    const raw_config = tdnf.pRpmConfig orelse
+        return tdnf_error.ERROR_TDNF_INVALID_PARAMETER;
+    const result = history_open_config(
+        @ptrCast(@alignCast(raw_config)),
         conf.pszPersistDir,
-    };
-    var result = joinPath(&data_dir, &data_nodes);
-    if (result != 0) return result;
-
-    const history_nodes = [_]?[*:0]u8{
-        data_dir,
-        @constCast(@as([*:0]const u8, "history.db")),
-    };
-    result = joinPath(&history_db, &history_nodes);
-    if (result != 0) return result;
-
-    if (nMustExist != 0) {
-        var exists: c_int = 0;
-        result = TDNFIsFileOrSymlink(history_db, &exists);
-        if (result != 0) return result;
-        if (exists == 0) return tdnf_error.ERROR_TDNF_HISTORY_NODB;
-    }
-
-    result = TDNFUtilsMakeDirs(data_dir);
-    if (result == tdnf_error.ERROR_TDNF_ALREADY_EXISTS) result = 0;
-    if (result != 0) return result;
-
-    const context = create_history_ctx(history_db) orelse
-        return tdnf_error.ERROR_TDNF_HISTORY_ERROR;
-    ppCtx.?.* = context;
-    return 0;
+        nMustExist,
+        ppCtx,
+    );
+    if (result == 0) return 0;
+    if (result == 1) return tdnf_error.ERROR_TDNF_HISTORY_NODB;
+    if (result == 2) return tdnf_error.ERROR_TDNF_INVALID_DIR;
+    return tdnf_error.ERROR_TDNF_HISTORY_ERROR;
 }
 
 comptime {

@@ -5,7 +5,7 @@ const history_db = @import("db.zig");
 const history_store = @import("store.zig");
 
 const tdnf_rpmdb_iter = opaque {};
-const tdnf_rpm_config = opaque {};
+const tdnf_rpm_config = @import("rpm_txn_config").TxnConfig;
 
 fn transactionPlanTestWriteHistoryFixture(
     raw_path: ?[*:0]const u8,
@@ -162,6 +162,29 @@ pub const HistoryNevraMap = api.HistoryNevraMap;
 pub export fn create_history_ctx(db_filename: ?[*:0]const u8) ?*HistoryCtx {
     const path = db_filename orelse return null;
     return Impl.createHistoryCtx(path) catch null;
+}
+
+pub export fn history_open_config(
+    config: ?*const tdnf_rpm_config,
+    persist_dir: ?[*:0]const u8,
+    must_exist: c_int,
+    output: ?*?*HistoryCtx,
+) c_int {
+    const out = output orelse return -1;
+    out.* = null;
+    const rpm_config = config orelse return -1;
+    const persist = persist_dir orelse return -1;
+    const context = ConfigImpl.createHistoryCtxConfig(
+        rpm_config,
+        std.mem.span(persist),
+        must_exist != 0,
+    ) catch |err| return switch (err) {
+        error.NotFound => 1,
+        error.InvalidDirectory => 2,
+        else => -1,
+    };
+    out.* = context;
+    return 0;
 }
 
 pub export fn destroy_history_ctx(ctx: ?*HistoryCtx) void {

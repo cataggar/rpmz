@@ -455,7 +455,6 @@ extern fn TDNFGPGCheckPackageWithFile(
     ?*c.tdnf_rpm_file,
     ?*c_int,
 ) callconv(.c) u32;
-extern fn TDNFUtilsMakeDirs(?[*:0]const u8) callconv(.c) u32;
 extern fn TDNFJoinArrayToString(
     ?[*]?[*:0]u8,
     ?[*:0]const u8,
@@ -3370,6 +3369,7 @@ const PinnedTransactionTarget = struct {
     pinned_root: [:0]u8,
     original_config: ?*anyopaque,
     original_install_root: ?[*:0]u8,
+    bound: bool = false,
 
     fn init(
         tdnf: *abi.Tdnf,
@@ -3385,8 +3385,6 @@ const PinnedTransactionTarget = struct {
         errdefer allocator.free(pinned_root);
         const original_config = tdnf.pRpmConfig;
         const original_install_root = args.pszInstallRoot;
-        tdnf.pRpmConfig = @ptrCast(guard.config());
-        args.pszInstallRoot = @constCast(pinned_root.ptr);
         return .{
             .tdnf = tdnf,
             .args = args,
@@ -3397,9 +3395,19 @@ const PinnedTransactionTarget = struct {
         };
     }
 
+    fn bind(self: *PinnedTransactionTarget) void {
+        std.debug.assert(!self.bound);
+        self.tdnf.pRpmConfig = @ptrCast(self.guard.config());
+        self.args.pszInstallRoot = @constCast(self.pinned_root.ptr);
+        self.bound = true;
+    }
+
     fn deinit(self: *PinnedTransactionTarget) void {
-        self.args.pszInstallRoot = self.original_install_root;
-        self.tdnf.pRpmConfig = self.original_config;
+        if (self.bound) {
+            self.args.pszInstallRoot = self.original_install_root;
+            self.tdnf.pRpmConfig = self.original_config;
+            self.bound = false;
+        }
         allocator.free(self.pinned_root);
         self.guard.deinit();
     }
@@ -3416,6 +3424,7 @@ fn runWithAcquiredTransactionTarget(
         acquired_guard,
     ) catch |err| return transactionLockFailure(err);
     defer target.deinit();
+    target.bind();
     return operation(tdnf, context);
 }
 
@@ -3616,17 +3625,9 @@ fn runWithHistory(
     history: *HistoryCtx,
     command_line: ?[*:0]const u8,
 ) u32 {
-    var data_dir: ?[*:0]u8 = null;
-    defer free(data_dir);
-    var rc = common.joinPath(&data_dir, &.{ tdnf.pArgs.?.pszInstallRoot, tdnf.pConf.?.pszPersistDir });
-    if (rc == 0 and data_dir != null) {
-        rc = TDNFUtilsMakeDirs(data_dir);
-        if (rc == errors.ERROR_TDNF_ALREADY_EXISTS) rc = 0;
-    }
-    if (rc != 0) return rc;
     if (history_sync_config(history, tdnf.pRpmConfig) != 0)
         return errors.ERROR_TDNF_HISTORY_ERROR;
-    rc = runTransaction(ts, tdnf);
+    const rc = runTransaction(ts, tdnf);
     if (rc != 0) return rc;
     if (history_update_state_config(history, tdnf.pRpmConfig, command_line) != 0)
         return errors.ERROR_TDNF_HISTORY_ERROR;
@@ -4632,4 +4633,56 @@ test "normal preparation mutation probes hold the replay target lock" {
     try std.testing.expect(!probe.failed);
     try std.testing.expectEqual(original_config, tdnf.pRpmConfig);
     try std.testing.expectEqual(original_root, args.pszInstallRoot);
+}
+
+test "normal target binds config only from stable caller storage" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "locks");
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const lock_directory = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "locks" },
+    );
+    defer std.testing.allocator.free(lock_directory);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+
+    var config = try txn_config.TxnConfig.init(std.testing.allocator, root);
+    defer config.deinit();
+    const acquired = try transaction_lock.acquireInDirectory(
+        std.testing.allocator,
+        &config,
+        lock_directory,
+        true,
+    );
+    var args = abi.CmdArgs{ .pszInstallRoot = root_z.ptr };
+    var tdnf = abi.Tdnf{
+        .pArgs = &args,
+        .pRpmConfig = @ptrCast(&config),
+    };
+    const original_config = tdnf.pRpmConfig;
+    var target = try PinnedTransactionTarget.init(&tdnf, acquired);
+    defer target.deinit();
+
+    try std.testing.expectEqual(original_config, tdnf.pRpmConfig);
+    target.bind();
+    try std.testing.expectEqual(
+        @as(?*anyopaque, @ptrCast(&target.guard.pinned_config)),
+        tdnf.pRpmConfig,
+    );
+    try std.testing.expectEqual(
+        @as([*:0]u8, @constCast(target.pinned_root.ptr)),
+        args.pszInstallRoot,
+    );
 }

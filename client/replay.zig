@@ -446,11 +446,12 @@ fn runValidated(
         result.status = .transaction_failed;
         result.validation_failure = null;
         result.transaction_failure = transactionFailure(err);
-        const failed_snapshot = captureSnapshot(arena, locked_config) catch {
-            result.transaction_failure = .final_inventory_unreadable;
-            return;
-        };
-        result.final_inventory = failed_snapshot.inventory;
+        captureFailedFinalInventory(
+            result,
+            arena,
+            locked_config,
+            captureSnapshot,
+        );
         return;
     };
 
@@ -486,6 +487,20 @@ fn runValidated(
     result.validation_failure = null;
     result.transaction_failure = null;
     result.applied_plan_digest = result.plan_digest;
+}
+
+fn captureFailedFinalInventory(
+    result: *Result,
+    allocator: Allocator,
+    config: *const txn_config.TxnConfig,
+    capture: anytype,
+) void {
+    result.final_inventory = null;
+    const snapshot = capture(allocator, config) catch {
+        result.transaction_failure = .final_inventory_unreadable;
+        return;
+    };
+    result.final_inventory = snapshot.inventory;
 }
 
 fn validateInput(input: Input) PreflightError!void {
@@ -930,6 +945,16 @@ fn buildFixedOrder(
     errdefer allocator.free(order);
     const item_actions = try allocator.alloc(usize, plan.actions.len);
     errdefer allocator.free(item_actions);
+    try collapseExecutionOrder(allocator, plan, steps, order);
+    const obsolete_priors = try ownedObsoletePriors(
+        allocator,
+        plan,
+        order,
+    );
+    defer {
+        for (obsolete_priors) |ids| allocator.free(ids);
+        allocator.free(obsolete_priors);
+    }
     var initialized_items: usize = 0;
     errdefer {
         for (items[0..initialized_items]) |item| freeFixedItem(allocator, item);
@@ -964,7 +989,7 @@ fn buildFixedOrder(
                 }
                 break :blk .{ .install = try fixedRpm(package.*, verified) };
             },
-            .upgrade, .downgrade, .reinstall, .obsolete => blk: {
+            .upgrade, .downgrade, .reinstall => blk: {
                 if (package.state != .available or
                     action.prior_package_ids.len == 0)
                     return error.ActionShapeMismatch;
@@ -981,14 +1006,31 @@ fn buildFixedOrder(
                     .upgrade => .{ .upgrade = replacement },
                     .downgrade => .{ .downgrade = replacement },
                     .reinstall => .{ .reinstall = replacement },
-                    .obsolete => .{ .obsolete = replacement },
                     else => unreachable,
                 };
+            },
+            .obsolete => blk: {
+                if (package.state != .available or
+                    action.prior_package_ids.len == 0)
+                    return error.ActionShapeMismatch;
+                if (obsolete_priors[index].len == 0) {
+                    break :blk .{
+                        .install = try fixedRpm(package.*, verified),
+                    };
+                }
+                break :blk .{ .obsolete = .{
+                    .package = try fixedRpm(package.*, verified),
+                    .priors = try fixedPriors(
+                        allocator,
+                        plan.packages,
+                        rows,
+                        obsolete_priors[index],
+                    ),
+                } };
             },
         };
         initialized_items = index + 1;
     }
-    try collapseExecutionOrder(allocator, plan, steps, order);
     fixed.validateFixedOrder(.{
         .items = items,
         .order = order,
@@ -1004,6 +1046,40 @@ fn buildFixedOrder(
         .order = order,
         .item_actions = item_actions,
     };
+}
+
+fn ownedObsoletePriors(
+    allocator: Allocator,
+    plan: *const transaction_plan.Data,
+    order: []const u32,
+) PreflightError![][]const []const u8 {
+    const owned = try allocator.alloc([]const []const u8, plan.actions.len);
+    errdefer allocator.free(owned);
+    for (owned) |*ids| ids.* = &.{};
+    errdefer {
+        for (owned) |ids| allocator.free(ids);
+    }
+    var assigned: std.StringHashMapUnmanaged(void) = .empty;
+    defer assigned.deinit(allocator);
+
+    for (order) |raw_index| {
+        const action_index: usize = @intCast(raw_index);
+        if (action_index >= plan.actions.len) return error.ActionShapeMismatch;
+        const action = plan.actions[action_index];
+        if (action.kind != .obsolete) continue;
+        var ids: std.ArrayList([]const u8) = .empty;
+        defer ids.deinit(allocator);
+        for (action.prior_package_ids) |prior| {
+            const entry = assigned.getOrPut(allocator, prior) catch
+                return error.OutOfMemory;
+            if (!entry.found_existing) {
+                ids.append(allocator, prior) catch return error.OutOfMemory;
+            }
+        }
+        owned[action_index] = ids.toOwnedSlice(allocator) catch
+            return error.OutOfMemory;
+    }
+    return owned;
 }
 
 fn collapseExecutionOrder(
@@ -1450,6 +1526,60 @@ test "result serialization never represents failure as success" {
     ) != null);
 }
 
+test "partial mutation with failed final capture clears old inventory" {
+    const Probe = struct {
+        fn capture(
+            _: Allocator,
+            _: *const txn_config.TxnConfig,
+        ) PreflightError!Snapshot {
+            return error.TargetUnreadable;
+        }
+    };
+
+    var actions = [_]ActionOutcome{.{
+        .index = 0,
+        .kind = .install,
+        .status = .applied,
+    }};
+    const old_inventory = [_]InstalledPackage{.{
+        .hnum = 7,
+        .identity = .{
+            .arch = "x86_64",
+            .epoch = null,
+            .name = "old",
+            .release = "1",
+            .version = "1",
+        },
+    }};
+    var result = Result{
+        .allocator = std.testing.allocator,
+        .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
+        .status = .transaction_failed,
+        .validation_failure = null,
+        .transaction_failure = .execution_failed,
+        .plan_digest = null,
+        .applied_plan_digest = null,
+        .actions = &actions,
+        .final_inventory = &old_inventory,
+    };
+    defer result.arena.deinit();
+    var config = try txn_config.TxnConfig.init(std.testing.allocator, "/");
+    defer config.deinit();
+
+    captureFailedFinalInventory(
+        &result,
+        std.testing.allocator,
+        &config,
+        Probe.capture,
+    );
+    try std.testing.expectEqual(
+        TransactionFailure.final_inventory_unreadable,
+        result.transaction_failure.?,
+    );
+    try std.testing.expect(result.final_inventory == null);
+    try std.testing.expectEqual(ActionStatus.applied, result.actions[0].status);
+}
+
 test "architecture validation accepts noarch and rejects source packages" {
     try std.testing.expect(architectureAllows("x86_64", "x86_64"));
     try std.testing.expect(architectureAllows("x86_64", "noarch"));
@@ -1739,7 +1869,7 @@ test "fixed replay items preserve all authoritative action representations" {
     );
 }
 
-test "shared obsolete priors collapse to complete semantic items" {
+test "shared obsolete priors collapse to one physical erase" {
     const packages = [_]transaction_plan.Package{
         testPackage("shared-old", "shared-old", "1", .installed, 11),
         testPackage("unique-old", "unique-old", "1", .installed, 12),
@@ -1809,14 +1939,14 @@ test "shared obsolete priors collapse to complete semantic items" {
     }
     try std.testing.expectEqual(@as(usize, 2), built.items.len);
     try std.testing.expect(built.items[0] == .obsolete);
-    try std.testing.expect(built.items[1] == .obsolete);
+    try std.testing.expect(built.items[1] == .install);
     try std.testing.expectEqual(
         @as(u32, 11),
         built.items[0].obsolete.priors[0].hnum,
     );
     try std.testing.expectEqual(
-        @as(u32, 11),
-        built.items[1].obsolete.priors[0].hnum,
+        @as(usize, 2),
+        built.items[0].obsolete.priors.len,
     );
 }
 

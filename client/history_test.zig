@@ -7,6 +7,7 @@
 const std = @import("std");
 const testing = std.testing;
 const history = @import("client_history");
+const txn_config = @import("rpm_txn_config");
 const tdnf_error = @import("tdnf_error");
 
 comptime {
@@ -53,7 +54,12 @@ fn getHistory(
     persist_dir: [*:0]const u8,
     out: ?*?*history.HistoryCtx,
     must_exist: c_int,
-) u32 {
+) !u32 {
+    var rpm_config = try txn_config.TxnConfig.init(
+        testing.allocator,
+        std.mem.span(install_root),
+    );
+    defer rpm_config.deinit();
     var args = history.CmdArgs{
         .pszInstallRoot = install_root,
     };
@@ -63,6 +69,7 @@ fn getHistory(
     var tdnf = history.Tdnf{
         .pArgs = &args,
         .pConf = &conf,
+        .pRpmConfig = @ptrCast(&rpm_config),
     };
     return TDNFGetHistoryCtx(&tdnf, out, must_exist);
 }
@@ -89,7 +96,7 @@ test "TDNFGetHistoryCtx creates the install-root history path" {
     var context: ?*history.HistoryCtx = null;
     try testing.expectEqual(
         @as(u32, 0),
-        getHistory(fixture.root.ptr, "/persist", &context, 0),
+        try getHistory(fixture.root.ptr, "/persist", &context, 0),
     );
     defer destroy_history_ctx(context);
     try testing.expect(context != null);
@@ -107,7 +114,7 @@ test "TDNFGetHistoryCtx must-exist leaves a missing path untouched" {
     var context: ?*history.HistoryCtx = null;
     try testing.expectEqual(
         tdnf_error.ERROR_TDNF_HISTORY_NODB,
-        getHistory(fixture.root.ptr, "/persist", &context, 1),
+        try getHistory(fixture.root.ptr, "/persist", &context, 1),
     );
     try testing.expect(context == null);
     try testing.expectError(
@@ -116,21 +123,21 @@ test "TDNFGetHistoryCtx must-exist leaves a missing path untouched" {
     );
 }
 
-test "TDNFGetHistoryCtx opens existing regular and symlink databases" {
+test "TDNFGetHistoryCtx opens regular and rejects symlink databases" {
     var fixture = try Fixture.init();
     defer fixture.deinit();
 
     var context: ?*history.HistoryCtx = null;
     try testing.expectEqual(
         @as(u32, 0),
-        getHistory(fixture.root.ptr, "/persist", &context, 0),
+        try getHistory(fixture.root.ptr, "/persist", &context, 0),
     );
     destroy_history_ctx(context);
     context = null;
 
     try testing.expectEqual(
         @as(u32, 0),
-        getHistory(fixture.root.ptr, "/persist", &context, 1),
+        try getHistory(fixture.root.ptr, "/persist", &context, 1),
     );
     destroy_history_ctx(context);
     context = null;
@@ -148,11 +155,10 @@ test "TDNFGetHistoryCtx opens existing regular and symlink databases" {
         .{},
     );
     try testing.expectEqual(
-        @as(u32, 0),
-        getHistory(fixture.root.ptr, "/persist", &context, 1),
+        tdnf_error.ERROR_TDNF_HISTORY_ERROR,
+        try getHistory(fixture.root.ptr, "/persist", &context, 1),
     );
-    defer destroy_history_ctx(context);
-    try testing.expect(context != null);
+    try testing.expect(context == null);
 }
 
 test "TDNFGetHistoryCtx reports directory creation failure" {
@@ -173,7 +179,7 @@ test "TDNFGetHistoryCtx reports directory creation failure" {
     var context: ?*history.HistoryCtx = null;
     try testing.expectEqual(
         tdnf_error.ERROR_TDNF_INVALID_DIR,
-        getHistory(blocker.ptr, "/persist", &context, 0),
+        try getHistory(blocker.ptr, "/persist", &context, 0),
     );
     try testing.expect(context == null);
 }
@@ -189,7 +195,7 @@ test "TDNFGetHistoryCtx cleans up after context creation failure" {
     var context: ?*history.HistoryCtx = null;
     try testing.expectEqual(
         tdnf_error.ERROR_TDNF_HISTORY_ERROR,
-        getHistory(fixture.root.ptr, "/persist", &context, 0),
+        try getHistory(fixture.root.ptr, "/persist", &context, 0),
     );
     try testing.expect(context == null);
 }

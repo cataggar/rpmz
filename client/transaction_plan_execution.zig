@@ -107,10 +107,98 @@ pub fn materialize(
         seen[raw_index] = true;
         destination.* = inputs[raw_index];
     }
-    return plan.withExecutionSteps(allocator, ordered) catch |err| switch (err) {
+    const semantic = try semanticExecutionSteps(
+        arena,
+        plan.model(),
+        ordered,
+    );
+    return plan.withExecutionSteps(allocator, semantic) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.InvalidInput,
     };
+}
+
+fn semanticExecutionSteps(
+    allocator: std.mem.Allocator,
+    data: *const transaction_plan.Data,
+    ordered_native: []const transaction_plan.ExecutionStep,
+) MaterializeError![]const transaction_plan.ExecutionStep {
+    var expected_count = data.actions.len;
+    for (data.actions) |action| {
+        if (action.kind == .obsolete or action.kind == .downgrade) {
+            if (action.prior_package_ids.len == 0) return error.InvalidInput;
+            expected_count += 1;
+        }
+    }
+    var output = try std.ArrayList(transaction_plan.ExecutionStep).initCapacity(
+        allocator,
+        expected_count,
+    );
+    errdefer output.deinit(allocator);
+    const primary_seen = try allocator.alloc(bool, data.actions.len);
+    defer allocator.free(primary_seen);
+    @memset(primary_seen, false);
+    var erased_priors: std.StringHashMapUnmanaged(void) = .empty;
+    defer erased_priors.deinit(allocator);
+
+    for (ordered_native) |step| {
+        if (step.action_index >= data.actions.len) return error.InvalidInput;
+        const action = data.actions[step.action_index];
+        if (isPrimaryStep(action, step)) {
+            if (primary_seen[step.action_index]) return error.InvalidInput;
+            primary_seen[step.action_index] = true;
+            output.appendAssumeCapacity(step);
+            if (action.kind == .obsolete or action.kind == .downgrade) {
+                output.appendAssumeCapacity(.{
+                    .action_index = step.action_index,
+                    .operation = .erase,
+                    .package_id = action.prior_package_ids[0],
+                });
+            }
+            continue;
+        }
+        if (step.operation != .erase or
+            (action.kind != .obsolete and action.kind != .downgrade) or
+            !containsString(action.prior_package_ids, step.package_id))
+        {
+            return error.InvalidInput;
+        }
+        const entry = try erased_priors.getOrPut(allocator, step.package_id);
+        if (entry.found_existing) return error.InvalidInput;
+    }
+    if (output.items.len != expected_count) return error.InvalidInput;
+    for (primary_seen) |was_seen| {
+        if (!was_seen) return error.InvalidInput;
+    }
+    for (data.actions) |action| {
+        if (action.kind == .obsolete or action.kind == .downgrade) {
+            if (!erased_priors.contains(action.prior_package_ids[0]))
+                return error.InvalidInput;
+        }
+    }
+    return output.toOwnedSlice(allocator);
+}
+
+fn isPrimaryStep(
+    action: transaction_plan.Action,
+    step: transaction_plan.ExecutionStep,
+) bool {
+    if (!std.mem.eql(u8, action.target_package_id, step.package_id))
+        return false;
+    const expected: transaction_plan.ExecutionOperation = switch (action.kind) {
+        .erase => .erase,
+        .reinstall => .reinstall,
+        .upgrade => .upgrade,
+        .downgrade, .install, .obsolete => .install,
+    };
+    return step.operation == expected;
+}
+
+fn containsString(values: []const []const u8, wanted: []const u8) bool {
+    for (values) |value| {
+        if (std.mem.eql(u8, value, wanted)) return true;
+    }
+    return false;
 }
 
 fn operationValue(operation: transaction_plan.ExecutionOperation) u32 {
@@ -142,4 +230,110 @@ fn findPackagePath(
         }
     }
     return null;
+}
+
+test "deduplicated native erase expands to shared obsolete companions" {
+    const packages = [_]transaction_plan.Package{
+        .{
+            .id = "old",
+            .identity = .{
+                .arch = "x86_64",
+                .epoch = null,
+                .name = "old",
+                .release = "1",
+                .version = "1",
+            },
+            .location = null,
+            .reason = null,
+            .repository_id = "@System",
+            .rpmdb_hnum = 11,
+            .sha256 = null,
+            .size = null,
+            .state = .installed,
+        },
+        .{
+            .id = "first",
+            .identity = .{
+                .arch = "x86_64",
+                .epoch = null,
+                .name = "first",
+                .release = "1",
+                .version = "1",
+            },
+            .location = .{ .href = "first.rpm" },
+            .reason = null,
+            .repository_id = "base",
+            .rpmdb_hnum = null,
+            .sha256 = "0" ** 64,
+            .size = 1,
+            .state = .available,
+        },
+        .{
+            .id = "second",
+            .identity = .{
+                .arch = "x86_64",
+                .epoch = null,
+                .name = "second",
+                .release = "1",
+                .version = "1",
+            },
+            .location = .{ .href = "second.rpm" },
+            .reason = null,
+            .repository_id = "base",
+            .rpmdb_hnum = null,
+            .sha256 = "1" ** 64,
+            .size = 1,
+            .state = .available,
+        },
+    };
+    const actions = [_]transaction_plan.Action{
+        .{
+            .kind = .obsolete,
+            .prior_package_ids = &.{"old"},
+            .reason = .obsoletes,
+            .requested_by_job_id = null,
+            .target_package_id = "first",
+        },
+        .{
+            .kind = .obsolete,
+            .prior_package_ids = &.{"old"},
+            .reason = .obsoletes,
+            .requested_by_job_id = null,
+            .target_package_id = "second",
+        },
+    };
+    const data = transaction_plan.Data{
+        .actions = &actions,
+        .environment = undefined,
+        .hidden_packages = &.{},
+        .jobs = &.{},
+        .packages = &packages,
+        .problems = &.{},
+        .repositories = &.{},
+        .requests = &.{},
+        .selected = &.{
+            .{ .package_id = "first" },
+            .{ .package_id = "second" },
+        },
+        .skipped = &.{},
+    };
+    const native = [_]transaction_plan.ExecutionStep{
+        .{ .action_index = 0, .operation = .install, .package_id = "first" },
+        .{ .action_index = 1, .operation = .install, .package_id = "second" },
+        .{ .action_index = 1, .operation = .erase, .package_id = "old" },
+    };
+    const semantic = try semanticExecutionSteps(
+        std.testing.allocator,
+        &data,
+        &native,
+    );
+    defer std.testing.allocator.free(semantic);
+    try std.testing.expectEqual(@as(usize, 4), semantic.len);
+    try std.testing.expectEqual(@as(usize, 0), semantic[1].action_index);
+    try std.testing.expectEqual(
+        transaction_plan.ExecutionOperation.erase,
+        semantic[1].operation,
+    );
+    try std.testing.expectEqual(@as(usize, 1), semantic[3].action_index);
+    try std.testing.expectEqualStrings("old", semantic[3].package_id);
 }

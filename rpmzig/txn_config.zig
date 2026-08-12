@@ -30,6 +30,9 @@ pub const DEFAULT_SOURCEDIR = "%{_topdir}/SOURCES";
 pub const DEFAULT_SYSCONFDIR = "/etc";
 pub const DEFAULT_SCRIPT_INTERPRETER = "/bin/sh";
 const MAX_EXPANSION_DEPTH = 32;
+const mode_type_mask: u16 = 0o170000;
+const mode_directory: u16 = 0o040000;
+const mode_regular: u16 = 0o100000;
 
 pub const Macro = enum {
     dbpath,
@@ -105,6 +108,7 @@ pub const InitError = error{
     InvalidInstallRoot,
     InstallRootPinFailed,
     OutOfMemory,
+    RpmDbPinFailed,
 };
 
 pub const LoadMacrosError = SetMacroError || error{
@@ -168,6 +172,44 @@ const MacroEntry = struct {
     value: []u8,
 };
 
+const FsIdentity = struct {
+    dev_major: u32,
+    dev_minor: u32,
+    ino: u64,
+
+    fn eql(left: FsIdentity, right: FsIdentity) bool {
+        return left.dev_major == right.dev_major and
+            left.dev_minor == right.dev_minor and
+            left.ino == right.ino;
+    }
+};
+
+const FsStat = struct {
+    identity: FsIdentity,
+    mode: u16,
+    nlink: u32,
+};
+
+fn fdStat(fd: c_int) ?FsStat {
+    var st = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &st,
+    ) != 0) return null;
+    return .{
+        .identity = .{
+            .dev_major = st.dev_major,
+            .dev_minor = st.dev_minor,
+            .ino = st.ino,
+        },
+        .mode = st.mode,
+        .nlink = st.nlink,
+    };
+}
+
 /// Transaction-engine config store backed by explicit defaults plus arbitrary
 /// command-line definitions. Values are expanded lazily so later definitions
 /// affect macros that reference them, matching librpm's macro behavior.
@@ -175,6 +217,8 @@ pub const TxnConfig = struct {
     allocator: std.mem.Allocator,
     install_root: []u8,
     pinned_install_root_fd: ?c_int = null,
+    pinned_rpmdb_dir_fd: ?c_int = null,
+    pinned_rpmdb_main_fd: ?c_int = null,
     macros: std.ArrayList(MacroEntry),
 
     /// Initializes a config store rooted at `install_root`. Empty input
@@ -185,6 +229,8 @@ pub const TxnConfig = struct {
             .allocator = allocator,
             .install_root = root,
             .pinned_install_root_fd = null,
+            .pinned_rpmdb_dir_fd = null,
+            .pinned_rpmdb_main_fd = null,
             .macros = .empty,
         };
         errdefer config.deinit();
@@ -213,6 +259,14 @@ pub const TxnConfig = struct {
             _ = std.c.close(fd);
             self.pinned_install_root_fd = null;
         }
+        if (self.pinned_rpmdb_main_fd) |fd| {
+            _ = std.c.close(fd);
+            self.pinned_rpmdb_main_fd = null;
+        }
+        if (self.pinned_rpmdb_dir_fd) |fd| {
+            _ = std.c.close(fd);
+            self.pinned_rpmdb_dir_fd = null;
+        }
         self.allocator.free(self.install_root);
         for (self.macros.items) |entry| {
             self.allocator.free(entry.name);
@@ -240,6 +294,53 @@ pub const TxnConfig = struct {
         return self.pinned_install_root_fd;
     }
 
+    pub fn pinnedRpmDbDirFd(self: *const TxnConfig) ?c_int {
+        return self.pinned_rpmdb_dir_fd;
+    }
+
+    pub fn pinnedRpmDbMainFd(self: *const TxnConfig) ?c_int {
+        return self.pinned_rpmdb_main_fd;
+    }
+
+    pub fn adoptPinnedRpmDbDirFd(
+        self: *TxnConfig,
+        fd: c_int,
+    ) InitError!void {
+        const st = fdStat(fd) orelse return error.RpmDbPinFailed;
+        if ((st.mode & mode_type_mask) != mode_directory)
+            return error.RpmDbPinFailed;
+        if (self.pinned_rpmdb_dir_fd) |current| {
+            const current_st = fdStat(current) orelse
+                return error.RpmDbPinFailed;
+            if (!current_st.identity.eql(st.identity))
+                return error.RpmDbPinFailed;
+            return;
+        }
+        const duplicate = std.c.dup(fd);
+        if (duplicate < 0) return error.RpmDbPinFailed;
+        self.pinned_rpmdb_dir_fd = duplicate;
+    }
+
+    pub fn adoptPinnedRpmDbMainFd(
+        self: *TxnConfig,
+        fd: c_int,
+    ) InitError!void {
+        const st = fdStat(fd) orelse return error.RpmDbPinFailed;
+        if ((st.mode & mode_type_mask) != mode_regular or st.nlink != 1) {
+            return error.RpmDbPinFailed;
+        }
+        if (self.pinned_rpmdb_main_fd) |current| {
+            const current_st = fdStat(current) orelse
+                return error.RpmDbPinFailed;
+            if (!current_st.identity.eql(st.identity))
+                return error.RpmDbPinFailed;
+            return;
+        }
+        const duplicate = std.c.dup(fd);
+        if (duplicate < 0) return error.RpmDbPinFailed;
+        self.pinned_rpmdb_main_fd = duplicate;
+    }
+
     fn cloneWithRoot(
         self: *const TxnConfig,
         allocator: std.mem.Allocator,
@@ -259,6 +360,8 @@ pub const TxnConfig = struct {
             .allocator = allocator,
             .install_root = root,
             .pinned_install_root_fd = duplicated_fd,
+            .pinned_rpmdb_dir_fd = null,
+            .pinned_rpmdb_main_fd = null,
             .macros = .empty,
         };
         errdefer copy.deinit();
@@ -271,7 +374,75 @@ pub const TxnConfig = struct {
                 };
             };
         }
+        if (duplicated_fd != null) try copy.pinRpmDb();
         return copy;
+    }
+
+    fn pinRpmDb(self: *TxnConfig) InitError!void {
+        const root_fd = self.pinned_install_root_fd orelse return;
+        const expanded = self.expandMacroAlloc(
+            self.allocator,
+            .dbpath,
+        ) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.RpmDbPinFailed,
+        };
+        defer self.allocator.free(expanded);
+        const relative = std.mem.trim(u8, expanded, "/");
+        var dir_fd = std.c.dup(root_fd);
+        if (dir_fd < 0) return error.RpmDbPinFailed;
+        errdefer _ = std.c.close(dir_fd);
+        if (relative.len != 0) {
+            var components = std.mem.splitScalar(u8, relative, '/');
+            while (components.next()) |component| {
+                if (component.len == 0 or
+                    std.mem.eql(u8, component, ".") or
+                    std.mem.eql(u8, component, ".."))
+                {
+                    return error.RpmDbPinFailed;
+                }
+                const component_z = self.allocator.dupeZ(
+                    u8,
+                    component,
+                ) catch return error.OutOfMemory;
+                defer self.allocator.free(component_z);
+                const next = std.c.openat(dir_fd, component_z.ptr, .{
+                    .ACCMODE = .RDONLY,
+                    .DIRECTORY = true,
+                    .CLOEXEC = true,
+                    .NOFOLLOW = true,
+                });
+                if (next < 0) {
+                    if (std.c._errno().* ==
+                        @intFromEnum(std.posix.E.NOENT))
+                    {
+                        _ = std.c.close(dir_fd);
+                        return;
+                    }
+                    return error.RpmDbPinFailed;
+                }
+                _ = std.c.close(dir_fd);
+                dir_fd = next;
+            }
+        }
+        self.pinned_rpmdb_dir_fd = dir_fd;
+
+        const main_fd = std.c.openat(
+            dir_fd,
+            DEFAULT_RPMDB_BASENAME,
+            .{
+                .ACCMODE = .RDWR,
+                .CLOEXEC = true,
+                .NOFOLLOW = true,
+            },
+        );
+        if (main_fd < 0) {
+            if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT)) return;
+            return error.RpmDbPinFailed;
+        }
+        errdefer _ = std.c.close(main_fd);
+        try self.adoptPinnedRpmDbMainFd(main_fd);
+        _ = std.c.close(main_fd);
     }
 
     /// Loads the conventional system and per-user declarative macro files.

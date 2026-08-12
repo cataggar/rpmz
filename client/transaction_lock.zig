@@ -4,15 +4,14 @@ const std = @import("std");
 const txn_config = @import("rpm_txn_config");
 
 const Allocator = std.mem.Allocator;
-const runtime_lock_directory = "/var/run";
-const identity_domain = "tdnf.transaction-target/v2";
 const deleted_suffix = " (deleted)";
 const mode_type_mask: u16 = 0o170000;
 const mode_directory: u16 = 0o040000;
+const lock_exclusive: c_int = 2;
+const lock_nonblocking: c_int = 4;
+const lock_unlock: c_int = 8;
 
-extern fn tdnfLockAcquireSafe(path: ?[*:0]const u8) c_int;
-extern fn tdnfLockTryAcquireSafe(path: ?[*:0]const u8) c_int;
-extern fn tdnfLockFree(path: ?[*:0]const u8, fd: c_int) void;
+extern fn flock(fd: c_int, operation: c_int) callconv(.c) c_int;
 
 pub const Error = error{
     InvalidTarget,
@@ -22,9 +21,7 @@ pub const Error = error{
 };
 
 pub const Guard = struct {
-    allocator: Allocator,
     pinned_config: txn_config.TxnConfig,
-    lock_path: [:0]u8,
     lock_fd: c_int,
 
     pub fn config(self: *Guard) *txn_config.TxnConfig {
@@ -32,9 +29,9 @@ pub const Guard = struct {
     }
 
     pub fn deinit(self: *Guard) void {
-        tdnfLockFree(self.lock_path.ptr, self.lock_fd);
         self.pinned_config.deinit();
-        self.allocator.free(self.lock_path);
+        _ = flock(self.lock_fd, lock_unlock);
+        _ = std.c.close(self.lock_fd);
         self.lock_fd = -1;
     }
 };
@@ -43,7 +40,7 @@ pub fn acquire(
     allocator: Allocator,
     config: *const txn_config.TxnConfig,
 ) Error!Guard {
-    return acquireInDirectory(allocator, config, runtime_lock_directory, true);
+    return acquireInDirectory(allocator, config, "", true);
 }
 
 pub fn tryAcquireInDirectory(
@@ -60,6 +57,7 @@ pub fn acquireInDirectory(
     lock_directory: []const u8,
     wait: bool,
 ) Error!Guard {
+    _ = lock_directory;
     const root_path = try allocator.dupeZ(u8, config.installRoot());
     defer allocator.free(root_path);
     const root_fd = std.c.open(root_path.ptr, .{
@@ -68,18 +66,25 @@ pub fn acquireInDirectory(
         .CLOEXEC = true,
     });
     if (root_fd < 0) return error.InvalidTarget;
-    defer _ = std.c.close(root_fd);
-
-    const root_identity = try fdIdentity(root_fd);
+    var owns_root_fd = true;
+    defer {
+        if (owns_root_fd) _ = std.c.close(root_fd);
+    }
+    _ = try fdIdentity(root_fd);
 
     const canonical_root = try resolvedRootAlloc(allocator, root_fd);
     defer allocator.free(canonical_root);
-    const lock_path = try targetLockPath(
-        allocator,
-        lock_directory,
-        root_identity,
-    );
-    errdefer allocator.free(lock_path);
+    const operation = lock_exclusive |
+        (if (wait) @as(c_int, 0) else lock_nonblocking);
+    if (flock(root_fd, operation) != 0) {
+        if (!wait and
+            std.c._errno().* == @intFromEnum(std.posix.E.AGAIN))
+        {
+            return error.WouldBlock;
+        }
+        return error.LockFailed;
+    }
+    errdefer _ = flock(root_fd, lock_unlock);
 
     var pinned_config = config.cloneWithPinnedInstallRoot(
         allocator,
@@ -90,18 +95,10 @@ pub fn acquireInDirectory(
         else => error.InvalidTarget,
     };
     errdefer pinned_config.deinit();
-
-    const lock_fd = if (wait)
-        tdnfLockAcquireSafe(lock_path.ptr)
-    else
-        tdnfLockTryAcquireSafe(lock_path.ptr);
-    if (lock_fd == -2) return error.WouldBlock;
-    if (lock_fd < 0) return error.LockFailed;
+    owns_root_fd = false;
     return .{
-        .allocator = allocator,
         .pinned_config = pinned_config,
-        .lock_path = lock_path,
-        .lock_fd = lock_fd,
+        .lock_fd = root_fd,
     };
 }
 
@@ -127,36 +124,6 @@ fn resolvedRootAlloc(
     if (std.mem.endsWith(u8, resolved, deleted_suffix))
         return error.InvalidTarget;
     return allocator.dupe(u8, resolved);
-}
-
-fn targetLockPath(
-    allocator: Allocator,
-    lock_directory: []const u8,
-    identity: TargetIdentity,
-) Error![:0]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(identity_domain);
-    hasher.update("\x00");
-    var identity_buffer: [96]u8 = undefined;
-    const identity_text = std.fmt.bufPrint(
-        &identity_buffer,
-        "{d}:{d}:{d}",
-        .{ identity.dev_major, identity.dev_minor, identity.inode },
-    ) catch return error.InvalidTarget;
-    hasher.update(identity_text);
-    var digest: [32]u8 = undefined;
-    hasher.final(&digest);
-    const hex = std.fmt.bytesToHex(digest, .lower);
-    const filename = std.fmt.allocPrint(
-        allocator,
-        ".tdnf-transaction-lock-{s}",
-        .{&hex},
-    ) catch return error.OutOfMemory;
-    defer allocator.free(filename);
-    return std.fs.path.joinZ(
-        allocator,
-        &.{ lock_directory, filename },
-    ) catch return error.OutOfMemory;
 }
 
 const TargetIdentity = struct {

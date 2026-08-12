@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const sqlite = @import("sqlite");
+const confined_sqlite = @import("confined_sqlite");
 const header = @import("rpm_header");
 const pkgfile = @import("rpm_pkgfile");
 const checksum = @import("checksum.zig");
@@ -81,7 +82,7 @@ fn clearError() void {
 const PinnedReadDb = struct {
     root: ?install_engine.RootDir,
     dir_fd: c_int,
-    path: ?[:0]u8,
+    connection: ?confined_sqlite.Connection,
     exists: bool,
 
     fn initConfig(config: *const TxnConfig) !PinnedReadDb {
@@ -119,56 +120,59 @@ const PinnedReadDb = struct {
             )) orelse return .{
                 .root = null,
                 .dir_fd = -1,
-                .path = null,
+                .connection = null,
                 .exists = false,
             };
         errdefer root.deinit();
-        const dir_fd_opt = try root.openDirectory(db_dir, false);
-        const dir_fd = dir_fd_opt orelse return .{
+        const dir_fd = if (config.pinnedRpmDbDirFd()) |pinned_dir| blk: {
+            const duplicate = std.c.dup(pinned_dir);
+            if (duplicate < 0) return error.SqliteOpenFailed;
+            break :blk duplicate;
+        } else (try root.openDirectory(db_dir, false)) orelse return .{
             .root = root,
             .dir_fd = -1,
-            .path = null,
+            .connection = null,
             .exists = false,
         };
         errdefer _ = std.c.close(dir_fd);
-        const basename_z = txn_config.DEFAULT_RPMDB_BASENAME;
-        const probe_fd = std.c.openat(dir_fd, basename_z, .{
-            .ACCMODE = .RDONLY,
-            .CLOEXEC = true,
-            .NOFOLLOW = true,
-        });
-        if (probe_fd < 0) {
-            if (std.c.errno(probe_fd) == .NOENT) {
+        var connection = confined_sqlite.openAt(
+            std.heap.c_allocator,
+            dir_fd,
+            txn_config.DEFAULT_RPMDB_BASENAME,
+            .{
+                .mode = .read_only,
+                .pinned_main_fd = config.pinnedRpmDbMainFd(),
+            },
+        ) catch |err| {
+            if (err == error.NotFound) {
                 return .{
                     .root = root,
                     .dir_fd = dir_fd,
-                    .path = null,
+                    .connection = null,
                     .exists = false,
                 };
             }
             return error.SqliteOpenFailed;
-        }
-        _ = std.c.close(probe_fd);
-        const path = try std.fmt.allocPrintSentinel(
-            std.heap.c_allocator,
-            "/proc/self/fd/{d}/{s}",
-            .{ dir_fd, basename_z },
-            0,
-        );
+        };
+        errdefer connection.close();
         return .{
             .root = root,
             .dir_fd = dir_fd,
-            .path = path,
+            .connection = connection,
             .exists = true,
         };
     }
 
     fn deinit(self: *PinnedReadDb) void {
-        if (self.path) |path| std.heap.c_allocator.free(path);
+        if (self.connection) |*connection| connection.close();
         if (self.dir_fd >= 0) _ = std.c.close(self.dir_fd);
         if (self.root) |*root| root.deinit();
         self.dir_fd = -1;
-        self.path = null;
+        self.connection = null;
+    }
+
+    fn db(self: *const PinnedReadDb) ?*c.sqlite3 {
+        return if (self.connection) |connection| connection.db else null;
     }
 };
 
@@ -215,7 +219,7 @@ export fn tdnf_rpmdb_count_packages_config(config: ?*const TxnConfig) i64 {
     };
     defer pinned.deinit();
     if (!pinned.exists) return 0;
-    return countPackagesAtPath(pinned.path.?) catch -1;
+    return countPackagesDb(pinned.db()) catch -1;
 }
 
 fn countPackagesAtPath(db_path: []const u8) CountPackagesError!i64 {
@@ -252,7 +256,10 @@ fn countPackagesAtPath(db_path: []const u8) CountPackagesError!i64 {
         });
         return error.SqliteOpenFailed;
     }
+    return countPackagesDb(db);
+}
 
+fn countPackagesDb(db: ?*c.sqlite3) CountPackagesError!i64 {
     var stmt: ?*c.sqlite3_stmt = null;
     const sql = "SELECT COUNT(*) FROM " ++ PKG_TABLE;
     const prepare_rc = c.sqlite3_prepare_v2(
@@ -476,7 +483,7 @@ export fn tdnf_rpmdb_cookie_config(config: ?*const TxnConfig) ?[*:0]u8 {
     };
     defer pinned.deinit();
     if (!pinned.exists) return dupZ("0:0");
-    return cookieAtPath(pinned.path.?);
+    return cookieFromDb(pinned.db());
 }
 
 fn cookieAtPath(db_path: []const u8) ?[*:0]u8 {
@@ -615,8 +622,15 @@ pub const Iter = struct {
             empty.* = .{ .db = null, .stmt = null, .pinned = null };
             return empty;
         }
-        const iter = try openAtPath(pinned.path.?);
-        iter.pinned = pinned;
+        const db = pinned.db();
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT hnum, blob FROM " ++ PKG_TABLE ++ " ORDER BY hnum";
+        if (c.sqlite3_prepare_v2(db, sql, sql.len, &stmt, null) != c.SQLITE_OK)
+            return error.SqlitePrepareFailed;
+        errdefer _ = c.sqlite3_finalize(stmt);
+        const iter = std.heap.c_allocator.create(Iter) catch
+            return error.OutOfMemory;
+        iter.* = .{ .db = db, .stmt = stmt, .pinned = pinned };
         return iter;
     }
 
@@ -680,8 +694,11 @@ pub const Iter = struct {
                 null,
             );
         }
-        if (self.db) |d| _ = c.sqlite3_close(d);
-        if (self.pinned) |*pinned| pinned.deinit();
+        if (self.pinned) |*pinned| {
+            pinned.deinit();
+        } else if (self.db) |d| {
+            _ = c.sqlite3_close(d);
+        }
         std.heap.c_allocator.destroy(self);
     }
 
@@ -1144,7 +1161,14 @@ fn resolveProviderVersionAtPath(
         return error.SqliteOpenFailed;
     }
     defer _ = c.sqlite3_close(db);
+    return resolveProviderVersionDb(allocator, db, provide_name);
+}
 
+fn resolveProviderVersionDb(
+    allocator: std.mem.Allocator,
+    db: ?*c.sqlite3,
+    provide_name: []const u8,
+) ProviderQueryError!?[]u8 {
     var stmt: ?*c.sqlite3_stmt = null;
     const sql =
         "SELECT packages.blob FROM 'Providename' AS provider " ++
@@ -1210,9 +1234,9 @@ export fn tdnf_rpmdb_resolve_provider_version_config(
     };
     defer pinned.deinit();
     if (!pinned.exists) return 0;
-    const version = resolveProviderVersionAtPath(
+    const version = resolveProviderVersionDb(
         std.heap.c_allocator,
-        pinned.path.?,
+        pinned.db(),
         name,
     ) catch |err| {
         setError("provider query for {s}: {t}", .{ name, err });
@@ -2215,9 +2239,13 @@ export fn tdnf_rpmdb_pubkeys_open_config(
         pinned.deinit();
         return allocEmptyPubkeyIter();
     }
-    const iter = pubkeysOpenAtPath(pinned.path.?) orelse {
+    const iter_opt = preparePubkeysDb(pinned.db()) catch {
         pinned.deinit();
         return null;
+    };
+    const iter = iter_opt orelse {
+        pinned.deinit();
+        return allocEmptyPubkeyIter();
     };
     iter.pinned = pinned;
     return iter;
@@ -2250,28 +2278,34 @@ fn pubkeysOpenAtPath(db_path: []const u8) ?*PubkeyIter {
         return null;
     }
 
+    const iter_opt = preparePubkeysDb(db) catch {
+        _ = c.sqlite3_close(db);
+        return null;
+    };
+    const iter = iter_opt orelse {
+        _ = c.sqlite3_close(db);
+        return allocEmptyPubkeyIter();
+    };
+    return iter;
+}
+
+fn preparePubkeysDb(db: ?*c.sqlite3) !?*PubkeyIter {
     var stmt: ?*c.sqlite3_stmt = null;
     // Same query as iter_open; we filter the gpg-pubkey rows in Zig
     // because the NAME tag is buried inside the binary blob.
     const sql = "SELECT blob FROM " ++ PKG_TABLE ++ " ORDER BY hnum";
     const prepare_rc = c.sqlite3_prepare_v2(db, sql, sql.len, &stmt, null);
     if (prepare_rc != c.SQLITE_OK) {
-        if (databaseHasNoTables(db)) {
-            _ = c.sqlite3_close(db);
-            return allocEmptyPubkeyIter();
-        }
+        if (databaseHasNoTables(db)) return null;
         setError("sqlite3_prepare_v2: {s}", .{
             std.mem.span(@as([*:0]const u8, c.sqlite3_errmsg(db))),
         });
-        _ = c.sqlite3_close(db);
-        return null;
+        return error.SqlitePrepareFailed;
     }
-
+    errdefer _ = c.sqlite3_finalize(stmt);
     const iter = std.heap.c_allocator.create(PubkeyIter) catch {
         setError("out of memory", .{});
-        _ = c.sqlite3_finalize(stmt);
-        _ = c.sqlite3_close(db);
-        return null;
+        return error.OutOfMemory;
     };
     iter.* = .{ .db = db, .stmt = stmt, .pinned = null };
     return iter;
@@ -2300,8 +2334,11 @@ fn databaseHasNoTables(db: ?*c.sqlite3) bool {
 export fn tdnf_rpmdb_pubkeys_close(it: ?*PubkeyIter) void {
     const iter = it orelse return;
     if (iter.stmt) |s| _ = c.sqlite3_finalize(s);
-    if (iter.db) |d| _ = c.sqlite3_close(d);
-    if (iter.pinned) |*pinned| pinned.deinit();
+    if (iter.pinned) |*pinned| {
+        pinned.deinit();
+    } else if (iter.db) |d| {
+        _ = c.sqlite3_close(d);
+    }
     std.heap.c_allocator.destroy(iter);
 }
 

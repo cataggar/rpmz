@@ -3092,6 +3092,16 @@ test "obsoletes retain multiple priors and permit a shared prior" {
             "old",
             bytesOrEmpty(facts.packages.?[shared_ref.?].identity.name),
         );
+        try testing.expectEqual(
+            @as(u32, 3),
+            facts.native_execution_input_count,
+        );
+        var erase_count: usize = 0;
+        for (facts.native_execution_inputs.?[0..facts.native_execution_input_count]) |input| {
+            if (input.operation == abi.execution_operation.erase)
+                erase_count += 1;
+        }
+        try testing.expectEqual(@as(usize, 1), erase_count);
     }
 }
 

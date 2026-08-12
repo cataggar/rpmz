@@ -16,6 +16,7 @@ const std = @import("std");
 const client = @import("client_root");
 const bundle_reader = @import("bundle_reader");
 const transaction_bundle = @import("transaction_bundle");
+const transaction_plan = @import("transaction_plan");
 const repository_metadata = @import("repository_metadata");
 
 comptime {
@@ -27,14 +28,87 @@ const resolver = client.resolver;
 const io = std.testing.io;
 const allocator = std.testing.allocator;
 
+const TxnConfig = opaque {};
+extern fn tdnf_rpm_config_create(
+    root: ?[*:0]const u8,
+) ?*TxnConfig;
+extern fn tdnf_rpm_config_destroy(config: ?*TxnConfig) void;
+extern fn tdnf_rpm_config_resolve_path(
+    config: ?*const TxnConfig,
+    name: ?[*:0]const u8,
+) ?[*:0]u8;
+extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
+extern fn tdnf_rpmdb_write_install(
+    root: ?[*:0]const u8,
+    rpm_path: ?[*:0]const u8,
+    install_tid: u32,
+    install_time: u32,
+    install_color: u32,
+    file_states: ?[*]const u8,
+    file_state_count: usize,
+    hnum_out: ?*u32,
+) i32;
+extern fn tdnf_rpmdb_write_install_config(
+    config: ?*const TxnConfig,
+    rpm_path: ?[*:0]const u8,
+    install_tid: u32,
+    install_time: u32,
+    install_color: u32,
+    file_states: ?[*]const u8,
+    file_state_count: usize,
+    hnum_out: ?*u32,
+) i32;
+
 fn rpmPayload(version: []const u8) ![]u8 {
+    return namedRpmPayload("app", version);
+}
+
+fn namedRpmPayload(name: []const u8, version: []const u8) ![]u8 {
     return repository_metadata.rpm_package.makeMinimalRpmBytesForTest(
         allocator,
-        "app",
+        name,
         version,
         "1",
         "x86_64",
     );
+}
+
+fn sharedObsoletePrimaryXml(
+    gpa: std.mem.Allocator,
+    first: []const u8,
+    second: []const u8,
+) ![]u8 {
+    const first_digest = sha256Hex(first);
+    const second_digest = sha256Hex(second);
+    return std.fmt.allocPrint(gpa,
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common"
+        \\              xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="2">
+        \\  <package type="rpm">
+        \\    <name>replacement-a</name>
+        \\    <arch>x86_64</arch>
+        \\    <version epoch="0" ver="1" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">{s}</checksum>
+        \\    <size package="{d}"/>
+        \\    <location href="packages/replacement-a.rpm"/>
+        \\    <format>
+        \\      <rpm:provides><rpm:entry name="replacement-a" flags="EQ" epoch="0" ver="1" rel="1"/></rpm:provides>
+        \\    </format>
+        \\  </package>
+        \\  <package type="rpm">
+        \\    <name>replacement-b</name>
+        \\    <arch>x86_64</arch>
+        \\    <version epoch="0" ver="1" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">{s}</checksum>
+        \\    <size package="{d}"/>
+        \\    <location href="packages/replacement-b.rpm"/>
+        \\    <format>
+        \\      <rpm:provides><rpm:entry name="replacement-b" flags="EQ" epoch="0" ver="1" rel="1"/></rpm:provides>
+        \\    </format>
+        \\  </package>
+        \\</metadata>
+        \\
+    , .{ &first_digest, first.len, &second_digest, second.len });
 }
 
 fn sha256Hex(bytes: []const u8) [64]u8 {
@@ -157,6 +231,37 @@ const Fixture = struct {
         });
     }
 
+    fn publishSharedObsoleteRepository(self: *Fixture) !void {
+        const first = try namedRpmPayload("replacement-a", "1");
+        defer allocator.free(first);
+        const second = try namedRpmPayload("replacement-b", "1");
+        defer allocator.free(second);
+        const primary = try sharedObsoletePrimaryXml(
+            allocator,
+            first,
+            second,
+        );
+        defer allocator.free(primary);
+        const repomd = try repomdFor(allocator, primary);
+        defer allocator.free(repomd);
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = "snapshot/repodata/primary.xml",
+            .data = primary,
+        });
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = "snapshot/repodata/repomd.xml",
+            .data = repomd,
+        });
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = "snapshot/packages/replacement-a.rpm",
+            .data = first,
+        });
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = "snapshot/packages/replacement-b.rpm",
+            .data = second,
+        });
+    }
+
     fn destroy(self: *Fixture) void {
         self.arena.deinit();
         allocator.free(self.scratch);
@@ -226,6 +331,78 @@ const Fixture = struct {
             .gpg_check = false,
         };
     }
+
+    fn sharedObsoleteInput(
+        self: *Fixture,
+        name: []const u8,
+    ) !bundle_export.ExportInput {
+        try self.publishSharedObsoleteRepository();
+        var request = try self.input(name);
+        request.resolve.subjects = &.{ "replacement-a", "replacement-b" };
+
+        const old = try namedRpmPayload("old", "1");
+        defer allocator.free(old);
+        const old_path = try std.fmt.allocPrintSentinel(
+            self.arena.allocator(),
+            "{s}/old.rpm",
+            .{self.base},
+            0,
+        );
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = "old.rpm",
+            .data = old,
+        });
+        const root_z = try self.arena.allocator().dupeZ(
+            u8,
+            request.resolve.installed.install_root,
+        );
+        var hnum: u32 = 0;
+        if (tdnf_rpmdb_write_install(
+            root_z.ptr,
+            old_path.ptr,
+            1,
+            1,
+            3,
+            null,
+            0,
+            &hnum,
+        ) != 0 or hnum == 0) {
+            return error.TestUnexpectedResult;
+        }
+        const config = tdnf_rpm_config_create(root_z.ptr) orelse
+            return error.TestUnexpectedResult;
+        defer tdnf_rpm_config_destroy(config);
+        const configured_dir = tdnf_rpm_config_resolve_path(
+            config,
+            "_dbpath",
+        ) orelse return error.TestUnexpectedResult;
+        defer tdnf_rpmdb_string_free(configured_dir);
+        const default_dir = try std.fmt.allocPrint(
+            self.arena.allocator(),
+            "{s}/var/lib/rpm",
+            .{request.resolve.installed.install_root},
+        );
+        if (!std.mem.eql(
+            u8,
+            std.mem.span(configured_dir),
+            default_dir,
+        )) {
+            hnum = 0;
+            if (tdnf_rpmdb_write_install_config(
+                config,
+                old_path.ptr,
+                1,
+                1,
+                3,
+                null,
+                0,
+                &hnum,
+            ) != 0 or hnum == 0) {
+                return error.TestUnexpectedResult;
+            }
+        }
+        return request;
+    }
 };
 
 /// Recursively reads every regular file under `path`, so a test can make a
@@ -283,6 +460,16 @@ fn packageFile(
     return bundle.findFile(bundle.model().packages[0].path).?;
 }
 
+fn planPackageIdByName(
+    plan: *const transaction_plan.Plan,
+    name: []const u8,
+) ?[]const u8 {
+    for (plan.model().packages) |package| {
+        if (std.mem.eql(u8, package.identity.name, name)) return package.id;
+    }
+    return null;
+}
+
 test "an exported bundle validates as a closed set" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
@@ -321,6 +508,170 @@ test "an exported bundle validates as a closed set" {
     try std.testing.expect(bundle.findFile("plan.json") != null);
     try std.testing.expectEqual(@as(usize, 1), bundle.model().packages.len);
     try std.testing.expectEqualStrings("app", bundle.model().packages[0].identity.name);
+}
+
+test "shared obsolete priors export parse bundle and replay end to end" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const input = try fixture.sharedObsoleteInput("shared-obsolete");
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+
+    const old_id = planPackageIdByName(exported.exported.plan, "old") orelse
+        return error.TestUnexpectedResult;
+    const first_id = planPackageIdByName(
+        exported.exported.plan,
+        "replacement-a",
+    ) orelse return error.TestUnexpectedResult;
+    const second_id = planPackageIdByName(
+        exported.exported.plan,
+        "replacement-b",
+    ) orelse return error.TestUnexpectedResult;
+    const actions = [_]transaction_plan.Action{
+        .{
+            .kind = .obsolete,
+            .prior_package_ids = &.{old_id},
+            .reason = .obsoletes,
+            .requested_by_job_id = null,
+            .target_package_id = first_id,
+        },
+        .{
+            .kind = .obsolete,
+            .prior_package_ids = &.{old_id},
+            .reason = .obsoletes,
+            .requested_by_job_id = null,
+            .target_package_id = second_id,
+        },
+    };
+    const steps = [_]transaction_plan.ExecutionStep{
+        .{ .action_index = 0, .operation = .install, .package_id = first_id },
+        .{ .action_index = 0, .operation = .erase, .package_id = old_id },
+        .{ .action_index = 1, .operation = .install, .package_id = second_id },
+        .{ .action_index = 1, .operation = .erase, .package_id = old_id },
+    };
+    var plan_data = exported.exported.plan.model().*;
+    var selected: std.ArrayList(transaction_plan.Selected) = .empty;
+    defer selected.deinit(allocator);
+    for (plan_data.selected) |selection| {
+        if (!std.mem.eql(u8, selection.package_id, old_id))
+            try selected.append(allocator, selection);
+    }
+    plan_data.actions = &actions;
+    plan_data.execution_steps = &steps;
+    plan_data.native_execution_inputs = &.{};
+    plan_data.selected = selected.items;
+    const shared_plan = try transaction_plan.Plan.create(
+        allocator,
+        plan_data,
+    );
+    defer shared_plan.destroy();
+    const plan_json = try shared_plan.canonicalJsonAlloc(allocator);
+    defer allocator.free(plan_json);
+    const parsed = try transaction_plan.parse(allocator, plan_json);
+    defer parsed.destroy();
+    try std.testing.expect(parsed.isReplayable());
+    try std.testing.expectEqual(@as(usize, 2), parsed.model().actions.len);
+    try std.testing.expectEqual(
+        @as(usize, 4),
+        parsed.model().execution_steps.?.len,
+    );
+    for (parsed.model().actions) |action| {
+        try std.testing.expectEqual(
+            transaction_plan.ActionKind.obsolete,
+            action.kind,
+        );
+        try std.testing.expectEqual(@as(usize, 1), action.prior_package_ids.len);
+    }
+    try std.testing.expectEqualStrings(
+        parsed.model().actions[0].prior_package_ids[0],
+        parsed.model().actions[1].prior_package_ids[0],
+    );
+
+    var directory = try std.Io.Dir.cwd().openDir(
+        io,
+        input.destination,
+        .{},
+    );
+    defer directory.close(io);
+    try directory.writeFile(io, .{
+        .sub_path = transaction_bundle.plan_name,
+        .data = plan_json,
+    });
+    const original_manifest = try readManifest(input.destination);
+    defer original_manifest.destroy();
+    var manifest_data = original_manifest.model().*;
+    const files = try allocator.dupe(
+        transaction_bundle.File,
+        manifest_data.files,
+    );
+    defer allocator.free(files);
+    const plan_sha = sha256Hex(plan_json);
+    var found_plan = false;
+    for (files) |*file| {
+        if (std.mem.eql(u8, file.path, transaction_bundle.plan_name)) {
+            file.sha256 = &plan_sha;
+            file.size = plan_json.len;
+            found_plan = true;
+        }
+    }
+    try std.testing.expect(found_plan);
+    const shared_digest = try shared_plan.digest(allocator);
+    manifest_data.files = files;
+    manifest_data.plan.digest = &shared_digest;
+    try writeManifest(input.destination, manifest_data);
+
+    const bundle = try bundle_reader.openBundle(
+        allocator,
+        io,
+        input.destination,
+    );
+    defer bundle.destroy();
+    try std.testing.expect(bundle.isReplayable());
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    if (replayed.status != .succeeded) {
+        std.debug.print(
+            "shared-obsolete replay failed: validation={?s} transaction={?s}\n",
+            .{
+                if (replayed.validation_failure) |failure|
+                    @tagName(failure)
+                else
+                    null,
+                if (replayed.transaction_failure) |failure|
+                    @tagName(failure)
+                else
+                    null,
+            },
+        );
+    }
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+    try std.testing.expectEqual(@as(usize, 2), replayed.actions.len);
+    for (replayed.actions) |action| {
+        try std.testing.expectEqual(
+            client.replay.ActionStatus.applied,
+            action.status,
+        );
+    }
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        replayed.final_inventory.?.len,
+    );
+    for (replayed.final_inventory.?) |package| {
+        try std.testing.expect(!std.mem.eql(
+            u8,
+            package.identity.name,
+            "old",
+        ));
+    }
 }
 
 test "v2 package facts are bound exactly to the plan" {
