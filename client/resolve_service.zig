@@ -56,12 +56,13 @@ extern fn TDNFFindRepoById(
     id: ?[*:0]const u8,
     output: *?*RepoData,
 ) callconv(.c) u32;
-extern fn TDNFDownloadPackageToCache(
+extern fn TDNFDownloadPackageToCacheFd(
     handle: ?*Tdnf,
     location: ?[*:0]const u8,
     name: ?[*:0]const u8,
     repo: ?*RepoData,
     output: *?[*:0]u8,
+    output_fd: *c_int,
 ) callconv(.c) u32;
 extern fn TDNFIsFileOrSymlink(
     path: ?[*:0]const u8,
@@ -79,6 +80,13 @@ extern fn TDNFPackageContextAddRpm(
     context: ?*anyopaque,
     repository: ?*anyopaque,
     path: ?[*:0]const u8,
+    output: *u32,
+) callconv(.c) u32;
+extern fn TDNFPackageContextAddRpmFd(
+    context: ?*anyopaque,
+    repository: ?*anyopaque,
+    path: ?[*:0]const u8,
+    fd: c_int,
     output: *u32,
 ) callconv(.c) u32;
 
@@ -431,6 +439,12 @@ pub fn stageCommandLinePackages(
     while (index < args.nCmdCount) : (index += 1) {
         const package_name = args.ppszCmds.?[@intCast(index)].?;
         if (fnmatch("*.rpm", package_name, 0) != 0) continue;
+        freeString(&path);
+        freeString(&package_copy);
+        var package_fd: c_int = -1;
+        defer {
+            if (package_fd >= 0) _ = std.c.close(package_fd);
+        }
         if (fnmatch("*.src.rpm", package_name, 0) == 0 or
             fnmatch("*.nosrc.rpm", package_name, 0) == 0)
         {
@@ -473,12 +487,13 @@ pub fn stageCommandLinePackages(
                 var repo: ?*RepoData = null;
                 result = TDNFFindRepoById(handle, command_line_repo_name, &repo);
                 if (result != 0) return result;
-                result = TDNFDownloadPackageToCache(
+                result = TDNFDownloadPackageToCacheFd(
                     handle,
                     package_name,
                     basename(package_copy.?),
                     repo,
                     &path,
+                    &package_fd,
                 );
                 if (result != 0) return result;
                 freeString(&package_copy);
@@ -486,12 +501,21 @@ pub fn stageCommandLinePackages(
         }
 
         var package_id: u32 = 0;
-        result = TDNFPackageContextAddRpm(
-            handle.pSack,
-            handle.pCmdLineRepo,
-            path,
-            &package_id,
-        );
+        result = if (package_fd >= 0)
+            TDNFPackageContextAddRpmFd(
+                handle.pSack,
+                handle.pCmdLineRepo,
+                path,
+                package_fd,
+                &package_id,
+            )
+        else
+            TDNFPackageContextAddRpm(
+                handle.pSack,
+                handle.pCmdLineRepo,
+                path,
+                &package_id,
+            );
         if (result != 0) return result;
         result = api.recordCmdLinePkgPath(handle, package_id, path);
         if (result != 0) return result;

@@ -28,14 +28,32 @@ pub fn loadModel(
     allocator: std.mem.Allocator,
     paths: []const [:0]const u8,
 ) LoadError!model.RepositoryModel {
+    return loadModelWithFds(allocator, paths, null);
+}
+
+/// Build the command-line repository from paths and optional retained file
+/// descriptors. A nonnegative descriptor is authoritative for that entry;
+/// the corresponding path remains its logical package location.
+pub fn loadModelWithFds(
+    allocator: std.mem.Allocator,
+    paths: []const [:0]const u8,
+    fds: ?[]const c_int,
+) LoadError!model.RepositoryModel {
+    if (fds) |values| {
+        if (values.len != paths.len) return error.RpmFileOpenFailed;
+    }
     var builder = repository_builder.RepositoryBuilder.init(allocator);
     defer builder.deinit();
 
-    for (paths) |path| {
+    for (paths, 0..) |path, index| {
         if (path.len == 0) return error.RpmFileOpenFailed;
-        var rpm = rpm_pkgfile.RpmFile.open(allocator, path) catch {
-            return error.RpmFileOpenFailed;
-        };
+        const fd = if (fds) |values| values[index] else -1;
+        var rpm = if (fd >= 0)
+            rpm_pkgfile.RpmFile.openFd(allocator, fd) catch
+                return error.RpmFileOpenFailed
+        else
+            rpm_pkgfile.RpmFile.open(allocator, path) catch
+                return error.RpmFileOpenFailed;
         defer rpm.close(allocator);
         const built = rpmpkg.buildFromRpmFile(
             allocator,

@@ -3,8 +3,11 @@ const builtin = @import("builtin");
 const result_abi = @import("solver_result_abi.zig");
 const legacy_abi = @import("solver_legacy_abi.zig");
 
-/// A bucket entry: the package the action names plus the job that asked for
-/// it, which is what orders the bucket.
+pub const LegacyResult = legacy_abi.LegacyResult;
+pub const LegacyPackage = legacy_abi.LegacyPackage;
+
+/// A bucket entry: one target or prior named by an action plus the job that
+/// asked for it, which is what orders the bucket.
 const BucketRef = struct {
     ref: u32,
     job: ?u32,
@@ -127,14 +130,7 @@ fn buildBucket(
     if (result.dwActionCount != 0) {
         for (result.pActions[0..result.dwActionCount]) |action| {
             if (!containsKind(bucket.kinds, action.dwKind)) continue;
-            const ref = try packageRef(result, action, bucket.side);
-            try refs.append(.{
-                .ref = ref,
-                .job = if (action.nHasRequestedJobId != 0)
-                    action.dwRequestedJobId
-                else
-                    null,
-            });
+            try appendBucketRefs(&refs, result, action, bucket.side);
         }
     }
     if (refs.items.len == 0) return null;
@@ -172,26 +168,38 @@ fn buildBucket(
     return head;
 }
 
-fn packageRef(
+fn appendBucketRefs(
+    refs: *RefList,
     result: *const result_abi.Result,
     action: result_abi.Action,
     side: Side,
-) BuildError!u32 {
-    const ref = switch (side) {
-        .target => action.dwPackageRef,
-        .prior, .removal => blk: {
-            if (side == .removal and action.dwKind != action_obsolete) {
-                break :blk action.dwPackageRef;
-            }
-            if (action.dwPriorCount == 0) return error.InvalidInput;
-            if (action.dwPriorOffset >= result.dwPriorPackageRefCount) {
-                return error.InvalidInput;
-            }
-            break :blk result.pdwPriorPackageRefs[action.dwPriorOffset];
-        },
-    };
-    if (ref >= result.dwPackageCount) return error.InvalidInput;
-    return ref;
+) BuildError!void {
+    const job = if (action.nHasRequestedJobId != 0)
+        action.dwRequestedJobId
+    else
+        null;
+    if (side == .target or
+        (side == .removal and action.dwKind != action_obsolete))
+    {
+        if (action.dwPackageRef >= result.dwPackageCount)
+            return error.InvalidInput;
+        try refs.append(.{ .ref = action.dwPackageRef, .job = job });
+        return;
+    }
+    if (action.dwPriorCount == 0 or
+        action.dwPriorOffset > result.dwPriorPackageRefCount or
+        action.dwPriorCount >
+            result.dwPriorPackageRefCount - action.dwPriorOffset or
+        result.pdwPriorPackageRefs == null)
+    {
+        return error.InvalidInput;
+    }
+    const offset: usize = action.dwPriorOffset;
+    const count: usize = action.dwPriorCount;
+    for (result.pdwPriorPackageRefs[offset..][0..count]) |ref| {
+        if (ref >= result.dwPackageCount) return error.InvalidInput;
+        try refs.append(.{ .ref = ref, .job = job });
+    }
 }
 
 fn containsKind(kinds: []const u32, kind: u32) bool {

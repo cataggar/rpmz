@@ -658,6 +658,7 @@ pub const tdnf_rpmdb_label_match = struct_tdnf_rpmdb_label_match;
 pub extern fn tdnf_rpmdb_find_label_matches_config(config: ?*const tdnf_rpm_config, name: [*c]const u8, evr: [*c]const u8, matches_out: [*c][*c]tdnf_rpmdb_label_match, count_out: [*c]usize) c_int;
 pub extern fn tdnf_rpmdb_label_matches_free(matches: [*c]tdnf_rpmdb_label_match, count: usize) void;
 pub extern fn tdnf_rpm_file_open(path: [*c]const u8) ?*tdnf_rpm_file;
+pub extern fn tdnf_rpm_file_open_fd(fd: c_int) ?*tdnf_rpm_file;
 pub extern fn tdnf_rpm_file_close(fh: ?*tdnf_rpm_file) void;
 pub const struct_tdnf_rpm_file_metadata = extern struct {
     name: [*c]const u8 = null,

@@ -8,10 +8,12 @@
 
 import os
 import glob
+import hashlib
 import shutil
 import pytest
 import fnmatch
 import tempfile
+import uuid
 
 INSTALLROOT = '/root/installroot'
 REPOFILENAME = 'photon-test.repo'
@@ -34,25 +36,29 @@ def teardown_test(utils):
         shutil.rmtree(REPODIR)
 
 
-def install_root(utils, no_reposd=False):
-    os.makedirs(INSTALLROOT, exist_ok=True)
-    os.makedirs(os.path.join(INSTALLROOT, 'etc/tdnf'), exist_ok=True)
+def install_root(utils, no_reposd=False, installroot=INSTALLROOT):
+    os.makedirs(installroot, exist_ok=True)
+    os.makedirs(os.path.join(installroot, 'etc/tdnf'), exist_ok=True)
     conffile = os.path.join(utils.config['repo_path'], 'tdnf.conf')
 
     # remove special settings for repodir and cachedir
     with open(conffile, 'r') as fin:
-        with open(os.path.join(INSTALLROOT, 'etc/tdnf', 'tdnf.conf'), 'w') as fout:
+        with open(os.path.join(
+                installroot, 'etc/tdnf', 'tdnf.conf'), 'w') as fout:
             for line in fin:
                 if not line.startswith('repodir') and \
                    not line.startswith('cachedir'):
                     fout.write(line)
 
     if not no_reposd:
-        os.makedirs(os.path.join(INSTALLROOT, 'etc/yum.repos.d'), exist_ok=True)
+        os.makedirs(os.path.join(
+            installroot, 'etc/yum.repos.d'), exist_ok=True)
         repofile = os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME)
-        shutil.copyfile(repofile, os.path.join(INSTALLROOT, 'etc/yum.repos.d', REPOFILENAME))
-    os.makedirs(os.path.join(INSTALLROOT, 'var/cache/tdnf'), exist_ok=True)
-    utils.run(['rpm', '--root', INSTALLROOT, '--initdb'])
+        shutil.copyfile(repofile, os.path.join(
+            installroot, 'etc/yum.repos.d', REPOFILENAME))
+    os.makedirs(os.path.join(
+        installroot, 'var/cache/tdnf'), exist_ok=True)
+    utils.run(['rpm', '--root', installroot, '--initdb'])
 
 
 # local version of check_package with install root
@@ -89,6 +95,11 @@ def find_cache_dir(reponame):
     return None
 
 
+def file_sha256(path):
+    with open(path, "rb") as stream:
+        return hashlib.sha256(stream.read()).digest()
+
+
 def test_install(utils):
     install_root(utils)
     pkgname = utils.config["mulversion_pkgname"]
@@ -102,6 +113,57 @@ def test_install(utils):
     assert check_package(utils, pkgname)
 
     shutil.rmtree(INSTALLROOT)
+
+
+def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
+    pkgname = utils.config["sglversion_pkgname"]
+    repository = os.path.join(utils.config["repo_path"], "photon-test")
+    source = glob.glob(os.path.join(
+        repository, "RPMS", "*", "{}-*.rpm".format(pkgname)))[0]
+    relative = os.path.relpath(source, repository)
+    cache_suffix = "tdnf-pinned-{}".format(uuid.uuid4().hex)
+    host_cache = os.path.join("/var/cache", cache_suffix)
+    installroot = os.path.join(
+        utils.config["build_dir"], "pinned-root-{}".format(uuid.uuid4().hex))
+    target_rpm = os.path.join(
+        installroot, host_cache.lstrip("/"),
+        "photon-test", "rpms", relative)
+    install_root(utils, installroot=installroot)
+
+    config_path = os.path.join(installroot, "etc/tdnf/tdnf.conf")
+    with open(config_path, "a") as config:
+        config.write("\ncachedir={}\n".format(host_cache))
+
+    source_digest = file_sha256(source)
+    assert not os.path.exists(host_cache)
+
+    try:
+        ret = utils.run([
+            "tdnf", "install", "-y", "--nogpgcheck",
+            "--setopt=keepcache=1",
+            "--installroot", installroot,
+            "--releasever=4.0", pkgname,
+        ], noconfig=True)
+        assert ret["retval"] == 0, ret.get("stderr", [])
+        assert check_package(utils, pkgname, installroot=installroot)
+        assert os.path.isfile(target_rpm)
+        assert file_sha256(target_rpm) == source_digest
+        assert not os.path.exists(host_cache)
+
+        erase_package(utils, pkgname, installroot=installroot)
+        os.remove(target_rpm)
+        ret = utils.run([
+            "tdnf", "install", "-y", "--nogpgcheck",
+            "--setopt=keepcache=0",
+            "--installroot", installroot,
+            "--releasever=4.0", pkgname,
+        ], noconfig=True)
+        assert ret["retval"] == 0, ret.get("stderr", [])
+        assert check_package(utils, pkgname, installroot=installroot)
+        assert not os.path.exists(target_rpm)
+        assert not os.path.exists(host_cache)
+    finally:
+        shutil.rmtree(installroot, ignore_errors=True)
 
 
 def test_makecache(utils):

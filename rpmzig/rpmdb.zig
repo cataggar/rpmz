@@ -2772,6 +2772,22 @@ export fn tdnf_rpm_file_open(path: ?[*:0]const u8) ?*FileHandle {
     return fh;
 }
 
+/// Open and parse a `.rpm` from an already pinned descriptor. The descriptor
+/// remains owned by the caller.
+export fn tdnf_rpm_file_open_fd(fd: c_int) ?*FileHandle {
+    clearError();
+    const fh = std.heap.c_allocator.create(FileHandle) catch {
+        setError("out of memory", .{});
+        return null;
+    };
+    fh.file = pkgfile.RpmFile.openFd(std.heap.c_allocator, fd) catch |err| {
+        setError("rpm_file_open_fd({d}): {t}", .{ fd, err });
+        std.heap.c_allocator.destroy(fh);
+        return null;
+    };
+    return fh;
+}
+
 /// Free a file handle. Accepts NULL.
 export fn tdnf_rpm_file_close(fh: ?*FileHandle) void {
     const f = fh orelse return;

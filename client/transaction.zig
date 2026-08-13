@@ -433,20 +433,31 @@ extern fn TDNFAllocateMemory(usize, usize, *?*anyopaque) callconv(.c) u32;
 extern fn TDNFAllocateString(?[*:0]const u8, *?[*:0]u8) callconv(.c) u32;
 extern fn TDNFFreeMemory(?*anyopaque) callconv(.c) void;
 extern fn TDNFFindRepoById(?*abi.Tdnf, ?[*:0]const u8, *?*abi.RepoData) callconv(.c) u32;
-extern fn TDNFDownloadPackageToCache(
+extern fn TDNFDownloadPackageToCacheFd(
     ?*abi.Tdnf,
     ?[*:0]const u8,
     ?[*:0]const u8,
     ?*abi.RepoData,
     *?[*:0]u8,
+    *c_int,
 ) callconv(.c) u32;
-extern fn TDNFDownloadPackageToDirectory(
+extern fn TDNFDownloadPackageToDirectoryFd(
     ?*abi.Tdnf,
     ?[*:0]const u8,
     ?[*:0]const u8,
     ?*abi.RepoData,
     ?[*:0]const u8,
     *?[*:0]u8,
+    *c_int,
+) callconv(.c) u32;
+extern fn TDNFRemovePackageFromCache(
+    ?*abi.Tdnf,
+    ?[*:0]const u8,
+) callconv(.c) u32;
+extern fn TDNFPackageContextDuplicateRpmFd(
+    ?*const anyopaque,
+    ?[*:0]const u8,
+    *c_int,
 ) callconv(.c) u32;
 extern fn TDNFGPGCheckPackageWithFile(
     ?*abi.Tdnf,
@@ -489,7 +500,6 @@ extern fn tdnf_repomd_native_verified_transaction_solve_config(
     *?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32;
 extern fn access(?[*:0]const u8, c_int) callconv(.c) c_int;
-extern fn unlink(?[*:0]const u8) callconv(.c) c_int;
 extern fn strerror(c_int) callconv(.c) [*:0]const u8;
 extern fn close(c_int) callconv(.c) c_int;
 extern fn time(?*std.c.time_t) callconv(.c) std.c.time_t;
@@ -554,12 +564,17 @@ fn freeCached(list_opt: ?*c.TDNF_CACHED_RPM_LIST) void {
     free(list);
 }
 
-fn removeCached(list: *c.TDNF_CACHED_RPM_LIST) u32 {
+fn removeCached(tdnf: *abi.Tdnf, list: *c.TDNF_CACHED_RPM_LIST) u32 {
     var entry = list.pHead;
     while (entry) |current| : (entry = @as(*c.TDNF_CACHED_RPM_ENTRY, @ptrCast(current)).pNext) {
         const current_ptr: *c.TDNF_CACHED_RPM_ENTRY = @ptrCast(current);
-        if (!isEmpty(current_ptr.pszFilePath) and unlink(current_ptr.pszFilePath) != 0)
-            return systemError();
+        if (!isEmpty(current_ptr.pszFilePath)) {
+            const rc = TDNFRemovePackageFromCache(
+                tdnf,
+                current_ptr.pszFilePath,
+            );
+            if (rc != 0) return rc;
+        }
     }
     return 0;
 }
@@ -569,7 +584,7 @@ fn cleanupTransaction(tdnf: *abi.Tdnf, ts: *c.TDNFRPMTS) void {
     const args = tdnf.pArgs.?;
     if (ts.pCachedRpmsArray) |cached| {
         if (conf.nKeepCache == 0 and args.nDownloadOnly == 0)
-            _ = removeCached(cached);
+            _ = removeCached(tdnf, cached);
         freeCached(cached);
     }
     clearPlan(ts);
@@ -902,17 +917,28 @@ fn addInstallPackage(
     const location = info.pszLocation orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const package_name = info.pszName orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var path: ?[*:0]u8 = null;
+    var rpm_fd: c_int = -1;
     var rpm_file: ?*c.tdnf_rpm_file = null;
     var cache_entry: ?*c.TDNF_CACHED_RPM_ENTRY = null;
     var header_evr: ?[*:0]u8 = null;
     defer {
         c.tdnf_rpm_file_close(rpm_file);
+        if (rpm_fd >= 0) _ = close(rpm_fd);
         free(header_evr);
         free(path);
         if (cache_entry) |entry| free(entry);
     }
     var rc: u32 = 0;
-    if (location[0] == '/') {
+    rc = TDNFPackageContextDuplicateRpmFd(
+        tdnf.pSack,
+        location,
+        &rpm_fd,
+    );
+    if (rc != 0) return rc;
+    if (rpm_fd >= 0) {
+        rc = TDNFAllocateString(location, &path);
+        if (rc != 0) return rc;
+    } else if (location[0] == '/') {
         rc = TDNFAllocateString(location, &path);
         if (rc != 0) return rc;
     } else if (args.nDownloadOnly == 0 or args.pszDownloadDir == null) {
@@ -942,27 +968,38 @@ fn addInstallPackage(
             }
         }
         if (!in_place) {
-            rc = TDNFDownloadPackageToCache(tdnf, location, package_name, repo, &path);
+            rc = TDNFDownloadPackageToCacheFd(
+                tdnf,
+                location,
+                package_name,
+                repo,
+                &path,
+                &rpm_fd,
+            );
             if (rc != 0) return rc;
         }
     } else {
-        rc = TDNFDownloadPackageToDirectory(
+        rc = TDNFDownloadPackageToDirectoryFd(
             tdnf,
             location,
             package_name,
             repo,
             args.pszDownloadDir,
             &path,
+            &rpm_fd,
         );
         if (rc != 0) return rc;
     }
 
-    if (path == null or access(path, F_OK) != 0) {
+    if (path == null or (rpm_fd < 0 and access(path, F_OK) != 0)) {
         const errno_value = std.c._errno().*;
         common.log(LOG_ERR, "could not access file %s: %s (%d)\n", .{ path orelse "(null)", strerror(errno_value), errno_value });
         return systemError();
     }
-    rpm_file = c.tdnf_rpm_file_open(path);
+    rpm_file = if (rpm_fd >= 0)
+        c.tdnf_rpm_file_open_fd(rpm_fd)
+    else
+        c.tdnf_rpm_file_open(path);
     if (rpm_file == null) {
         common.log(LOG_ERR, "Unable to parse package %s: %s\n", .{ path.?, c.tdnf_rpmdb_last_error() });
         return ERROR_TDNF_RPMRC_NOTFOUND;
