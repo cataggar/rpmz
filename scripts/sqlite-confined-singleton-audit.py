@@ -12,7 +12,8 @@ SYMBOLS = (
     "tdnf_sqlite_confined_open_at",
     "tdnf_sqlite_confined_close",
     "tdnf_sqlite_confined_verify",
-    "tdnf_sqlite_confined_duplicate_main_fd",
+    "tdnf_sqlite_confined_pin_main_fd",
+    "tdnf_sqlite_confined_release_main_fd_pin",
 )
 
 

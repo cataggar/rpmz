@@ -358,6 +358,19 @@ pub const Paths = struct {
     other: ?[]const u8 = null,
 };
 
+pub const FdPath = struct {
+    fd: c_int,
+    path: []const u8,
+};
+
+pub const FdPaths = struct {
+    repomd: FdPath,
+    primary: FdPath,
+    filelists: ?FdPath = null,
+    updateinfo: ?FdPath = null,
+    other: ?FdPath = null,
+};
+
 pub const CacheOptions = struct {
     include_filelists: bool = true,
     include_updateinfo: bool = false,
@@ -450,6 +463,109 @@ pub fn loadModelWithRepomd(
         paths,
         max_metadata_bytes,
     );
+}
+
+pub fn loadModelWithRepomdFds(
+    allocator: std.mem.Allocator,
+    paths: FdPaths,
+) LoadError!PathModel {
+    return loadModelWithRepomdFdsBudget(
+        allocator,
+        paths,
+        max_metadata_bytes,
+        false,
+    );
+}
+
+pub fn loadLegacyModelWithRepomdFds(
+    allocator: std.mem.Allocator,
+    paths: FdPaths,
+) LoadError!PathModel {
+    return loadModelWithRepomdFdsBudget(
+        allocator,
+        paths,
+        legacy_max_output_bytes,
+        true,
+    );
+}
+
+fn loadModelWithRepomdFdsBudget(
+    allocator: std.mem.Allocator,
+    paths: FdPaths,
+    max_total_output_bytes: usize,
+    legacy: bool,
+) LoadError!PathModel {
+    var output_budget = DecompressedOutputBudget.init(
+        max_total_output_bytes,
+    );
+    const repomd_bytes = try readMetadataFdBudget(
+        allocator,
+        paths.repomd,
+        null,
+        legacy,
+        &output_budget,
+    );
+    const parsed_repomd = repomd_xml.parse(
+        allocator,
+        repomd_bytes,
+    ) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.InvalidRepoMetadata,
+    };
+    const primary_record = recordForKind(parsed_repomd, .primary) orelse
+        return error.InvalidRepoMetadata;
+    const filelists_record = recordForKind(parsed_repomd, .filelists);
+    const updateinfo_record = recordForKind(parsed_repomd, .updateinfo);
+    const other_record = recordForKind(parsed_repomd, .other);
+    return .{
+        .repository = try parseResolvedModel(
+            allocator,
+            parsed_repomd,
+            .{
+                .primary = try readMetadataFdBudget(
+                    allocator,
+                    paths.primary,
+                    primary_record,
+                    legacy,
+                    &output_budget,
+                ),
+                .filelists = if (paths.filelists) |path|
+                    try readMetadataFdBudget(
+                        allocator,
+                        path,
+                        filelists_record orelse
+                            return error.InvalidRepoMetadata,
+                        legacy,
+                        &output_budget,
+                    )
+                else
+                    null,
+                .updateinfo = if (paths.updateinfo) |path|
+                    try readMetadataFdBudget(
+                        allocator,
+                        path,
+                        updateinfo_record orelse
+                            return error.InvalidRepoMetadata,
+                        legacy,
+                        &output_budget,
+                    )
+                else
+                    null,
+                .other = if (paths.other) |path|
+                    try readMetadataFdBudget(
+                        allocator,
+                        path,
+                        other_record orelse
+                            return error.InvalidRepoMetadata,
+                        legacy,
+                        &output_budget,
+                    )
+                else
+                    null,
+            },
+        ),
+        .repomd_bytes = repomd_bytes,
+    };
 }
 
 fn loadModelWithRepomdBudget(
@@ -894,6 +1010,135 @@ pub fn loadCacheModelWithRepomd(
     };
 }
 
+fn openRelativeRegularFd(root_fd: c_int, path: []const u8) LoadError!c_int {
+    try validateCacheMetadataPath(path);
+    var components = std.mem.splitScalar(u8, path, '/');
+    var component = components.next() orelse
+        return error.InvalidRepoMetadata;
+    var current = std.c.fcntl(
+        root_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+    if (current < 0) return error.FileSystemIo;
+    errdefer _ = std.c.close(current);
+    while (components.next()) |next| {
+        if (component.len == 0 or component.len > std.fs.max_name_bytes)
+            return error.InvalidRepoMetadata;
+        var buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+        @memcpy(buffer[0..component.len], component);
+        buffer[component.len] = 0;
+        const child = std.c.openat(current, @ptrCast(&buffer), .{
+            .ACCMODE = .RDONLY,
+            .DIRECTORY = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+        if (child < 0) return error.AccessDenied;
+        _ = std.c.close(current);
+        current = child;
+        component = next;
+    }
+    if (component.len == 0 or component.len > std.fs.max_name_bytes)
+        return error.InvalidRepoMetadata;
+    var buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+    @memcpy(buffer[0..component.len], component);
+    buffer[component.len] = 0;
+    const fd = std.c.openat(current, @ptrCast(&buffer), .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    if (fd < 0) return error.AccessDenied;
+    _ = std.c.close(current);
+    current = -1;
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &stat,
+    ) != 0 or (stat.mode & 0o170000) != 0o100000 or stat.nlink != 1) {
+        _ = std.c.close(fd);
+        return error.AccessDenied;
+    }
+    return fd;
+}
+
+pub fn loadCacheModelWithRepomdFd(
+    allocator: std.mem.Allocator,
+    cache_fd: c_int,
+    options: CacheOptions,
+) LoadError!CacheModel {
+    const repomd_path = "repodata/repomd.xml";
+    const repomd_fd = try openRelativeRegularFd(cache_fd, repomd_path);
+    defer _ = std.c.close(repomd_fd);
+    var budget = DecompressedOutputBudget.init(max_metadata_bytes);
+    const repomd_bytes = try readMetadataFdBudget(
+        allocator,
+        .{ .fd = repomd_fd, .path = repomd_path },
+        null,
+        false,
+        &budget,
+    );
+    const parsed_repomd = repomd_xml.parse(
+        allocator,
+        repomd_bytes,
+    ) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.InvalidRepoMetadata,
+    };
+
+    var primary: ?FdPath = null;
+    var filelists: ?FdPath = null;
+    var updateinfo: ?FdPath = null;
+    var other: ?FdPath = null;
+    var opened: [4]c_int = undefined;
+    var opened_count: usize = 0;
+    defer {
+        for (opened[0..opened_count]) |fd| _ = std.c.close(fd);
+    }
+    for (parsed_repomd.pRecords) |*record| {
+        const raw_type = model.spanZ(record.pszType) orelse continue;
+        const href = model.spanZ(record.pszLocationHref) orelse continue;
+        const slot: ?*?FdPath = switch (model.kindFromRawType(raw_type)) {
+            .primary => if (primary == null) &primary else null,
+            .filelists => if (options.include_filelists and filelists == null)
+                &filelists
+            else
+                null,
+            .updateinfo => if (options.include_updateinfo and
+                updateinfo == null) &updateinfo else null,
+            .other => if (options.include_other and other == null)
+                &other
+            else
+                null,
+            else => null,
+        };
+        const output = slot orelse continue;
+        const fd = try openRelativeRegularFd(cache_fd, href);
+        opened[opened_count] = fd;
+        opened_count += 1;
+        output.* = .{ .fd = fd, .path = href };
+    }
+    const loaded = try loadModelWithRepomdFds(
+        allocator,
+        .{
+            .repomd = .{ .fd = repomd_fd, .path = repomd_path },
+            .primary = primary orelse return error.InvalidRepoMetadata,
+            .filelists = filelists,
+            .updateinfo = updateinfo,
+            .other = other,
+        },
+    );
+    return .{
+        .repository = loaded.repository,
+        .repomd_bytes = loaded.repomd_bytes,
+        .record_xml_bases = parsed_repomd.pRecordXmlBases,
+    };
+}
+
 fn validateCacheMetadataPath(
     href: []const u8,
 ) LoadError!void {
@@ -1016,6 +1261,100 @@ fn readMetadataFile(
 ) LoadError![]u8 {
     var output_budget = DecompressedOutputBudget.init(max_metadata_bytes);
     return readMetadataFileBudget(allocator, path, &output_budget);
+}
+
+fn readMetadataFdBudget(
+    allocator: std.mem.Allocator,
+    source: FdPath,
+    record: ?*const model.Record,
+    legacy: bool,
+    output_budget: *DecompressedOutputBudget,
+) LoadError![]u8 {
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        source.fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &stat,
+    ) != 0 or (stat.mode & 0o170000) != 0o100000 or
+        stat.nlink != 1)
+    {
+        return error.AccessDenied;
+    }
+    const max_raw_bytes = max_metadata_bytes +
+        @as(usize, @intFromBool(legacy));
+    if (stat.size > max_raw_bytes) return error.StreamTooLong;
+    const raw = std.heap.c_allocator.alloc(
+        u8,
+        @intCast(stat.size),
+    ) catch return error.OutOfMemory;
+    trackRawScratchAlloc(raw.len);
+    defer {
+        trackRawScratchFree(raw.len);
+        std.heap.c_allocator.free(raw);
+    }
+    if (std.c.lseek(source.fd, 0, 0) < 0)
+        return error.FileSystemIo;
+    var offset: usize = 0;
+    while (offset < raw.len) {
+        const got = std.c.read(
+            source.fd,
+            raw.ptr + offset,
+            raw.len - offset,
+        );
+        if (got < 0 and
+            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+        {
+            continue;
+        }
+        if (got <= 0) return error.FileSystemIo;
+        offset += @intCast(got);
+    }
+    if (record) |metadata| {
+        if (metadata.nHasSize != 0 and raw.len != metadata.nSize)
+            return error.InvalidRepoMetadata;
+        if (!metadata_integrity.digestMatches(metadata.checksum, raw))
+            return error.InvalidRepoMetadata;
+    }
+    const hard_output: usize = if (legacy)
+        legacy_max_output_bytes + 1
+    else
+        max_metadata_bytes + 1;
+    const output_limit = if (legacy)
+        boundedOutputLimit(
+            raw.len,
+            hard_output,
+            legacy_max_expansion_ratio,
+            legacy_expansion_slack,
+        )
+    else
+        hard_output;
+    const open = decompressMetadata(
+        allocator,
+        source.path,
+        raw,
+        try output_budget.fileLimit(output_limit),
+    ) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.StreamTooLong => error.StreamTooLong,
+        error.UnsupportedCompressor => error.UnsupportedCompressor,
+        error.DecompressFailed => error.DecompressFailed,
+    };
+    try output_budget.consume(open.len);
+    if (record) |metadata| {
+        if (hasOpenChecksum(metadata.openChecksum)) {
+            if (!metadata_integrity.digestMatches(
+                metadata.openChecksum,
+                open,
+            )) return error.InvalidRepoMetadata;
+        } else if (metadata.nHasOpenSize != 0 and
+            open.len != metadata.nOpenSize)
+        {
+            return error.InvalidRepoMetadata;
+        }
+    }
+    return open;
 }
 
 fn readMetadataFileBudget(

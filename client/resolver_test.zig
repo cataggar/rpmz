@@ -337,8 +337,8 @@ test "public resolver returns an owned plan built only from declared inputs" {
     defer plan.destroy();
 
     for ([_][]u8{
-        subject,     repository_id, snapshot, root,
-        scratch,     architecture,  distro,   releasever,
+        subject, repository_id, snapshot, root,
+        scratch, architecture,  distro,   releasever,
     }) |borrowed| {
         @memset(borrowed, 0xaa);
         allocator.free(borrowed);
@@ -724,6 +724,42 @@ test "provider-supplied secrets reach neither the plan nor the scratch tree" {
     defer allocator.free(work);
     try std.testing.expectEqualStrings("", work);
     try expectSecretFree(allocator, fixture.tmp.dir, "root");
+}
+
+test "local snapshot reserved bytes select the exact directory" {
+    const allocator = std.testing.allocator;
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const reserved = "snapshot %2e%2e ?#% $releasever %{name}";
+    try fixture.tmp.dir.rename(
+        "snapshot",
+        fixture.tmp.dir,
+        reserved,
+        io,
+    );
+    const exact = try std.fs.path.join(
+        allocator,
+        &.{ fixture.base, reserved },
+    );
+    defer allocator.free(exact);
+    const repositories = [_]resolver.Repository{.{
+        .id = "base",
+        .metadata = .{ .local_snapshot = exact },
+    }};
+    const plan = try resolver.resolvePlan(
+        allocator,
+        io,
+        fixture.input(&repositories),
+    );
+    defer plan.destroy();
+    try std.testing.expectEqualStrings(
+        "base",
+        plan.model().repositories[0].id,
+    );
+    try std.testing.expectEqualStrings(
+        "app",
+        plan.model().packages[0].identity.name,
+    );
 }
 
 // Reads every regular file under `sub_path` and fails if any of them contains

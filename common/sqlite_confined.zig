@@ -29,6 +29,10 @@ extern fn renameat(
     new_dir_fd: c_int,
     new_path: [*:0]const u8,
 ) callconv(.c) c_int;
+extern fn fork() callconv(.c) c_int;
+extern fn waitpid(pid: c_int, status: *c_int, options: c_int) callconv(.c) c_int;
+extern fn _exit(status: c_int) callconv(.c) noreturn;
+extern fn lockf(fd: c_int, command: c_int, length: i64) callconv(.c) c_int;
 
 const Allocator = std.mem.Allocator;
 const OpenFn = *const fn ([*:0]const u8, c_int, c_int) callconv(.c) c_int;
@@ -140,7 +144,7 @@ const Route = struct {
     main_fd: c_int,
     route_fd: c_int,
     writable: bool,
-    active: bool = true,
+    active: bool = false,
     route_prefix: [:0]u8,
     synthetic_path: [:0]u8,
     next: ?*Route = null,
@@ -175,6 +179,18 @@ const VfsContext = struct {
     shared_node: bool,
 };
 
+pub const MainFdPin = struct {
+    database: ?*DatabaseState,
+    fd: c_int,
+
+    pub fn deinit(self: *MainFdPin) void {
+        const database = self.database orelse return;
+        self.database = null;
+        self.fd = -1;
+        releaseDatabaseState(database);
+    }
+};
+
 pub const Connection = struct {
     db: ?*c.sqlite3,
     handle: *Handle,
@@ -198,10 +214,12 @@ pub const Connection = struct {
         if (!verifyTrackedLocked(self.handle)) return error.PathChanged;
     }
 
-    pub fn duplicateMainFd(self: *const Connection) Error!c_int {
-        const duplicate = duplicateFdCloexec(self.handle.main_fd);
-        if (duplicate < 0) return error.SyscallFailed;
-        return duplicate;
+    pub fn pinMainFd(self: *const Connection) MainFdPin {
+        retainDatabaseState(self.handle.database);
+        return .{
+            .database = self.handle.database,
+            .fd = self.handle.main_fd,
+        };
     }
 };
 
@@ -266,6 +284,52 @@ pub fn openAt(
         if ((existing.mode & s_ifmt) != s_ifreg or existing.nlink != 1)
             return error.UnsafeFile;
     }
+    const database_basename = allocator.dupeZ(u8, basename) catch
+        return error.OutOfMemory;
+    var owns_database_basename = true;
+    errdefer if (owns_database_basename)
+        allocator.free(database_basename);
+    const database_candidate = allocator.create(DatabaseState) catch
+        return error.OutOfMemory;
+    var owns_database_candidate = true;
+    errdefer if (owns_database_candidate)
+        allocator.destroy(database_candidate);
+    const route_fd = duplicateFdCloexec(directory.fd);
+    if (route_fd < 0) return error.SyscallFailed;
+    var owns_route_fd = true;
+    errdefer {
+        if (owns_route_fd) _ = std.c.close(route_fd);
+    }
+    const route_prefix = std.fmt.allocPrintSentinel(
+        allocator,
+        "/proc/self/fd/{d}/",
+        .{route_fd},
+        0,
+    ) catch return error.OutOfMemory;
+    var owns_route_prefix = true;
+    errdefer if (owns_route_prefix) allocator.free(route_prefix);
+    const synthetic_path = std.fmt.allocPrintSentinel(
+        allocator,
+        "{s}{s}",
+        .{ route_prefix, basename },
+        0,
+    ) catch return error.OutOfMemory;
+    var owns_synthetic_path = true;
+    errdefer if (owns_synthetic_path) allocator.free(synthetic_path);
+    const vfs_id = allocateVfsId();
+    const vfs_name = std.fmt.allocPrintSentinel(
+        allocator,
+        "tdnf-confined-{x}",
+        .{vfs_id},
+        0,
+    ) catch return error.OutOfMemory;
+    errdefer allocator.free(vfs_name);
+    const route = allocator.create(Route) catch return error.OutOfMemory;
+    var owns_route = true;
+    errdefer if (owns_route) allocator.destroy(route);
+    const handle = allocator.create(Handle) catch return error.OutOfMemory;
+    errdefer allocator.destroy(handle);
+
     const open_flags = switch (options.mode) {
         .read_only => o_rdonly,
         .read_write => o_rdwr,
@@ -299,10 +363,31 @@ pub fn openAt(
             return error.UnsafeFile;
         return error.SyscallFailed;
     }
-    var owns_main_fd = true;
-    errdefer {
-        if (owns_main_fd) _ = std.c.close(main_fd);
-    }
+    route.* = .{
+        .allocator = allocator,
+        .database = undefined,
+        .main_fd = main_fd,
+        .route_fd = route_fd,
+        .writable = options.mode == .read_write,
+        .route_prefix = route_prefix,
+        .synthetic_path = synthetic_path,
+    };
+    owns_directory = false;
+    owns_database_basename = false;
+    owns_database_candidate = false;
+    owns_route_fd = false;
+    owns_route_prefix = false;
+    owns_synthetic_path = false;
+    owns_route = false;
+    const database = try registerMainRoute(
+        directory,
+        basename,
+        database_candidate,
+        database_basename,
+        route,
+    );
+    errdefer releaseDatabaseState(database);
+
     const main_stat = try regularSingleLinkStat(main_fd);
     if (options.pinned_main_fd != null) {
         const path_stat = statRelativeFd(
@@ -318,75 +403,12 @@ pub fn openAt(
         }
     }
 
-    const database = try acquireDatabaseState(
-        allocator,
-        directory,
-        basename,
-        Identity.fromStat(main_stat),
-    );
-    owns_directory = false;
-    errdefer releaseDatabaseState(database);
     try trackExistingWalSidecars(database);
-    const route_fd = duplicateFdCloexec(database.directory.fd);
-    if (route_fd < 0) return error.SyscallFailed;
-    var owns_route_fd = true;
+    publishRoute(route);
+    var route_published = true;
     errdefer {
-        if (owns_route_fd) _ = std.c.close(route_fd);
+        if (route_published) retireRoute(route);
     }
-    const route_prefix = std.fmt.allocPrintSentinel(
-        allocator,
-        "/proc/self/fd/{d}/",
-        .{route_fd},
-        0,
-    ) catch return error.OutOfMemory;
-    var owns_route_prefix = true;
-    errdefer {
-        if (owns_route_prefix) allocator.free(route_prefix);
-    }
-    const synthetic_path = std.fmt.allocPrintSentinel(
-        allocator,
-        "{s}{s}",
-        .{ route_prefix, database.basename },
-        0,
-    ) catch return error.OutOfMemory;
-    var owns_synthetic_path = true;
-    errdefer {
-        if (owns_synthetic_path) allocator.free(synthetic_path);
-    }
-    const vfs_id = allocateVfsId();
-    const vfs_name = std.fmt.allocPrintSentinel(
-        allocator,
-        "tdnf-confined-{x}",
-        .{vfs_id},
-        0,
-    ) catch return error.OutOfMemory;
-    errdefer allocator.free(vfs_name);
-    const route = allocator.create(Route) catch return error.OutOfMemory;
-    var owns_route = true;
-    errdefer {
-        if (owns_route) allocator.destroy(route);
-    }
-    route.* = .{
-        .allocator = allocator,
-        .database = database,
-        .main_fd = main_fd,
-        .route_fd = route_fd,
-        .writable = options.mode == .read_write,
-        .route_prefix = route_prefix,
-        .synthetic_path = synthetic_path,
-    };
-    addRoute(route);
-    owns_main_fd = false;
-    owns_route_fd = false;
-    owns_route_prefix = false;
-    owns_synthetic_path = false;
-    owns_route = false;
-    var route_added = true;
-    errdefer {
-        if (route_added) retireRoute(route);
-    }
-    const handle = allocator.create(Handle) catch return error.OutOfMemory;
-    errdefer allocator.destroy(handle);
     handle.* = .{
         .allocator = allocator,
         .database = database,
@@ -431,13 +453,18 @@ pub fn openAt(
     _ = c.sqlite3_commit_hook(db, commitHook, handle);
 
     registered = false;
-    route_added = false;
+    route_published = false;
     return .{ .db = db, .handle = handle };
 }
 
 const RawConnection = extern struct {
     db: ?*c.sqlite3,
     handle: ?*anyopaque,
+};
+
+const RawMainFdPin = extern struct {
+    fd: c_int,
+    database: ?*anyopaque,
 };
 
 fn bridgeStatus(err: Error) c_int {
@@ -512,15 +539,31 @@ pub export fn tdnf_sqlite_confined_verify(
     return 0;
 }
 
-pub export fn tdnf_sqlite_confined_duplicate_main_fd(
+pub export fn tdnf_sqlite_confined_pin_main_fd(
     raw: *const RawConnection,
-) callconv(.c) c_int {
-    const handle = raw.handle orelse return -1;
+) callconv(.c) RawMainFdPin {
+    const handle = raw.handle orelse return .{
+        .fd = -1,
+        .database = null,
+    };
     const connection = Connection{
         .db = raw.db,
         .handle = @ptrCast(@alignCast(handle)),
     };
-    return connection.duplicateMainFd() catch -1;
+    const pin = connection.pinMainFd();
+    return .{
+        .fd = pin.fd,
+        .database = pin.database,
+    };
+}
+
+pub export fn tdnf_sqlite_confined_release_main_fd_pin(
+    raw_database: ?*anyopaque,
+) callconv(.c) void {
+    const database: *DatabaseState = @ptrCast(@alignCast(
+        raw_database orelse return,
+    ));
+    releaseDatabaseState(database);
 }
 
 pub export fn tdnf_sqlite_confined_registry_anchor() callconv(.c) usize {
@@ -635,12 +678,14 @@ fn releaseDirectoryPin(pin: *DirectoryPin) void {
     allocator.destroy(pin);
 }
 
-fn acquireDatabaseState(
-    allocator: Allocator,
+fn registerMainRoute(
     directory: *DirectoryPin,
     basename: []const u8,
-    main_identity: Identity,
+    candidate: *DatabaseState,
+    owned_basename: [:0]u8,
+    route: *Route,
 ) Error!*DatabaseState {
+    const allocator = route.allocator;
     lockRegistry();
     var cursor = database_head;
     while (cursor) |database| : (cursor = database.next) {
@@ -649,53 +694,71 @@ fn acquireDatabaseState(
         {
             continue;
         }
-        if (!database.main_identity.eql(main_identity)) {
-            unlockRegistry();
-            return error.PathChanged;
-        }
         database.refs += 1;
+        route.database = database;
+        route.database_next = database.routes;
+        database.routes = route;
         unlockRegistry();
-        releaseDirectoryPin(directory);
-        return database;
-    }
-    unlockRegistry();
-
-    const owned_basename = allocator.dupeZ(u8, basename) catch
-        return error.OutOfMemory;
-    errdefer allocator.free(owned_basename);
-    const state = allocator.create(DatabaseState) catch
-        return error.OutOfMemory;
-    errdefer allocator.destroy(state);
-    state.* = .{
-        .allocator = allocator,
-        .directory = directory,
-        .main_identity = main_identity,
-        .basename = owned_basename,
-    };
-
-    lockRegistry();
-    cursor = database_head;
-    while (cursor) |existing| : (cursor = existing.next) {
-        if (!existing.directory.identity.eql(directory.identity) or
-            !std.mem.eql(u8, existing.basename, basename))
-        {
-            continue;
-        }
-        if (!existing.main_identity.eql(main_identity)) {
-            unlockRegistry();
-            return error.PathChanged;
-        }
-        existing.refs += 1;
-        unlockRegistry();
-        allocator.destroy(state);
+        allocator.destroy(candidate);
         allocator.free(owned_basename);
         releaseDirectoryPin(directory);
-        return existing;
+        const main_stat = regularSingleLinkStat(route.main_fd) catch |err| {
+            releaseDatabaseState(database);
+            return err;
+        };
+        if (!database.main_identity.eql(Identity.fromStat(main_stat))) {
+            releaseDatabaseState(database);
+            return error.PathChanged;
+        }
+        return database;
     }
-    state.next = database_head;
-    database_head = state;
+
+    const main_stat = statFd(route.main_fd) orelse {
+        _ = std.c.close(route.main_fd);
+        route.main_fd = -1;
+        unlockRegistry();
+        _ = std.c.close(route.route_fd);
+        allocator.free(route.route_prefix);
+        allocator.free(route.synthetic_path);
+        allocator.destroy(route);
+        allocator.destroy(candidate);
+        allocator.free(owned_basename);
+        releaseDirectoryPin(directory);
+        return error.SyscallFailed;
+    };
+    if ((main_stat.mode & s_ifmt) != s_ifreg or main_stat.nlink != 1) {
+        _ = std.c.close(route.main_fd);
+        route.main_fd = -1;
+        unlockRegistry();
+        _ = std.c.close(route.route_fd);
+        allocator.free(route.route_prefix);
+        allocator.free(route.synthetic_path);
+        allocator.destroy(route);
+        allocator.destroy(candidate);
+        allocator.free(owned_basename);
+        releaseDirectoryPin(directory);
+        return error.UnsafeFile;
+    }
+    candidate.* = .{
+        .allocator = allocator,
+        .directory = directory,
+        .main_identity = Identity.fromStat(main_stat),
+        .basename = owned_basename,
+    };
+    route.database = candidate;
+    route.database_next = candidate.routes;
+    candidate.routes = route;
+    candidate.next = database_head;
+    database_head = candidate;
     unlockRegistry();
-    return state;
+    return candidate;
+}
+
+fn retainDatabaseState(database: *DatabaseState) void {
+    lockRegistry();
+    defer unlockRegistry();
+    std.debug.assert(database.refs != 0);
+    database.refs += 1;
 }
 
 fn releaseDatabaseState(database: *DatabaseState) void {
@@ -778,13 +841,13 @@ fn allocateVfsId() u64 {
     return result;
 }
 
-fn addRoute(route: *Route) void {
+fn publishRoute(route: *Route) void {
     lockRegistry();
     defer unlockRegistry();
+    std.debug.assert(!route.active);
+    route.active = true;
     route.next = registry_head;
     registry_head = route;
-    route.database_next = route.database.routes;
-    route.database.routes = route;
 }
 
 fn retireRoute(route: *Route) void {
@@ -1766,6 +1829,92 @@ test "confined SQLite rejects main replacement between pin and VFS open" {
     try std.testing.expectEqualStrings("outside", outside);
 }
 
+test "failed concurrent open cannot release a live POSIX database lock" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const dir_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(dir_fd >= 0);
+    defer _ = std.c.close(dir_fd);
+
+    var first = try openAt(
+        std.testing.allocator,
+        dir_fd,
+        "db.sqlite",
+        .{ .mode = .read_write, .create = true },
+    );
+    defer first.close();
+    try std.testing.expectEqual(
+        c.SQLITE_OK,
+        c.sqlite3_exec(
+            first.db,
+            "PRAGMA journal_mode=DELETE;" ++
+                "CREATE TABLE values_table(value INTEGER);" ++
+                "BEGIN EXCLUSIVE;",
+            null,
+            null,
+            null,
+        ),
+    );
+    const pinned_fd = openat(
+        dir_fd,
+        "db.sqlite",
+        o_rdonly | o_cloexec | o_nofollow,
+        0,
+    );
+    try std.testing.expect(pinned_fd >= 0);
+    defer _ = std.c.close(pinned_fd);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "outside.sqlite",
+        .data = "outside",
+    });
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        renameat(dir_fd, "db.sqlite", dir_fd, "locked.sqlite"),
+    );
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        renameat(dir_fd, "outside.sqlite", dir_fd, "db.sqlite"),
+    );
+    try std.testing.expectError(
+        error.PathChanged,
+        openAt(std.testing.allocator, dir_fd, "db.sqlite", .{
+            .mode = .read_only,
+            .pinned_main_fd = pinned_fd,
+        }),
+    );
+
+    const child = fork();
+    try std.testing.expect(child >= 0);
+    if (child == 0) {
+        const fd = openat(
+            dir_fd,
+            "locked.sqlite",
+            o_rdwr | o_cloexec | o_nofollow,
+            0,
+        );
+        if (fd < 0) _exit(2);
+        const rc = lockf(fd, 2, 0);
+        const blocked = rc < 0 and
+            (std.c._errno().* == @intFromEnum(std.posix.E.AGAIN) or
+                std.c._errno().* == @intFromEnum(std.posix.E.ACCES));
+        _exit(if (blocked) 0 else 3);
+    }
+    var status: c_int = 0;
+    try std.testing.expectEqual(child, waitpid(child, &status, 0));
+    try std.testing.expectEqual(@as(c_int, 0), status);
+}
+
 test "confined SQLite keeps WAL and journal sidecars no-follow" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2031,10 +2180,10 @@ test "WAL connections share a stable CLOEXEC directory pin" {
     try std.testing.expect(
         (std.c.fcntl(shared_fd, std.c.F.GETFD) & std.c.FD_CLOEXEC) != 0,
     );
-    const duplicate_main = try second.duplicateMainFd();
-    defer _ = std.c.close(duplicate_main);
+    var main_pin = second.pinMainFd();
+    defer main_pin.deinit();
     try std.testing.expect(
-        (std.c.fcntl(duplicate_main, std.c.F.GETFD) & std.c.FD_CLOEXEC) != 0,
+        (std.c.fcntl(main_pin.fd, std.c.F.GETFD) & std.c.FD_CLOEXEC) != 0,
     );
 
     first.close();
@@ -2050,6 +2199,7 @@ test "WAL connections share a stable CLOEXEC directory pin" {
         ),
     );
     second.close();
+    main_pin.deinit();
     try std.testing.expectEqual(@as(c_int, -1), std.c.fcntl(
         shared_fd,
         std.c.F.GETFD,

@@ -23,6 +23,7 @@ pub const Input = struct {
     cost: u32,
     /// Input-only cache root. It is never retained or serialized.
     cache_dir: []const u8,
+    cache_dir_fd: ?c_int = null,
     options: available_loader.CacheOptions = .{},
 };
 
@@ -251,11 +252,18 @@ pub fn capture(
     }
 
     const arena = owner.arena_state.allocator();
-    const loaded = try available_loader.loadCacheModelWithRepomd(
-        arena,
-        input.cache_dir,
-        input.options,
-    );
+    const loaded = if (input.cache_dir_fd) |fd|
+        try available_loader.loadCacheModelWithRepomdFd(
+            arena,
+            fd,
+            input.options,
+        )
+    else
+        try available_loader.loadCacheModelWithRepomd(
+            arena,
+            input.cache_dir,
+            input.options,
+        );
     owner.load_cookie_sha256 = available_loader.solvCacheCookie(
         loaded.repomd_bytes,
         input.options,

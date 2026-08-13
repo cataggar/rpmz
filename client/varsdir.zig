@@ -42,9 +42,11 @@ const NAME_BUF_LEN = 256;
 const O_RDONLY = 0;
 
 extern fn opendir(path: [*:0]const u8) ?*DIR;
+extern fn fdopendir(fd: c_int) ?*DIR;
 extern fn readdir(dir: *DIR) ?*Dirent;
 extern fn closedir(dir: *DIR) c_int;
 extern fn open(path: [*:0]const u8, flags: c_int, ...) c_int;
+extern fn openat(dir_fd: c_int, path: [*:0]const u8, flags: c_int, ...) c_int;
 extern fn read(fd: c_int, buf: [*]u8, count: usize) isize;
 extern fn close(fd: c_int) c_int;
 extern fn malloc(size: usize) ?*anyopaque;
@@ -154,6 +156,141 @@ fn collectDirectory(root: *CnfNode, dir_path: [*:0]const u8) bool {
     return true;
 }
 
+fn openDirectoryAtRoot(root_fd: c_int, raw_path: []const u8) ?c_int {
+    if (raw_path.len == 0 or raw_path[0] != '/') {
+        setErrno(@intFromEnum(std.c.E.INVAL));
+        return null;
+    }
+    var current = std.c.fcntl(
+        root_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+    if (current < 0) return null;
+    defer {
+        if (current >= 0) _ = close(current);
+    }
+    var components = std.mem.splitScalar(
+        u8,
+        std.mem.trim(u8, raw_path, "/"),
+        '/',
+    );
+    while (components.next()) |component| {
+        if (component.len == 0) continue;
+        if (component.len > std.fs.max_name_bytes or
+            std.mem.eql(u8, component, ".") or
+            std.mem.eql(u8, component, ".."))
+        {
+            setErrno(@intFromEnum(std.c.E.INVAL));
+            return null;
+        }
+        var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+        @memcpy(name_buffer[0..component.len], component);
+        name_buffer[component.len] = 0;
+        const next = std.c.openat(current, @ptrCast(&name_buffer), .{
+            .ACCMODE = .RDONLY,
+            .DIRECTORY = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+        if (next < 0) return null;
+        _ = close(current);
+        current = next;
+    }
+    const result = current;
+    current = -1;
+    return result;
+}
+
+fn collectDirectoryAt(
+    root: *CnfNode,
+    root_fd: c_int,
+    dir_path: [*:0]const u8,
+) bool {
+    const directory_fd = openDirectoryAtRoot(
+        root_fd,
+        std.mem.span(dir_path),
+    ) orelse return std.c._errno().* == @intFromEnum(std.c.E.NOENT);
+    const scan_fd = std.c.fcntl(
+        directory_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+    if (scan_fd < 0) {
+        _ = close(directory_fd);
+        return false;
+    }
+    const dir = fdopendir(scan_fd) orelse {
+        _ = close(scan_fd);
+        _ = close(directory_fd);
+        return false;
+    };
+    defer _ = closedir(dir);
+    defer _ = close(directory_fd);
+
+    const dir_len = std.mem.len(dir_path);
+    while (readdir(dir)) |entry| {
+        const name = std.mem.sliceTo(&entry.name, 0);
+        if (!isVariableName(name)) continue;
+        if (dir_len + 1 + name.len > MAX_PATH_LEN) {
+            setErrno(@intFromEnum(std.c.E.NAMETOOLONG));
+            return false;
+        }
+        const fd = std.c.openat(
+            directory_fd,
+            @ptrCast(&entry.name),
+            .{
+                .ACCMODE = .RDONLY,
+                .CLOEXEC = true,
+                .NOFOLLOW = true,
+            },
+        );
+        if (fd < 0) return false;
+        var stat = std.mem.zeroes(std.os.linux.Statx);
+        if (std.c.statx(
+            fd,
+            "",
+            std.os.linux.AT.EMPTY_PATH,
+            std.os.linux.STATX.BASIC_STATS,
+            &stat,
+        ) != 0 or (stat.mode & 0o170000) != 0o100000 or stat.nlink != 1) {
+            _ = close(fd);
+            setErrno(@intFromEnum(std.c.E.LOOP));
+            return false;
+        }
+        var value_buf: [MAX_VALUE_LEN + 1]u8 = undefined;
+        var used: usize = 0;
+        while (used < MAX_VALUE_LEN) {
+            const rc = read(fd, value_buf[used..].ptr, MAX_VALUE_LEN - used);
+            if (rc < 0) {
+                _ = close(fd);
+                return false;
+            }
+            if (rc == 0) break;
+            used += @intCast(rc);
+            if (std.mem.indexOfScalar(u8, value_buf[0..used], '\n') != null)
+                break;
+        }
+        _ = close(fd);
+        const line_end = std.mem.indexOfScalar(
+            u8,
+            value_buf[0..used],
+            '\n',
+        ) orelse used;
+        const value_len = trailingSpaceTrimmed(
+            value_buf[0..line_end],
+        ).len;
+        value_buf[value_len] = 0;
+        const node = create_cnfnode(@ptrCast(&entry.name)) orelse {
+            setErrno(@intFromEnum(std.c.E.NOMEM));
+            return false;
+        };
+        cnfnode_setval(node, @ptrCast(&value_buf));
+        append_node(root, node);
+    }
+    return true;
+}
+
 /// Build a variable tree from every file in `dirs`, a NULL-terminated array
 /// of directory paths. Returns NULL with errno set on failure.
 pub export fn parse_varsdirs(dirs: ?[*:null]const ?[*:0]const u8) ?*CnfNode {
@@ -166,6 +303,26 @@ pub export fn parse_varsdirs(dirs: ?[*:null]const ?[*:0]const u8) ?*CnfNode {
         var i: usize = 0;
         while (list[i]) |dir_path| : (i += 1) {
             if (!collectDirectory(root, dir_path)) {
+                destroy_cnftree(root);
+                return null;
+            }
+        }
+    }
+    return root;
+}
+
+pub export fn parse_varsdirs_at(
+    root_fd: c_int,
+    dirs: ?[*:null]const ?[*:0]const u8,
+) ?*CnfNode {
+    const root = create_cnfnode("(root)") orelse {
+        setErrno(@intFromEnum(std.c.E.NOMEM));
+        return null;
+    };
+    if (dirs) |list| {
+        var index: usize = 0;
+        while (list[index]) |dir_path| : (index += 1) {
+            if (!collectDirectoryAt(root, root_fd, dir_path)) {
                 destroy_cnftree(root);
                 return null;
             }

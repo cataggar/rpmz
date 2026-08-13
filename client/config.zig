@@ -11,6 +11,7 @@ const abi = @import("client_abi");
 const errors = @import("tdnf_error");
 const options = @import("client_config_options");
 const rpmtrans = @import("rpmtrans_flags");
+const txn_config = @import("rpm_txn_config");
 const varsdir = @import("client_varsdir");
 
 const CnfNode = abi.CnfNode;
@@ -93,6 +94,10 @@ extern fn cnfmodule_parse_file(
     module: ?*CnfModule,
     path: ?[*:0]const u8,
 ) callconv(.c) ?*CnfNode;
+extern fn cnfmodule_parse(
+    module: ?*CnfModule,
+    stream: ?*FILE,
+) callconv(.c) ?*CnfNode;
 extern fn create_cnfnode(name: ?[*:0]const u8) callconv(.c) ?*CnfNode;
 extern fn cnfnode_setval(
     node: ?*CnfNode,
@@ -109,7 +114,9 @@ extern fn fnmatch(
     flags: c_int,
 ) callconv(.c) c_int;
 extern fn fopen(path: [*:0]const u8, mode: [*:0]const u8) callconv(.c) ?*FILE;
+extern fn fdopen(fd: c_int, mode: [*:0]const u8) callconv(.c) ?*FILE;
 extern fn fclose(stream: *FILE) callconv(.c) c_int;
+extern fn fdopendir(fd: c_int) callconv(.c) ?*DIR;
 extern fn getline(
     line: *?[*]u8,
     capacity: *usize,
@@ -309,7 +316,10 @@ fn parseOsInfo(conf: *Conf, path: [*:0]const u8, ops: Ops) u32 {
         return 0;
     };
     defer _ = fclose(stream);
+    return parseOsInfoStream(conf, stream, ops);
+}
 
+fn parseOsInfoStream(conf: *Conf, stream: *FILE, ops: Ops) u32 {
     var raw: ?*anyopaque = null;
     var result = ops.allocate_memory(ops.context, 1, 256, &raw);
     if (result != 0) return result;
@@ -475,6 +485,146 @@ fn configFromTree(conf: *Conf, top: ?*CnfNode, ops: Ops) u32 {
     return 0;
 }
 
+fn nativeConfig(handle: *Tdnf) ?*txn_config.TxnConfig {
+    return @ptrCast(@alignCast(handle.pRpmConfig orelse return null));
+}
+
+fn targetPathError(err: txn_config.TargetPathError) u32 {
+    return switch (err) {
+        error.NotFound => errors.ERROR_TDNF_FILE_NOT_FOUND,
+        error.InvalidTargetPath, error.UnsafeTargetPath => errors.ERROR_TDNF_INVALID_PARAMETER,
+        error.SyscallFailed => errors.ERROR_TDNF_SYSTEM_BASE +
+            @as(u32, @intCast(std.c._errno().*)),
+    };
+}
+
+fn parsePinnedIni(
+    config: *const txn_config.TxnConfig,
+    module: *CnfModule,
+    path: []const u8,
+) union(enum) { tree: *CnfNode, status: u32 } {
+    const fd = config.openPinnedRegular(path) catch |err|
+        return .{ .status = targetPathError(err) };
+    const stream = fdopen(fd, "r") orelse {
+        _ = std.c.close(fd);
+        return .{ .status = errors.ERROR_TDNF_SYSTEM_BASE +
+            @as(u32, @intCast(std.c._errno().*)) };
+    };
+    defer _ = fclose(stream);
+    const tree = cnfmodule_parse(module, stream) orelse
+        return .{ .status = errors.ERROR_TDNF_CONF_FILE_LOAD };
+    return .{ .tree = tree };
+}
+
+fn parsePinnedOsInfo(
+    config: *const txn_config.TxnConfig,
+    conf: *Conf,
+    ops: Ops,
+) u32 {
+    const fd = config.openPinnedRegular(OS_REL_FILE) catch |err| {
+        if (err == error.NotFound) {
+            common.log(
+                LOG_NOTICE,
+                "Warning: '%s' file is not present in the target\n",
+                .{OS_REL_FILE},
+            );
+            return 0;
+        }
+        return targetPathError(err);
+    };
+    const stream = fdopen(fd, "r") orelse {
+        _ = std.c.close(fd);
+        return errors.ERROR_TDNF_SYSTEM_BASE +
+            @as(u32, @intCast(std.c._errno().*));
+    };
+    defer _ = fclose(stream);
+    return parseOsInfoStream(conf, stream, ops);
+}
+
+fn readFdToStringArray(fd: c_int, lines: *?[*]?[*:0]u8) u32 {
+    const stream = fdopen(fd, "r") orelse {
+        _ = std.c.close(fd);
+        return errors.ERROR_TDNF_SYSTEM_BASE +
+            @as(u32, @intCast(std.c._errno().*));
+    };
+    defer _ = fclose(stream);
+    var line: ?[*]u8 = null;
+    defer if (line) |value| std.c.free(value);
+    var capacity: usize = 0;
+    while (getline(&line, &capacity, stream) >= 0) {
+        const raw = std.mem.sliceTo(line.?, 0);
+        const value = std.mem.trimEnd(u8, raw, "\r\n");
+        const value_z = std.heap.c_allocator.dupeZ(u8, value) catch
+            return errors.ERROR_TDNF_OUT_OF_MEMORY;
+        defer std.heap.c_allocator.free(value_z);
+        const result = TDNFAddStringArray(lines, value_z.ptr);
+        if (result != 0) return result;
+    }
+    return 0;
+}
+
+fn readConfFilesFromPinnedDir(
+    config: *const txn_config.TxnConfig,
+    path: []const u8,
+    lines: *?[*]?[*:0]u8,
+) u32 {
+    const directory_fd = config.openPinnedDirectory(
+        path,
+        false,
+    ) catch |err| {
+        if (err == error.NotFound) return 0;
+        return targetPathError(err);
+    };
+    const scan_fd = std.c.fcntl(
+        directory_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+    if (scan_fd < 0) {
+        _ = std.c.close(directory_fd);
+        return errors.ERROR_TDNF_SYSTEM_BASE +
+            @as(u32, @intCast(std.c._errno().*));
+    }
+    const directory = fdopendir(scan_fd) orelse {
+        const saved = std.c._errno().*;
+        _ = std.c.close(scan_fd);
+        _ = std.c.close(directory_fd);
+        return errors.ERROR_TDNF_SYSTEM_BASE +
+            @as(u32, @intCast(saved));
+    };
+    defer _ = closedir(directory);
+    defer _ = std.c.close(directory_fd);
+
+    while (readdir(directory)) |entry| {
+        const name: [*:0]const u8 = @ptrCast(&entry.name);
+        if (fnmatch("*.conf", name, 0) != 0) continue;
+        const fd = std.c.openat(directory_fd, name, .{
+            .ACCMODE = .RDONLY,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+        if (fd < 0) {
+            if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+                continue;
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        }
+        var stat = std.mem.zeroes(std.os.linux.Statx);
+        if (std.c.statx(
+            fd,
+            "",
+            std.os.linux.AT.EMPTY_PATH,
+            std.os.linux.STATX.BASIC_STATS,
+            &stat,
+        ) != 0 or (stat.mode & 0o170000) != 0o100000 or stat.nlink != 1) {
+            _ = std.c.close(fd);
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        }
+        const result = readFdToStringArray(fd, lines);
+        if (result != 0) return result;
+    }
+    return 0;
+}
+
 fn readConfFilesFromDir(path: [*:0]const u8, lines: *?[*]?[*:0]u8) u32 {
     var dir = opendir(path) orelse return 0;
     var file_count: usize = 0;
@@ -578,10 +728,11 @@ fn freeConfig(conf: ?*Conf) void {
     TDNFFreeMemory(value);
 }
 
-fn readConfig(
+fn readConfigMode(
     handle_opt: ?*Tdnf,
     config_path_opt: ?[*:0]const u8,
     group_opt: ?[*:0]const u8,
+    pinned_source: bool,
     ops: Ops,
 ) u32 {
     const handle = handle_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -625,7 +776,25 @@ fn readConfig(
         freeConfig(conf);
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     };
-    const tree = cnfmodule_parse_file(module, config_path) orelse {
+    const tree = if (pinned_source) blk: {
+        const config = nativeConfig(handle) orelse {
+            freeConfig(previous);
+            freeConfig(conf);
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        };
+        switch (parsePinnedIni(
+            config,
+            module,
+            std.mem.span(config_path),
+        )) {
+            .tree => |tree| break :blk tree,
+            .status => |status| {
+                freeConfig(previous);
+                freeConfig(conf);
+                return status;
+            },
+        }
+    } else cnfmodule_parse_file(module, config_path) orelse {
         const errno_value = std.c._errno().*;
         freeConfig(previous);
         freeConfig(conf);
@@ -637,19 +806,21 @@ fn readConfig(
     defer destroy_cnftree(tree);
 
     const args = handle.pArgs.?;
-    var os_path: ?[*:0]u8 = null;
-    defer freeString(&os_path);
-    if (args.pszInstallRoot) |root| {
-        if (root[0] != 0 and !std.mem.eql(u8, std.mem.span(root), "/")) {
-            result = joinPath(&os_path, root, OS_REL_FILE);
-            if (result != 0) {
-                freeConfig(previous);
-                freeConfig(conf);
-                return result;
+    const pinned_config = nativeConfig(handle);
+    result = if (pinned_config != null and
+        pinned_config.?.pinnedInstallRootFd() != null)
+        parsePinnedOsInfo(pinned_config.?, conf, ops)
+    else blk: {
+        var os_path: ?[*:0]u8 = null;
+        defer freeString(&os_path);
+        if (args.pszInstallRoot) |root| {
+            if (root[0] != 0 and !std.mem.eql(u8, std.mem.span(root), "/")) {
+                const join_result = joinPath(&os_path, root, OS_REL_FILE);
+                if (join_result != 0) break :blk join_result;
             }
         }
-    }
-    result = parseOsInfo(conf, os_path orelse OS_REL_FILE, ops);
+        break :blk parseOsInfo(conf, os_path orelse OS_REL_FILE, ops);
+    };
     if (result != 0) {
         freeConfig(previous);
         freeConfig(conf);
@@ -684,7 +855,96 @@ fn readConfig(
         }
     }
 
-    if (args.pszInstallRoot) |root| {
+    if (pinned_config) |config| {
+        if (config.pinnedInstallRootFd() != null) {
+            const cache_dir = std.mem.span(conf.pszCacheDir.?);
+            if (cache_dir.len == 0 or cache_dir[0] != '/') {
+                freeConfig(previous);
+                freeConfig(conf);
+                return errors.ERROR_TDNF_INVALID_PARAMETER;
+            }
+            config.setPinnedCacheDir(cache_dir) catch {
+                freeConfig(previous);
+                freeConfig(conf);
+                return errors.ERROR_TDNF_OUT_OF_MEMORY;
+            };
+            const cache_fd = config.openPinnedDirectory(
+                cache_dir,
+                true,
+            ) catch |err| {
+                freeConfig(previous);
+                freeConfig(conf);
+                return targetPathError(err);
+            };
+            defer _ = std.c.close(cache_fd);
+            config.adoptPinnedCacheDirFd(cache_fd) catch {
+                freeConfig(previous);
+                freeConfig(conf);
+                return errors.ERROR_TDNF_INVALID_PARAMETER;
+            };
+
+            const repo_dir = std.mem.span(conf.pszRepoDir.?);
+            const target_repo = blk: {
+                const fd = config.openPinnedDirectory(
+                    repo_dir,
+                    false,
+                ) catch |err| switch (err) {
+                    error.NotFound => break :blk pinned_source,
+                    else => {
+                        freeConfig(previous);
+                        freeConfig(conf);
+                        return targetPathError(err);
+                    },
+                };
+                _ = std.c.close(fd);
+                break :blk true;
+            };
+            if (target_repo) {
+                config.setPinnedRepoDir(repo_dir) catch {
+                    freeConfig(previous);
+                    freeConfig(conf);
+                    return errors.ERROR_TDNF_OUT_OF_MEMORY;
+                };
+            }
+        } else if (args.pszInstallRoot) |root| {
+            if (root[0] != 0 and !std.mem.eql(u8, std.mem.span(root), "/")) {
+                var rooted_cache: ?[*:0]u8 = null;
+                result = joinPath(&rooted_cache, root, conf.pszCacheDir.?);
+                if (result != 0) {
+                    freeConfig(previous);
+                    freeConfig(conf);
+                    return result;
+                }
+                freeString(&conf.pszCacheDir);
+                conf.pszCacheDir = rooted_cache;
+
+                var rooted_repo: ?[*:0]u8 = null;
+                defer freeString(&rooted_repo);
+                result = joinPath(&rooted_repo, root, conf.pszRepoDir.?);
+                if (result != 0) {
+                    freeConfig(previous);
+                    freeConfig(conf);
+                    return result;
+                }
+                var is_dir: c_int = 0;
+                result = TDNFIsDir(rooted_repo, &is_dir);
+                if (result == errors.ERROR_TDNF_FILE_NOT_FOUND) {
+                    result = 0;
+                    is_dir = 0;
+                }
+                if (result != 0) {
+                    freeConfig(previous);
+                    freeConfig(conf);
+                    return result;
+                }
+                if (is_dir != 0) {
+                    freeString(&conf.pszRepoDir);
+                    conf.pszRepoDir = rooted_repo;
+                    rooted_repo = null;
+                }
+            }
+        }
+    } else if (args.pszInstallRoot) |root| {
         if (root[0] != 0 and !std.mem.eql(u8, std.mem.span(root), "/")) {
             var rooted_cache: ?[*:0]u8 = null;
             result = joinPath(&rooted_cache, root, conf.pszCacheDir.?);
@@ -819,6 +1079,33 @@ fn readConfig(
             return result;
         }
     }
+    if (pinned_config) |config| {
+        if (config.pinnedInstallRootFd() != null) {
+            const plugin_dir = std.mem.span(conf.pszPluginConfPath.?);
+            const target_plugin = blk: {
+                const fd = config.openPinnedDirectory(
+                    plugin_dir,
+                    false,
+                ) catch |err| switch (err) {
+                    error.NotFound => break :blk pinned_source,
+                    else => {
+                        freeConfig(previous);
+                        freeConfig(conf);
+                        return targetPathError(err);
+                    },
+                };
+                _ = std.c.close(fd);
+                break :blk true;
+            };
+            if (target_plugin) {
+                config.setPinnedPluginConfDir(plugin_dir) catch {
+                    freeConfig(previous);
+                    freeConfig(conf);
+                    return errors.ERROR_TDNF_OUT_OF_MEMORY;
+                };
+            }
+        }
+    }
 
     var config_dir: ?[*:0]u8 = null;
     defer freeString(&config_dir);
@@ -841,7 +1128,14 @@ fn readConfig(
             freeConfig(conf);
             return result;
         }
-        result = readConfFilesFromDir(path.?, directory[1]);
+        result = if (pinned_source)
+            readConfFilesFromPinnedDir(
+                pinned_config.?,
+                std.mem.span(path.?),
+                directory[1],
+            )
+        else
+            readConfFilesFromDir(path.?, directory[1]);
         freeString(&path);
         if (result != 0) {
             freeConfig(previous);
@@ -855,12 +1149,35 @@ fn readConfig(
     return 0;
 }
 
+fn readConfig(
+    handle: ?*Tdnf,
+    config_path: ?[*:0]const u8,
+    group: ?[*:0]const u8,
+    ops: Ops,
+) u32 {
+    return readConfigMode(handle, config_path, group, false, ops);
+}
+
 export fn TDNFReadConfig(
     handle: ?*Tdnf,
     config_path: ?[*:0]const u8,
     group: ?[*:0]const u8,
 ) callconv(.c) u32 {
     return readConfig(handle, config_path, group, production_ops);
+}
+
+export fn TDNFReadConfigPinned(
+    handle: ?*Tdnf,
+    config_path: ?[*:0]const u8,
+    group: ?[*:0]const u8,
+) callconv(.c) u32 {
+    return readConfigMode(
+        handle,
+        config_path,
+        group,
+        true,
+        production_ops,
+    );
 }
 
 export fn TDNFConfigExpandVars(handle_opt: ?*Tdnf) callconv(.c) u32 {
@@ -917,21 +1234,30 @@ export fn TDNFConfigReplaceVars(
     if (source[0] == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
     const conf = handle.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
 
-    const vars = varsdir.parse_varsdirs(@ptrCast(conf.ppszVarsDirs)) orelse {
+    const config = nativeConfig(handle);
+    const vars = if (config != null and
+        config.?.pinnedInstallRootFd() != null)
+        varsdir.parse_varsdirs_at(
+            config.?.pinnedInstallRootFd().?,
+            @ptrCast(conf.ppszVarsDirs),
+        )
+    else
+        varsdir.parse_varsdirs(@ptrCast(conf.ppszVarsDirs));
+    const vars_root = vars orelse {
         const errno_value = std.c._errno().*;
         common.log(LOG_ERR, "parsing vars failed: %s (%d)\n", .{ strerror(errno_value), errno_value });
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     };
-    defer destroy_cnftree(vars);
+    defer destroy_cnftree(vars_root);
 
     const release = create_cnfnode("releasever");
     cnfnode_setval(release, conf.pszVarReleaseVer);
-    append_node(vars, release);
+    append_node(vars_root, release);
     const arch = create_cnfnode("basearch");
     cnfnode_setval(arch, conf.pszVarBaseArch);
-    append_node(vars, arch);
+    append_node(vars_root, arch);
 
-    const replaced = varsdir.replace_vars(vars, source) orelse {
+    const replaced = varsdir.replace_vars(vars_root, source) orelse {
         common.log(LOG_ERR, "replacing vars in %s failed\n", .{source});
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     };
@@ -1109,6 +1435,255 @@ test "missing install-root os-release uses UNKNOWN without reading host state" {
     defer TDNFFreeConfig(handle.pConf);
     try expectString(handle.pConf.?.pszOSName, "UNKNOWN");
     try expectString(handle.pConf.?.pszOSVersion, "UNKNOWN");
+}
+
+test "pinned config and os-release survive root replacement" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/etc/tdnf");
+    try tmp.dir.createDirPath(std.testing.io, "root/repos");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .data =
+        \\[main]
+        \\gpgcheck=1
+        \\plugins=0
+        \\repodir=/repos
+        \\cachedir=/cache
+        \\persistdir=/persist
+        \\varsdir=
+        \\
+        ,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/os-release",
+        .data = "ID=pinned\nVERSION_ID=1\n",
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const parked = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "parked" },
+    );
+    defer std.testing.allocator.free(parked);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const parked_z = try std.testing.allocator.dupeZ(u8, parked);
+    defer std.testing.allocator.free(parked_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var base_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer base_config.deinit();
+    var pinned = try base_config.cloneWithPinnedInstallRootDeferredRpmDb(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer pinned.deinit();
+
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.rename(root_z.ptr, parked_z.ptr),
+    );
+    try tmp.dir.createDirPath(std.testing.io, "root/etc/tdnf");
+    try tmp.dir.createDirPath(std.testing.io, "root/repos");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .data = "[main]\ngpgcheck=0\nplugins=0\ncachedir=/cache\n",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/os-release",
+        .data = "ID=replacement\nVERSION_ID=9\n",
+    });
+
+    var args = CmdArgs{ .pszInstallRoot = root_z.ptr };
+    var handle = Tdnf{
+        .pArgs = &args,
+        .pRpmConfig = @ptrCast(&pinned),
+    };
+    try testing.expectEqual(
+        @as(u32, 0),
+        TDNFReadConfigPinned(
+            &handle,
+            "/etc/tdnf/tdnf.conf",
+            "main",
+        ),
+    );
+    defer TDNFFreeConfig(handle.pConf);
+    try testing.expectEqual(@as(c_int, 1), handle.pConf.?.nGPGCheck);
+    try expectString(handle.pConf.?.pszOSName, "pinned");
+    try tmp.dir.access(std.testing.io, "parked/cache", .{});
+    try testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(std.testing.io, "root/cache", .{}),
+    );
+}
+
+test "pinned config rejects absolute symlink escapes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/etc/tdnf");
+    try tmp.dir.createDirPath(std.testing.io, "outside");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "outside/tdnf.conf",
+        .data = "[main]\nplugins=0\n",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "outside/os-release",
+        .data = "ID=escaped\nVERSION_ID=9\n",
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const outside_config = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "outside", "tdnf.conf" },
+    );
+    defer std.testing.allocator.free(outside_config);
+    try tmp.dir.symLink(
+        std.testing.io,
+        outside_config,
+        "root/etc/tdnf/tdnf.conf",
+        .{},
+    );
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var base_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer base_config.deinit();
+    var pinned = try base_config.cloneWithPinnedInstallRootDeferredRpmDb(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer pinned.deinit();
+    var args = CmdArgs{ .pszInstallRoot = root_z.ptr };
+    var handle = Tdnf{
+        .pArgs = &args,
+        .pRpmConfig = @ptrCast(&pinned),
+    };
+    try testing.expectEqual(
+        errors.ERROR_TDNF_INVALID_PARAMETER,
+        TDNFReadConfigPinned(
+            &handle,
+            "/etc/tdnf/tdnf.conf",
+            "main",
+        ),
+    );
+    try testing.expect(handle.pConf == null);
+
+    try tmp.dir.deleteFile(std.testing.io, "root/etc/tdnf/tdnf.conf");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .data = "[main]\nplugins=0\ncachedir=/cache\n",
+    });
+    const outside_os = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "outside", "os-release" },
+    );
+    defer std.testing.allocator.free(outside_os);
+    try tmp.dir.symLink(
+        std.testing.io,
+        outside_os,
+        "root/etc/os-release",
+        .{},
+    );
+    try testing.expectEqual(
+        errors.ERROR_TDNF_INVALID_PARAMETER,
+        TDNFReadConfigPinned(
+            &handle,
+            "/etc/tdnf/tdnf.conf",
+            "main",
+        ),
+    );
+    try testing.expect(handle.pConf == null);
+
+    try tmp.dir.deleteFile(std.testing.io, "root/etc/os-release");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/os-release",
+        .data = "ID=safe\nVERSION_ID=1\n",
+    });
+    try tmp.dir.createDirPath(std.testing.io, "outside/cache");
+    const outside_cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "outside", "cache" },
+    );
+    defer std.testing.allocator.free(outside_cache);
+    try tmp.dir.symLink(
+        std.testing.io,
+        outside_cache,
+        "root/cache",
+        .{},
+    );
+    try testing.expectEqual(
+        errors.ERROR_TDNF_INVALID_PARAMETER,
+        TDNFReadConfigPinned(
+            &handle,
+            "/etc/tdnf/tdnf.conf",
+            "main",
+        ),
+    );
+    try testing.expect(handle.pConf == null);
+
+    try tmp.dir.deleteFile(std.testing.io, "root/cache");
+    try tmp.dir.createDirPath(std.testing.io, "root/cache");
+    try tmp.dir.createDirPath(std.testing.io, "outside/repos");
+    const outside_repos = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "outside", "repos" },
+    );
+    defer std.testing.allocator.free(outside_repos);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .data = "[main]\nplugins=0\ncachedir=/cache\nrepodir=/repos\n",
+    });
+    try tmp.dir.symLink(
+        std.testing.io,
+        outside_repos,
+        "root/repos",
+        .{},
+    );
+    try testing.expectEqual(
+        errors.ERROR_TDNF_INVALID_PARAMETER,
+        TDNFReadConfigPinned(
+            &handle,
+            "/etc/tdnf/tdnf.conf",
+            "main",
+        ),
+    );
+    try testing.expect(handle.pConf == null);
 }
 
 test "missing files, invalid parameters, and invalid tsflags reset handle output" {

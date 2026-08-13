@@ -11,6 +11,7 @@ const abi = @import("client_abi");
 const download = @import("client_download");
 const errors = @import("tdnf_error");
 const repoutils = @import("repoutils.zig");
+const txn_config = @import("rpm_txn_config");
 const uri_sanitize = @import("uri_sanitize");
 
 const CmdArgs = abi.CmdArgs;
@@ -40,7 +41,6 @@ const libc = struct {
     extern fn fsync(c_int) c_int;
     extern fn isatty(c_int) c_int;
     extern fn renameat(c_int, [*:0]const u8, c_int, [*:0]const u8) c_int;
-    extern fn realpath([*:0]const u8, [*c]u8) [*c]u8;
     extern fn time(?*std.c.time_t) std.c.time_t;
 };
 
@@ -319,6 +319,64 @@ fn openDirectoryComponents(
     return 0;
 }
 
+fn openConfiguredCacheRoot(
+    handle: *Tdnf,
+    create: bool,
+    output: *c_int,
+) u32 {
+    const conf = handle.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const cache_z = cString(conf.pszCacheDir) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const cache = std.mem.span(cache_z);
+    if (handle.pRpmConfig) |raw| {
+        const config: *const txn_config.TxnConfig =
+            @ptrCast(@alignCast(raw));
+        if (config.cacheDirUsesPinnedRoot(cache)) {
+            output.* = std.c.fcntl(
+                config.pinnedCacheDirFd().?,
+                std.c.F.DUPFD_CLOEXEC,
+                @as(c_int, 0),
+            );
+            if (output.* < 0) return systemError(errnoValue());
+            return 0;
+        }
+    }
+    return openDirectoryPathTrusted(cache, create, output);
+}
+
+fn openConfiguredCachePath(
+    handle: *Tdnf,
+    path: []const u8,
+    create: bool,
+    output: *c_int,
+) u32 {
+    const conf = handle.pConf orelse
+        return openDirectoryPathTrusted(path, create, output);
+    const cache_z = cString(conf.pszCacheDir) orelse
+        return openDirectoryPathTrusted(path, create, output);
+    const cache = std.mem.trimEnd(u8, std.mem.span(cache_z), "/");
+    const exact = std.mem.eql(u8, path, cache);
+    const nested = path.len > cache.len and
+        std.mem.startsWith(u8, path, cache) and path[cache.len] == '/';
+    if (!exact and !nested)
+        return openDirectoryPathTrusted(path, create, output);
+
+    var root_fd: c_int = -1;
+    const result = openConfiguredCacheRoot(handle, create, &root_fd);
+    if (result != 0) return result;
+    if (exact) {
+        output.* = root_fd;
+        return 0;
+    }
+    defer _ = c.close(root_fd);
+    return openDirectoryComponents(
+        root_fd,
+        path[cache.len + 1 ..],
+        create,
+        output,
+    );
+}
+
 fn pinParent(path: []const u8, create: bool, output: *PinnedParent) u32 {
     if (path.len == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
     var end = path.len;
@@ -374,7 +432,7 @@ fn pinParentUnderTrustedRoot(
     }
 
     var root_fd: c_int = -1;
-    var result = openDirectoryPathTrusted(root, create, &root_fd);
+    var result = openConfiguredCacheRoot(handle, create, &root_fd);
     if (result != 0) return result;
     defer _ = c.close(root_fd);
 
@@ -386,24 +444,6 @@ fn pinParentUnderTrustedRoot(
     @memcpy(output.name[0..filename.len], filename);
     output.name[filename.len] = 0;
     return 0;
-}
-
-fn normalizePinnedDirectory(
-    fd: c_int,
-    allocator: Allocator,
-) ![]u8 {
-    const proc_path = try std.fmt.allocPrintSentinel(
-        allocator,
-        "/proc/self/fd/{d}",
-        .{fd},
-        0,
-    );
-    defer allocator.free(proc_path);
-    var resolved: [std.fs.max_path_bytes]u8 = undefined;
-    if (libc.realpath(proc_path, @ptrCast(&resolved)) == null) {
-        return error.InvalidPath;
-    }
-    return allocator.dupe(u8, std.mem.sliceTo(&resolved, 0));
 }
 
 fn remotePath(location: []const u8, allocator: Allocator) ![]u8 {
@@ -418,8 +458,15 @@ fn remotePath(location: []const u8, allocator: Allocator) ![]u8 {
         return error.InvalidUrl;
     }
     if (uri.path.percent_encoded.len == 0) return error.InvalidUrl;
-    const path = try allocator.dupe(u8, uri.path.percent_encoded);
-    return std.Uri.percentDecodeInPlace(path);
+    const encoded = try allocator.dupe(u8, uri.path.percent_encoded);
+    const decoded = std.Uri.percentDecodeInPlace(encoded);
+    if (decoded.len == encoded.len) return encoded;
+    const path = allocator.dupe(u8, decoded) catch |err| {
+        allocator.free(encoded);
+        return err;
+    };
+    allocator.free(encoded);
+    return path;
 }
 
 fn safeRelativePath(path: []const u8, allocator: Allocator) ![]u8 {
@@ -534,42 +581,62 @@ fn prepareDownloadRequest(
     handle: *Tdnf,
     repo: *RepoData,
     url: [*:0]const u8,
-    destination: [*:0]const u8,
     progress_text: ?[*:0]const u8,
-    request: *download.TDNF_ZIG_DOWNLOAD_REQUEST,
+    request: *download.DownloadToFdRequest,
     no_output: *bool,
 ) u32 {
     const args = handle.pArgs orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const conf = handle.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const connect_timeout = std.math.cast(u32, conf.nConnectTimeout) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const timeout = std.math.cast(u32, repo.nTimeout) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const minrate = std.math.cast(u64, repo.nMinrate) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const throttle = std.math.cast(u64, repo.nThrottle) orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
     request.* = .{
-        .pszUrl = url,
-        .pszDestination = destination,
-        .pfnProgress = null,
-        .pProgressData = null,
-        .pszUserAgent = cString(conf.pszUserAgentHeader),
-        .pszProxy = cString(conf.pszProxy),
-        .pszProxyUserPwd = cString(conf.pszProxyUserPass),
-        .pszUserName = cString(repo.pszUser),
-        .pszPassword = cString(repo.pszPass),
-        .pszSSLCaCert = cString(repo.pszSSLCaCert),
-        .pszSSLClientCert = cString(repo.pszSSLClientCert),
-        .pszSSLClientKey = cString(repo.pszSSLClientKey),
-        .nSSLVerify = if (repo.nSSLVerify != 0) 1 else 0,
-        .nConnectTimeout = conf.nConnectTimeout,
-        .nTimeout = repo.nTimeout,
-        .nLowSpeedLimit = repo.nMinrate,
-        .nLowSpeedTime = repo.nTimeout,
-        .nMaxRecvSpeed = repo.nThrottle,
+        .url = std.mem.span(url),
+        .user_agent = optionalSpan(conf.pszUserAgentHeader),
+        .proxy_url = optionalSpan(conf.pszProxy),
+        .proxy_userpwd = optionalSpan(conf.pszProxyUserPass),
+        .username = optionalSpan(repo.pszUser),
+        .password = optionalSpan(repo.pszPass),
+        .ca_cert = optionalSpan(repo.pszSSLCaCert),
+        .client_cert = optionalSpan(repo.pszSSLClientCert),
+        .client_key = optionalSpan(repo.pszSSLClientKey),
+        .ssl_verify = repo.nSSLVerify != 0,
+        .connect_timeout_secs = connect_timeout,
+        .total_timeout_secs = timeout,
+        .low_speed_limit = minrate,
+        .low_speed_time_secs = timeout,
+        .max_recv_speed = throttle,
     };
     no_output.* = true;
     if (args.nQuiet == 0 and progress_text != null and
         (libc.isatty(1) != 0 or args.nVerbose != 0))
     {
-        request.pfnProgress = progressCallback;
-        request.pProgressData = setProgressData(std.mem.span(progress_text.?));
+        request.progress_fn = progressCallback;
+        request.progress_data = setProgressData(std.mem.span(progress_text.?));
         no_output.* = false;
     }
     return 0;
+}
+
+fn optionalSpan(value: [*c]u8) ?[]const u8 {
+    return if (cString(value)) |text| std.mem.span(text) else null;
+}
+
+fn mapDownloadError(err: anyerror) u32 {
+    return switch (err) {
+        error.UnsupportedConfiguration => errors.ERROR_TDNF_CALL_NOT_SUPPORTED,
+        error.InvalidUrl, error.HttpsRequired => errors.ERROR_TDNF_URL_INVALID,
+        error.TlsConfiguration => errors.ERROR_TDNF_SET_SSL_SETTINGS,
+        error.Timeout, error.LowSpeedLimit => errors.ERROR_TDNF_TIMED_OUT,
+        error.OperationAborted => errors.ERROR_TDNF_OPERATION_ABORTED,
+        error.OutOfMemory => errors.ERROR_TDNF_OUT_OF_MEMORY,
+        else => errors.ERROR_TDNF_REPO_PERFORM,
+    };
 }
 
 fn downloadToPinnedParent(
@@ -591,60 +658,85 @@ fn downloadToPinnedParent(
         .{ std.c.getpid(), sequence },
         0,
     ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
-    const temp_path = std.fmt.allocPrintSentinel(
-        allocator,
-        "/proc/self/fd/{d}/{s}",
-        .{ parent.fd, temp_name },
-        0,
-    ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer _ = c.unlinkat(parent.fd, temp_name, 0);
+    const temp_fd = std.c.openat(parent.fd, temp_name, .{
+        .ACCMODE = .RDWR,
+        .CREAT = true,
+        .EXCL = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    }, @as(std.c.mode_t, 0o600));
+    if (temp_fd < 0) return systemError(errnoValue());
+    defer _ = c.close(temp_fd);
 
-    var request: download.TDNF_ZIG_DOWNLOAD_REQUEST = undefined;
+    var request: download.DownloadToFdRequest = undefined;
     var no_output = true;
     var result = prepareDownloadRequest(
         handle,
         repo,
         url,
-        temp_path,
         progress_text,
         &request,
         &no_output,
     );
     if (result != 0) return result;
-    if (require_https) request.nSSLVerify = 1;
+    if (require_https) {
+        const uri = std.Uri.parse(request.url) catch
+            return errors.ERROR_TDNF_URL_INVALID;
+        if (!std.ascii.eqlIgnoreCase(uri.scheme, "https"))
+            return errors.ERROR_TDNF_URL_INVALID;
+        request.ssl_verify = true;
+    }
 
     var attempt: c_int = 0;
+    var io_state: std.Io.Threaded = .init(std.heap.c_allocator, .{});
+    defer io_state.deinit();
+    const io = io_state.io();
     while (attempt <= repo.nRetries) : (attempt += 1) {
         if (attempt > 0 and !builtin.is_test) {
             common.log(LOG_INFO, "retrying %d/%d\n", .{ attempt, repo.nRetries });
         }
-        var status: c_long = 0;
-        result = if (require_https)
-            download.client_download_https_only(&request, &status)
-        else
-            download.TDNFZigDownloadFile(&request, &status);
-        if (result == 0) break;
+        if (std.c.ftruncate(temp_fd, 0) != 0 or
+            std.c.lseek(temp_fd, 0, 0) < 0)
+        {
+            return systemError(errnoValue());
+        }
+        const status_value = download.client_download_to_fd(
+            std.heap.c_allocator,
+            io,
+            request,
+            temp_fd,
+        ) catch |err| {
+            result = mapDownloadError(err);
+            if (attempt == repo.nRetries or downloadErrorIsFatal(result, 0)) {
+                const safe_url = uri_sanitize.redactAlloc(
+                    allocator,
+                    std.mem.span(url),
+                ) catch "download URL";
+                if (!builtin.is_test) common.log(
+                    LOG_ERR,
+                    "Error: failed to download %.*s: error %u\n",
+                    .{
+                        @as(c_int, @intCast(safe_url.len)),
+                        safe_url.ptr,
+                        result,
+                    },
+                );
+                return result;
+            }
+            continue;
+        };
+        const status: c_long = @intCast(status_value);
+        if (status < 400) break;
 
         const safe_url = uri_sanitize.redactAlloc(allocator, std.mem.span(url)) catch "download URL";
         if (status >= 400) {
             if (!builtin.is_test) common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
-            return result;
+            return errors.ERROR_TDNF_REPO_PERFORM;
         }
-        if (attempt == repo.nRetries or downloadErrorIsFatal(result, status)) {
-            if (!builtin.is_test) common.log(LOG_ERR, "Error: failed to download %.*s: %s\n", .{ @as(c_int, @intCast(safe_url.len)), safe_url.ptr, download.TDNFZigDownloadLastError() });
-            return result;
-        }
-        _ = c.unlinkat(parent.fd, temp_name, 0);
     }
 
     if (!no_output and !builtin.is_test) common.log(LOG_INFO, "\n", .{});
-    const temp_fd = std.c.openat(parent.fd, temp_name, .{
-        .ACCMODE = .RDONLY,
-        .CLOEXEC = true,
-        .NOFOLLOW = true,
-    });
-    if (temp_fd < 0) return systemError(errnoValue());
-    defer _ = c.close(temp_fd);
     if (libc.fchmod(temp_fd, 0o644) != 0) return systemError(errnoValue());
     if (libc.fsync(temp_fd) != 0) return systemError(errnoValue());
     if (libc.renameat(parent.fd, temp_name, parent.fd, parent.nameZ()) != 0) {
@@ -885,11 +977,8 @@ pub export fn TDNFDownloadPackageToCache(
     defer freeCString(cache_path);
 
     var root_fd: c_int = -1;
-    result = openDirectoryPathTrusted(
-        std.mem.span(configured_cache),
-        true,
-        &root_fd,
-    );
+    _ = configured_cache;
+    result = openConfiguredCacheRoot(handle, true, &root_fd);
     if (result != 0) return result;
     defer _ = c.close(root_fd);
 
@@ -904,20 +993,13 @@ pub export fn TDNFDownloadPackageToCache(
     result = openDirectoryComponents(root_fd, prefix, true, &rpm_fd);
     if (result != 0) return result;
     defer _ = c.close(rpm_fd);
-    const normalized_rpm = normalizePinnedDirectory(
-        rpm_fd,
-        arena_state.allocator(),
-    ) catch |err| return if (err == error.OutOfMemory)
-        errors.ERROR_TDNF_OUT_OF_MEMORY
-    else
-        systemError(errnoValue());
     return downloadPackageToTreeAt(
         handle,
         location,
         package_name,
         repo,
         rpm_fd,
-        normalized_rpm,
+        std.mem.span(cache_path.?),
         out,
     );
 }
@@ -999,23 +1081,21 @@ pub export fn TDNFDownloadPackageToTree(
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena_state.deinit();
     var cache_root_fd: c_int = -1;
-    const result = openDirectoryPathTrusted(cache_path, true, &cache_root_fd);
+    const result = openConfiguredCachePath(
+        handle,
+        cache_path,
+        true,
+        &cache_root_fd,
+    );
     if (result != 0) return result;
     defer _ = c.close(cache_root_fd);
-    const normalized_cache = normalizePinnedDirectory(
-        cache_root_fd,
-        arena_state.allocator(),
-    ) catch |err| return if (err == error.OutOfMemory)
-        errors.ERROR_TDNF_OUT_OF_MEMORY
-    else
-        systemError(errnoValue());
     return downloadPackageToTreeAt(
         handle,
         location,
         package_name,
         repo,
         cache_root_fd,
-        normalized_cache,
+        cache_path,
         out,
     );
 }
@@ -1057,7 +1137,12 @@ pub export fn TDNFDownloadPackageToDirectory(
     defer if (out.* == null) freeCString(allocated_path);
 
     var directory_fd: c_int = -1;
-    result = openDirectoryPathTrusted(std.mem.span(directory), false, &directory_fd);
+    result = openConfiguredCachePath(
+        handle,
+        std.mem.span(directory),
+        false,
+        &directory_fd,
+    );
     if (result != 0) return result;
     defer _ = c.close(directory_fd);
 
@@ -1445,7 +1530,7 @@ test "configured cache and download root symlinks are resolved once" {
     try std.testing.expect(std.mem.startsWith(
         u8,
         std.mem.span(cache_output.?),
-        real_cache,
+        cache_link,
     ));
 
     const metadata_dest = try std.fs.path.join(

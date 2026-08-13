@@ -30,6 +30,7 @@ pub const RepositoryInput = struct {
     /// Directory holding the repository's downloaded metadata. Empty when
     /// `rpm_directory` is set, because such a repository has no metadata.
     cache_dir: []const u8,
+    cache_dir_fd: ?c_int = null,
     /// Directory of `.rpm` files backing the repository, as `--repofromdir`
     /// declares. Null for an ordinary metadata-backed repository.
     rpm_directory: ?[]const u8 = null,
@@ -289,7 +290,9 @@ pub fn prepare(
         }
         if (repository.rpm_directory) |directory| {
             if (directory.len == 0) return error.InvalidInput;
-        } else if (repository.cache_dir.len == 0) {
+        } else if (repository.cache_dir.len == 0 and
+            repository.cache_dir_fd == null)
+        {
             return error.InvalidInput;
         }
         if (repository.snapshot_file != null and
@@ -306,6 +309,16 @@ pub fn prepare(
             // Package order decides which problem the solver reports, so a
             // sorted walk here answered differently than the plan did (#266).
             try directory_repository.loadModelOrdered(arena, directory, .read)
+        else if (repository.cache_dir_fd) |fd|
+            (try available_loader.loadCacheModelWithRepomdFd(
+                arena,
+                fd,
+                .{
+                    .include_filelists = true,
+                    .include_updateinfo = false,
+                    .include_other = false,
+                },
+            )).repository
         else
             try available_loader.loadCacheModel(
                 arena,

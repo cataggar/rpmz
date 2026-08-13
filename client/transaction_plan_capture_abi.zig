@@ -377,6 +377,7 @@ pub const IntegrationRepository = extern struct {
     cache_dir: ?[*:0]const u8 = null,
     priority: i32 = 0,
     cost: u32 = 0,
+    cache_dir_fd: c_int = -1,
 };
 
 pub const IntegrationEnvironment = extern struct {

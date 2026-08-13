@@ -247,13 +247,18 @@ pub const Writer = struct {
         if (config.pinnedInstallRootFd() != null and
             config.pinnedRpmDbMainFd() == null)
         {
-            const main_fd = writer.connection.duplicateMainFd() catch {
+            var main_pin = writer.connection.pinMainFd() catch {
                 return error.SyscallFailed;
             };
-            defer _ = sysc.close(main_fd);
-            @constCast(config).adoptPinnedRpmDbMainFd(main_fd) catch {
+            errdefer main_pin.deinit();
+            @constCast(config).adoptPinnedRpmDbMainLease(
+                main_pin.fd,
+                main_pin.database,
+                confined_sqlite.MainFdPin.releaseOpaque,
+            ) catch {
                 return error.UnsafePath;
             };
+            main_pin.disown();
         }
         return writer;
     }

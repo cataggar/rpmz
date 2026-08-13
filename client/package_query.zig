@@ -163,8 +163,45 @@ fn freeRepoInputs(
     for (values[0..count]) |*repo| {
         free(repo.pszCacheDir);
         repo.pszCacheDir = null;
+        if (repo.nCacheDirFd >= 0) {
+            _ = std.c.close(repo.nCacheDirFd);
+            repo.nCacheDirFd = -1;
+        }
     }
     free(values);
+}
+
+fn openRepositoryCacheFd(
+    context: *const package_context.Context,
+    repo: *const abi.RepoData,
+) c_int {
+    const root_fd = package_context.cacheDirFd(context) orelse return -1;
+    const raw_name = repo.pszCacheName orelse repo.pszId orelse return -1;
+    const name = std.mem.span(raw_name);
+    if (name.len == 0 or name.len > std.fs.max_name_bytes or
+        std.mem.indexOfScalar(u8, name, '/') != null or
+        std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, ".."))
+    {
+        return -1;
+    }
+    return std.c.openat(root_fd, raw_name, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+}
+
+pub export fn TDNFNativeQueryOpenRepoCacheFd(
+    handle: ?*abi.Tdnf,
+    repo: ?*abi.RepoData,
+) c_int {
+    const tdnf = handle orelse return -1;
+    const context: *package_context.Context = @ptrCast(@alignCast(
+        tdnf.pSack orelse return -1,
+    ));
+    const value = repo orelse return -1;
+    return openRepositoryCacheFd(context, value);
 }
 
 pub export fn TDNFNativeQueryBuildRepoInputs(
@@ -196,6 +233,7 @@ pub export fn TDNFNativeQueryBuildRepoInputs(
         if (!repositoryQueryable(repo)) continue;
         const item = &repos.?[populated];
         item.* = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_REPO_INPUT);
+        item.nCacheDirFd = -1;
         item.pszDirectory = repositoryDirectory(repo);
         if (item.pszDirectory == null) {
             var cache: ?[*:0]u8 = null;
@@ -205,6 +243,12 @@ pub export fn TDNFNativeQueryBuildRepoInputs(
                 return rc;
             }
             item.pszCacheDir = cache;
+            if (tdnf.pSack) |raw_context| {
+                item.nCacheDirFd = openRepositoryCacheFd(
+                    @ptrCast(@alignCast(raw_context)),
+                    repo,
+                );
+            }
         }
         item.pszId = repo.pszId;
         item.pszSnapshotFile = repo.pszSnapshotFile;
@@ -224,6 +268,7 @@ pub export fn TDNFNativeQueryBuildSingleRepoInput(
     const value = repo orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     out.* = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_REPO_INPUT);
+    out.nCacheDirFd = -1;
     var cache: ?[*:0]u8 = null;
     const rc = TDNFGetCachePath(tdnf, value, null, null, &cache);
     if (rc != 0) return rc;
@@ -945,6 +990,7 @@ fn sackRepoInputs(
         if (!repositoryQueryable(owner)) continue;
         const item = &repos.?[populated];
         item.* = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_REPO_INPUT);
+        item.nCacheDirFd = -1;
         item.pszDirectory = repositoryDirectory(owner);
         if (item.pszDirectory == null) {
             const cache_dir = package_context.cacheDir(context) orelse {
@@ -963,6 +1009,7 @@ fn sackRepoInputs(
                 return errors.ERROR_TDNF_OUT_OF_MEMORY;
             };
             item.pszCacheDir = path.ptr;
+            item.nCacheDirFd = openRepositoryCacheFd(context, owner);
         }
         item.pszId = owner.pszId;
         item.pszSnapshotFile = owner.pszSnapshotFile;
@@ -1595,6 +1642,30 @@ pub export fn TDNFGetAvailableCacheBytes(
     out.* = @as(u64, @intCast(stat.f_bsize)) *
         @as(u64, @intCast(stat.f_bavail));
     return 0;
+}
+
+pub export fn TDNFGetAvailableCacheBytesHandle(
+    handle: ?*abi.Tdnf,
+    output: ?*u64,
+) u32 {
+    if (output) |slot| slot.* = 0;
+    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (tdnf.pSack) |raw_context| {
+        const context: *const package_context.Context =
+            @ptrCast(@alignCast(raw_context));
+        if (package_context.cacheDirFd(context)) |fd| {
+            var stat: libc.struct_statfs = undefined;
+            if (libc.fstatfs(fd, &stat) != 0) {
+                const errno_value = std.posix.errno(-1);
+                return errors.fromErrno(errno_value);
+            }
+            out.* = @as(u64, @intCast(stat.f_bsize)) *
+                @as(u64, @intCast(stat.f_bavail));
+            return 0;
+        }
+    }
+    return TDNFGetAvailableCacheBytes(tdnf.pConf, out);
 }
 
 fn addDownloadSizes(head: c.PTDNF_PKG_INFO, total: *u64, available: u64) bool {

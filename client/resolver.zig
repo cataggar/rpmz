@@ -777,11 +777,15 @@ const Scratch = struct {
         );
 
         body.clearRetainingCapacity();
+        var minversions = IniWriter{
+            .allocator = self.allocator,
+            .body = &body,
+        };
         for (input.policy.min_versions) |constraint| {
-            appendFmt(self.allocator, &body, "{s}={s}\n", .{
+            try minversions.line(error.InvalidPolicy, "{s}={s}", .{
                 constraint.name,
                 constraint.evr,
-            }) catch return error.OutOfMemory;
+            });
         }
         try self.write("minversions.d/policy.conf", body.items);
 
@@ -805,9 +809,12 @@ const Scratch = struct {
     ) ResolveError!void {
         var body: std.ArrayList(u8) = .empty;
         defer body.deinit(self.allocator);
+        var writer = IniWriter{
+            .allocator = self.allocator,
+            .body = &body,
+        };
         for (names) |name| {
-            appendFmt(self.allocator, &body, "{s}\n", .{name}) catch
-                return error.OutOfMemory;
+            try writer.line(error.InvalidPolicy, "{s}", .{name});
         }
         try self.write(relative, body.items);
     }
@@ -817,35 +824,50 @@ const Scratch = struct {
         body: *std.ArrayList(u8),
         input: ResolveInput,
     ) ResolveError!void {
-        const allocator = self.allocator;
-        appendFmt(allocator, body,
-            \\[main]
-            \\gpgcheck=0
-            \\plugins=0
-            \\installonly_limit={d}
-            \\clean_requirements_on_remove={d}
-            \\distrosync_reinstall_changed=0
-            \\repodir={s}/{s}/repos
-            \\cachedir={s}
-            \\persistdir={s}/{s}/persist
-            \\varsdir=
-            \\
-        , .{
+        var writer = IniWriter{
+            .allocator = self.allocator,
+            .body = body,
+        };
+        try writer.section(error.InvalidPath, "main");
+        try writer.line(error.InvalidPath, "gpgcheck=0", .{});
+        try writer.line(error.InvalidPath, "plugins=0", .{});
+        try writer.line(error.InvalidPolicy, "installonly_limit={d}", .{
             input.policy.installonly_limit,
-            @intFromBool(input.policy.clean_requirements_on_remove),
+        });
+        try writer.line(
+            error.InvalidPolicy,
+            "clean_requirements_on_remove={d}",
+            .{
+                @intFromBool(input.policy.clean_requirements_on_remove),
+            },
+        );
+        try writer.line(
+            error.InvalidPath,
+            "distrosync_reinstall_changed=0",
+            .{},
+        );
+        try writer.line(error.InvalidPath, "repodir={s}/{s}/repos", .{
             self.rootPath(),
             self.name,
+        });
+        try writer.line(error.InvalidPath, "cachedir={s}", .{
             input.cache_dir,
+        });
+        try writer.line(error.InvalidPath, "persistdir={s}/{s}/persist", .{
             self.rootPath(),
             self.name,
-        }) catch return error.OutOfMemory;
+        });
+        try writer.line(error.InvalidPath, "varsdir=", .{});
+        try writer.blank(error.InvalidPath);
         for (input.policy.excludes) |value| {
-            appendFmt(allocator, body, "excludepkgs={s}\n", .{value}) catch
-                return error.OutOfMemory;
+            try writer.line(error.InvalidPolicy, "excludepkgs={s}", .{value});
         }
         for (input.policy.installonly_names) |value| {
-            appendFmt(allocator, body, "installonlypkgs={s}\n", .{value}) catch
-                return error.OutOfMemory;
+            try writer.line(
+                error.InvalidPolicy,
+                "installonlypkgs={s}",
+                .{value},
+            );
         }
     }
 
@@ -860,64 +882,130 @@ const Scratch = struct {
         body: *std.ArrayList(u8),
         repository: Repository,
     ) ResolveError!void {
-        const allocator = self.allocator;
-        appendFmt(allocator, body,
-            \\[{s}]
-            \\name={s}
-            \\enabled=1
-            \\priority={d}
-            \\gpgcheck={d}
-            \\skip_if_unavailable={d}
-            \\
-        , .{
-            repository.id,
-            repository.id,
+        var writer = IniWriter{
+            .allocator = self.allocator,
+            .body = body,
+        };
+        try writer.section(error.InvalidRepository, repository.id);
+        try writer.line(
+            error.InvalidRepository,
+            "name={s}",
+            .{repository.id},
+        );
+        try writer.line(error.InvalidRepository, "enabled=1", .{});
+        try writer.line(error.InvalidRepository, "priority={d}", .{
             repository.priority,
+        });
+        try writer.line(error.InvalidRepository, "gpgcheck={d}", .{
             @intFromBool(repository.gpg_check),
-            @intFromBool(repository.skip_if_unavailable),
-        }) catch return error.OutOfMemory;
+        });
+        try writer.line(
+            error.InvalidRepository,
+            "skip_if_unavailable={d}",
+            .{@intFromBool(repository.skip_if_unavailable)},
+        );
 
         switch (repository.metadata) {
             .local_snapshot => |path| {
                 // A local snapshot is already the caller's chosen state, so it
                 // must never expire and be silently refetched.
-                appendFmt(allocator, body,
-                    \\baseurl=file://{s}
-                    \\metadata_expire=never
-                    \\sslverify=1
-                    \\
-                , .{path}) catch return error.OutOfMemory;
+                const uri = fileUriAlloc(self.allocator, path) catch
+                    return error.OutOfMemory;
+                defer self.allocator.free(uri);
+                try writer.line(
+                    error.InvalidRepository,
+                    "baseurl={s}",
+                    .{uri},
+                );
+                try writer.line(
+                    error.InvalidRepository,
+                    "metadata_expire=never",
+                    .{},
+                );
+                try writer.line(error.InvalidRepository, "sslverify=1", .{});
             },
             .remote => |remote| {
                 for (remote.base_urls) |url| {
-                    appendFmt(allocator, body, "baseurl={s}\n", .{url}) catch
-                        return error.OutOfMemory;
+                    try writer.line(
+                        error.InvalidRepository,
+                        "baseurl={s}",
+                        .{url},
+                    );
                 }
                 if (remote.metalink) |url| {
-                    appendFmt(allocator, body, "metalink={s}\n", .{url}) catch
-                        return error.OutOfMemory;
+                    try writer.line(
+                        error.InvalidRepository,
+                        "metalink={s}",
+                        .{url},
+                    );
                 }
-                appendFmt(allocator, body, "sslverify={d}\n", .{
+                try writer.line(error.InvalidRepository, "sslverify={d}", .{
                     @intFromBool(remote.ssl_verify),
-                }) catch return error.OutOfMemory;
+                });
             },
         }
         for (repository.gpg_keys) |key| {
-            appendFmt(allocator, body, "gpgkey={s}\n", .{key}) catch
-                return error.OutOfMemory;
+            try writer.line(error.InvalidRepository, "gpgkey={s}", .{key});
         }
     }
 };
 
-fn appendFmt(
+const max_ini_line_content = 1021;
+
+const IniWriter = struct {
     allocator: Allocator,
     body: *std.ArrayList(u8),
-    comptime format: []const u8,
-    arguments: anytype,
-) Allocator.Error!void {
-    const rendered = try std.fmt.allocPrint(allocator, format, arguments);
-    defer allocator.free(rendered);
-    try body.appendSlice(allocator, rendered);
+
+    fn line(
+        self: *IniWriter,
+        invalid: ResolveError,
+        comptime format: []const u8,
+        arguments: anytype,
+    ) ResolveError!void {
+        const rendered = std.fmt.allocPrint(
+            self.allocator,
+            format,
+            arguments,
+        ) catch return error.OutOfMemory;
+        defer self.allocator.free(rendered);
+        if (rendered.len > max_ini_line_content or hasUnsafeControl(rendered))
+            return invalid;
+        self.body.appendSlice(self.allocator, rendered) catch
+            return error.OutOfMemory;
+        self.body.append(self.allocator, '\n') catch
+            return error.OutOfMemory;
+    }
+
+    fn section(
+        self: *IniWriter,
+        invalid: ResolveError,
+        name: []const u8,
+    ) ResolveError!void {
+        try self.line(invalid, "[{s}]", .{name});
+    }
+
+    fn blank(self: *IniWriter, invalid: ResolveError) ResolveError!void {
+        try self.line(invalid, "", .{});
+    }
+};
+
+fn fileUriAlloc(allocator: Allocator, path: []const u8) Allocator.Error![]u8 {
+    const hex = "0123456789ABCDEF";
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+    try output.appendSlice(allocator, "file://");
+    for (path) |byte| {
+        if (byte == '/' or std.ascii.isAlphanumeric(byte) or
+            byte == '-' or byte == '.' or byte == '_' or byte == '~')
+        {
+            try output.append(allocator, byte);
+        } else {
+            try output.append(allocator, '%');
+            try output.append(allocator, hex[byte >> 4]);
+            try output.append(allocator, hex[byte & 0x0f]);
+        }
+    }
+    return output.toOwnedSlice(allocator);
 }
 
 const testing = std.testing;
@@ -1164,6 +1252,174 @@ test "resolver: generated configuration rejects control-byte injection" {
         "file:///keys/repo.gpg\nbaseurl=https://example.invalid/evil",
     };
     try testing.expectError(error.InvalidRepository, validate(input));
+}
+
+test "resolver: every generated physical INI line fits llconf" {
+    var body: std.ArrayList(u8) = .empty;
+    defer body.deinit(testing.allocator);
+    var writer = IniWriter{
+        .allocator = testing.allocator,
+        .body = &body,
+    };
+    var exact: [max_ini_line_content]u8 = undefined;
+    @memset(&exact, 'a');
+    try writer.line(error.InvalidPath, "{s}", .{&exact});
+    try testing.expectEqual(max_ini_line_content + 1, body.items.len);
+
+    var overlong: [max_ini_line_content + 1]u8 = undefined;
+    @memset(&overlong, 'b');
+    try testing.expectError(
+        error.InvalidPath,
+        writer.line(error.InvalidPath, "{s}", .{&overlong}),
+    );
+    try testing.expectEqual(max_ini_line_content + 1, body.items.len);
+}
+
+test "resolver: aligned overlong config cannot inject repodir plugins or repos" {
+    const Aligned = struct {
+        fn value(
+            allocator: Allocator,
+            line_prefix: []const u8,
+            value_prefix: []const u8,
+            injected: []const u8,
+        ) ![]u8 {
+            const split_offset = max_ini_line_content + 1;
+            const fixed = line_prefix.len + value_prefix.len;
+            if (fixed >= split_offset) return error.TestUnexpectedResult;
+            const filler_len = split_offset - fixed;
+            const result = try allocator.alloc(
+                u8,
+                value_prefix.len + filler_len + injected.len,
+            );
+            @memcpy(result[0..value_prefix.len], value_prefix);
+            @memset(result[value_prefix.len..][0..filler_len], 'a');
+            @memcpy(result[value_prefix.len + filler_len ..], injected);
+            try testing.expectEqual(
+                split_offset,
+                line_prefix.len + value_prefix.len + filler_len,
+            );
+            return result;
+        }
+    };
+
+    const scratch_root = try Aligned.value(
+        testing.allocator,
+        "repodir=",
+        "/",
+        "plugins=1",
+    );
+    defer testing.allocator.free(scratch_root);
+    const config = try std.fmt.allocPrintSentinel(
+        testing.allocator,
+        "{s}/tdnf-resolve-test/tdnf.conf",
+        .{scratch_root},
+        0,
+    );
+    defer testing.allocator.free(config);
+    var scratch = Scratch{
+        .allocator = testing.allocator,
+        .io = undefined,
+        .parent = undefined,
+        .name = @constCast("tdnf-resolve-test"),
+        .config = config,
+    };
+    var body: std.ArrayList(u8) = .empty;
+    defer body.deinit(testing.allocator);
+    var input = ResolveInput{
+        .operation = .upgrade_all,
+        .installed = .{ .install_root = "/target" },
+        .environment = .{
+            .architecture = "x86_64",
+            .distro = "test",
+            .release_version = "1",
+        },
+        .scratch_dir = "/scratch",
+    };
+    try testing.expectError(
+        error.InvalidPath,
+        scratch.renderConfig(&body, input),
+    );
+
+    const cache = try Aligned.value(
+        testing.allocator,
+        "cachedir=",
+        "/",
+        "repodir=/outside",
+    );
+    defer testing.allocator.free(cache);
+    const normal_config = try testing.allocator.dupeZ(
+        u8,
+        "/scratch/tdnf-resolve-test/tdnf.conf",
+    );
+    defer testing.allocator.free(normal_config);
+    scratch.config = normal_config;
+    input.cache_dir = cache;
+    body.clearRetainingCapacity();
+    try testing.expectError(
+        error.InvalidPath,
+        scratch.renderConfig(&body, input),
+    );
+
+    const remote_url = try Aligned.value(
+        testing.allocator,
+        "baseurl=",
+        "https://example.invalid/",
+        "[injected]",
+    );
+    defer testing.allocator.free(remote_url);
+    const repository = Repository{
+        .id = "base",
+        .metadata = .{ .remote = .{ .base_urls = &.{remote_url} } },
+    };
+    try validateRepository(repository);
+    body.clearRetainingCapacity();
+    try testing.expectError(
+        error.InvalidRepository,
+        scratch.renderRepository(&body, repository),
+    );
+}
+
+test "resolver: local snapshot file URI preserves exact path bytes" {
+    const path =
+        "/snapshot/%2e%2e/a?b#c%d/$releasever/%{name}/space x";
+    const expected =
+        "file:///snapshot/%252e%252e/a%3Fb%23c%25d/" ++
+        "%24releasever/%25%7Bname%7D/space%20x";
+    const uri = try fileUriAlloc(testing.allocator, path);
+    defer testing.allocator.free(uri);
+    try testing.expectEqualStrings(expected, uri);
+    try testing.expect(std.mem.indexOf(u8, uri, "?") == null);
+    try testing.expect(std.mem.indexOf(u8, uri, "#") == null);
+    try testing.expect(std.mem.indexOf(u8, uri, "$") == null);
+    try testing.expect(std.mem.indexOf(u8, uri, "%2e%2e") == null);
+
+    const parsed = try std.Uri.parse(uri);
+    const decoded = try testing.allocator.dupe(
+        u8,
+        parsed.path.percent_encoded,
+    );
+    defer testing.allocator.free(decoded);
+    const round_trip = std.Uri.percentDecodeInPlace(decoded);
+    try testing.expectEqualStrings(path, round_trip);
+
+    var body: std.ArrayList(u8) = .empty;
+    defer body.deinit(testing.allocator);
+    var scratch = Scratch{
+        .allocator = testing.allocator,
+        .io = undefined,
+        .parent = undefined,
+        .name = @constCast("unused"),
+        .config = @constCast("/unused/tdnf.conf"),
+    };
+    try scratch.renderRepository(&body, .{
+        .id = "local",
+        .metadata = .{ .local_snapshot = path },
+    });
+    try testing.expect(std.mem.indexOf(
+        u8,
+        body.items,
+        "baseurl=" ++ expected ++ "\n",
+    ) != null);
 }
 
 test "resolver: every public operation maps onto exactly one service operation" {

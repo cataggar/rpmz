@@ -32,6 +32,11 @@ const RawConnection = extern struct {
     handle: ?*anyopaque,
 };
 
+const RawMainFdPin = extern struct {
+    fd: c_int,
+    database: ?*anyopaque,
+};
+
 extern fn tdnf_sqlite_confined_open_at(
     dir_fd: c_int,
     basename: [*]const u8,
@@ -47,9 +52,30 @@ extern fn tdnf_sqlite_confined_close(
 extern fn tdnf_sqlite_confined_verify(
     connection: *const RawConnection,
 ) callconv(.c) c_int;
-extern fn tdnf_sqlite_confined_duplicate_main_fd(
+extern fn tdnf_sqlite_confined_pin_main_fd(
     connection: *const RawConnection,
-) callconv(.c) c_int;
+) callconv(.c) RawMainFdPin;
+extern fn tdnf_sqlite_confined_release_main_fd_pin(
+    database: ?*anyopaque,
+) callconv(.c) void;
+
+pub const MainFdPin = struct {
+    fd: c_int,
+    database: ?*anyopaque,
+
+    pub fn deinit(self: *MainFdPin) void {
+        releaseOpaque(self.database);
+        self.* = .{ .fd = -1, .database = null };
+    }
+
+    pub fn disown(self: *MainFdPin) void {
+        self.* = .{ .fd = -1, .database = null };
+    }
+
+    pub fn releaseOpaque(database: ?*anyopaque) void {
+        tdnf_sqlite_confined_release_main_fd_pin(database);
+    }
+};
 
 pub const Connection = struct {
     db: ?*c.sqlite3,
@@ -72,11 +98,11 @@ pub const Connection = struct {
         try statusError(tdnf_sqlite_confined_verify(&raw));
     }
 
-    pub fn duplicateMainFd(self: *const Connection) Error!c_int {
+    pub fn pinMainFd(self: *const Connection) Error!MainFdPin {
         const raw = RawConnection{ .db = self.db, .handle = self.handle };
-        const fd = tdnf_sqlite_confined_duplicate_main_fd(&raw);
-        if (fd < 0) return error.SyscallFailed;
-        return fd;
+        const pin = tdnf_sqlite_confined_pin_main_fd(&raw);
+        if (pin.fd < 0 or pin.database == null) return error.SyscallFailed;
+        return .{ .fd = pin.fd, .database = pin.database };
     }
 };
 

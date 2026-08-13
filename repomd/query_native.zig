@@ -1801,6 +1801,35 @@ fn loadAvailableDataset(raw_repo: abi.TDNF_REPOMD_NATIVE_REPO_INPUT, options: Av
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
 
+    if (raw_repo.nCacheDirFd >= 0) {
+        const loaded = available_loader.loadCacheModelWithRepomdFd(
+            arena,
+            raw_repo.nCacheDirFd,
+            .{
+                .include_filelists = options.need_filelists,
+                .include_updateinfo = options.need_updateinfo,
+                .include_other = options.need_other,
+            },
+        ) catch |err| {
+            setError(
+                "failed to load repo '{s}' metadata by descriptor: {t}",
+                .{ repo_id, err },
+            );
+            return err;
+        };
+        const snapshot_entries = if (snapshot_file) |path|
+            try parseSnapshotEntries(arena, path)
+        else
+            &[_]SnapshotEntry{};
+        return .{
+            .kind = .available,
+            .repo_id = repo_id,
+            .arena_state = arena_state,
+            .repository = loaded.repository,
+            .snapshot_entries = snapshot_entries,
+        };
+    }
+
     const repomd_path = try std.fs.path.join(arena, &.{ cache_dir, "repodata", "repomd.xml" });
     const repomd_bytes = readSmallFile(arena, repomd_path, 16 * 1024 * 1024) catch |err| {
         setError("failed to read {s}: {t}", .{ repomd_path, err });

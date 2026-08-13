@@ -553,10 +553,10 @@ test "history config stays under pinned root and rejects database symlinks" {
     try std.testing.expect(
         (std.c.fcntl(db.dir_fd, std.c.F.GETFD) & std.c.FD_CLOEXEC) != 0,
     );
-    const main_fd = try db.connection.?.duplicateMainFd();
-    defer _ = std.c.close(main_fd);
+    var main_pin = try db.connection.?.pinMainFd();
+    defer main_pin.deinit();
     try std.testing.expect(
-        (std.c.fcntl(main_fd, std.c.F.GETFD) & std.c.FD_CLOEXEC) != 0,
+        (std.c.fcntl(main_pin.fd, std.c.F.GETFD) & std.c.FD_CLOEXEC) != 0,
     );
     var timeout_statement: ?*sqlite.c.sqlite3_stmt = null;
     try std.testing.expectEqual(

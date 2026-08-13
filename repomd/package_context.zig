@@ -5,6 +5,10 @@ const cmdline_repository = @import("cmdline_repository.zig");
 const directory_repository = @import("directory_repository.zig");
 const installed_repository = @import("installed_repository.zig");
 const model = @import("model.zig");
+
+extern fn tdnf_rpm_config_duplicate_cache_dir_fd(
+    config: ?*const anyopaque,
+) c_int;
 const rpmpkg = @import("rpmpkg.zig");
 
 const abi = @import("tdnf_internal_abi");
@@ -64,6 +68,7 @@ pub const Repository = struct {
 const Impl = struct {
     allocator: std.mem.Allocator,
     cache_dir: ?[:0]u8,
+    cache_dir_fd: c_int = -1,
     root_dir: ?[:0]u8,
     architecture: [:0]u8,
     repositories: std.ArrayList(*Repository) = .empty,
@@ -78,6 +83,7 @@ const Impl = struct {
         self.repositories.deinit(self.allocator);
         self.package_slots.deinit(self.allocator);
         if (self.cache_dir) |value| self.allocator.free(value);
+        if (self.cache_dir_fd >= 0) _ = std.c.close(self.cache_dir_fd);
         if (self.root_dir) |value| self.allocator.free(value);
         self.allocator.free(self.architecture);
         self.allocator.destroy(self);
@@ -138,6 +144,19 @@ pub fn swap(left: *Context, right: *Context) error{OutOfMemory}!void {
 
 pub fn cacheDir(context: *const Context) ?[*:0]const u8 {
     return if (context.impl.cache_dir) |value| value.ptr else null;
+}
+
+pub fn cacheDirFd(context: *const Context) ?c_int {
+    return if (context.impl.cache_dir_fd >= 0)
+        context.impl.cache_dir_fd
+    else
+        null;
+}
+
+pub fn adoptCacheDirFd(context: *Context, fd: c_int) void {
+    if (context.impl.cache_dir_fd >= 0)
+        _ = std.c.close(context.impl.cache_dir_fd);
+    context.impl.cache_dir_fd = fd;
 }
 
 pub fn rootDir(context: *const Context) ?[*:0]const u8 {
@@ -232,6 +251,60 @@ pub fn loadAvailableMetadata(
         try available_loader.loadModelWithRepomd(arena, paths)
     else
         try available_loader.loadLegacyModelWithRepomd(arena, paths);
+    return finishAvailableMetadata(
+        context,
+        arena_state,
+        id,
+        owner,
+        priority,
+        loaded,
+        .{
+            .include_filelists = paths.filelists != null,
+            .include_updateinfo = paths.updateinfo != null,
+            .include_other = paths.other != null,
+        },
+    );
+}
+
+pub fn loadAvailableMetadataFds(
+    context: *Context,
+    id: []const u8,
+    owner: ?*anyopaque,
+    priority: i32,
+    paths: available_loader.FdPaths,
+    verify_integrity: bool,
+) available_loader.LoadError!*Repository {
+    var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
+    errdefer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const loaded = if (verify_integrity)
+        try available_loader.loadModelWithRepomdFds(arena, paths)
+    else
+        try available_loader.loadLegacyModelWithRepomdFds(arena, paths);
+    return finishAvailableMetadata(
+        context,
+        arena_state,
+        id,
+        owner,
+        priority,
+        loaded,
+        .{
+            .include_filelists = paths.filelists != null,
+            .include_updateinfo = paths.updateinfo != null,
+            .include_other = paths.other != null,
+        },
+    );
+}
+
+fn finishAvailableMetadata(
+    context: *Context,
+    arena_state: std.heap.ArenaAllocator,
+    id: []const u8,
+    owner: ?*anyopaque,
+    priority: i32,
+    loaded: available_loader.PathModel,
+    cache_options: available_loader.CacheOptions,
+) available_loader.LoadError!*Repository {
     const repository = try finishAvailable(
         context,
         arena_state,
@@ -240,11 +313,7 @@ pub fn loadAvailableMetadata(
         priority,
         loaded.repository,
     );
-    repository.cache_options = .{
-        .include_filelists = paths.filelists != null,
-        .include_updateinfo = paths.updateinfo != null,
-        .include_other = paths.other != null,
-    };
+    repository.cache_options = cache_options;
     repository.cookie_sha256 = available_loader.solvCacheCookie(
         loaded.repomd_bytes,
         repository.cache_options,
@@ -809,6 +878,10 @@ fn TDNFPackageContextCreate(
         error.RpmDbOpenFailed => abi.ERROR_TDNF_RPMTS_OPENDB_FAILED,
         error.RpmDbReadFailed => abi.ERROR_TDNF_SOLV_IO,
     };
+    if (rpm_config) |config| {
+        const cache_fd = tdnf_rpm_config_duplicate_cache_dir_fd(config);
+        if (cache_fd >= 0) adoptCacheDirFd(context, cache_fd);
+    }
     slot.* = context;
     return 0;
 }

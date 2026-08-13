@@ -1766,7 +1766,14 @@ fn filePathFromUri(allocator: Allocator, uri: Uri) ![]u8 {
     }
     const buffer = try allocator.alloc(u8, uri.path.percent_encoded.len);
     @memcpy(buffer, uri.path.percent_encoded);
-    return Uri.percentDecodeInPlace(buffer);
+    const decoded = Uri.percentDecodeInPlace(buffer);
+    if (decoded.len == buffer.len) return buffer;
+    const path = allocator.dupe(u8, decoded) catch |err| {
+        allocator.free(buffer);
+        return err;
+    };
+    allocator.free(buffer);
+    return path;
 }
 
 fn resolveRedirect(allocator: Allocator, base: Uri, location: []const u8) !Uri {

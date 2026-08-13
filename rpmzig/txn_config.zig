@@ -33,7 +33,16 @@ const MAX_EXPANSION_DEPTH = 32;
 const mode_type_mask: u16 = 0o170000;
 const mode_directory: u16 = 0o040000;
 const mode_regular: u16 = 0o100000;
-const deleted_suffix = " (deleted)";
+const open_directory: u64 = 0x10000;
+const open_cloexec: u64 = 0x80000;
+const resolve_no_magiclinks: u64 = 0x02;
+const resolve_in_root: u64 = 0x10;
+
+const OpenHow = extern struct {
+    flags: u64,
+    mode: u64 = 0,
+    resolve: u64,
+};
 
 pub const Macro = enum {
     dbpath,
@@ -110,6 +119,13 @@ pub const InitError = error{
     InstallRootPinFailed,
     OutOfMemory,
     RpmDbPinFailed,
+};
+
+pub const TargetPathError = error{
+    InvalidTargetPath,
+    NotFound,
+    SyscallFailed,
+    UnsafeTargetPath,
 };
 
 pub const LoadMacrosError = SetMacroError || error{
@@ -219,6 +235,37 @@ fn duplicateFdCloexec(fd: c_int) c_int {
     );
 }
 
+fn openDirectoryInRoot(
+    root_fd: c_int,
+    path: []const u8,
+) TargetPathError!?c_int {
+    if (path.len > std.fs.max_path_bytes) return error.InvalidTargetPath;
+    var path_buffer: [std.fs.max_path_bytes + 1]u8 = undefined;
+    @memcpy(path_buffer[0..path.len], path);
+    path_buffer[path.len] = 0;
+    const how = OpenHow{
+        .flags = open_directory | open_cloexec,
+        .resolve = resolve_in_root | resolve_no_magiclinks,
+    };
+    const rc = std.os.linux.syscall4(
+        .openat2,
+        @intCast(root_fd),
+        @intFromPtr(&path_buffer),
+        @intFromPtr(&how),
+        @sizeOf(OpenHow),
+    );
+    return switch (std.os.linux.errno(rc)) {
+        .SUCCESS => @intCast(rc),
+        .NOSYS => null,
+        .NOENT => error.NotFound,
+        .LOOP, .NOTDIR, .XDEV => error.UnsafeTargetPath,
+        .INVAL, .NAMETOOLONG => error.InvalidTargetPath,
+        else => error.SyscallFailed,
+    };
+}
+
+pub const PinnedFdReleaseFn = *const fn (?*anyopaque) void;
+
 /// Transaction-engine config store backed by explicit defaults plus arbitrary
 /// command-line definitions. Values are expanded lazily so later definitions
 /// affect macros that reference them, matching librpm's macro behavior.
@@ -228,8 +275,15 @@ pub const TxnConfig = struct {
     pinned_install_root_fd: ?c_int = null,
     pinned_rpmdb_dir_fd: ?c_int = null,
     pinned_rpmdb_main_fd: ?c_int = null,
+    pinned_cache_dir_fd: ?c_int = null,
+    pinned_rpmdb_main_release: ?PinnedFdReleaseFn = null,
+    pinned_rpmdb_main_release_context: ?*anyopaque = null,
     rpmdb_pin_finalized: bool = false,
     target_lock_held: bool = false,
+    literal_dbpath: ?[]u8 = null,
+    pinned_repo_dir: ?[]u8 = null,
+    pinned_cache_dir: ?[]u8 = null,
+    pinned_plugin_conf_dir: ?[]u8 = null,
     macros: std.ArrayList(MacroEntry),
 
     /// Initializes a config store rooted at `install_root`. Empty input
@@ -242,8 +296,15 @@ pub const TxnConfig = struct {
             .pinned_install_root_fd = null,
             .pinned_rpmdb_dir_fd = null,
             .pinned_rpmdb_main_fd = null,
+            .pinned_cache_dir_fd = null,
+            .pinned_rpmdb_main_release = null,
+            .pinned_rpmdb_main_release_context = null,
             .rpmdb_pin_finalized = false,
             .target_lock_held = false,
+            .literal_dbpath = null,
+            .pinned_repo_dir = null,
+            .pinned_cache_dir = null,
+            .pinned_plugin_conf_dir = null,
             .macros = .empty,
         };
         errdefer config.deinit();
@@ -273,13 +334,32 @@ pub const TxnConfig = struct {
             self.pinned_install_root_fd = null;
         }
         if (self.pinned_rpmdb_main_fd) |fd| {
-            _ = std.c.close(fd);
+            if (self.pinned_rpmdb_main_release) |release|
+                release(self.pinned_rpmdb_main_release_context)
+            else
+                _ = std.c.close(fd);
             self.pinned_rpmdb_main_fd = null;
+            self.pinned_rpmdb_main_release = null;
+            self.pinned_rpmdb_main_release_context = null;
         }
         if (self.pinned_rpmdb_dir_fd) |fd| {
             _ = std.c.close(fd);
             self.pinned_rpmdb_dir_fd = null;
         }
+        if (self.pinned_cache_dir_fd) |fd| {
+            _ = std.c.close(fd);
+            self.pinned_cache_dir_fd = null;
+        }
+        if (self.literal_dbpath) |literal| {
+            self.allocator.free(literal);
+            self.literal_dbpath = null;
+        }
+        if (self.pinned_repo_dir) |path| self.allocator.free(path);
+        if (self.pinned_cache_dir) |path| self.allocator.free(path);
+        if (self.pinned_plugin_conf_dir) |path| self.allocator.free(path);
+        self.pinned_repo_dir = null;
+        self.pinned_cache_dir = null;
+        self.pinned_plugin_conf_dir = null;
         self.allocator.free(self.install_root);
         for (self.macros.items) |entry| {
             self.allocator.free(entry.name);
@@ -329,6 +409,10 @@ pub const TxnConfig = struct {
         return self.pinned_rpmdb_main_fd;
     }
 
+    pub fn pinnedCacheDirFd(self: *const TxnConfig) ?c_int {
+        return self.pinned_cache_dir_fd;
+    }
+
     pub fn targetLockHeld(self: *const TxnConfig) bool {
         return self.target_lock_held;
     }
@@ -364,6 +448,25 @@ pub const TxnConfig = struct {
         self.pinned_rpmdb_dir_fd = duplicate;
     }
 
+    pub fn adoptPinnedCacheDirFd(
+        self: *TxnConfig,
+        fd: c_int,
+    ) InitError!void {
+        const st = fdStat(fd) orelse return error.InstallRootPinFailed;
+        if ((st.mode & mode_type_mask) != mode_directory)
+            return error.InstallRootPinFailed;
+        if (self.pinned_cache_dir_fd) |current| {
+            const current_st = fdStat(current) orelse
+                return error.InstallRootPinFailed;
+            if (!current_st.identity.eql(st.identity))
+                return error.InstallRootPinFailed;
+            return;
+        }
+        const duplicate = duplicateFdCloexec(fd);
+        if (duplicate < 0) return error.InstallRootPinFailed;
+        self.pinned_cache_dir_fd = duplicate;
+    }
+
     pub fn adoptPinnedRpmDbMainFd(
         self: *TxnConfig,
         fd: c_int,
@@ -382,6 +485,25 @@ pub const TxnConfig = struct {
         const duplicate = duplicateFdCloexec(fd);
         if (duplicate < 0) return error.RpmDbPinFailed;
         self.pinned_rpmdb_main_fd = duplicate;
+        self.pinned_rpmdb_main_release = null;
+        self.pinned_rpmdb_main_release_context = null;
+    }
+
+    pub fn adoptPinnedRpmDbMainLease(
+        self: *TxnConfig,
+        fd: c_int,
+        context: ?*anyopaque,
+        release: PinnedFdReleaseFn,
+    ) InitError!void {
+        const st = fdStat(fd) orelse return error.RpmDbPinFailed;
+        if ((st.mode & mode_type_mask) != mode_regular or st.nlink != 1 or
+            self.pinned_rpmdb_main_fd != null or context == null)
+        {
+            return error.RpmDbPinFailed;
+        }
+        self.pinned_rpmdb_main_fd = fd;
+        self.pinned_rpmdb_main_release = release;
+        self.pinned_rpmdb_main_release_context = context;
     }
 
     fn cloneWithRoot(
@@ -406,8 +528,15 @@ pub const TxnConfig = struct {
             .pinned_install_root_fd = duplicated_fd,
             .pinned_rpmdb_dir_fd = null,
             .pinned_rpmdb_main_fd = null,
+            .pinned_cache_dir_fd = null,
+            .pinned_rpmdb_main_release = null,
+            .pinned_rpmdb_main_release_context = null,
             .rpmdb_pin_finalized = false,
             .target_lock_held = false,
+            .literal_dbpath = null,
+            .pinned_repo_dir = null,
+            .pinned_cache_dir = null,
+            .pinned_plugin_conf_dir = null,
             .macros = .empty,
         };
         errdefer copy.deinit();
@@ -420,6 +549,27 @@ pub const TxnConfig = struct {
                 };
             };
         }
+        if (self.literal_dbpath) |literal| {
+            copy.setLiteralRpmDbPath(literal) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidMacroName, error.InvalidMacroValue => unreachable,
+            };
+        }
+        if (self.pinned_repo_dir) |path|
+            try copy.setPinnedRepoDir(path);
+        if (self.pinned_cache_dir) |path| {
+            try copy.setPinnedCacheDir(path);
+            if (duplicated_fd != null) {
+                const cache_fd = copy.openPinnedDirectory(
+                    path,
+                    false,
+                ) catch return error.InstallRootPinFailed;
+                defer _ = std.c.close(cache_fd);
+                try copy.adoptPinnedCacheDirFd(cache_fd);
+            }
+        }
+        if (self.pinned_plugin_conf_dir) |path|
+            try copy.setPinnedPluginConfDir(path);
         if (duplicated_fd != null and finalize_rpmdb)
             try copy.finalizeRpmDbPin();
         return copy;
@@ -456,30 +606,25 @@ pub const TxnConfig = struct {
                 }
             }
         }
-        const proc_path = std.fmt.allocPrintSentinel(
-            self.allocator,
-            "/proc/self/fd/{d}/{s}",
-            .{ root_fd, relative },
-            0,
-        ) catch return error.OutOfMemory;
-        defer self.allocator.free(proc_path);
-        const dir_fd = std.c.open(proc_path.ptr, .{
-            .ACCMODE = .RDONLY,
-            .DIRECTORY = true,
-            .CLOEXEC = true,
-        });
-        if (dir_fd < 0) {
-            if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
-                return;
-            return error.RpmDbPinFailed;
-        }
+        _ = root_fd;
+        const normalized = if (expanded.len != 0 and expanded[0] == '/')
+            expanded
+        else
+            std.fmt.allocPrint(
+                self.allocator,
+                "/{s}",
+                .{expanded},
+            ) catch return error.OutOfMemory;
+        defer if (normalized.ptr != expanded.ptr)
+            self.allocator.free(normalized);
+        const dir_fd = self.openPinnedDirectory(
+            normalized,
+            false,
+        ) catch |err| return switch (err) {
+            error.NotFound => return,
+            else => error.RpmDbPinFailed,
+        };
         errdefer _ = std.c.close(dir_fd);
-        const root_path = try resolvedFdPathAlloc(self.allocator, root_fd);
-        defer self.allocator.free(root_path);
-        const dir_path = try resolvedFdPathAlloc(self.allocator, dir_fd);
-        defer self.allocator.free(dir_path);
-        if (!pathIsWithin(root_path, dir_path))
-            return error.RpmDbPinFailed;
 
         const main_fd = std.c.openat(
             dir_fd,
@@ -501,39 +646,6 @@ pub const TxnConfig = struct {
         try self.adoptPinnedRpmDbMainFd(main_fd);
         _ = std.c.close(main_fd);
         self.pinned_rpmdb_dir_fd = dir_fd;
-    }
-
-    fn resolvedFdPathAlloc(
-        allocator: std.mem.Allocator,
-        fd: c_int,
-    ) InitError![]u8 {
-        var proc_buffer: [64]u8 = undefined;
-        const proc_path = std.fmt.bufPrintZ(
-            &proc_buffer,
-            "/proc/self/fd/{d}",
-            .{fd},
-        ) catch return error.RpmDbPinFailed;
-        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const length = std.c.readlink(
-            proc_path.ptr,
-            &path_buffer,
-            path_buffer.len,
-        );
-        if (length <= 0 or length >= path_buffer.len)
-            return error.RpmDbPinFailed;
-        const path = path_buffer[0..@intCast(length)];
-        if (std.mem.endsWith(u8, path, deleted_suffix))
-            return error.RpmDbPinFailed;
-        return allocator.dupe(u8, path) catch error.OutOfMemory;
-    }
-
-    fn pathIsWithin(root: []const u8, candidate: []const u8) bool {
-        if (std.mem.eql(u8, root, "/"))
-            return candidate.len != 0 and candidate[0] == '/';
-        return std.mem.eql(u8, root, candidate) or
-            (candidate.len > root.len and
-                std.mem.startsWith(u8, candidate, root) and
-                candidate[root.len] == '/');
     }
 
     /// Loads the conventional system and per-user declarative macro files.
@@ -566,13 +678,197 @@ pub const TxnConfig = struct {
         return self.install_root;
     }
 
+    pub fn setPinnedRepoDir(
+        self: *TxnConfig,
+        path: []const u8,
+    ) std.mem.Allocator.Error!void {
+        try self.replacePinnedPath(&self.pinned_repo_dir, path);
+    }
+
+    pub fn setPinnedCacheDir(
+        self: *TxnConfig,
+        path: []const u8,
+    ) std.mem.Allocator.Error!void {
+        try self.replacePinnedPath(&self.pinned_cache_dir, path);
+    }
+
+    pub fn setPinnedPluginConfDir(
+        self: *TxnConfig,
+        path: []const u8,
+    ) std.mem.Allocator.Error!void {
+        try self.replacePinnedPath(&self.pinned_plugin_conf_dir, path);
+    }
+
+    pub fn repoDirUsesPinnedRoot(
+        self: *const TxnConfig,
+        path: []const u8,
+    ) bool {
+        return pinnedPathMatches(self.pinned_repo_dir, path);
+    }
+
+    pub fn cacheDirUsesPinnedRoot(
+        self: *const TxnConfig,
+        path: []const u8,
+    ) bool {
+        _ = path;
+        return self.pinned_cache_dir_fd != null;
+    }
+
+    pub fn pluginConfDirUsesPinnedRoot(
+        self: *const TxnConfig,
+        path: []const u8,
+    ) bool {
+        return pinnedPathMatches(self.pinned_plugin_conf_dir, path);
+    }
+
+    fn replacePinnedPath(
+        self: *TxnConfig,
+        slot: *?[]u8,
+        path: []const u8,
+    ) std.mem.Allocator.Error!void {
+        const replacement = try self.allocator.dupe(u8, path);
+        if (slot.*) |old| self.allocator.free(old);
+        slot.* = replacement;
+    }
+
+    fn pinnedPathMatches(stored: ?[]const u8, path: []const u8) bool {
+        return if (stored) |expected|
+            std.mem.eql(u8, expected, path)
+        else
+            false;
+    }
+
+    pub fn openPinnedDirectory(
+        self: *const TxnConfig,
+        raw_path: []const u8,
+        create: bool,
+    ) TargetPathError!c_int {
+        const root_fd = self.pinned_install_root_fd orelse
+            return error.InvalidTargetPath;
+        if (raw_path.len == 0 or raw_path[0] != '/' or
+            std.mem.indexOfScalar(u8, raw_path, 0) != null)
+        {
+            return error.InvalidTargetPath;
+        }
+        const confined = openDirectoryInRoot(
+            root_fd,
+            raw_path,
+        ) catch |err| switch (err) {
+            error.NotFound => null,
+            else => return err,
+        };
+        if (confined) |fd| return fd;
+        var current = duplicateFdCloexec(root_fd);
+        if (current < 0) return error.SyscallFailed;
+        errdefer _ = std.c.close(current);
+        const relative = std.mem.trim(u8, raw_path, "/");
+        if (relative.len == 0) return current;
+
+        var components = std.mem.splitScalar(u8, relative, '/');
+        while (components.next()) |component| {
+            if (component.len == 0 or
+                component.len > std.fs.max_name_bytes or
+                std.mem.eql(u8, component, ".") or
+                std.mem.eql(u8, component, ".."))
+            {
+                return error.InvalidTargetPath;
+            }
+            var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+            @memcpy(name_buffer[0..component.len], component);
+            name_buffer[component.len] = 0;
+            const name: [*:0]const u8 = @ptrCast(&name_buffer);
+            var next = std.c.openat(current, name, .{
+                .ACCMODE = .RDONLY,
+                .DIRECTORY = true,
+                .CLOEXEC = true,
+                .NOFOLLOW = true,
+            });
+            if (next < 0 and create and
+                std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+            {
+                if (std.c.mkdirat(current, name, 0o755) != 0 and
+                    std.c._errno().* != @intFromEnum(std.posix.E.EXIST))
+                {
+                    return error.SyscallFailed;
+                }
+                next = std.c.openat(current, name, .{
+                    .ACCMODE = .RDONLY,
+                    .DIRECTORY = true,
+                    .CLOEXEC = true,
+                    .NOFOLLOW = true,
+                });
+            }
+            if (next < 0) {
+                return switch (std.c._errno().*) {
+                    @intFromEnum(std.posix.E.NOENT) => error.NotFound,
+                    @intFromEnum(std.posix.E.LOOP),
+                    @intFromEnum(std.posix.E.NOTDIR),
+                    => error.UnsafeTargetPath,
+                    else => error.SyscallFailed,
+                };
+            }
+            _ = std.c.close(current);
+            current = next;
+        }
+        return current;
+    }
+
+    pub fn openPinnedRegular(
+        self: *const TxnConfig,
+        path: []const u8,
+    ) TargetPathError!c_int {
+        if (path.len < 2 or path[0] != '/' or path[path.len - 1] == '/')
+            return error.InvalidTargetPath;
+        const slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse
+            return error.InvalidTargetPath;
+        const parent_path = if (slash == 0) "/" else path[0..slash];
+        const basename = path[slash + 1 ..];
+        if (basename.len == 0 or basename.len > std.fs.max_name_bytes or
+            std.mem.eql(u8, basename, ".") or
+            std.mem.eql(u8, basename, ".."))
+        {
+            return error.InvalidTargetPath;
+        }
+        const parent = try self.openPinnedDirectory(parent_path, false);
+        defer _ = std.c.close(parent);
+        var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+        @memcpy(name_buffer[0..basename.len], basename);
+        name_buffer[basename.len] = 0;
+        const name: [*:0]const u8 = @ptrCast(&name_buffer);
+        const fd = std.c.openat(parent, name, .{
+            .ACCMODE = .RDONLY,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+        if (fd < 0) {
+            return switch (std.c._errno().*) {
+                @intFromEnum(std.posix.E.NOENT) => error.NotFound,
+                @intFromEnum(std.posix.E.LOOP),
+                @intFromEnum(std.posix.E.NOTDIR),
+                => error.UnsafeTargetPath,
+                else => error.SyscallFailed,
+            };
+        }
+        errdefer _ = std.c.close(fd);
+        const st = fdStat(fd) orelse return error.SyscallFailed;
+        if ((st.mode & mode_type_mask) != mode_regular or st.nlink != 1)
+            return error.UnsafeTargetPath;
+        return fd;
+    }
+
     /// Returns the effective value for a known macro.
     pub fn value(self: *const TxnConfig, macro_name: Macro) []const u8 {
+        if (macro_name == .dbpath) {
+            if (self.literal_dbpath) |literal| return literal;
+        }
         return self.rawValue(macro_name.name()).?;
     }
 
     /// Returns the unexpanded value of an arbitrary macro.
     pub fn rawValue(self: *const TxnConfig, name: []const u8) ?[]const u8 {
+        if (std.mem.eql(u8, name, Macro.dbpath.name())) {
+            if (self.literal_dbpath) |literal| return literal;
+        }
         const index = self.findMacro(name) orelse return null;
         return self.macros.items[index].value;
     }
@@ -598,6 +894,22 @@ pub const TxnConfig = struct {
         try self.setMacroByName(macro_name.name(), macro_value);
     }
 
+    /// Sets `_dbpath` to exact caller bytes. Unlike an rpm macro definition,
+    /// the value is never recursively expanded.
+    pub fn setLiteralRpmDbPath(
+        self: *TxnConfig,
+        path: []const u8,
+    ) SetMacroError!void {
+        if (self.rpmdb_pin_finalized or path.len == 0 or
+            std.mem.indexOfScalar(u8, path, 0) != null)
+        {
+            return error.InvalidMacroValue;
+        }
+        const replacement = try self.allocator.dupe(u8, path);
+        if (self.literal_dbpath) |old| self.allocator.free(old);
+        self.literal_dbpath = replacement;
+    }
+
     /// Overrides or creates an arbitrary macro without expanding its value.
     pub fn setMacroByName(
         self: *TxnConfig,
@@ -617,6 +929,12 @@ pub const TxnConfig = struct {
 
         const replacement = try self.allocator.dupe(u8, normalized_value);
         errdefer self.allocator.free(replacement);
+        if (std.mem.eql(u8, normalized_name, Macro.dbpath.name())) {
+            if (self.literal_dbpath) |literal| {
+                self.allocator.free(literal);
+                self.literal_dbpath = null;
+            }
+        }
 
         if (self.findMacro(normalized_name)) |index| {
             const old = self.macros.items[index].value;
@@ -818,6 +1136,12 @@ pub const TxnConfig = struct {
         if (depth >= MAX_EXPANSION_DEPTH) return error.ExpansionTooDeep;
         for (stack[0..depth]) |ancestor| {
             if (std.mem.eql(u8, ancestor, name)) return error.ExpansionCycle;
+        }
+        if (std.mem.eql(u8, name, Macro.dbpath.name())) {
+            if (self.literal_dbpath) |literal| {
+                try output.appendSlice(allocator, literal);
+                return;
+            }
         }
 
         const raw = self.rawValue(name) orelse return error.UnknownMacro;
@@ -1066,6 +1390,38 @@ test "TxnConfig recursively expands arbitrary macros" {
     try std.testing.expectEqualStrings("/sysroot/build/demo/specs", rooted);
 }
 
+test "literal rpmdb path never expands macro or environment expressions" {
+    var cfg = try TxnConfig.init(std.testing.allocator, "/sysroot");
+    defer cfg.deinit();
+    _ = try cfg.applyRpmDefine("redirect expanded");
+    const literal = "/literal/%{redirect}/%{getenv:HOME}";
+    try cfg.setLiteralRpmDbPath(literal);
+
+    const expanded = try cfg.expandMacroAlloc(
+        std.testing.allocator,
+        .dbpath,
+    );
+    defer std.testing.allocator.free(expanded);
+    try std.testing.expectEqualStrings(literal, expanded);
+
+    var clone = try cfg.clone(std.testing.allocator);
+    defer clone.deinit();
+    const cloned = try clone.expandMacroAlloc(
+        std.testing.allocator,
+        .dbpath,
+    );
+    defer std.testing.allocator.free(cloned);
+    try std.testing.expectEqualStrings(literal, cloned);
+
+    try cfg.setMacro(.dbpath, "/%{redirect}");
+    const ordinary = try cfg.expandMacroAlloc(
+        std.testing.allocator,
+        .dbpath,
+    );
+    defer std.testing.allocator.free(ordinary);
+    try std.testing.expectEqualStrings("/expanded", ordinary);
+}
+
 test "TxnConfig rejects cycles and unsupported expressions" {
     var cfg = try TxnConfig.init(std.testing.allocator, "");
     defer cfg.deinit();
@@ -1136,6 +1492,87 @@ test "pinned config descriptors are CLOEXEC and identity is read-only" {
     );
     try std.testing.expect(status_flags >= 0);
     try std.testing.expectEqual(@as(c_int, 0), status_flags & 3);
+}
+
+test "literal rpmdb pin selects the exact supplied path bytes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(
+        std.testing.io,
+        "root/literal/%{redirect}",
+    );
+    try tmp.dir.createDirPath(std.testing.io, "root/expanded");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/literal/%{redirect}/rpmdb.sqlite",
+        .data = "",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/expanded/rpmdb.sqlite",
+        .data = "",
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+
+    var config = try TxnConfig.init(std.testing.allocator, root);
+    defer config.deinit();
+    _ = try config.applyRpmDefine("redirect expanded");
+    try config.setLiteralRpmDbPath("/literal/%{redirect}");
+    var pinned = try config.cloneWithPinnedInstallRoot(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer pinned.deinit();
+
+    const literal_parent = std.c.openat(root_fd, "literal", .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(literal_parent >= 0);
+    defer _ = std.c.close(literal_parent);
+    const literal_fd = std.c.openat(literal_parent, "%{redirect}", .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(literal_fd >= 0);
+    defer _ = std.c.close(literal_fd);
+    const expanded_fd = std.c.openat(root_fd, "expanded", .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(expanded_fd >= 0);
+    defer _ = std.c.close(expanded_fd);
+
+    const pinned_identity = fdStat(pinned.pinnedRpmDbDirFd().?).?.identity;
+    try std.testing.expect(
+        pinned_identity.eql(fdStat(literal_fd).?.identity),
+    );
+    try std.testing.expect(
+        !pinned_identity.eql(fdStat(expanded_fd).?.identity),
+    );
 }
 
 test "deferred rpmdb pin uses the final macro and then freezes it" {

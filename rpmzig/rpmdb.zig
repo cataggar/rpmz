@@ -337,6 +337,18 @@ export fn tdnf_rpm_config_destroy(config: ?*TxnConfig) void {
     std.heap.c_allocator.destroy(cfg);
 }
 
+export fn tdnf_rpm_config_duplicate_cache_dir_fd(
+    config: ?*const TxnConfig,
+) c_int {
+    const fd = (config orelse return -1).pinnedCacheDirFd() orelse
+        return -1;
+    return std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+}
+
 export fn tdnf_rpm_config_finalize_rpmdb_pin(
     config: ?*TxnConfig,
 ) c_int {

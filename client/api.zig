@@ -206,6 +206,11 @@ extern fn TDNFReadConfig(
     path: ?[*:0]const u8,
     group: ?[*:0]const u8,
 ) callconv(.c) u32;
+extern fn TDNFReadConfigPinned(
+    handle: ?*Tdnf,
+    path: ?[*:0]const u8,
+    group: ?[*:0]const u8,
+) callconv(.c) u32;
 extern fn TDNFConfigExpandVars(handle: ?*Tdnf) callconv(.c) u32;
 extern fn TDNFFreeConfig(conf: ?*Conf) callconv(.c) void;
 extern fn TDNFLoadPlugins(handle: ?*Tdnf) callconv(.c) u32;
@@ -955,8 +960,7 @@ pub export fn TDNFOpenHandle(
     defer freeString(&conf_path);
     var rooted_conf_path: ?[*:0]u8 = null;
     defer freeString(&rooted_conf_path);
-    var pinned_conf_path: ?[:0]u8 = null;
-    defer if (pinned_conf_path) |path| std.heap.c_allocator.free(path);
+    var use_pinned_conf = false;
 
     handle.pRpmConfig = tdnf_rpm_config_create(args.pszInstallRoot);
     if (handle.pRpmConfig == null) {
@@ -973,34 +977,24 @@ pub export fn TDNFOpenHandle(
         const config: *const txn_config.TxnConfig = @ptrCast(@alignCast(
             handle.pRpmConfig.?,
         ));
-        if (config.pinnedInstallRootFd()) |root_fd| {
-            pinned_conf_path = std.fmt.allocPrintSentinel(
-                std.heap.c_allocator,
-                "/proc/self/fd/{d}{s}",
-                .{ root_fd, std.mem.span(config_file) },
-                0,
-            ) catch blk: {
-                result = errors.ERROR_TDNF_OUT_OF_MEMORY;
-                break :blk null;
-            };
+        if (config.pinnedInstallRootFd() != null) {
+            use_pinned_conf = true;
+            result = TDNFAllocateString(config_file, &conf_path);
         } else {
             const nodes = [_]?[*:0]const u8{
                 args.pszInstallRoot,
                 config_file,
             };
             result = joinPath(&rooted_conf_path, &nodes);
-        }
-        var exists: c_int = 0;
-        const candidate: ?[*:0]const u8 = if (pinned_conf_path) |path|
-            path.ptr
-        else
-            rooted_conf_path;
-        if (result == 0) result = TDNFIsFileOrSymlink(candidate, &exists);
-        if (result == 0) {
-            result = TDNFAllocateString(
-                if (exists != 0) candidate else config_file,
-                &conf_path,
-            );
+            var exists: c_int = 0;
+            if (result == 0)
+                result = TDNFIsFileOrSymlink(rooted_conf_path, &exists);
+            if (result == 0) {
+                result = TDNFAllocateString(
+                    if (exists != 0) rooted_conf_path else config_file,
+                    &conf_path,
+                );
+            }
         }
     } else if (result == 0) {
         result = TDNFAllocateString(
@@ -1009,8 +1003,14 @@ pub export fn TDNFOpenHandle(
         );
     }
 
-    if (result == 0)
-        result = TDNFReadConfig(handle, conf_path, config_group);
+    if (result == 0) {
+        result = if (use_pinned_conf)
+            TDNFReadConfigPinned(handle, conf_path, config_group)
+        else
+            TDNFReadConfig(handle, conf_path, config_group);
+        if (use_pinned_conf and result == errors.ERROR_TDNF_FILE_NOT_FOUND)
+            result = TDNFReadConfig(handle, config_file, config_group);
+    }
     if (result == 0) {
         var node = handle.pArgs.?.cn_setopts.?.first_child;
         while (node) |current| : (node = current.next) {

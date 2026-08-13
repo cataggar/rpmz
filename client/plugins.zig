@@ -10,6 +10,7 @@ const builtin = @import("builtin");
 const abi = @import("client_abi");
 const errors = @import("tdnf_error");
 const backend = @import("builtin_plugins");
+const txn_config = @import("rpm_txn_config");
 
 const CnfNode = abi.CnfNode;
 const CmdArgs = abi.CmdArgs;
@@ -19,6 +20,7 @@ const RepoData = abi.RepoData;
 const Tdnf = abi.Tdnf;
 
 const CnfModule = opaque {};
+const FILE = opaque {};
 
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
@@ -54,6 +56,12 @@ extern fn cnfmodule_parse_file(
     module: ?*CnfModule,
     path: ?[*:0]const u8,
 ) callconv(.c) ?*CnfNode;
+extern fn cnfmodule_parse(
+    module: ?*CnfModule,
+    stream: ?*FILE,
+) callconv(.c) ?*CnfNode;
+extern fn fdopen(fd: c_int, mode: [*:0]const u8) callconv(.c) ?*FILE;
+extern fn fclose(stream: *FILE) callconv(.c) c_int;
 extern fn destroy_cnfnode(node: ?*CnfNode) callconv(.c) void;
 extern fn isTrue(value: ?[*:0]const u8) callconv(.c) c_int;
 extern fn register_ini(root: ?*CnfNode) callconv(.c) void;
@@ -362,26 +370,14 @@ fn freeString(value: *?[*:0]u8) void {
     value.* = null;
 }
 
-fn loadPluginConfig(
-    config_file: ?[*:0]const u8,
+fn loadPluginConfigTree(
+    config: *CnfNode,
     desc: ?*const PluginDesc,
     output: ?*?*Plugin,
     ops: Ops,
 ) u32 {
-    if (isNullOrEmpty(config_file) or desc == null or output == null)
+    if (desc == null or output == null)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (access(config_file, F_OK) != 0) {
-        if (std.c._errno().* == @intFromEnum(std.c.E.NOENT)) return 0;
-        return systemError();
-    }
-
-    const module = find_cnfmodule("ini") orelse
-        return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const config = cnfmodule_parse_file(module, config_file) orelse {
-        if (std.c._errno().* != 0) return systemError();
-        return errors.ERROR_TDNF_CONF_FILE_LOAD;
-    };
-    defer destroy_cnfnode(config);
 
     var raw: ?*anyopaque = null;
     var result = ops.allocate_memory(
@@ -427,6 +423,68 @@ fn loadPluginConfig(
     return 0;
 }
 
+fn loadPluginConfig(
+    config_file: ?[*:0]const u8,
+    desc: ?*const PluginDesc,
+    output: ?*?*Plugin,
+    ops: Ops,
+) u32 {
+    if (isNullOrEmpty(config_file) or desc == null or output == null)
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (access(config_file, F_OK) != 0) {
+        if (std.c._errno().* == @intFromEnum(std.c.E.NOENT)) return 0;
+        return systemError();
+    }
+    const module = find_cnfmodule("ini") orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const config = cnfmodule_parse_file(module, config_file) orelse {
+        if (std.c._errno().* != 0) return systemError();
+        return errors.ERROR_TDNF_CONF_FILE_LOAD;
+    };
+    defer destroy_cnfnode(config);
+    return loadPluginConfigTree(config, desc, output, ops);
+}
+
+fn loadPluginConfigAt(
+    directory_fd: c_int,
+    name: [*:0]const u8,
+    desc: *const PluginDesc,
+    output: *?*Plugin,
+    ops: Ops,
+) u32 {
+    const fd = std.c.openat(directory_fd, name, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    if (fd < 0) {
+        if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT)) return 0;
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &stat,
+    ) != 0 or (stat.mode & 0o170000) != 0o100000 or stat.nlink != 1) {
+        _ = std.c.close(fd);
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    const stream = fdopen(fd, "r") orelse {
+        _ = std.c.close(fd);
+        return systemError();
+    };
+    defer _ = fclose(stream);
+    const module = find_cnfmodule("ini") orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const config = cnfmodule_parse(module, stream) orelse
+        return errors.ERROR_TDNF_CONF_FILE_LOAD;
+    defer destroy_cnfnode(config);
+    return loadPluginConfigTree(config, desc, output, ops);
+}
+
 fn freePlugins(plugins_opt: ?*Plugin, ops: Ops) void {
     var plugins = plugins_opt;
     while (plugins) |plugin| {
@@ -452,7 +510,28 @@ fn loadPluginConfigs(
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const conf = tdnf.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
 
-    if (access(conf.pszPluginConfPath, F_OK) != 0) {
+    var pinned_directory: c_int = -1;
+    defer {
+        if (pinned_directory >= 0) _ = std.c.close(pinned_directory);
+    }
+    if (tdnf.pRpmConfig) |raw| {
+        const config: *const txn_config.TxnConfig =
+            @ptrCast(@alignCast(raw));
+        const path = std.mem.span(conf.pszPluginConfPath.?);
+        if (config.pluginConfDirUsesPinnedRoot(path)) {
+            pinned_directory = config.openPinnedDirectory(
+                path,
+                false,
+            ) catch |err| return switch (err) {
+                error.NotFound => ERROR_TDNF_NO_PLUGIN_CONF_DIR,
+                error.InvalidTargetPath,
+                error.UnsafeTargetPath,
+                => errors.ERROR_TDNF_INVALID_PARAMETER,
+                error.SyscallFailed => systemError(),
+            };
+        }
+    }
+    if (pinned_directory < 0 and access(conf.pszPluginConfPath, F_OK) != 0) {
         if (std.c._errno().* == @intFromEnum(std.c.E.NOENT))
             return ERROR_TDNF_NO_PLUGIN_CONF_DIR;
         return systemError();
@@ -474,7 +553,28 @@ fn loadPluginConfigs(
         }
 
         var plugin: ?*Plugin = null;
-        result = loadPluginConfig(config, desc, &plugin, ops);
+        result = if (pinned_directory >= 0) blk: {
+            const full = std.mem.span(config.?);
+            const basename = std.fs.path.basename(full);
+            if (basename.len == 0 or
+                basename.len > std.fs.max_name_bytes or
+                std.mem.indexOfScalar(u8, basename, '/') != null)
+            {
+                break :blk errors.ERROR_TDNF_INVALID_PARAMETER;
+            }
+            const name_z = std.heap.c_allocator.dupeZ(
+                u8,
+                basename,
+            ) catch break :blk errors.ERROR_TDNF_OUT_OF_MEMORY;
+            defer std.heap.c_allocator.free(name_z);
+            break :blk loadPluginConfigAt(
+                pinned_directory,
+                name_z.ptr,
+                desc,
+                &plugin,
+                ops,
+            );
+        } else loadPluginConfig(config, desc, &plugin, ops);
         freeString(&config);
         if (result != 0) {
             freePlugins(plugins, ops);

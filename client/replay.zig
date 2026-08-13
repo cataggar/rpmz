@@ -386,7 +386,9 @@ fn runValidated(
         else => return error.InvalidInput,
     };
     defer rpm_config.deinit();
-    rpm_config.setMacro(.dbpath, input.target.rpmdb_path) catch |err| switch (err) {
+    rpm_config.setLiteralRpmDbPath(
+        input.target.rpmdb_path,
+    ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidInput,
     };

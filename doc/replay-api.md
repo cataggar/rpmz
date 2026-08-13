@@ -19,8 +19,10 @@ defer result.deinit();
 ```
 
 `rpmdb_path` is the absolute install-root-relative `_dbpath` supported by the
-native RPM configuration. The caller must provide all three target values;
-replay does not infer architecture or RPM state from the host.
+native RPM configuration. Replay treats its bytes literally; RPM macro and
+environment expressions such as `%{getenv:HOME}` are not expanded. The caller
+must provide all three target values; replay does not infer architecture or
+RPM state from the host.
 `bundle_directory`, `install_root`, and `rpmdb_path` must already be exact,
 lexically canonical absolute paths. Replay rejects embedded NUL, surrounding
 whitespace, trailing separators, repeated separators, and `.` or `..`
@@ -48,15 +50,18 @@ export rejects any order or multi-prior graph it cannot preserve.
 Replay and ordinary tdnf transactions use the same install-root-wide lock. The
 target key is derived only from the opened root directory identity, so aliases
 and different `_dbpath` values under one root contend while distinct roots do
-not. The opened root directory itself is locked and pinned, and replay retains
-the lock from its initial rpmdb snapshot through final inventory capture.
-Ordinary transactions acquire it
-for the handle before target configuration or rpmdb release-version reads.
-They read the target configuration through the pinned root, finalize
-`_dbpath`, pin the rpmdb, and then retain the lock through the installed
-snapshot, solve, preparation, native execution, and history completion. Key
-imports reuse it instead of nesting locks. Standalone history and mark
-mutations use the same root lock.
+not. The publicly reachable root directory is never the lock object. A
+validated, owner-only runtime lock file keyed by the pinned root's device and
+inode provides serialization, while the root descriptor provides filesystem
+identity. Replay retains both from its initial rpmdb snapshot through final
+inventory capture. Ordinary transactions acquire them before target
+configuration or rpmdb release-version reads. Configuration, os-release,
+repository, variable, plugin, cache, and metadata files are then opened
+descriptor-relatively with no-follow confinement. They finalize literal
+`_dbpath`, pin the rpmdb, and retain the lock through the installed snapshot,
+solve, preparation, native execution, and history completion. Key imports
+reuse it instead of nesting locks. Standalone history and mark mutations use
+the same root lock.
 
 RPM identity comparisons use the effective epoch (`epoch orelse 0`). Canonical
 plans still preserve the metadata distinction between an omitted epoch and an

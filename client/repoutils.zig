@@ -9,6 +9,7 @@ const common = @import("tdnf_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
 const errors = @import("tdnf_error");
+const txn_config = @import("rpm_txn_config");
 
 const Conf = abi.Conf;
 const RepoData = abi.RepoData;
@@ -246,6 +247,50 @@ fn openDirectoryPathNoFollow(
     return 0;
 }
 
+fn ensureDirectoryPathNoFollow(path_z: [*:0]const u8) u32 {
+    const path = std.mem.span(path_z);
+    if (path.len == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
+    var current = std.c.open(
+        if (std.fs.path.isAbsolute(path)) "/" else ".",
+        .{
+            .ACCMODE = .RDONLY,
+            .DIRECTORY = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        },
+    );
+    if (current < 0) return systemError(errnoValue());
+    defer _ = c.close(current);
+    var components = std.mem.splitScalar(u8, path, '/');
+    while (components.next()) |component| {
+        if (component.len == 0 or std.mem.eql(u8, component, ".")) continue;
+        if (!isSafeComponent(component) or
+            component.len > std.fs.max_name_bytes)
+        {
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        }
+        var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+        @memcpy(name_buffer[0..component.len], component);
+        name_buffer[component.len] = 0;
+        const name: [*:0]const u8 = @ptrCast(&name_buffer);
+        if (std.c.mkdirat(current, name, 0o755) != 0 and
+            errnoValue() != @intFromEnum(std.posix.E.EXIST))
+        {
+            return systemError(errnoValue());
+        }
+        const next = std.c.openat(current, name, .{
+            .ACCMODE = .RDONLY,
+            .DIRECTORY = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+        if (next < 0) return systemError(errnoValue());
+        _ = c.close(current);
+        current = next;
+    }
+    return 0;
+}
+
 fn pinParent(path_z: [*:0]const u8, output: *PinnedParent) u32 {
     const path = std.mem.span(path_z);
     if (path.len == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -289,6 +334,19 @@ fn openCacheRoot(handle: *Tdnf, output: *c_int) u32 {
     const cache_dir = cString(conf.?.pszCacheDir) orelse
         return errors.ERROR_TDNF_INVALID_CONF;
     if (cache_dir[0] == 0) return errors.ERROR_TDNF_INVALID_CONF;
+    if (handle.pRpmConfig) |raw| {
+        const config: *const txn_config.TxnConfig =
+            @ptrCast(@alignCast(raw));
+        if (config.cacheDirUsesPinnedRoot(std.mem.span(cache_dir))) {
+            output.* = std.c.fcntl(
+                config.pinnedCacheDirFd().?,
+                std.c.F.DUPFD_CLOEXEC,
+                @as(c_int, 0),
+            );
+            if (output.* < 0) return systemError(errnoValue());
+            return 0;
+        }
+    }
     return openDirectoryPathNoFollow(cache_dir, output);
 }
 
@@ -306,6 +364,84 @@ fn openDirectoryAt(
     if (fd < 0) return systemError(errnoValue());
     output.* = fd;
     return 0;
+}
+
+pub export fn TDNFEnsureRepoCacheDir(
+    handle_opt: ?*Tdnf,
+    repo_opt: ?*RepoData,
+    subdir_opt: ?[*:0]const u8,
+) u32 {
+    const handle = handle_opt orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const repo = repo_opt orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const subdir = subdir_opt orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const component = checkedRepositoryComponent(
+        repo,
+        .cache_name,
+    ) orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (handle.pRpmConfig) |raw| {
+        const config: *const txn_config.TxnConfig =
+            @ptrCast(@alignCast(raw));
+        if (config.pinnedCacheDirFd() != null) {
+            var current = std.c.fcntl(
+                config.pinnedCacheDirFd().?,
+                std.c.F.DUPFD_CLOEXEC,
+                @as(c_int, 0),
+            );
+            if (current < 0) return systemError(errnoValue());
+            defer _ = std.c.close(current);
+            var parts = [_][]const u8{
+                std.mem.span(component),
+                std.mem.span(subdir),
+            };
+            for (&parts) |part| {
+                var components = std.mem.splitScalar(u8, part, '/');
+                while (components.next()) |name_bytes| {
+                    if (!isSafeComponent(name_bytes) or
+                        name_bytes.len > std.fs.max_name_bytes)
+                    {
+                        return errors.ERROR_TDNF_INVALID_PARAMETER;
+                    }
+                    var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+                    @memcpy(
+                        name_buffer[0..name_bytes.len],
+                        name_bytes,
+                    );
+                    name_buffer[name_bytes.len] = 0;
+                    const name: [*:0]const u8 = @ptrCast(&name_buffer);
+                    if (std.c.mkdirat(current, name, 0o755) != 0 and
+                        errnoValue() != @intFromEnum(std.posix.E.EXIST))
+                    {
+                        return systemError(errnoValue());
+                    }
+                    const next = std.c.openat(current, name, .{
+                        .ACCMODE = .RDONLY,
+                        .DIRECTORY = true,
+                        .CLOEXEC = true,
+                        .NOFOLLOW = true,
+                    });
+                    if (next < 0) return systemError(errnoValue());
+                    _ = std.c.close(current);
+                    current = next;
+                }
+            }
+            return 0;
+        }
+    }
+
+    var path: ?[*:0]u8 = null;
+    const result = getCachePath(
+        handle,
+        repo,
+        subdir,
+        null,
+        &path,
+    );
+    if (result != 0) return result;
+    defer freeCString(path);
+    return ensureDirectoryPathNoFollow(path.?);
 }
 
 fn productionUnlinkAt(
@@ -723,6 +859,58 @@ fn metadataExpired(
     expire: c_long,
 ) bool {
     return libc.difftime(current, changed) > @as(f64, @floatFromInt(expire));
+}
+
+pub export fn TDNFShouldSyncRepoMetadata(
+    handle_opt: ?*Tdnf,
+    repo_opt: ?*RepoData,
+    metadata_expire: c_long,
+    output: ?*c_int,
+) u32 {
+    if (output) |out| out.* = 0;
+    const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const handle = handle_opt orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const repo = repo_opt orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    var root_fd: c_int = -1;
+    var repo_fd: c_int = -1;
+    const result = openCacheRepository(
+        handle,
+        repo,
+        .cache_name,
+        &root_fd,
+        &repo_fd,
+    );
+    if (result == systemError(ENOENT)) {
+        out.* = 1;
+        return 0;
+    }
+    if (result != 0) return result;
+    defer _ = c.close(repo_fd);
+    defer _ = c.close(root_fd);
+    var stat = std.mem.zeroes(Stat);
+    if (std.c.statx(
+        repo_fd,
+        metadata_marker,
+        std.os.linux.AT.SYMLINK_NOFOLLOW,
+        .{ .TYPE = true, .CTIME = true },
+        &stat,
+    ) != 0) {
+        if (errnoValue() == ENOENT) {
+            out.* = 1;
+            return 0;
+        }
+        return systemError(errnoValue());
+    }
+    if ((stat.mode & 0o170000) != 0o100000)
+        return systemError(ELOOP);
+    if (metadataExpired(
+        libc.time(null),
+        stat.ctime.sec,
+        metadata_expire,
+    )) out.* = 1;
+    return 0;
 }
 
 pub export fn TDNFShouldSyncMetadata(

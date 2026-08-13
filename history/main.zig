@@ -115,7 +115,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         return 255;
     };
     defer rpm_config.deinit();
-    var target = transaction_lock.acquire(
+    var target = transaction_lock.acquireRoot(
         std.heap.c_allocator,
         &rpm_config,
     ) catch {

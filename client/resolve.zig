@@ -2169,6 +2169,7 @@ pub const struct__TDNF_REPOMD_NATIVE_REPO_INPUT = extern struct {
     pszCacheDir: [*c]const u8 = null,
     pszSnapshotFile: [*c]const u8 = null,
     pszDirectory: [*c]const u8 = null,
+    nCacheDirFd: c_int = -1,
     pub const TDNFRepoMdNativeList = __root.TDNFRepoMdNativeList;
     pub const TDNFRepoMdNativeSearch = __root.TDNFRepoMdNativeSearch;
     pub const TDNFRepoMdNativeProvides = __root.TDNFRepoMdNativeProvides;
@@ -2391,6 +2392,7 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 = extern struct 
     pszDirectory: [*c]const u8 = null,
     nPriority: i32 = 0,
     dwCost: u32 = 0,
+    nCacheDirFd: c_int = -1,
     pub const TDNFRepoMdNativeSolverLiveSolve = __root.TDNFRepoMdNativeSolverLiveSolve;
 };
 pub const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 = struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16;

@@ -110,6 +110,10 @@ extern fn TDNFGetAvailableCacheBytes(
     conf: ?*abi.Conf,
     available: *u64,
 ) callconv(.c) u32;
+extern fn TDNFGetAvailableCacheBytesHandle(
+    handle: ?*Tdnf,
+    available: *u64,
+) callconv(.c) u32;
 extern fn TDNFCheckDownloadCacheBytes(
     solved: ?*SolvedPackageInfo,
     available: u64,
@@ -526,7 +530,7 @@ fn finalizeSolved(handle: *Tdnf, info: *SolvedPackageInfo) u32 {
             info.pPkgsToReinstall != null,
     );
     var available: u64 = 0;
-    var result = TDNFGetAvailableCacheBytes(handle.pConf, &available);
+    var result = TDNFGetAvailableCacheBytesHandle(handle, &available);
     if (result == 0 and info.nNeedDownload != 0)
         result = TDNFCheckDownloadCacheBytes(info, available);
     return result;

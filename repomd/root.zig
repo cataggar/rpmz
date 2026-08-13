@@ -842,6 +842,10 @@ fn nativeSolverLiveSolve(
                         setError("invalid native live repository cache", .{});
                         return abi.ERROR_TDNF_INVALID_PARAMETER;
                     },
+                .cache_dir_fd = if (raw.nCacheDirFd >= 0)
+                    raw.nCacheDirFd
+                else
+                    null,
                 .rpm_directory = rpm_directory,
                 .snapshot_file = spanOptional(raw.pszSnapshotFile),
                 .priority = raw.nPriority,
