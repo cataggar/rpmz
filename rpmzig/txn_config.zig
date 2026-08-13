@@ -256,10 +256,10 @@ fn openDirectoryInRoot(
     );
     return switch (std.os.linux.errno(rc)) {
         .SUCCESS => @intCast(rc),
-        .NOSYS => null,
+        .NOSYS, .INVAL => null,
         .NOENT => error.NotFound,
         .LOOP, .NOTDIR, .XDEV => error.UnsafeTargetPath,
-        .INVAL, .NAMETOOLONG => error.InvalidTargetPath,
+        .NAMETOOLONG => error.InvalidTargetPath,
         else => error.SyscallFailed,
     };
 }
@@ -1740,12 +1740,25 @@ test "rpmdb symlinks resolve only within the pinned install root" {
     defer _ = std.c.close(root_fd);
     var config = try TxnConfig.init(std.testing.allocator, root);
     defer config.deinit();
-    var pinned = try config.cloneWithPinnedInstallRoot(
-        std.testing.allocator,
-        root,
-        root_fd,
-    );
-    pinned.deinit();
+    const confined = try openDirectoryInRoot(root_fd, DEFAULT_DBPATH);
+    if (confined) |fd| {
+        _ = std.c.close(fd);
+        var pinned = try config.cloneWithPinnedInstallRoot(
+            std.testing.allocator,
+            root,
+            root_fd,
+        );
+        pinned.deinit();
+    } else {
+        try std.testing.expectError(
+            error.RpmDbPinFailed,
+            config.cloneWithPinnedInstallRoot(
+                std.testing.allocator,
+                root,
+                root_fd,
+            ),
+        );
+    }
 
     try tmp.dir.deleteFile(std.testing.io, "root/var/lib/rpm");
     try tmp.dir.symLink(
