@@ -475,6 +475,7 @@ pub const struct__TDNF_REPOMD_NATIVE_REPO_INPUT = extern struct {
     pszSnapshotFile: [*c]const u8 = null,
     pszDirectory: [*c]const u8 = null,
     nCacheDirFd: c_int = -1,
+    nSnapshotFd: c_int = -1,
 };
 pub const TDNF_REPOMD_NATIVE_REPO_INPUT = struct__TDNF_REPOMD_NATIVE_REPO_INPUT;
 pub const PTDNF_REPOMD_NATIVE_REPO_INPUT = [*c]struct__TDNF_REPOMD_NATIVE_REPO_INPUT;

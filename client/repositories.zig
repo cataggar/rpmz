@@ -160,7 +160,6 @@ extern fn TDNFAllocateStringArray(?[*]?[*:0]u8, *?[*]?[*:0]u8) u32;
 extern fn TDNFAddStringArray(*?[*]?[*:0]u8, ?[*:0]const u8) u32;
 extern fn TDNFSplitStringToArray(?[*:0]const u8, ?[*:0]const u8, *?[*]?[*:0]u8) u32;
 extern fn TDNFMergeStringArrays(*?[*]?[*:0]u8, ?[*]?[*:0]u8) u32;
-extern fn TDNFReadFileToStringArray(?[*:0]const u8, *?[*]?[*:0]u8) u32;
 extern fn TDNFJoinPathFromArray(*?[*:0]u8, [*]?[*:0]u8, c_int) u32;
 extern fn TDNFAppendPath(?[*:0]const u8, ?[*:0]const u8, *?[*:0]u8) u32;
 extern fn TDNFParseMetadataExpire(?[*:0]const u8, *c_long) u32;
@@ -180,6 +179,7 @@ extern fn closedir(*DIR) c_int;
 extern fn fdopendir(c_int) ?*DIR;
 extern fn fdopen(c_int, [*:0]const u8) ?*FILE;
 extern fn fclose(*FILE) c_int;
+extern fn getline(*?[*]u8, *usize, *FILE) isize;
 extern fn mkfifo([*:0]const u8, std.c.mode_t) c_int;
 extern fn mknod([*:0]const u8, std.c.mode_t, std.c.dev_t) c_int;
 extern fn fnmatch([*:0]const u8, [*:0]const u8, c_int) c_int;
@@ -208,7 +208,7 @@ extern fn TDNFRepoRemoveCache(?*Tdnf, ?*RepoData) u32;
 extern fn TDNFRemoveSolvCache(?*Tdnf, ?*RepoData) u32;
 extern fn TDNFRemoveLastRefreshMarker(?*Tdnf, ?*RepoData) u32;
 extern fn TDNFRemoveRpmCache(?*Tdnf, ?*RepoData) u32;
-extern fn TDNFRemoveTmpRepodata(?[*:0]const u8) u32;
+extern fn TDNFRemoveTmpRepodataForRepo(?*Tdnf, ?*RepoData) u32;
 extern fn TDNFUtilsMakeDir(?[*:0]const u8) u32;
 extern fn TDNFUtilsMakeDirs(?[*:0]const u8) u32;
 extern fn TDNFGetErrorString(u32, *?[*:0]u8) u32;
@@ -628,7 +628,8 @@ fn pinRelativePath(
     }
     var components = std.mem.splitScalar(u8, parent_path, '/');
     while (components.next()) |component| {
-        if (component.len == 0 or component.len > std.fs.max_name_bytes or
+        if (component.len == 0) continue;
+        if (component.len > std.fs.max_name_bytes or
             std.mem.eql(u8, component, ".") or
             std.mem.eql(u8, component, ".."))
         {
@@ -661,20 +662,47 @@ fn pinPathForHandle(
 ) u32 {
     const tdnf = handle orelse return pinPath(path_z, output);
     const conf = tdnf.pConf orelse return pinPath(path_z, output);
-    const cache_z = conf.pszCacheDir orelse return pinPath(path_z, output);
-    const cache = std.mem.trimEnd(u8, std.mem.span(cache_z), "/");
     const path = std.mem.span(path_z);
-    if (path.len <= cache.len or
-        !std.mem.startsWith(u8, path, cache) or path[cache.len] != '/')
-    {
-        return pinPath(path_z, output);
-    }
     const raw_config = tdnf.pRpmConfig orelse return pinPath(path_z, output);
     const config: *const txn_config.TxnConfig =
         @ptrCast(@alignCast(raw_config));
-    const root_fd = config.pinnedCacheDirFd() orelse
-        return pinPath(path_z, output);
-    return pinRelativePath(root_fd, path[cache.len + 1 ..], output);
+    if (conf.pszCacheDir) |cache_z| {
+        const base = std.mem.trimEnd(u8, std.mem.span(cache_z), "/");
+        if (path.len > base.len and
+            std.mem.startsWith(u8, path, base) and path[base.len] == '/')
+        {
+            if (config.cacheDirUsesPinnedRoot(std.mem.span(cache_z))) {
+                return pinRelativePath(
+                    config.pinnedCacheDirFd().?,
+                    path[base.len + 1 ..],
+                    output,
+                );
+            }
+            if (config.pinnedInstallRootFd() != null)
+                return errors.ERROR_TDNF_INVALID_PARAMETER;
+            return pinPath(path_z, output);
+        }
+    }
+    if (conf.pszRepoDir) |repo_z| {
+        const base = std.mem.trimEnd(u8, std.mem.span(repo_z), "/");
+        if (path.len > base.len and
+            std.mem.startsWith(u8, path, base) and path[base.len] == '/')
+        {
+            if (config.repoDirUsesPinnedRoot(std.mem.span(repo_z))) {
+                const repo_fd = config.openPinnedDirectory(
+                    std.mem.span(repo_z),
+                    false,
+                ) catch return errors.ERROR_TDNF_INVALID_PARAMETER;
+                defer _ = std.c.close(repo_fd);
+                return pinRelativePath(
+                    repo_fd,
+                    path[base.len + 1 ..],
+                    output,
+                );
+            }
+        }
+    }
+    return pinPath(path_z, output);
 }
 
 fn statPinned(path_z: [*:0]const u8, output: *Stat) u32 {
@@ -714,18 +742,6 @@ fn statPinnedForHandle(
     ) != 0) return systemError();
     if (output.mode & mode_type_mask != mode_regular)
         return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
-    return 0;
-}
-
-fn regularPathExists(path_z: [*:0]const u8, exists: *bool) u32 {
-    var stat_buf = std.mem.zeroes(Stat);
-    const result = statPinned(path_z, &stat_buf);
-    if (result == systemErrorFrom(@intFromEnum(std.c.E.NOENT))) {
-        exists.* = false;
-        return 0;
-    }
-    if (result != 0) return result;
-    exists.* = true;
     return 0;
 }
 
@@ -1328,6 +1344,58 @@ fn readPinnedRegularAlloc(
     return bytes;
 }
 
+fn readFdToStringArray(fd: c_int, output: *?[*]?[*:0]u8) u32 {
+    const stream = fdopen(fd, "r") orelse {
+        _ = std.c.close(fd);
+        return systemError();
+    };
+    defer _ = fclose(stream);
+    var line: ?[*]u8 = null;
+    defer if (line) |value| std.c.free(value);
+    var capacity: usize = 0;
+    while (getline(&line, &capacity, stream) >= 0) {
+        const raw = std.mem.sliceTo(line.?, 0);
+        const value = std.mem.trimEnd(u8, raw, "\r\n");
+        const value_z = std.heap.c_allocator.dupeZ(u8, value) catch
+            return errors.ERROR_TDNF_OUT_OF_MEMORY;
+        defer std.heap.c_allocator.free(value_z);
+        const result = TDNFAddStringArray(output, value_z.ptr);
+        if (result != 0) return result;
+    }
+    return 0;
+}
+
+fn readPinnedStringArray(
+    handle: ?*Tdnf,
+    path: [*:0]const u8,
+    output: *?[*]?[*:0]u8,
+) u32 {
+    var pinned: PinnedPath = undefined;
+    const result = pinPathForHandle(handle, path, &pinned);
+    if (result != 0) return result;
+    defer pinned.deinit();
+    const fd = std.c.openat(pinned.parent_fd, pinned.nameZ(), .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    if (fd < 0) return systemError();
+    var stat = std.mem.zeroes(Stat);
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &stat,
+    ) != 0 or stat.mode & mode_type_mask != mode_regular or
+        stat.nlink != 1)
+    {
+        _ = std.c.close(fd);
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    return readFdToStringArray(fd, output);
+}
+
 fn calculateCookieForPath(
     handle: ?*Tdnf,
     path: [*:0]const u8,
@@ -1383,6 +1451,85 @@ fn parseRepoMd(handle: ?*Tdnf, metadata: *RepoMetadata) u32 {
     result = findRepoMdPart(doc.?, repomd_other, &metadata.pszOther);
     if (result != 0 and result != errors.ERROR_TDNF_NO_DATA) return result;
     return 0;
+}
+
+pub export fn TDNFOpenSnapshotFd(
+    handle_opt: ?*Tdnf,
+    repo_opt: ?*RepoData,
+) c_int {
+    const handle = handle_opt orelse return -1;
+    const repo = repo_opt orelse return -1;
+    const path = repo.pszSnapshotFile orelse return -2;
+    if (handle.pRpmConfig) |raw| {
+        const config: *const txn_config.TxnConfig =
+            @ptrCast(@alignCast(raw));
+        if (config.pinnedInstallRootFd() != null) {
+            const conf = handle.pConf orelse return -1;
+            var value = std.mem.span(path);
+            if (conf.pszCacheDir) |base_z| {
+                const base = std.mem.trimEnd(u8, std.mem.span(base_z), "/");
+                if (value.len > base.len and
+                    std.mem.startsWith(u8, value, base) and
+                    value[base.len] == '/')
+                {
+                    var pinned: PinnedPath = undefined;
+                    if (pinPathForHandle(handle, path, &pinned) != 0)
+                        return -1;
+                    defer pinned.deinit();
+                    return std.c.openat(
+                        pinned.parent_fd,
+                        pinned.nameZ(),
+                        .{
+                            .ACCMODE = .RDONLY,
+                            .CLOEXEC = true,
+                            .NOFOLLOW = true,
+                        },
+                    );
+                }
+            }
+            if (conf.pszRepoDir) |base_z| {
+                const base = std.mem.trimEnd(u8, std.mem.span(base_z), "/");
+                if (value.len > base.len and
+                    std.mem.startsWith(u8, value, base) and
+                    value[base.len] == '/')
+                {
+                    var pinned: PinnedPath = undefined;
+                    if (pinPathForHandle(handle, path, &pinned) != 0)
+                        return -1;
+                    defer pinned.deinit();
+                    return std.c.openat(
+                        pinned.parent_fd,
+                        pinned.nameZ(),
+                        .{
+                            .ACCMODE = .RDONLY,
+                            .CLOEXEC = true,
+                            .NOFOLLOW = true,
+                        },
+                    );
+                }
+            }
+            const root = std.mem.trimEnd(
+                u8,
+                config.installRoot(),
+                "/",
+            );
+            if (root.len > 1 and value.len > root.len and
+                std.mem.startsWith(u8, value, root) and
+                value[root.len] == '/')
+            {
+                value = value[root.len..];
+            }
+            return config.openPinnedRegular(value) catch -1;
+        }
+    }
+    var pinned: PinnedPath = undefined;
+    if (pinPath(path, &pinned) != 0) return -1;
+    defer pinned.deinit();
+    return std.c.openat(pinned.parent_fd, pinned.nameZ(), .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
 }
 
 fn downloadProgressCallback(
@@ -1880,7 +2027,39 @@ fn statChanged(
     return 0;
 }
 
-fn validateLocalSnapshot(path: [*:0]const u8) u32 {
+fn validateLocalSnapshot(
+    handle: *Tdnf,
+    path: [*:0]const u8,
+) u32 {
+    if (handle.pRpmConfig) |raw| {
+        const config: *const txn_config.TxnConfig =
+            @ptrCast(@alignCast(raw));
+        if (config.pinnedInstallRootFd() != null) {
+            var value = std.mem.span(path);
+            const root = std.mem.trimEnd(
+                u8,
+                config.installRoot(),
+                "/",
+            );
+            if (root.len > 1 and value.len > root.len and
+                std.mem.startsWith(u8, value, root) and
+                value[root.len] == '/')
+            {
+                value = value[root.len..];
+            }
+            const fd = config.openPinnedRegular(value) catch |err| return switch (err) {
+                error.NotFound => systemErrorFrom(
+                    @intFromEnum(std.c.E.NOENT),
+                ),
+                error.InvalidTargetPath,
+                error.UnsafeTargetPath,
+                => errors.ERROR_TDNF_INVALID_PARAMETER,
+                error.SyscallFailed => systemError(),
+            };
+            _ = std.c.close(fd);
+            return 0;
+        }
+    }
     var stat_buf = std.mem.zeroes(Stat);
     return statPinned(path, &stat_buf);
 }
@@ -1909,7 +2088,7 @@ fn resolveSnapshot(handle: *Tdnf, repo: *RepoData) u32 {
     const snapshot = repo.pszSnapshotUrl orelse return 0;
     freeString(&repo.pszSnapshotFile);
     if (snapshot[0] == '/') {
-        const result = validateLocalSnapshot(snapshot);
+        const result = validateLocalSnapshot(handle, snapshot);
         if (result != 0) return result;
         return TDNFAllocateString(snapshot, &repo.pszSnapshotFile);
     }
@@ -1919,7 +2098,12 @@ fn resolveSnapshot(handle: *Tdnf, repo: *RepoData) u32 {
         if (!safeRelativePath(snapshot)) return errors.ERROR_TDNF_INVALID_PARAMETER;
         var result = joinPath(&repo.pszSnapshotFile, &.{ handle.pConf.?.pszRepoDir, snapshot });
         if (result != 0) return result;
-        result = validateLocalSnapshot(repo.pszSnapshotFile.?);
+        var stat_buf = std.mem.zeroes(Stat);
+        result = statPinnedForHandle(
+            handle,
+            repo.pszSnapshotFile.?,
+            &stat_buf,
+        );
         if (result != 0) freeString(&repo.pszSnapshotFile);
         return result;
     }
@@ -1952,7 +2136,7 @@ fn resolveSnapshot(handle: *Tdnf, repo: *RepoData) u32 {
     const value = std.mem.span(snapshot);
     if (std.mem.startsWith(u8, value, "file://")) {
         const local: [*:0]const u8 = snapshot + 7;
-        const result = validateLocalSnapshot(local);
+        const result = validateLocalSnapshot(handle, local);
         if (result != 0) return result;
         return TDNFAllocateString(local, &repo.pszSnapshotFile);
     }
@@ -2002,7 +2186,11 @@ fn getRepoMD(
         }
         TDNFFreeStringArray(repo.ppszBaseUrls);
         repo.ppszBaseUrls = null;
-        result = TDNFReadFileToStringArray(mirror_file, &repo.ppszBaseUrls);
+        result = readPinnedStringArray(
+            handle,
+            mirror_file.?,
+            &repo.ppszBaseUrls,
+        );
         if (result != 0) return result;
         filterMirrorComments(repo.ppszBaseUrls);
     }
@@ -2051,7 +2239,8 @@ fn getRepoMD(
 
     var temp_dir: ?[*:0]u8 = null;
     defer {
-        if (temp_dir != null) _ = TDNFRemoveTmpRepodata(temp_dir);
+        if (temp_dir != null)
+            _ = TDNFRemoveTmpRepodataForRepo(handle, repo);
         freeString(&temp_dir);
     }
     var temp_repomd: ?[*:0]u8 = null;
@@ -2237,6 +2426,215 @@ test "repositories production: path validation rejects traversal and absolute me
 test "repositories production: ABI remains canonical" {
     try std.testing.expectEqual(@sizeOf(abi.C.TDNF_REPO_DATA), @sizeOf(RepoData));
     try std.testing.expectEqual(@sizeOf(abi.C.TDNF_REPO_METADATA), @sizeOf(RepoMetadata));
+}
+
+test "repositories production: alternate-root mirror stats and snapshots stay pinned" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(io, &base_buffer)];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "host-cache" },
+    );
+    defer std.testing.allocator.free(cache);
+    const repos = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "host-repos" },
+    );
+    defer std.testing.allocator.free(repos);
+    const target_cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, cache[1..] },
+    );
+    defer std.testing.allocator.free(target_cache);
+    const target_repos = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, repos[1..] },
+    );
+    defer std.testing.allocator.free(target_repos);
+    try cwd.createDirPath(io, target_cache);
+    try cwd.createDirPath(io, target_repos);
+    try cwd.createDirPath(io, cache);
+    try cwd.createDirPath(io, repos);
+
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const cache_z = try std.testing.allocator.dupeZ(u8, cache);
+    defer std.testing.allocator.free(cache_z);
+    const repos_z = try std.testing.allocator.dupeZ(u8, repos);
+    defer std.testing.allocator.free(repos_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var base_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer base_config.deinit();
+    var config = try base_config.cloneWithPinnedInstallRootDeferredRpmDb(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer config.deinit();
+    const cache_fd = try config.openPinnedDirectory(cache, false);
+    defer _ = std.c.close(cache_fd);
+    try config.repinCacheDir(cache, cache_fd);
+    const repo_fd = try config.openPinnedDirectory(repos, false);
+    defer _ = std.c.close(repo_fd);
+    try config.setPinnedRepoDir(repos);
+
+    const target_repo_cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_cache, "repo" },
+    );
+    defer std.testing.allocator.free(target_repo_cache);
+    const host_repo_cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ cache, "repo" },
+    );
+    defer std.testing.allocator.free(host_repo_cache);
+    try cwd.createDirPath(io, target_repo_cache);
+    try cwd.createDirPath(io, host_repo_cache);
+    const target_mirror = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_repo_cache, metadata_mirrorlist },
+    );
+    defer std.testing.allocator.free(target_mirror);
+    const host_mirror = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ host_repo_cache, metadata_mirrorlist },
+    );
+    defer std.testing.allocator.free(host_mirror);
+    try cwd.writeFile(io, .{
+        .sub_path = target_mirror,
+        .data = "https://target.invalid/repo\n",
+    });
+    try cwd.writeFile(io, .{
+        .sub_path = host_mirror,
+        .data = "https://host.invalid/repo\n",
+    });
+
+    var conf = Conf{
+        .pszCacheDir = cache_z.ptr,
+        .pszRepoDir = repos_z.ptr,
+    };
+    var args = abi.CmdArgs{};
+    var handle = Tdnf{
+        .pArgs = &args,
+        .pConf = &conf,
+        .pRpmConfig = @ptrCast(&config),
+    };
+    var values: ?[*]?[*:0]u8 = null;
+    const mirror_display = try std.fs.path.joinZ(
+        std.testing.allocator,
+        &.{ cache, "repo", metadata_mirrorlist },
+    );
+    defer std.testing.allocator.free(mirror_display);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        readPinnedStringArray(
+            &handle,
+            mirror_display.ptr,
+            &values,
+        ),
+    );
+    defer TDNFFreeStringArray(values);
+    try std.testing.expectEqualStrings(
+        "https://target.invalid/repo",
+        std.mem.span(values.?[0].?),
+    );
+    var needs_download = true;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        statChanged(
+            &handle,
+            mirror_display.ptr,
+            std.math.maxInt(c_long),
+            &needs_download,
+        ),
+    );
+    try std.testing.expect(!needs_download);
+
+    const target_snapshot = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_repos, "snapshot.list" },
+    );
+    defer std.testing.allocator.free(target_snapshot);
+    const host_snapshot = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ repos, "snapshot.list" },
+    );
+    defer std.testing.allocator.free(host_snapshot);
+    try cwd.writeFile(io, .{
+        .sub_path = target_snapshot,
+        .data = "target-package=1-1\n",
+    });
+    try cwd.writeFile(io, .{
+        .sub_path = host_snapshot,
+        .data = "host-package=9-9\n",
+    });
+    const snapshot_display = try std.fs.path.joinZ(
+        std.testing.allocator,
+        &.{ repos, "snapshot.list" },
+    );
+    defer std.testing.allocator.free(snapshot_display);
+    try std.testing.expect(config.repoDirUsesPinnedRoot(repos));
+    var snapshot_pinned: PinnedPath = undefined;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        pinPathForHandle(
+            &handle,
+            snapshot_display.ptr,
+            &snapshot_pinned,
+        ),
+    );
+    snapshot_pinned.deinit();
+    var snapshot_stat = std.mem.zeroes(Stat);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        statPinnedForHandle(
+            &handle,
+            snapshot_display.ptr,
+            &snapshot_stat,
+        ),
+    );
+    var repo = RepoData{
+        .pszId = @constCast("repo"),
+        .pszCacheName = @constCast("repo"),
+        .pszSnapshotUrl = @constCast("snapshot.list"),
+    };
+    defer freeString(&repo.pszSnapshotFile);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        resolveSnapshot(&handle, &repo),
+    );
+    const snapshot_fd = TDNFOpenSnapshotFd(&handle, &repo);
+    try std.testing.expect(snapshot_fd >= 0);
+    defer _ = std.c.close(snapshot_fd);
+    var snapshot_buffer: [64]u8 = undefined;
+    const snapshot_size = std.c.read(
+        snapshot_fd,
+        &snapshot_buffer,
+        snapshot_buffer.len,
+    );
+    try std.testing.expect(snapshot_size > 0);
+    try std.testing.expectEqualStrings(
+        "target-package=1-1\n",
+        snapshot_buffer[0..@intCast(snapshot_size)],
+    );
 }
 
 fn readTestFile(path: []const u8) ![]u8 {

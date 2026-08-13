@@ -4697,6 +4697,9 @@ pub fn TDNFGoalBuildNativeSolverRepoInputs(arg_pTdnf: PTDNF, arg_ppRepos: [*c]PT
                     pTdnf,
                     pRepoData,
                 );
+                if (pRepos[dwCount].nCacheDirFd == -2) {
+                    return ERROR_TDNF_INVALID_PARAMETER;
+                }
             }
             dwCount +%= 1;
         }

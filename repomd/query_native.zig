@@ -1792,7 +1792,12 @@ fn loadAvailableDataset(raw_repo: abi.TDNF_REPOMD_NATIVE_REPO_INPUT, options: Av
     // solver already loads one this way (repomd/solver_live.zig); this is the
     // query layer's half of the same thing.
     if (spanOptionalRepoField(raw_repo.pszDirectory)) |directory| {
-        return loadDirectoryDataset(repo_id, directory, snapshot_file);
+        return loadDirectoryDataset(
+            repo_id,
+            directory,
+            snapshot_file,
+            raw_repo.nSnapshotFd,
+        );
     }
 
     const cache_dir = spanRequired(raw_repo.pszCacheDir, "repo cache dir") orelse return error.InvalidParameter;
@@ -1817,10 +1822,11 @@ fn loadAvailableDataset(raw_repo: abi.TDNF_REPOMD_NATIVE_REPO_INPUT, options: Av
             );
             return err;
         };
-        const snapshot_entries = if (snapshot_file) |path|
-            try parseSnapshotEntries(arena, path)
-        else
-            &[_]SnapshotEntry{};
+        const snapshot_entries = try snapshotEntriesForInput(
+            arena,
+            raw_repo,
+            snapshot_file,
+        );
         return .{
             .kind = .available,
             .repo_id = repo_id,
@@ -1895,10 +1901,11 @@ fn loadAvailableDataset(raw_repo: abi.TDNF_REPOMD_NATIVE_REPO_INPUT, options: Av
         };
     };
 
-    const snapshot_entries = if (snapshot_file) |path|
-        try parseSnapshotEntries(arena, path)
-    else
-        &[_]SnapshotEntry{};
+    const snapshot_entries = try snapshotEntriesForInput(
+        arena,
+        raw_repo,
+        snapshot_file,
+    );
 
     return .{
         .kind = .available,
@@ -1925,6 +1932,7 @@ fn loadDirectoryDataset(
     repo_id: []const u8,
     directory: []const u8,
     snapshot_file: ?[]const u8,
+    snapshot_fd: c_int,
 ) !LoadedDataset {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     errdefer arena_state.deinit();
@@ -1946,10 +1954,11 @@ fn loadDirectoryDataset(
         };
     };
 
-    const snapshot_entries = if (snapshot_file) |path|
-        try parseSnapshotEntries(arena, path)
-    else
-        &[_]SnapshotEntry{};
+    const snapshot_entries = try snapshotEntries(
+        arena,
+        snapshot_fd,
+        snapshot_file,
+    );
 
     return .{
         .kind = .available,
@@ -2786,6 +2795,73 @@ fn parseSnapshotEntries(allocator: std.mem.Allocator, path: []const u8) ![]Snaps
         return err;
     };
     return parseEntriesText(allocator, bytes);
+}
+
+fn readSmallFd(
+    allocator: std.mem.Allocator,
+    fd: c_int,
+    max_len: usize,
+) ![]u8 {
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &stat,
+    ) != 0 or (stat.mode & 0o170000) != 0o100000 or
+        stat.nlink != 1)
+    {
+        return error.FileSystemIo;
+    }
+    if (stat.size > max_len) return error.FileTooBig;
+    const bytes = try allocator.alloc(u8, @intCast(stat.size));
+    errdefer allocator.free(bytes);
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const count = std.c.pread(
+            fd,
+            bytes.ptr + offset,
+            bytes.len - offset,
+            @intCast(offset),
+        );
+        if (count < 0 and
+            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+        {
+            continue;
+        }
+        if (count <= 0) return error.FileSystemIo;
+        offset += @intCast(count);
+    }
+    return bytes;
+}
+
+fn snapshotEntries(
+    allocator: std.mem.Allocator,
+    fd: c_int,
+    path: ?[]const u8,
+) ![]SnapshotEntry {
+    if (fd >= 0) {
+        const bytes = readSmallFd(
+            allocator,
+            fd,
+            8 * 1024 * 1024,
+        ) catch |err| {
+            setError("failed to read snapshot by descriptor: {t}", .{err});
+            return err;
+        };
+        return parseEntriesText(allocator, bytes);
+    }
+    if (path) |value| return parseSnapshotEntries(allocator, value);
+    return &[_]SnapshotEntry{};
+}
+
+fn snapshotEntriesForInput(
+    allocator: std.mem.Allocator,
+    raw_repo: abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
+    path: ?[]const u8,
+) ![]SnapshotEntry {
+    return snapshotEntries(allocator, raw_repo.nSnapshotFd, path);
 }
 
 fn parseEntryArray(raw_values: [*c][*c]u8) ![]NameEvrQuery {
@@ -4123,6 +4199,50 @@ fn spanRequired(raw: ?[*:0]const u8, comptime label: []const u8) ?[]const u8 {
         return null;
     }
     return text;
+}
+
+test "snapshot descriptor overrides a conflicting pathname" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "target.snapshot",
+        .data = "target=1-1\n",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "host.snapshot",
+        .data = "host=9-9\n",
+    });
+    var host_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = host_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &host_buffer,
+    )];
+    const target_path = try std.fs.path.joinZ(
+        std.testing.allocator,
+        &.{ base, "target.snapshot" },
+    );
+    defer std.testing.allocator.free(target_path);
+    const target_fd = std.c.open(target_path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(target_fd >= 0);
+    defer _ = std.c.close(target_fd);
+    const host_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "host.snapshot" },
+    );
+    defer std.testing.allocator.free(host_path);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const entries = try snapshotEntries(
+        arena_state.allocator(),
+        target_fd,
+        host_path,
+    );
+    try std.testing.expectEqual(@as(usize, 1), entries.len);
+    try std.testing.expectEqualStrings("target", entries[0].name);
 }
 
 test "native autoremove orphan detection keeps packages required by name file and provides" {

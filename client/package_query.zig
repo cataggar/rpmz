@@ -47,6 +47,10 @@ extern fn TDNFGetCachePath(
     ?[*:0]const u8,
     *?[*:0]u8,
 ) callconv(.c) u32;
+extern fn TDNFOpenSnapshotFd(
+    ?*abi.Tdnf,
+    ?*abi.RepoData,
+) callconv(.c) c_int;
 extern fn TDNFUtilsMakeDirs(?[*:0]const u8) callconv(.c) u32;
 extern fn TDNFFindRepoById(
     ?*abi.Tdnf,
@@ -167,6 +171,10 @@ fn freeRepoInputs(
             _ = std.c.close(repo.nCacheDirFd);
             repo.nCacheDirFd = -1;
         }
+        if (repo.nSnapshotFd >= 0) {
+            _ = std.c.close(repo.nSnapshotFd);
+            repo.nSnapshotFd = -1;
+        }
     }
     free(values);
 }
@@ -192,6 +200,22 @@ fn openRepositoryCacheFd(
     });
 }
 
+fn duplicateRepositorySnapshotFd(
+    context: *const package_context.Context,
+    repo: *const abi.RepoData,
+) c_int {
+    const repository = package_context.findRepositoryByOwner(
+        context,
+        @ptrCast(@constCast(repo)),
+    ) orelse return -1;
+    if (repository.snapshot_fd < 0) return -1;
+    return std.c.fcntl(
+        repository.snapshot_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+}
+
 pub export fn TDNFNativeQueryOpenRepoCacheFd(
     handle: ?*abi.Tdnf,
     repo: ?*abi.RepoData,
@@ -201,7 +225,10 @@ pub export fn TDNFNativeQueryOpenRepoCacheFd(
         tdnf.pSack orelse return -1,
     ));
     const value = repo orelse return -1;
-    return openRepositoryCacheFd(context, value);
+    const fd = openRepositoryCacheFd(context, value);
+    if (fd < 0 and package_context.cacheDirFd(context) != null)
+        return -2;
+    return fd;
 }
 
 pub export fn TDNFNativeQueryBuildRepoInputs(
@@ -234,6 +261,7 @@ pub export fn TDNFNativeQueryBuildRepoInputs(
         const item = &repos.?[populated];
         item.* = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_REPO_INPUT);
         item.nCacheDirFd = -1;
+        item.nSnapshotFd = -1;
         item.pszDirectory = repositoryDirectory(repo);
         if (item.pszDirectory == null) {
             var cache: ?[*:0]u8 = null;
@@ -244,14 +272,37 @@ pub export fn TDNFNativeQueryBuildRepoInputs(
             }
             item.pszCacheDir = cache;
             if (tdnf.pSack) |raw_context| {
-                item.nCacheDirFd = openRepositoryCacheFd(
-                    @ptrCast(@alignCast(raw_context)),
-                    repo,
-                );
+                const context: *const package_context.Context =
+                    @ptrCast(@alignCast(raw_context));
+                item.nCacheDirFd = openRepositoryCacheFd(context, repo);
+                if (package_context.cacheDirFd(context) != null and
+                    item.nCacheDirFd < 0)
+                {
+                    freeRepoInputs(repos, populated + 1);
+                    return errors.ERROR_TDNF_INVALID_PARAMETER;
+                }
             }
         }
         item.pszId = repo.pszId;
         item.pszSnapshotFile = repo.pszSnapshotFile;
+        if (item.pszSnapshotFile != null) {
+            if (tdnf.pSack) |raw_context| {
+                item.nSnapshotFd = duplicateRepositorySnapshotFd(
+                    @ptrCast(@alignCast(raw_context)),
+                    repo,
+                );
+                if (item.nSnapshotFd < 0) {
+                    freeRepoInputs(repos, populated + 1);
+                    return errors.ERROR_TDNF_INVALID_PARAMETER;
+                }
+            } else {
+                item.nSnapshotFd = TDNFOpenSnapshotFd(tdnf, repo);
+            }
+            if (item.nSnapshotFd < 0) {
+                freeRepoInputs(repos, populated + 1);
+                return errors.ERROR_TDNF_INVALID_PARAMETER;
+            }
+        }
         populated += 1;
     }
     out.* = repos;
@@ -269,12 +320,28 @@ pub export fn TDNFNativeQueryBuildSingleRepoInput(
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     out.* = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_REPO_INPUT);
     out.nCacheDirFd = -1;
+    out.nSnapshotFd = -1;
     var cache: ?[*:0]u8 = null;
     const rc = TDNFGetCachePath(tdnf, value, null, null, &cache);
     if (rc != 0) return rc;
     out.pszCacheDir = cache;
     out.pszId = value.pszId;
     out.pszSnapshotFile = value.pszSnapshotFile;
+    if (out.pszSnapshotFile != null) {
+        if (tdnf.pSack) |raw_context| {
+            out.nSnapshotFd = duplicateRepositorySnapshotFd(
+                @ptrCast(@alignCast(raw_context)),
+                value,
+            );
+        } else {
+            out.nSnapshotFd = TDNFOpenSnapshotFd(tdnf, value);
+        }
+        if (out.nSnapshotFd < 0) {
+            free(out.pszCacheDir);
+            out.pszCacheDir = null;
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        }
+    }
     return 0;
 }
 
@@ -991,6 +1058,7 @@ fn sackRepoInputs(
         const item = &repos.?[populated];
         item.* = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_REPO_INPUT);
         item.nCacheDirFd = -1;
+        item.nSnapshotFd = -1;
         item.pszDirectory = repositoryDirectory(owner);
         if (item.pszDirectory == null) {
             const cache_dir = package_context.cacheDir(context) orelse {
@@ -1010,9 +1078,29 @@ fn sackRepoInputs(
             };
             item.pszCacheDir = path.ptr;
             item.nCacheDirFd = openRepositoryCacheFd(context, owner);
+            if (package_context.cacheDirFd(context) != null and
+                item.nCacheDirFd < 0)
+            {
+                freeRepoInputs(repos, populated + 1);
+                return errors.ERROR_TDNF_INVALID_PARAMETER;
+            }
         }
         item.pszId = owner.pszId;
         item.pszSnapshotFile = owner.pszSnapshotFile;
+        if (repository.snapshot_fd >= 0) {
+            item.nSnapshotFd = std.c.fcntl(
+                repository.snapshot_fd,
+                std.c.F.DUPFD_CLOEXEC,
+                @as(c_int, 0),
+            );
+            if (item.nSnapshotFd < 0) {
+                freeRepoInputs(repos, populated + 1);
+                return errors.ERROR_TDNF_INVALID_PARAMETER;
+            }
+        } else if (item.pszSnapshotFile != null) {
+            freeRepoInputs(repos, populated + 1);
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        }
         populated += 1;
     }
     output.* = repos;

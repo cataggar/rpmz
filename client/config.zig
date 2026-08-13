@@ -863,11 +863,6 @@ fn readConfigMode(
                 freeConfig(conf);
                 return errors.ERROR_TDNF_INVALID_PARAMETER;
             }
-            config.setPinnedCacheDir(cache_dir) catch {
-                freeConfig(previous);
-                freeConfig(conf);
-                return errors.ERROR_TDNF_OUT_OF_MEMORY;
-            };
             const cache_fd = config.openPinnedDirectory(
                 cache_dir,
                 true,
@@ -877,10 +872,13 @@ fn readConfigMode(
                 return targetPathError(err);
             };
             defer _ = std.c.close(cache_fd);
-            config.adoptPinnedCacheDirFd(cache_fd) catch {
+            config.repinCacheDir(cache_dir, cache_fd) catch |err| {
                 freeConfig(previous);
                 freeConfig(conf);
-                return errors.ERROR_TDNF_INVALID_PARAMETER;
+                return switch (err) {
+                    error.OutOfMemory => errors.ERROR_TDNF_OUT_OF_MEMORY,
+                    else => errors.ERROR_TDNF_INVALID_PARAMETER,
+                };
             };
 
             const repo_dir = std.mem.span(conf.pszRepoDir.?);
@@ -989,6 +987,36 @@ fn readConfigMode(
             freeConfig(previous);
             freeConfig(conf);
             return result;
+        }
+    }
+
+    if (pinned_config) |config| {
+        if (config.pinnedInstallRootFd() != null) {
+            const cache_dir = std.mem.span(conf.pszCacheDir.?);
+            if (cache_dir.len == 0 or cache_dir[0] != '/') {
+                freeConfig(previous);
+                freeConfig(conf);
+                return errors.ERROR_TDNF_INVALID_PARAMETER;
+            }
+            if (!config.cacheDirUsesPinnedRoot(cache_dir)) {
+                const cache_fd = config.openPinnedDirectory(
+                    cache_dir,
+                    true,
+                ) catch |err| {
+                    freeConfig(previous);
+                    freeConfig(conf);
+                    return targetPathError(err);
+                };
+                defer _ = std.c.close(cache_fd);
+                config.repinCacheDir(cache_dir, cache_fd) catch |err| {
+                    freeConfig(previous);
+                    freeConfig(conf);
+                    return switch (err) {
+                        error.OutOfMemory => errors.ERROR_TDNF_OUT_OF_MEMORY,
+                        else => errors.ERROR_TDNF_INVALID_PARAMETER,
+                    };
+                };
+            }
         }
     }
 
@@ -1533,6 +1561,81 @@ test "pinned config and os-release survive root replacement" {
         error.FileNotFound,
         tmp.dir.access(std.testing.io, "root/cache", .{}),
     );
+}
+
+test "pinned cachedir setopt repins only the final target path" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/etc/tdnf");
+    try tmp.dir.createDirPath(std.testing.io, "root/repos");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .data =
+        \\[main]
+        \\plugins=0
+        \\repodir=/repos
+        \\cachedir=/old-cache
+        \\
+        ,
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var base_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer base_config.deinit();
+    var pinned = try base_config.cloneWithPinnedInstallRootDeferredRpmDb(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer pinned.deinit();
+    const setopts = create_cnfnode("(setopts)") orelse
+        return error.TestUnexpectedNull;
+    defer destroy_cnftree(setopts);
+    const cachedir = create_cnfnode("cachedir") orelse
+        return error.TestUnexpectedNull;
+    cnfnode_setval(cachedir, "/new-cache");
+    append_node(setopts, cachedir);
+    var args = CmdArgs{
+        .pszInstallRoot = root_z.ptr,
+        .cn_setopts = setopts,
+    };
+    var handle = Tdnf{
+        .pArgs = &args,
+        .pRpmConfig = @ptrCast(&pinned),
+    };
+    try testing.expectEqual(
+        @as(u32, 0),
+        TDNFReadConfigPinned(
+            &handle,
+            "/etc/tdnf/tdnf.conf",
+            "main",
+        ),
+    );
+    defer TDNFFreeConfig(handle.pConf);
+    try expectString(handle.pConf.?.pszCacheDir, "/new-cache");
+    try testing.expect(pinned.cacheDirUsesPinnedRoot("/new-cache"));
+    try testing.expect(!pinned.cacheDirUsesPinnedRoot("/old-cache"));
+    try tmp.dir.access(std.testing.io, "root/new-cache", .{});
 }
 
 test "pinned config rejects absolute symlink escapes" {

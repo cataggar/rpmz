@@ -10,7 +10,10 @@ const mode_regular: u16 = 0o100000;
 const lock_exclusive: c_int = 2;
 const lock_nonblocking: c_int = 4;
 const lock_unlock: c_int = 8;
-// Use the root-owned sticky tmpfs namespace shared across local users.
+const rename_exchange: c_uint = 2;
+const at_removedir: c_int = 0x200;
+// The shared object is promoted to root ownership before a privileged
+// transaction uses this root-owned sticky namespace.
 const default_lock_directory = "/dev/shm";
 
 extern fn flock(fd: c_int, operation: c_int) callconv(.c) c_int;
@@ -19,6 +22,13 @@ extern fn waitpid(pid: c_int, status: *c_int, options: c_int) callconv(.c) c_int
 extern fn setgid(gid: u32) callconv(.c) c_int;
 extern fn setuid(uid: u32) callconv(.c) c_int;
 extern fn chown(path: [*:0]const u8, uid: u32, gid: u32) callconv(.c) c_int;
+extern fn renameat2(
+    old_dir_fd: c_int,
+    old_path: [*:0]const u8,
+    new_dir_fd: c_int,
+    new_path: [*:0]const u8,
+    flags: c_uint,
+) callconv(.c) c_int;
 extern fn _exit(status: c_int) callconv(.c) noreturn;
 
 pub const Error = error{
@@ -156,6 +166,22 @@ fn safeComponent(component: []const u8) bool {
         std.mem.indexOfScalar(u8, component, 0) == null;
 }
 
+fn systemRootUid() u32 {
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        std.os.linux.AT.FDCWD,
+        "/",
+        std.os.linux.AT.SYMLINK_NOFOLLOW,
+        .{ .TYPE = true, .UID = true },
+        &stat,
+    ) != 0) return 0;
+    return stat.uid;
+}
+
+fn privilegedRoot() bool {
+    return std.c.geteuid() == 0 and systemRootUid() == 0;
+}
+
 fn trustedDirectoryStat(
     fd: c_int,
     final: bool,
@@ -172,15 +198,17 @@ fn trustedDirectoryStat(
         return error.LockFailed;
     }
     const euid: u32 = @intCast(std.c.geteuid());
+    const root_uid = systemRootUid();
     const permissions = stat.mode & 0o7777;
     if (final and shared_namespace) {
-        if (stat.uid != 0 or permissions != 0o1777)
+        if (stat.uid != root_uid or permissions != 0o1777)
             return error.LockFailed;
         return;
     }
-    if (stat.uid != 0 and stat.uid != euid) return error.LockFailed;
+    if (stat.uid != root_uid and stat.uid != euid) return error.LockFailed;
     const writable_by_others = (permissions & 0o022) != 0;
-    const root_sticky = stat.uid == 0 and (permissions & 0o1000) != 0;
+    const root_sticky = stat.uid == root_uid and
+        (permissions & 0o1000) != 0;
     if (writable_by_others and !root_sticky) return error.LockFailed;
     if (final and (stat.uid != euid or permissions != 0o700))
         return error.LockFailed;
@@ -244,12 +272,12 @@ fn openTrustedLockDirectory(
             if (shared_namespace) 0o1777 else 0o700
         else if (shared_namespace and strict_ancestors and
             component_index != 0 and
-            std.c.geteuid() == 0)
+            privilegedRoot())
             0o755
         else
             null;
         if (desired_mode) |mode| {
-            if ((created or !shared_namespace or std.c.geteuid() == 0) and
+            if ((created or !shared_namespace or privilegedRoot()) and
                 std.c.fchmod(next, mode) != 0)
             {
                 _ = std.c.close(next);
@@ -330,16 +358,191 @@ fn validLockFile(
     stat: LockFileStat,
     shared_namespace: bool,
 ) bool {
-    // The first writer owns a shared object; mode and the root-owned sticky
-    // directory, not that environment-dependent uid, authorize later writers.
+    const euid: u32 = @intCast(std.c.geteuid());
+    const root_uid = systemRootUid();
+    const privileged = privilegedRoot();
     return (stat.mode & mode_type_mask) == mode_regular and
         (stat.mode & 0o7777) ==
-            (if (shared_namespace) @as(u16, 0o666) else @as(u16, 0o600)) and
+            (if (shared_namespace) @as(u16, 0o644) else @as(u16, 0o600)) and
         stat.nlink == 1 and
         (if (shared_namespace)
-            true
+            stat.uid == root_uid or (!privileged and stat.uid == euid)
         else
-            stat.uid == @as(u32, @intCast(std.c.geteuid())));
+            stat.uid == euid);
+}
+
+fn openExistingLock(
+    directory_fd: c_int,
+    name: [*:0]const u8,
+) c_int {
+    var fd = std.c.openat(directory_fd, name, .{
+        .ACCMODE = .RDWR,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+        .NONBLOCK = true,
+    });
+    if (fd < 0 and
+        std.c._errno().* == @intFromEnum(std.posix.E.ACCES))
+    {
+        fd = std.c.openat(directory_fd, name, .{
+            .ACCMODE = .RDONLY,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+            .NONBLOCK = true,
+        });
+    }
+    return fd;
+}
+
+fn flockForMode(fd: c_int, wait: bool) Error!void {
+    const operation = lock_exclusive |
+        (if (wait) @as(c_int, 0) else lock_nonblocking);
+    if (flock(fd, operation) == 0) return;
+    if (!wait and
+        (std.c._errno().* == @intFromEnum(std.posix.E.AGAIN) or
+            std.c._errno().* == @intFromEnum(std.posix.E.ACCES)))
+    {
+        return error.WouldBlock;
+    }
+    return error.LockFailed;
+}
+
+fn randomPromotionName(buffer: *[96]u8) Error![*:0]const u8 {
+    var random: [16]u8 = undefined;
+    var offset: usize = 0;
+    while (offset < random.len) {
+        const count = std.c.getrandom(
+            random[offset..].ptr,
+            random.len - offset,
+            0,
+        );
+        if (count < 0 and
+            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+        {
+            continue;
+        }
+        if (count <= 0) return error.LockFailed;
+        offset += @intCast(count);
+    }
+    const encoded = std.fmt.bytesToHex(random, .lower);
+    return std.fmt.bufPrintZ(
+        buffer,
+        ".tdnf-lock-promote-{d}-{s}",
+        .{ std.c.getpid(), &encoded },
+    ) catch error.LockFailed;
+}
+
+fn promoteSharedLock(
+    directory_fd: c_int,
+    name: [*:0]const u8,
+    existing_fd: c_int,
+    wait: bool,
+) Error!?c_int {
+    const old_fd = existing_fd;
+    var old_locked = false;
+    defer {
+        if (old_fd >= 0) {
+            if (old_locked) _ = flock(old_fd, lock_unlock);
+            _ = std.c.close(old_fd);
+        }
+    }
+    var old_identity: ?TargetIdentity = null;
+    if (old_fd >= 0) {
+        const opened = lockFileStatFd(old_fd) orelse
+            return error.LockFailed;
+        if ((opened.mode & mode_type_mask) != mode_regular or
+            opened.nlink != 1)
+            return error.LockFailed;
+        try flockForMode(old_fd, wait);
+        old_locked = true;
+        const named = lockFileStatAt(directory_fd, name) orelse
+            return null;
+        if (!opened.identity.eql(named.identity)) return null;
+        old_identity = opened.identity;
+    }
+
+    var temp_name_buffer: [96]u8 = undefined;
+    var replacement_fd: c_int = -1;
+    var temp_name: [*:0]const u8 = undefined;
+    var attempts: usize = 0;
+    while (attempts < 64) : (attempts += 1) {
+        temp_name = try randomPromotionName(&temp_name_buffer);
+        replacement_fd = std.c.openat(directory_fd, temp_name, .{
+            .ACCMODE = .RDWR,
+            .CREAT = true,
+            .EXCL = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        }, @as(std.c.mode_t, 0o644));
+        if (replacement_fd >= 0) break;
+        if (std.c._errno().* != @intFromEnum(std.posix.E.EXIST))
+            return error.LockFailed;
+    }
+    if (replacement_fd < 0) return error.LockFailed;
+    var replacement_locked = false;
+    var keep_replacement = false;
+    defer {
+        if (!keep_replacement) {
+            if (replacement_locked)
+                _ = flock(replacement_fd, lock_unlock);
+            _ = std.c.close(replacement_fd);
+            _ = std.c.unlinkat(directory_fd, temp_name, 0);
+        }
+    }
+    if (std.c.fchmod(replacement_fd, 0o644) != 0)
+        return error.LockFailed;
+    const replacement = lockFileStatFd(replacement_fd) orelse
+        return error.LockFailed;
+    if (!validLockFile(replacement, true) or
+        replacement.uid != systemRootUid())
+        return error.LockFailed;
+    try flockForMode(replacement_fd, wait);
+    replacement_locked = true;
+
+    const identity = old_identity orelse return error.LockFailed;
+    const current = lockFileStatAt(directory_fd, name) orelse return null;
+    if (!identity.eql(current.identity)) return null;
+    if (renameat2(
+        directory_fd,
+        temp_name,
+        directory_fd,
+        name,
+        rename_exchange,
+    ) != 0) {
+        if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+            return null;
+        return error.LockFailed;
+    }
+    const named = lockFileStatAt(directory_fd, name) orelse
+        return error.LockFailed;
+    if (!replacement.identity.eql(named.identity) or
+        !validLockFile(named, true) or named.uid != systemRootUid())
+    {
+        return error.LockFailed;
+    }
+
+    if (lockFileStatAt(directory_fd, temp_name)) |displaced| {
+        if (!identity.eql(displaced.identity)) {
+            if (renameat2(
+                directory_fd,
+                temp_name,
+                directory_fd,
+                name,
+                rename_exchange,
+            ) != 0) return error.LockFailed;
+            return null;
+        }
+        _ = std.c.unlinkat(
+            directory_fd,
+            temp_name,
+            if ((displaced.mode & mode_type_mask) == mode_directory)
+                at_removedir
+            else
+                0,
+        );
+    } else return error.LockFailed;
+    keep_replacement = true;
+    return replacement_fd;
 }
 
 fn openProtectedLock(
@@ -372,57 +575,101 @@ fn openProtectedLock(
         ) catch return error.OutOfMemory;
     defer allocator.free(name);
 
-    var fd = std.c.openat(directory_fd, name.ptr, .{
-        .ACCMODE = .RDWR,
-        .CREAT = true,
-        .EXCL = true,
-        .CLOEXEC = true,
-        .NOFOLLOW = true,
-    }, @as(std.c.mode_t, if (shared_namespace) 0o666 else 0o600));
-    const created = fd >= 0;
-    if (fd < 0 and std.c._errno().* == @intFromEnum(std.posix.E.EXIST)) {
-        fd = std.c.openat(directory_fd, name.ptr, .{
+    while (true) {
+        var fd = std.c.openat(directory_fd, name.ptr, .{
             .ACCMODE = .RDWR,
+            .CREAT = true,
+            .EXCL = true,
             .CLOEXEC = true,
             .NOFOLLOW = true,
-        });
-    }
-    if (fd < 0) return error.LockFailed;
-    errdefer _ = std.c.close(fd);
-    if ((created or (shared_namespace and std.c.geteuid() == 0)) and
-        std.c.fchmod(
-            fd,
-            if (shared_namespace) 0o666 else 0o600,
-        ) != 0)
-        return error.LockFailed;
-
-    const opened = lockFileStatFd(fd) orelse return error.LockFailed;
-    const named = lockFileStatAt(directory_fd, name.ptr) orelse
-        return error.LockFailed;
-    if (!validLockFile(opened, shared_namespace) or
-        !opened.identity.eql(named.identity))
-    {
-        return error.LockFailed;
-    }
-
-    const operation = lock_exclusive |
-        (if (wait) @as(c_int, 0) else lock_nonblocking);
-    if (flock(fd, operation) != 0) {
-        if (!wait and
-            (std.c._errno().* == @intFromEnum(std.posix.E.AGAIN) or
-                std.c._errno().* == @intFromEnum(std.posix.E.ACCES)))
+        }, @as(std.c.mode_t, if (shared_namespace) 0o644 else 0o600));
+        const created = fd >= 0;
+        if (fd < 0 and
+            std.c._errno().* == @intFromEnum(std.posix.E.EXIST))
         {
-            return error.WouldBlock;
+            fd = openExistingLock(directory_fd, name.ptr);
         }
-        return error.LockFailed;
+        if (fd < 0) {
+            if (shared_namespace and privilegedRoot()) {
+                return error.LockFailed;
+            }
+            return error.LockFailed;
+        }
+        if (created and std.c.fchmod(
+            fd,
+            if (shared_namespace) 0o644 else 0o600,
+        ) != 0) {
+            _ = std.c.close(fd);
+            return error.LockFailed;
+        }
+
+        var opened = lockFileStatFd(fd) orelse {
+            _ = std.c.close(fd);
+            return error.LockFailed;
+        };
+        var named = lockFileStatAt(directory_fd, name.ptr) orelse {
+            _ = std.c.close(fd);
+            continue;
+        };
+        if (!opened.identity.eql(named.identity)) {
+            _ = std.c.close(fd);
+            continue;
+        }
+        const expected_mode: u16 = if (shared_namespace) 0o644 else 0o600;
+        if ((opened.mode & mode_type_mask) == mode_regular and
+            opened.nlink == 1 and
+            opened.uid == @as(u32, @intCast(std.c.geteuid())) and
+            (opened.mode & 0o7777) != expected_mode)
+        {
+            if (std.c.fchmod(fd, expected_mode) != 0) {
+                _ = std.c.close(fd);
+                return error.LockFailed;
+            }
+            opened = lockFileStatFd(fd) orelse {
+                _ = std.c.close(fd);
+                return error.LockFailed;
+            };
+            named = lockFileStatAt(directory_fd, name.ptr) orelse {
+                _ = std.c.close(fd);
+                continue;
+            };
+            if (!opened.identity.eql(named.identity)) {
+                _ = std.c.close(fd);
+                continue;
+            }
+        }
+        if (!validLockFile(opened, shared_namespace)) {
+            if (shared_namespace and privilegedRoot()) {
+                if (try promoteSharedLock(
+                    directory_fd,
+                    name.ptr,
+                    fd,
+                    wait,
+                )) |promoted| return promoted;
+                continue;
+            }
+            _ = std.c.close(fd);
+            return error.LockFailed;
+        }
+
+        flockForMode(fd, wait) catch |err| {
+            _ = std.c.close(fd);
+            return err;
+        };
+        const after = lockFileStatAt(directory_fd, name.ptr) orelse {
+            _ = flock(fd, lock_unlock);
+            _ = std.c.close(fd);
+            continue;
+        };
+        if (!opened.identity.eql(after.identity) or
+            !validLockFile(after, shared_namespace))
+        {
+            _ = flock(fd, lock_unlock);
+            _ = std.c.close(fd);
+            continue;
+        }
+        return fd;
     }
-    errdefer _ = flock(fd, lock_unlock);
-    const after = lockFileStatAt(directory_fd, name.ptr) orelse
-        return error.LockFailed;
-    if (!opened.identity.eql(after.identity) or
-        !validLockFile(after, shared_namespace))
-        return error.LockFailed;
-    return fd;
 }
 
 const TargetIdentity = struct {
@@ -748,7 +995,7 @@ test "protected lock object rejects a preplaced symlink" {
 }
 
 test "shared namespace lock is visible to the target owner across uid" {
-    if (std.c.geteuid() != 0) return error.SkipZigTest;
+    if (!privilegedRoot()) return error.SkipZigTest;
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -828,4 +1075,222 @@ test "shared namespace lock is visible to the target owner across uid" {
     var status: c_int = 0;
     try std.testing.expectEqual(child, waitpid(child, &status, 0));
     try std.testing.expectEqual(@as(c_int, 0), status);
+}
+
+test "privileged shared lock safely replaces a held unprivileged precreation" {
+    if (!privilegedRoot()) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const root_path = root_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &root_buffer,
+    )];
+    const root_z = try std.testing.allocator.dupeZ(u8, root_path);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    const identity = try fdIdentity(root_fd);
+
+    const directory_fd = try openTrustedLockDirectory(
+        default_lock_directory,
+        true,
+        true,
+    );
+    defer _ = std.c.close(directory_fd);
+    const name = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "tdnf-root-{x}-{x}-{x}.lock",
+        .{ identity.dev_major, identity.dev_minor, identity.inode },
+        0,
+    );
+    defer std.testing.allocator.free(name);
+    _ = std.c.unlinkat(directory_fd, name.ptr, 0);
+    defer _ = std.c.unlinkat(directory_fd, name.ptr, 0);
+
+    var ready = [_]c_int{ -1, -1 };
+    var release = [_]c_int{ -1, -1 };
+    try std.testing.expectEqual(@as(c_int, 0), std.c.pipe(&ready));
+    defer {
+        _ = std.c.close(ready[0]);
+        _ = std.c.close(ready[1]);
+    }
+    try std.testing.expectEqual(@as(c_int, 0), std.c.pipe(&release));
+    defer {
+        _ = std.c.close(release[0]);
+        _ = std.c.close(release[1]);
+    }
+
+    const child = fork();
+    try std.testing.expect(child >= 0);
+    if (child == 0) {
+        _ = std.c.close(ready[0]);
+        _ = std.c.close(release[1]);
+        if (setgid(65534) != 0 or setuid(65534) != 0) _exit(2);
+        const fd = std.c.openat(directory_fd, name.ptr, .{
+            .ACCMODE = .RDWR,
+            .CREAT = true,
+            .EXCL = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        }, @as(std.c.mode_t, 0o644));
+        if (fd < 0 or std.c.fchmod(fd, 0o644) != 0 or
+            flock(fd, lock_exclusive) != 0)
+        {
+            _exit(3);
+        }
+        var byte: [1]u8 = .{1};
+        if (std.c.write(ready[1], &byte, 1) != 1) _exit(4);
+        if (std.c.read(release[0], &byte, 1) != 1) _exit(5);
+        _ = flock(fd, lock_unlock);
+        _ = std.c.close(fd);
+        _exit(0);
+    }
+    _ = std.c.close(ready[1]);
+    ready[1] = -1;
+    _ = std.c.close(release[0]);
+    release[0] = -1;
+    var byte: [1]u8 = undefined;
+    try std.testing.expectEqual(
+        @as(isize, 1),
+        std.c.read(ready[0], &byte, 1),
+    );
+    try std.testing.expectError(
+        error.WouldBlock,
+        openProtectedLock(
+            std.testing.allocator,
+            default_lock_directory,
+            identity,
+            false,
+            true,
+            true,
+        ),
+    );
+    byte[0] = 1;
+    try std.testing.expectEqual(
+        @as(isize, 1),
+        std.c.write(release[1], &byte, 1),
+    );
+    var status: c_int = 0;
+    try std.testing.expectEqual(child, waitpid(child, &status, 0));
+    try std.testing.expectEqual(@as(c_int, 0), status);
+
+    const lock_fd = try openProtectedLock(
+        std.testing.allocator,
+        default_lock_directory,
+        identity,
+        true,
+        true,
+        true,
+    );
+    defer {
+        _ = flock(lock_fd, lock_unlock);
+        _ = std.c.close(lock_fd);
+    }
+    const stat = lockFileStatAt(directory_fd, name.ptr) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 0), stat.uid);
+    try std.testing.expectEqual(@as(u16, 0o644), stat.mode & 0o7777);
+}
+
+test "unprivileged process cannot unlink or replace a privileged shared lock" {
+    if (!privilegedRoot()) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const root_path = root_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &root_buffer,
+    )];
+    const root_z = try std.testing.allocator.dupeZ(u8, root_path);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    const identity = try fdIdentity(root_fd);
+    const directory_fd = try openTrustedLockDirectory(
+        default_lock_directory,
+        true,
+        true,
+    );
+    defer _ = std.c.close(directory_fd);
+    const name = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "tdnf-root-{x}-{x}-{x}.lock",
+        .{ identity.dev_major, identity.dev_minor, identity.inode },
+        0,
+    );
+    defer std.testing.allocator.free(name);
+    _ = std.c.unlinkat(directory_fd, name.ptr, 0);
+    defer _ = std.c.unlinkat(directory_fd, name.ptr, 0);
+
+    const lock_fd = try openProtectedLock(
+        std.testing.allocator,
+        default_lock_directory,
+        identity,
+        true,
+        true,
+        true,
+    );
+    defer {
+        _ = flock(lock_fd, lock_unlock);
+        _ = std.c.close(lock_fd);
+    }
+    const child = fork();
+    try std.testing.expect(child >= 0);
+    if (child == 0) {
+        _ = std.c.close(lock_fd);
+        if (setgid(65534) != 0 or setuid(65534) != 0) _exit(2);
+        if (std.c.unlinkat(directory_fd, name.ptr, 0) == 0) _exit(3);
+        const replacement = ".tdnf-lock-attacker";
+        _ = std.c.unlinkat(directory_fd, replacement, 0);
+        const replacement_fd = std.c.openat(directory_fd, replacement, .{
+            .ACCMODE = .RDWR,
+            .CREAT = true,
+            .EXCL = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        }, @as(std.c.mode_t, 0o644));
+        if (replacement_fd < 0) _exit(4);
+        _ = std.c.close(replacement_fd);
+        if (std.c.renameat(
+            directory_fd,
+            replacement,
+            directory_fd,
+            name.ptr,
+        ) == 0) {
+            _exit(5);
+        }
+        _ = std.c.unlinkat(directory_fd, replacement, 0);
+        const contender = openExistingLock(directory_fd, name.ptr);
+        if (contender < 0) _exit(6);
+        const blocked = flock(
+            contender,
+            lock_exclusive | lock_nonblocking,
+        ) != 0;
+        _ = std.c.close(contender);
+        _exit(if (blocked) 0 else 7);
+    }
+    var status: c_int = 0;
+    try std.testing.expectEqual(child, waitpid(child, &status, 0));
+    try std.testing.expectEqual(@as(c_int, 0), status);
+    const fd_stat = lockFileStatFd(lock_fd) orelse
+        return error.TestUnexpectedResult;
+    const path_stat = lockFileStatAt(directory_fd, name.ptr) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(fd_stat.identity.eql(path_stat.identity));
+    try std.testing.expectEqual(@as(u32, 0), path_stat.uid);
 }

@@ -123,6 +123,8 @@ def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
     relative = os.path.relpath(source, repository)
     cache_suffix = "tdnf-pinned-{}".format(uuid.uuid4().hex)
     host_cache = os.path.join("/var/cache", cache_suffix)
+    configured_cache = os.path.join(
+        "/var/cache", "tdnf-configured-{}".format(uuid.uuid4().hex))
     installroot = os.path.join(
         utils.config["build_dir"], "pinned-root-{}".format(uuid.uuid4().hex))
     target_rpm = os.path.join(
@@ -132,7 +134,7 @@ def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
 
     config_path = os.path.join(installroot, "etc/tdnf/tdnf.conf")
     with open(config_path, "a") as config:
-        config.write("\ncachedir={}\n".format(host_cache))
+        config.write("\ncachedir={}\n".format(configured_cache))
 
     source_digest = file_sha256(source)
     assert not os.path.exists(host_cache)
@@ -141,25 +143,34 @@ def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
         ret = utils.run([
             "tdnf", "install", "-y", "--nogpgcheck",
             "--setopt=keepcache=1",
+            "--setopt=cachedir={}".format(host_cache),
             "--installroot", installroot,
             "--releasever=4.0", pkgname,
         ], noconfig=True)
         assert ret["retval"] == 0, ret.get("stderr", [])
-        assert check_package(utils, pkgname, installroot=installroot)
         assert os.path.isfile(target_rpm)
         assert file_sha256(target_rpm) == source_digest
         assert not os.path.exists(host_cache)
+        assert not os.path.exists(configured_cache)
+        rpm_query = utils.run([
+            "rpm", "--root", installroot, "-q", pkgname,
+        ])
+        assert rpm_query["retval"] == 0, rpm_query.get("stderr", [])
 
         erase_package(utils, pkgname, installroot=installroot)
         os.remove(target_rpm)
         ret = utils.run([
             "tdnf", "install", "-y", "--nogpgcheck",
             "--setopt=keepcache=0",
+            "--setopt=cachedir={}".format(host_cache),
             "--installroot", installroot,
             "--releasever=4.0", pkgname,
         ], noconfig=True)
         assert ret["retval"] == 0, ret.get("stderr", [])
-        assert check_package(utils, pkgname, installroot=installroot)
+        rpm_query = utils.run([
+            "rpm", "--root", installroot, "-q", pkgname,
+        ])
+        assert rpm_query["retval"] == 0, rpm_query.get("stderr", [])
         assert not os.path.exists(target_rpm)
         assert not os.path.exists(host_cache)
     finally:

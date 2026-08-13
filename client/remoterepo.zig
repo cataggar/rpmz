@@ -373,7 +373,7 @@ fn openConfiguredCacheRoot(
     if (handle.pRpmConfig) |raw| {
         const config: *const txn_config.TxnConfig =
             @ptrCast(@alignCast(raw));
-        if (config.cacheDirUsesPinnedRoot(cache)) {
+        if (config.pinnedCacheDirFd() != null) {
             output.* = std.c.fcntl(
                 config.pinnedCacheDirFd().?,
                 std.c.F.DUPFD_CLOEXEC,
@@ -961,6 +961,52 @@ fn downloadFileFromRepoPinned(
     );
 }
 
+pub export fn TDNFDownloadFileAt(
+    handle_opt: ?*Tdnf,
+    repo_opt: ?*RepoData,
+    url_opt: ?[*:0]const u8,
+    directory_fd: c_int,
+    name_opt: ?[*:0]const u8,
+    progress_text: ?[*:0]const u8,
+    require_https: c_int,
+    output_fd: ?*c_int,
+) u32 {
+    if (output_fd) |out| out.* = -1;
+    const handle = handle_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const repo = repo_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const url = url_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const name = name_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (url[0] == 0 or directory_fd < 0 or
+        !isSafeComponent(std.mem.span(name)))
+    {
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    var parent = PinnedParent{
+        .fd = std.c.fcntl(
+            directory_fd,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 0),
+        ),
+        .name = undefined,
+    };
+    if (parent.fd < 0) return systemError(errnoValue());
+    defer parent.deinit();
+    const name_bytes = std.mem.span(name);
+    if (name_bytes.len > std.fs.max_name_bytes)
+        return systemError(@intFromEnum(std.posix.E.NAMETOOLONG));
+    @memcpy(parent.name[0..name_bytes.len], name_bytes);
+    parent.name[name_bytes.len] = 0;
+    return downloadToPinnedParent(
+        handle,
+        repo,
+        url,
+        &parent,
+        progress_text,
+        require_https != 0,
+        output_fd,
+    );
+}
+
 pub export fn TDNFDownloadFileFromRepo(
     handle_opt: ?*Tdnf,
     repo_opt: ?*RepoData,
@@ -1472,7 +1518,7 @@ fn spawnRetryServer() !struct { thread: std.Thread, port: u16 } {
     };
 }
 
-test "package URL construction preserves absolute URLs and joins relative locations" {
+test "remoterepo: package URL construction preserves absolute URLs and joins relative locations" {
     var fixture: TestFixture = .{};
     const cache = try zString("/unused");
     defer std.testing.allocator.free(cache);
@@ -1511,7 +1557,7 @@ test "package URL construction preserves absolute URLs and joins relative locati
     );
 }
 
-test "file downloads replace atomically and preserve the old final on failure" {
+test "remoterepo: file downloads replace atomically and preserve the old final on failure" {
     const root = try resetTestDirectory("atomic-file");
     defer std.testing.allocator.free(root);
     const source = try std.fs.path.join(
@@ -1579,7 +1625,7 @@ test "file downloads replace atomically and preserve the old final on failure" {
     try std.testing.expectEqualStrings("keep this final", preserved);
 }
 
-test "package cache uses repository ID path and reuses a nonempty cache hit" {
+test "remoterepo: package cache uses repository ID path and reuses a nonempty cache hit" {
     const root = try resetTestDirectory("cache-hit");
     defer std.testing.allocator.free(root);
     const repository = try std.fs.path.join(
@@ -1655,7 +1701,7 @@ test "package cache uses repository ID path and reuses a nonempty cache hit" {
     try std.testing.expectEqualStrings("first package", cached);
 }
 
-test "package cache fd retains downloaded inode across pathname replacement" {
+test "remoterepo: package cache fd retains downloaded inode across pathname replacement" {
     const root = try resetTestDirectory("cache-fd");
     defer std.testing.allocator.free(root);
     const repository = try std.fs.path.join(
@@ -1735,7 +1781,7 @@ test "package cache fd retains downloaded inode across pathname replacement" {
     );
 }
 
-test "configured cache and download root symlinks are resolved once" {
+test "remoterepo: configured cache and download root symlinks are resolved once" {
     const root = try resetTestDirectory("root-symlinks");
     defer std.testing.allocator.free(root);
     const repository = try std.fs.path.join(
@@ -1930,7 +1976,7 @@ test "configured cache and download root symlinks are resolved once" {
     try std.testing.expectEqualStrings("symlinked root package", body);
 }
 
-test "transport failures retry and repository downloads fall back to the next base URL" {
+test "remoterepo: transport failures retry and repository downloads fall back to the next base URL" {
     const root = try resetTestDirectory("retry-fallback");
     defer std.testing.allocator.free(root);
     const cache = try zString(root);
@@ -2030,7 +2076,7 @@ test "transport failures retry and repository downloads fall back to the next ba
     try std.testing.expectEqualStrings("fallback success", fallback);
 }
 
-test "package tree rejects traversal and malicious cache symlinks" {
+test "remoterepo: package tree rejects traversal and malicious cache symlinks" {
     const root = try resetTestDirectory("unsafe-cache");
     defer std.testing.allocator.free(root);
     const cache_root = try std.fs.path.join(
@@ -2095,7 +2141,7 @@ test "package tree rejects traversal and malicious cache symlinks" {
     try std.testing.expectEqualStrings("outside", preserved);
 }
 
-test "URL helpers surface allocator exhaustion without partial output" {
+test "remoterepo: URL helpers surface allocator exhaustion without partial output" {
     var failing = std.testing.FailingAllocator.init(
         std.testing.allocator,
         .{ .fail_index = 0 },

@@ -350,6 +350,7 @@ extern fn TDNFFreeMemory(?*anyopaque) void;
 extern fn TDNFBuildRefreshInput(?*anyopaque, ?*anyopaque, *abi.RepositoryRefreshInput) u32;
 extern fn TDNFRemoveLastRefreshMarker(?*anyopaque, ?*anyopaque) u32;
 extern fn TDNFRepoMdCalculateCookieForFd(c_int, ?[*]u8) u32;
+extern fn TDNFOpenSnapshotFd(?*anyopaque, ?*anyopaque) c_int;
 
 const IdList = extern struct {
     pnElements: ?[*]i32,
@@ -669,6 +670,20 @@ fn loadRepository(
         }
         const prior = package_context.findRepositoryByOwner(context, input.repo_data);
         const verify_integrity = if (state) |value| value.enabled else false;
+        var snapshot_fd: c_int = -1;
+        if (!comptime integration_options.standalone_test) {
+            snapshot_fd = TDNFOpenSnapshotFd(
+                input.tdnf_handle,
+                input.repo_data,
+            );
+            if (snapshot_fd == -1 and input.repo_data != null)
+                return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+        }
+        var snapshot_transferred = false;
+        defer {
+            if (snapshot_fd >= 0 and !snapshot_transferred)
+                _ = std.c.close(snapshot_fd);
+        }
         const repository = if (config != null and
             config.?.pinnedCacheDirFd() != null)
         blk: {
@@ -686,6 +701,7 @@ fn loadRepository(
                 input.priority,
                 opened.paths,
                 verify_integrity,
+                snapshot_fd,
             ) catch |err| return mapMetadataLoadError(err);
         } else package_context.loadAvailableMetadata(
             context,
@@ -702,7 +718,9 @@ fn loadRepository(
                 .other = if (paths.other) |path| std.mem.span(path) else null,
             },
             verify_integrity,
+            snapshot_fd,
         ) catch |err| return mapMetadataLoadError(err);
+        snapshot_transferred = snapshot_fd >= 0;
         if (state) |value| {
             if (value.enabled) value.replaceRepositoryRecord(
                 if (prior) |old| @ptrCast(old) else null,
@@ -715,13 +733,29 @@ fn loadRepository(
         return 0;
     }
 
+    var snapshot_fd: c_int = -1;
+    if (!comptime integration_options.standalone_test) {
+        snapshot_fd = TDNFOpenSnapshotFd(
+            input.tdnf_handle,
+            input.repo_data,
+        );
+        if (snapshot_fd == -1 and input.repo_data != null)
+            return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    var snapshot_transferred = false;
+    defer {
+        if (snapshot_fd >= 0 and !snapshot_transferred)
+            _ = std.c.close(snapshot_fd);
+    }
     const repository = package_context.loadAvailableDirectory(
         context,
         std.mem.span(repository_id),
         input.repo_data,
         input.priority,
         std.mem.span(input.base_url orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER),
+        snapshot_fd,
     ) catch |err| return mapDirectoryLoadError(err);
+    snapshot_transferred = snapshot_fd >= 0;
     if (input.live_repository_slot) |slot| slot.* = @ptrCast(repository);
     return 0;
 }

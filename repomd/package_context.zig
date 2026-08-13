@@ -56,6 +56,7 @@ pub const Repository = struct {
     cookie_sha256: [32]u8 = [_]u8{0} ** 32,
     cache_options: available_loader.CacheOptions = .{},
     has_cookie: bool = false,
+    snapshot_fd: c_int = -1,
     cmdline_paths: std.ArrayList([:0]u8) = .empty,
     cmdline_fds: std.ArrayList(c_int) = .empty,
 
@@ -66,6 +67,7 @@ pub const Repository = struct {
             if (fd >= 0) _ = std.c.close(fd);
         }
         self.cmdline_fds.deinit(allocator);
+        if (self.snapshot_fd >= 0) _ = std.c.close(self.snapshot_fd);
         self.arena_state.deinit();
         allocator.destroy(self);
     }
@@ -249,6 +251,7 @@ pub fn loadAvailableMetadata(
     priority: i32,
     paths: available_loader.Paths,
     verify_integrity: bool,
+    snapshot_fd: c_int,
 ) available_loader.LoadError!*Repository {
     var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
     errdefer arena_state.deinit();
@@ -269,6 +272,7 @@ pub fn loadAvailableMetadata(
             .include_updateinfo = paths.updateinfo != null,
             .include_other = paths.other != null,
         },
+        snapshot_fd,
     );
 }
 
@@ -279,6 +283,7 @@ pub fn loadAvailableMetadataFds(
     priority: i32,
     paths: available_loader.FdPaths,
     verify_integrity: bool,
+    snapshot_fd: c_int,
 ) available_loader.LoadError!*Repository {
     var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
     errdefer arena_state.deinit();
@@ -299,6 +304,7 @@ pub fn loadAvailableMetadataFds(
             .include_updateinfo = paths.updateinfo != null,
             .include_other = paths.other != null,
         },
+        snapshot_fd,
     );
 }
 
@@ -310,6 +316,7 @@ fn finishAvailableMetadata(
     priority: i32,
     loaded: available_loader.PathModel,
     cache_options: available_loader.CacheOptions,
+    snapshot_fd: c_int,
 ) available_loader.LoadError!*Repository {
     const repository = try finishAvailable(
         context,
@@ -325,6 +332,7 @@ fn finishAvailableMetadata(
         repository.cache_options,
     );
     repository.has_cookie = true;
+    repository.snapshot_fd = snapshot_fd;
     return repository;
 }
 
@@ -334,6 +342,7 @@ pub fn loadAvailableDirectory(
     owner: ?*anyopaque,
     priority: i32,
     directory: []const u8,
+    snapshot_fd: c_int,
 ) directory_repository.LoadError!*Repository {
     var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
     errdefer arena_state.deinit();
@@ -342,7 +351,7 @@ pub fn loadAvailableDirectory(
         directory,
         .read,
     );
-    return finishAvailable(
+    const repository = try finishAvailable(
         context,
         arena_state,
         id,
@@ -350,6 +359,8 @@ pub fn loadAvailableDirectory(
         priority,
         repository_model,
     );
+    repository.snapshot_fd = snapshot_fd;
+    return repository;
 }
 
 fn finishAvailable(

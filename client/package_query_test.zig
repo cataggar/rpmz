@@ -115,6 +115,7 @@ test "production query layer preserves repository and command-line handles" {
         null,
         10,
         path_a,
+        -1,
     );
     const repo_b = try context_api.loadAvailableDirectory(
         context,
@@ -122,6 +123,7 @@ test "production query layer preserves repository and command-line handles" {
         null,
         20,
         path_b,
+        -1,
     );
     const command_line = try context_api.createCommandLine(context);
     const local_id = try context_api.addCommandLineRpm(

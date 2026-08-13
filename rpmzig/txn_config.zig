@@ -710,8 +710,26 @@ pub const TxnConfig = struct {
         self: *const TxnConfig,
         path: []const u8,
     ) bool {
-        _ = path;
-        return self.pinned_cache_dir_fd != null;
+        return self.pinned_cache_dir_fd != null and
+            pinnedPathMatches(self.pinned_cache_dir, path);
+    }
+
+    pub fn repinCacheDir(
+        self: *TxnConfig,
+        path: []const u8,
+        fd: c_int,
+    ) InitError!void {
+        const stat = fdStat(fd) orelse return error.InstallRootPinFailed;
+        if ((stat.mode & mode_type_mask) != mode_directory)
+            return error.InstallRootPinFailed;
+        const replacement_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(replacement_path);
+        const replacement_fd = duplicateFdCloexec(fd);
+        if (replacement_fd < 0) return error.InstallRootPinFailed;
+        if (self.pinned_cache_dir_fd) |old_fd| _ = std.c.close(old_fd);
+        if (self.pinned_cache_dir) |old_path| self.allocator.free(old_path);
+        self.pinned_cache_dir = replacement_path;
+        self.pinned_cache_dir_fd = replacement_fd;
     }
 
     pub fn pluginConfDirUsesPinnedRoot(
