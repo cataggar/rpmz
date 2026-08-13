@@ -1872,6 +1872,7 @@ pub const struct__TDNF_PKG_INFO = extern struct {
     pbChecksum: [*c]u8 = null,
     pChangeLogEntries: PTDNF_PKG_CHANGELOG_ENTRY = null,
     pNext: [*c]struct__TDNF_PKG_INFO = null,
+    dwSourcePackageHandle: u32 = 0,
     pub const TDNFFreePackageInfo = __root.TDNFFreePackageInfo;
     pub const TDNFFreePackageInfoArray = __root.TDNFFreePackageInfoArray;
     pub const TDNFNativeQuerySerializePackageInfoRefs = __root.TDNFNativeQuerySerializePackageInfoRefs;
@@ -2331,6 +2332,7 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_PACKAGE = extern struct {
     nChecksumIsHeaderOnly: c_int = 0,
     nHasPackageSize: c_int = 0,
     nHasInstalledSize: c_int = 0,
+    dwSourcePackageHandle: u32 = 0,
 };
 pub const TDNF_REPOMD_NATIVE_SOLVER_PACKAGE = struct__TDNF_REPOMD_NATIVE_SOLVER_PACKAGE;
 pub const struct__TDNF_REPOMD_NATIVE_SOLVER_ACTION = extern struct {
@@ -2409,6 +2411,8 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB = extern struct {
     nChecksumIsPkgId: c_int = 0,
     dwQueuePair: u32 = 0,
     nHasQueuePair: c_int = 0,
+    nRpmFd: c_int = -1,
+    dwSourcePackageHandle: u32 = 0,
 };
 pub const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB = struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB;
 pub const PTDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB = [*c]struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB;

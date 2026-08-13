@@ -37,6 +37,7 @@ pub const RepositoryInput = struct {
     priority: i32 = default_repository_priority,
     cost: u32 = default_repository_cost,
     installed_states: []const InstalledState = &.{},
+    source_package_handles: []const u32 = &.{},
 };
 
 pub const PackageRange = struct {
@@ -70,6 +71,7 @@ pub const UniversePackage = struct {
     repository_package_index: u32,
     source: *const metadata.Package,
     installed: ?InstalledState,
+    source_package_handle: u32 = 0,
 
     pub fn relationEntries(
         self: UniversePackage,
@@ -94,6 +96,7 @@ pub const UniverseInitError = error{
     DuplicateRepositoryId,
     MultipleInstalledRepositories,
     InstalledStateCountMismatch,
+    SourcePackageHandleCountMismatch,
     UnexpectedInstalledState,
     TooManyRepositories,
     TooManyPackages,
@@ -132,6 +135,11 @@ pub const Universe = struct {
                 return error.TooManyPackages;
             }
             package_count += input.model.packages.len;
+            if (input.source_package_handles.len != 0 and
+                input.source_package_handles.len != input.model.packages.len)
+            {
+                return error.SourcePackageHandleCountMismatch;
+            }
 
             switch (input.kind) {
                 .installed => {
@@ -195,6 +203,10 @@ pub const Universe = struct {
                             input.installed_states[package_index]
                         else
                             null,
+                        .source_package_handle = if (input.source_package_handles.len != 0)
+                            input.source_package_handles[package_index]
+                        else
+                            0,
                     };
                     package_cursor += 1;
                 }

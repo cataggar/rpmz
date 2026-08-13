@@ -456,7 +456,7 @@ extern fn TDNFRemovePackageFromCache(
 ) callconv(.c) u32;
 extern fn TDNFPackageContextDuplicateRpmFd(
     ?*const anyopaque,
-    ?[*:0]const u8,
+    i32,
     *c_int,
 ) callconv(.c) u32;
 extern fn TDNFGPGCheckPackageWithFile(
@@ -929,11 +929,22 @@ fn addInstallPackage(
         if (cache_entry) |entry| free(entry);
     }
     var rc: u32 = 0;
-    rc = TDNFPackageContextDuplicateRpmFd(
-        tdnf.pSack,
-        location,
-        &rpm_fd,
-    );
+    if (info.pszRepoName != null and
+        std.mem.eql(
+            u8,
+            std.mem.span(info.pszRepoName.?),
+            "@cmdline",
+        ))
+    {
+        if (info.dwSourcePackageHandle == 0)
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        rc = TDNFPackageContextDuplicateRpmFd(
+            tdnf.pSack,
+            @intCast(info.dwSourcePackageHandle),
+            &rpm_fd,
+        );
+        if (rc == 0 and rpm_fd < 0) return ERROR_TDNF_RPMTS_FDDUP_FAILED;
+    }
     if (rc != 0) return rc;
     if (rpm_fd >= 0) {
         rc = TDNFAllocateString(location, &path);
@@ -1048,6 +1059,19 @@ fn addInstallPackage(
         metadata.package_kind != package_source and
         metadata.package_kind != package_nosrc)
         return ERROR_TDNF_RPM_CHECK;
+    if (info.pszVersion == null or info.pszRelease == null or
+        info.pszArch == null or
+        !identityMatchesMetadata(.{
+            .name = std.mem.span(info.pszName.?),
+            .epoch = info.dwEpoch,
+            .version = std.mem.span(info.pszVersion.?),
+            .release = std.mem.span(info.pszRelease.?),
+            .arch = std.mem.span(info.pszArch.?),
+        }, metadata))
+    {
+        common.log(LOG_ERR, "rpm file (%s) identity does not match selected package\n", .{path.?});
+        return ERROR_TDNF_RPM_CHECK;
+    }
 
     if (ts.pCachedRpmsArray != null and conf.pszCacheDir != null and
         std.mem.startsWith(u8, std.mem.span(path.?), std.mem.span(conf.pszCacheDir.?)))
@@ -4091,6 +4115,30 @@ test "fixed executor accepts explicit zero for omitted RPM epoch" {
         .has_epoch = 0,
     };
     try std.testing.expect(identityMatchesMetadata(identity, metadata));
+}
+
+test "selected package identity rejects substituted RPM metadata" {
+    const identity = FixedOrderPackageIdentity{
+        .name = "selected",
+        .epoch = 2,
+        .version = "3",
+        .release = "4",
+        .arch = "x86_64",
+    };
+    var metadata = c.tdnf_rpm_file_metadata{
+        .name = "selected",
+        .version = "3",
+        .release = "4",
+        .arch = "x86_64",
+        .epoch = 2,
+        .has_epoch = 1,
+    };
+    try std.testing.expect(identityMatchesMetadata(identity, metadata));
+    metadata.name = "substituted";
+    try std.testing.expect(!identityMatchesMetadata(identity, metadata));
+    metadata.name = "selected";
+    metadata.arch = "aarch64";
+    try std.testing.expect(!identityMatchesMetadata(identity, metadata));
 }
 
 test "auxiliary prior can be shared across replacement action kinds" {

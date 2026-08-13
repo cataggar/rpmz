@@ -239,6 +239,7 @@ fn fillPackage(
     }
     out.nChecksumIsPkgId = @intFromBool(source.checksum.is_pkgid);
     out.nChecksumIsHeaderOnly = @intFromBool(source.checksum.header_only);
+    out.dwSourcePackageHandle = package.source_package_handle;
     if (source.size.package) |size| {
         out.nPackageSize = size;
         out.nHasPackageSize = 1;

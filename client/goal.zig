@@ -1881,6 +1881,7 @@ pub const struct__TDNF_PKG_INFO = extern struct {
     pbChecksum: [*c]u8 = null,
     pChangeLogEntries: PTDNF_PKG_CHANGELOG_ENTRY = null,
     pNext: [*c]struct__TDNF_PKG_INFO = null,
+    dwSourcePackageHandle: u32 = 0,
     pub const TDNFFreePackageInfo = __root.TDNFFreePackageInfo;
     pub const TDNFFreePackageInfoArray = __root.TDNFFreePackageInfoArray;
     pub const TDNFNativeQuerySerializePackageInfoRefs = __root.TDNFNativeQuerySerializePackageInfoRefs;
@@ -2340,6 +2341,7 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_PACKAGE = extern struct {
     nChecksumIsHeaderOnly: c_int = 0,
     nHasPackageSize: c_int = 0,
     nHasInstalledSize: c_int = 0,
+    dwSourcePackageHandle: u32 = 0,
 };
 pub const TDNF_REPOMD_NATIVE_SOLVER_PACKAGE = struct__TDNF_REPOMD_NATIVE_SOLVER_PACKAGE;
 pub const struct__TDNF_REPOMD_NATIVE_SOLVER_ACTION = extern struct {
@@ -2419,6 +2421,8 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB = extern struct {
     nChecksumIsPkgId: c_int = 0,
     dwQueuePair: u32 = 0,
     nHasQueuePair: c_int = 0,
+    nRpmFd: c_int = -1,
+    dwSourcePackageHandle: u32 = 0,
     pub const TDNFGoalFreeNativeSolverJobs = __root.TDNFGoalFreeNativeSolverJobs;
     pub const TDNFGoalFreeNativeSolverHiddenAvailable = __root.TDNFGoalFreeNativeSolverHiddenAvailable;
 };
@@ -2854,6 +2858,7 @@ pub extern fn TDNFPackageContextRootDir(pContext: ?*const TDNF_PACKAGE_CONTEXT) 
 pub extern fn TDNFPackageContextInitCommandLine(pContext: PTDNF_PACKAGE_CONTEXT, ppRepository: [*c]PTDNF_REPOSITORY_CONTEXT) u32;
 pub extern fn TDNFPackageContextResetCommandLine(pContext: PTDNF_PACKAGE_CONTEXT, ppRepository: [*c]PTDNF_REPOSITORY_CONTEXT) u32;
 pub extern fn TDNFPackageContextAddRpm(pContext: PTDNF_PACKAGE_CONTEXT, pRepository: PTDNF_REPOSITORY_CONTEXT, pszPath: [*c]const u8, pdwPkgId: [*c]u32) u32;
+pub extern fn TDNFPackageContextDuplicateRpmFd(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, pFd: [*c]c_int) u32;
 pub extern fn TDNFPackageContextGetFields(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, pFields: PTDNF_PKG_FIELDS) u32;
 pub extern fn TDNFPackageContextGetRepoNevra(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, ppszRepo: [*c][*c]const u8, ppszNevra: [*c][*c]u8) u32;
 pub extern fn TDNFPackageContextGetInstalledPkgIds(pContext: PTDNF_PACKAGE_CONTEXT, pIdList: PTDNF_ID_LIST) u32;
@@ -5098,6 +5103,23 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
                     if (dwError != @as(u32, 0)) return dwError;
                     if (!false) break;
                 }
+                pJob.*.dwSourcePackageHandle = @intCast(dwPkgId);
+                dwError = TDNFPackageContextDuplicateRpmFd(
+                    pTdnf.*.pSack,
+                    dwPkgId,
+                    &pJob.*.nRpmFd,
+                );
+                while (true) {
+                    if (dwError != @as(u32, 0)) return dwError;
+                    if (!false) break;
+                }
+                if (pJob.*.nRpmFd < 0) {
+                    dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + ENODATA));
+                    while (true) {
+                        if (dwError != @as(u32, 0)) return dwError;
+                        if (!false) break;
+                    }
+                }
             }
             pJob.*.dwEpoch = dwJobEpoch;
             pJob.*.pszName = pszJobName;
@@ -5190,6 +5212,12 @@ pub fn TDNFGoalFreeNativeSolverJobs(arg_pJobs: PTDNF_REPOMD_NATIVE_SOLVER_LIVE_J
     {
         dwIndex = 0;
         while (dwIndex < dwJobCount) : (dwIndex +%= 1) {
+            if (pJobs[dwIndex].dwSourcePackageHandle != 0 and
+                pJobs[dwIndex].nRpmFd >= 0)
+            {
+                _ = close(pJobs[dwIndex].nRpmFd);
+                pJobs[dwIndex].nRpmFd = -1;
+            }
             var pszName: [*c]u8 = @ptrCast(@alignCast(@constCast(pJobs[dwIndex].pszName)));
             _ = &pszName;
             var pszVersion: [*c]u8 = @ptrCast(@alignCast(@constCast(pJobs[dwIndex].pszVersion)));

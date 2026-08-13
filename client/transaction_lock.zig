@@ -10,9 +10,16 @@ const mode_regular: u16 = 0o100000;
 const lock_exclusive: c_int = 2;
 const lock_nonblocking: c_int = 4;
 const lock_unlock: c_int = 8;
+// Use the root-owned sticky tmpfs namespace shared across local users.
+const default_lock_directory = "/dev/shm";
 
 extern fn flock(fd: c_int, operation: c_int) callconv(.c) c_int;
-extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn fork() callconv(.c) c_int;
+extern fn waitpid(pid: c_int, status: *c_int, options: c_int) callconv(.c) c_int;
+extern fn setgid(gid: u32) callconv(.c) c_int;
+extern fn setuid(uid: u32) callconv(.c) c_int;
+extern fn chown(path: [*:0]const u8, uid: u32, gid: u32) callconv(.c) c_int;
+extern fn _exit(status: c_int) callconv(.c) noreturn;
 
 pub const Error = error{
     InvalidTarget,
@@ -108,6 +115,7 @@ fn acquireInDirectoryMode(
         identity,
         wait,
         lock_directory.len == 0,
+        lock_directory.len == 0,
     );
     errdefer _ = std.c.close(lock_fd);
     errdefer _ = flock(lock_fd, lock_unlock);
@@ -136,26 +144,8 @@ fn acquireInDirectoryMode(
 }
 
 fn defaultLockDirectoryAlloc(allocator: Allocator) Error![]u8 {
-    if (std.c.geteuid() == 0) {
-        return allocator.dupe(u8, "/run/tdnf/locks") catch
-            error.OutOfMemory;
-    }
-    if (getenv("XDG_RUNTIME_DIR")) |raw| {
-        const runtime = std.mem.span(raw);
-        if (runtime.len != 0 and runtime[0] == '/') {
-            return std.fs.path.join(
-                allocator,
-                &.{ runtime, "tdnf", "locks" },
-            ) catch error.OutOfMemory;
-        }
-    }
-    const home_raw = getenv("HOME") orelse return error.LockFailed;
-    const home = std.mem.span(home_raw);
-    if (home.len == 0 or home[0] != '/') return error.LockFailed;
-    return std.fs.path.join(
-        allocator,
-        &.{ home, ".tdnf", "runtime-locks" },
-    ) catch error.OutOfMemory;
+    return allocator.dupe(u8, default_lock_directory) catch
+        error.OutOfMemory;
 }
 
 fn safeComponent(component: []const u8) bool {
@@ -166,7 +156,11 @@ fn safeComponent(component: []const u8) bool {
         std.mem.indexOfScalar(u8, component, 0) == null;
 }
 
-fn trustedDirectoryStat(fd: c_int, final: bool) Error!void {
+fn trustedDirectoryStat(
+    fd: c_int,
+    final: bool,
+    shared_namespace: bool,
+) Error!void {
     var stat = std.mem.zeroes(std.os.linux.Statx);
     if (std.c.statx(
         fd,
@@ -178,18 +172,24 @@ fn trustedDirectoryStat(fd: c_int, final: bool) Error!void {
         return error.LockFailed;
     }
     const euid: u32 = @intCast(std.c.geteuid());
-    if (stat.uid != 0 and stat.uid != euid) return error.LockFailed;
     const permissions = stat.mode & 0o7777;
+    if (final and shared_namespace) {
+        if (stat.uid != 0 or permissions != 0o1777)
+            return error.LockFailed;
+        return;
+    }
+    if (stat.uid != 0 and stat.uid != euid) return error.LockFailed;
     const writable_by_others = (permissions & 0o022) != 0;
     const root_sticky = stat.uid == 0 and (permissions & 0o1000) != 0;
     if (writable_by_others and !root_sticky) return error.LockFailed;
-    if (final and (stat.uid != euid or writable_by_others))
+    if (final and (stat.uid != euid or permissions != 0o700))
         return error.LockFailed;
 }
 
 fn openTrustedLockDirectory(
     path: []const u8,
     strict_ancestors: bool,
+    shared_namespace: bool,
 ) Error!c_int {
     if (path.len < 2 or path[0] != '/' or path[path.len - 1] == '/')
         return error.LockFailed;
@@ -204,6 +204,7 @@ fn openTrustedLockDirectory(
 
     var components = std.mem.splitScalar(u8, path[1..], '/');
     var component = components.next() orelse return error.LockFailed;
+    var component_index: usize = 0;
     while (true) {
         if (!safeComponent(component)) return error.LockFailed;
         var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
@@ -211,6 +212,7 @@ fn openTrustedLockDirectory(
         name_buffer[component.len] = 0;
         const name: [*:0]const u8 = @ptrCast(&name_buffer);
         const next_component = components.next();
+        var created = false;
         var next = std.c.openat(current, name, .{
             .ACCMODE = .RDONLY,
             .DIRECTORY = true,
@@ -220,11 +222,16 @@ fn openTrustedLockDirectory(
         if (next < 0 and
             std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
         {
-            if (std.c.mkdirat(current, name, 0o700) != 0 and
+            const mode: std.c.mode_t = if (shared_namespace)
+                if (next_component == null) 0o1777 else 0o755
+            else
+                0o700;
+            if (std.c.mkdirat(current, name, mode) != 0 and
                 std.c._errno().* != @intFromEnum(std.posix.E.EXIST))
             {
                 return error.LockFailed;
             }
+            created = true;
             next = std.c.openat(current, name, .{
                 .ACCMODE = .RDONLY,
                 .DIRECTORY = true,
@@ -233,12 +240,28 @@ fn openTrustedLockDirectory(
             });
         }
         if (next < 0) return error.LockFailed;
-        if (next_component == null and std.c.fchmod(next, 0o700) != 0) {
-            _ = std.c.close(next);
-            return error.LockFailed;
+        const desired_mode: ?std.c.mode_t = if (next_component == null)
+            if (shared_namespace) 0o1777 else 0o700
+        else if (shared_namespace and strict_ancestors and
+            component_index != 0 and
+            std.c.geteuid() == 0)
+            0o755
+        else
+            null;
+        if (desired_mode) |mode| {
+            if ((created or !shared_namespace or std.c.geteuid() == 0) and
+                std.c.fchmod(next, mode) != 0)
+            {
+                _ = std.c.close(next);
+                return error.LockFailed;
+            }
         }
         if (strict_ancestors or next_component == null) {
-            trustedDirectoryStat(next, next_component == null) catch |err| {
+            trustedDirectoryStat(
+                next,
+                next_component == null,
+                shared_namespace,
+            ) catch |err| {
                 _ = std.c.close(next);
                 return err;
             };
@@ -246,6 +269,7 @@ fn openTrustedLockDirectory(
         _ = std.c.close(current);
         current = next;
         component = next_component orelse break;
+        component_index += 1;
     }
     return current;
 }
@@ -302,11 +326,20 @@ fn lockFileStatFd(fd: c_int) ?LockFileStat {
     };
 }
 
-fn validLockFile(stat: LockFileStat) bool {
+fn validLockFile(
+    stat: LockFileStat,
+    shared_namespace: bool,
+) bool {
+    // The first writer owns a shared object; mode and the root-owned sticky
+    // directory, not that environment-dependent uid, authorize later writers.
     return (stat.mode & mode_type_mask) == mode_regular and
-        (stat.mode & 0o7777) == 0o600 and
+        (stat.mode & 0o7777) ==
+            (if (shared_namespace) @as(u16, 0o666) else @as(u16, 0o600)) and
         stat.nlink == 1 and
-        stat.uid == @as(u32, @intCast(std.c.geteuid()));
+        (if (shared_namespace)
+            true
+        else
+            stat.uid == @as(u32, @intCast(std.c.geteuid())));
 }
 
 fn openProtectedLock(
@@ -315,18 +348,28 @@ fn openProtectedLock(
     root: TargetIdentity,
     wait: bool,
     strict_ancestors: bool,
+    shared_namespace: bool,
 ) Error!c_int {
     const directory_fd = try openTrustedLockDirectory(
         directory_path,
         strict_ancestors,
+        shared_namespace,
     );
     defer _ = std.c.close(directory_fd);
-    const name = std.fmt.allocPrintSentinel(
-        allocator,
-        "root-{x}-{x}-{x}.lock",
-        .{ root.dev_major, root.dev_minor, root.inode },
-        0,
-    ) catch return error.OutOfMemory;
+    const name = if (shared_namespace)
+        std.fmt.allocPrintSentinel(
+            allocator,
+            "tdnf-root-{x}-{x}-{x}.lock",
+            .{ root.dev_major, root.dev_minor, root.inode },
+            0,
+        ) catch return error.OutOfMemory
+    else
+        std.fmt.allocPrintSentinel(
+            allocator,
+            "root-{x}-{x}-{x}.lock",
+            .{ root.dev_major, root.dev_minor, root.inode },
+            0,
+        ) catch return error.OutOfMemory;
     defer allocator.free(name);
 
     var fd = std.c.openat(directory_fd, name.ptr, .{
@@ -335,7 +378,7 @@ fn openProtectedLock(
         .EXCL = true,
         .CLOEXEC = true,
         .NOFOLLOW = true,
-    }, @as(std.c.mode_t, 0o600));
+    }, @as(std.c.mode_t, if (shared_namespace) 0o666 else 0o600));
     const created = fd >= 0;
     if (fd < 0 and std.c._errno().* == @intFromEnum(std.posix.E.EXIST)) {
         fd = std.c.openat(directory_fd, name.ptr, .{
@@ -346,13 +389,17 @@ fn openProtectedLock(
     }
     if (fd < 0) return error.LockFailed;
     errdefer _ = std.c.close(fd);
-    if (created and std.c.fchmod(fd, 0o600) != 0)
+    if ((created or (shared_namespace and std.c.geteuid() == 0)) and
+        std.c.fchmod(
+            fd,
+            if (shared_namespace) 0o666 else 0o600,
+        ) != 0)
         return error.LockFailed;
 
     const opened = lockFileStatFd(fd) orelse return error.LockFailed;
     const named = lockFileStatAt(directory_fd, name.ptr) orelse
         return error.LockFailed;
-    if (!validLockFile(opened) or
+    if (!validLockFile(opened, shared_namespace) or
         !opened.identity.eql(named.identity))
     {
         return error.LockFailed;
@@ -372,7 +419,8 @@ fn openProtectedLock(
     errdefer _ = flock(fd, lock_unlock);
     const after = lockFileStatAt(directory_fd, name.ptr) orelse
         return error.LockFailed;
-    if (!opened.identity.eql(after.identity) or !validLockFile(after))
+    if (!opened.identity.eql(after.identity) or
+        !validLockFile(after, shared_namespace))
         return error.LockFailed;
     return fd;
 }
@@ -405,6 +453,15 @@ fn fdIdentity(fd: c_int) Error!TargetIdentity {
         .dev_minor = stat.dev_minor,
         .inode = stat.ino,
     };
+}
+
+test "default lock namespace is environment independent" {
+    const first = try defaultLockDirectoryAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(first);
+    const second = try defaultLockDirectoryAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(second);
+    try std.testing.expectEqualStrings(default_lock_directory, first);
+    try std.testing.expectEqualStrings(first, second);
 }
 
 test "aliases and database paths share one install-root lock" {
@@ -518,7 +575,10 @@ test "aliases and database paths share one install-root lock" {
     defer std.testing.allocator.free(lock_name);
     const lock_stat = lockFileStatAt(lock_dir_fd, lock_name.ptr) orelse
         return error.TestUnexpectedResult;
-    try std.testing.expect(validLockFile(lock_stat));
+    try std.testing.expect(validLockFile(
+        lock_stat,
+        false,
+    ));
     try std.testing.expectError(
         error.WouldBlock,
         tryAcquireInDirectory(
@@ -685,4 +745,87 @@ test "protected lock object rejects a preplaced symlink" {
             true,
         ),
     );
+}
+
+test "shared namespace lock is visible to the target owner across uid" {
+    if (std.c.geteuid() != 0) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "locks");
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const locks = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "locks" },
+    );
+    defer std.testing.allocator.free(locks);
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const locks_z = try std.testing.allocator.dupeZ(u8, locks);
+    defer std.testing.allocator.free(locks_z);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    try std.testing.expectEqual(@as(c_int, 0), std.c.chmod(base_z.ptr, 0o755));
+    try std.testing.expectEqual(@as(c_int, 0), std.c.chmod(locks_z.ptr, 0o1777));
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        chown(root_z.ptr, 65534, 65534),
+    );
+    try std.testing.expectEqual(@as(c_int, 0), std.c.chmod(root_z.ptr, 0o755));
+
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    const identity = try fdIdentity(root_fd);
+
+    const lock_fd = try openProtectedLock(
+        std.testing.allocator,
+        locks,
+        identity,
+        true,
+        false,
+        true,
+    );
+    defer {
+        _ = flock(lock_fd, lock_unlock);
+        _ = std.c.close(lock_fd);
+    }
+
+    const child = fork();
+    try std.testing.expect(child >= 0);
+    if (child == 0) {
+        _ = std.c.close(lock_fd);
+        if (setgid(65534) != 0 or setuid(65534) != 0) _exit(2);
+        const result = openProtectedLock(
+            std.heap.c_allocator,
+            locks,
+            identity,
+            false,
+            false,
+            true,
+        );
+        if (result) |fd| {
+            _ = std.c.close(fd);
+            _exit(3);
+        } else |err| {
+            _exit(if (err == error.WouldBlock) 0 else 4);
+        }
+    }
+    var status: c_int = 0;
+    try std.testing.expectEqual(child, waitpid(child, &status, 0));
+    try std.testing.expectEqual(@as(c_int, 0), status);
 }

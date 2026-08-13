@@ -55,13 +55,24 @@ pub fn loadModelWithFds(
             rpm_pkgfile.RpmFile.open(allocator, path) catch
                 return error.RpmFileOpenFailed;
         defer rpm.close(allocator);
-        const built = rpmpkg.buildFromRpmFile(
+        var built = rpmpkg.buildFromRpmFile(
             allocator,
             &rpm,
             path,
         ) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             else => error.InvalidRpmHeader,
+        };
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(rpm.bytes, &digest, .{});
+        const digest_hex = std.fmt.bytesToHex(digest, .lower);
+        const owned_digest = try allocator.dupe(u8, &digest_hex);
+        built.package.pkg_id = owned_digest;
+        built.package.checksum = .{
+            .kind = try allocator.dupe(u8, "sha256"),
+            .value = owned_digest,
+            .is_pkgid = true,
+            .header_only = false,
         };
         try builder.appendBuiltPackage(built);
     }
@@ -115,6 +126,20 @@ test "builds a command-line repository from rpm files" {
     try testing.expectEqualStrings(
         paths.items[1],
         repository.packages[1].location.href,
+    );
+    try testing.expectEqualStrings(
+        "sha256",
+        repository.packages[1].checksum.kind,
+    );
+    try testing.expectEqual(@as(usize, 64), repository.packages[1].checksum.value.len);
+    try testing.expect(!repository.packages[1].checksum.header_only);
+    try testing.expectEqual(
+        @as(?u64, @intCast((try tmp.dir.statFile(
+            testing.io,
+            "beta.rpm",
+            .{},
+        )).size)),
+        repository.packages[1].size.package,
     );
     try testing.expect(repository.has_filelists);
 }

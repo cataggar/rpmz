@@ -500,22 +500,21 @@ pub fn stageCommandLinePackages(
             }
         }
 
+        if (package_fd < 0) {
+            package_fd = std.c.open(path.?, .{
+                .ACCMODE = .RDONLY,
+                .CLOEXEC = true,
+            });
+            if (package_fd < 0) return systemError();
+        }
         var package_id: u32 = 0;
-        result = if (package_fd >= 0)
-            TDNFPackageContextAddRpmFd(
-                handle.pSack,
-                handle.pCmdLineRepo,
-                path,
-                package_fd,
-                &package_id,
-            )
-        else
-            TDNFPackageContextAddRpm(
-                handle.pSack,
-                handle.pCmdLineRepo,
-                path,
-                &package_id,
-            );
+        result = TDNFPackageContextAddRpmFd(
+            handle.pSack,
+            handle.pCmdLineRepo,
+            path,
+            package_fd,
+            &package_id,
+        );
         if (result != 0) return result;
         result = api.recordCmdLinePkgPath(handle, package_id, path);
         if (result != 0) return result;

@@ -257,6 +257,7 @@ fn buildPackage(package: *const result_abi.Package) BuildError![*c]legacy_abi.Le
     info[0].pszRelease = try dupe(span(package.pszRelease));
     info[0].pszArch = try dupe(span(package.pszArch));
     info[0].pszRepoName = try dupe(span(package.pszRepository));
+    info[0].dwSourcePackageHandle = package.dwSourcePackageHandle;
     info[0].pszEVR = try dupeEvr(
         info[0].dwEpoch,
         span(package.pszVersion),
@@ -517,6 +518,7 @@ fn testPackage(source: TestPackage) result_abi.Package {
         .nChecksumIsHeaderOnly = @intFromBool(source.checksum_is_header_only),
         .nHasPackageSize = @intFromBool(source.package_size != 0),
         .nHasInstalledSize = @intFromBool(source.installed_size != 0),
+        .dwSourcePackageHandle = 0,
     };
 }
 
@@ -969,6 +971,7 @@ test "a checksum becomes raw digest bytes with a hash kind" {
         .checksum_type = "SHA-256",
         .checksum_value = "0a1b2c",
     })};
+    packages[0].dwSourcePackageHandle = 73;
     var actions = [_]result_abi.Action{.{
         .dwPackageRef = 0,
         .dwKind = action_install,
@@ -1004,6 +1007,10 @@ test "a checksum becomes raw digest bytes with a hash kind" {
     try testing.expectEqual(@as(u8, 0x0a), digest[0]);
     try testing.expectEqual(@as(u8, 0x1b), digest[1]);
     try testing.expectEqual(@as(u8, 0x2c), digest[2]);
+    try testing.expectEqual(
+        @as(u32, 73),
+        info[0].dwSourcePackageHandle,
+    );
 }
 
 test "omits a header-only digest so it never reaches the download verifier" {

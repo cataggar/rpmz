@@ -261,6 +261,21 @@ fn duplicateFdCloexec(fd: c_int) c_int {
     );
 }
 
+fn reopenPinnedFd(fd: c_int, mode: Mode) c_int {
+    var path_buffer: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(
+        &path_buffer,
+        "/proc/self/fd/{d}",
+        .{fd},
+    ) catch return -1;
+    return openat(
+        linux.AT.FDCWD,
+        path.ptr,
+        (if (mode == .read_only) o_rdonly else o_rdwr) | o_cloexec,
+        0,
+    );
+}
+
 pub fn openAt(
     allocator: Allocator,
     dir_fd: c_int,
@@ -330,25 +345,19 @@ pub fn openAt(
     const handle = allocator.create(Handle) catch return error.OutOfMemory;
     errdefer allocator.destroy(handle);
 
+    const effective_create = options.create and
+        options.pinned_main_fd == null;
     const open_flags = switch (options.mode) {
         .read_only => o_rdonly,
         .read_write => o_rdwr,
     } | o_cloexec | o_nofollow |
-        (if (options.create) o_creat else 0);
+        (if (effective_create) o_creat else 0);
     const pinned_stat = if (options.pinned_main_fd) |pinned|
         try regularSingleLinkStat(pinned)
     else
         null;
     const main_fd = if (options.pinned_main_fd) |pinned|
-        if (options.mode == .read_only)
-            duplicateFdCloexec(pinned)
-        else
-            openat(
-                directory.fd,
-                basename_z.ptr,
-                open_flags,
-                0o644,
-            )
+        reopenPinnedFd(pinned, options.mode)
     else
         openat(
             directory.fd,
@@ -432,13 +441,14 @@ pub fn openAt(
 
     if (options.before_sqlite_open) |callback|
         callback(options.mutation_context);
+    if (!verifyHandle(handle)) return error.PathChanged;
 
     var db: ?*c.sqlite3 = null;
     const sqlite_flags = switch (options.mode) {
         .read_only => c.SQLITE_OPEN_READONLY,
         .read_write => c.SQLITE_OPEN_READWRITE,
     } | c.SQLITE_OPEN_NOMUTEX | c.SQLITE_OPEN_NOFOLLOW |
-        (if (options.create) c.SQLITE_OPEN_CREATE else 0);
+        (if (effective_create) c.SQLITE_OPEN_CREATE else 0);
     if (c.sqlite3_open_v2(
         handle.synthetic_path.ptr,
         &db,
@@ -1812,7 +1822,7 @@ test "confined SQLite rejects main replacement between pin and VFS open" {
     defer _ = std.c.close(dir_fd);
     var mutation = Mutation{ .dir_fd = dir_fd };
     try std.testing.expectError(
-        error.SqliteOpenFailed,
+        error.PathChanged,
         openAt(std.testing.allocator, dir_fd, "db.sqlite", .{
             .mode = .read_write,
             .before_sqlite_open = Mutation.run,
@@ -1827,6 +1837,67 @@ test "confined SQLite rejects main replacement between pin and VFS open" {
     );
     defer std.testing.allocator.free(outside);
     try std.testing.expectEqualStrings("outside", outside);
+}
+
+test "pinned writable main disappearance never creates a replacement" {
+    const Mutation = struct {
+        dir_fd: c_int,
+
+        fn run(raw: ?*anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            _ = unlinkat(self.dir_fd, "db.sqlite", 0);
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "db.sqlite",
+        .data = "",
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const dir_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(dir_fd >= 0);
+    defer _ = std.c.close(dir_fd);
+    const pinned_fd = openat(
+        dir_fd,
+        "db.sqlite",
+        o_rdonly | o_cloexec | o_nofollow,
+        0,
+    );
+    try std.testing.expect(pinned_fd >= 0);
+    defer _ = std.c.close(pinned_fd);
+    defer {
+        _ = unlinkat(dir_fd, "db.sqlite", 0);
+        _ = unlinkat(dir_fd, "db.sqlite-journal", 0);
+        _ = unlinkat(dir_fd, "db.sqlite-wal", 0);
+        _ = unlinkat(dir_fd, "db.sqlite-shm", 0);
+    }
+    var mutation = Mutation{ .dir_fd = dir_fd };
+    try std.testing.expectError(
+        error.PathChanged,
+        openAt(std.testing.allocator, dir_fd, "db.sqlite", .{
+            .mode = .read_write,
+            .create = true,
+            .pinned_main_fd = pinned_fd,
+            .before_sqlite_open = Mutation.run,
+            .mutation_context = &mutation,
+        }),
+    );
+    try std.testing.expect(!sidecarExists(dir_fd, "db.sqlite"));
+    try std.testing.expect(!sidecarExists(dir_fd, "db.sqlite-journal"));
+    try std.testing.expect(!sidecarExists(dir_fd, "db.sqlite-wal"));
+    try std.testing.expect(!sidecarExists(dir_fd, "db.sqlite-shm"));
 }
 
 test "failed concurrent open cannot release a live POSIX database lock" {

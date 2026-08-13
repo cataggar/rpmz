@@ -528,31 +528,32 @@ pub fn addCommandLineRpmWithFd(
     return packageIdFor(repository, repository_model.packages.len - 1);
 }
 
-pub fn duplicateCommandLineRpmFd(
+pub fn duplicateCommandLineRpmFdForPackage(
     context: *const Context,
-    path: []const u8,
+    package_id: i32,
 ) error{DuplicateFailed}!?c_int {
-    const repository = context.impl.command_line orelse return null;
+    const view = packageView(context, package_id) orelse
+        return error.DuplicateFailed;
+    const repository = context.impl.command_line orelse
+        return error.DuplicateFailed;
+    if (view.repository != repository or
+        repository.kind != .command_line or
+        view.index >= repository.cmdline_fds.items.len)
+    {
+        return error.DuplicateFailed;
+    }
     if (repository.cmdline_paths.items.len != repository.cmdline_fds.items.len) {
         return error.DuplicateFailed;
     }
-    var index = repository.cmdline_paths.items.len;
-    while (index > 0) {
-        index -= 1;
-        if (!std.mem.eql(u8, repository.cmdline_paths.items[index], path)) {
-            continue;
-        }
-        const fd = repository.cmdline_fds.items[index];
-        if (fd < 0) return null;
-        const duplicate = std.c.fcntl(
-            fd,
-            std.c.F.DUPFD_CLOEXEC,
-            @as(c_int, 0),
-        );
-        if (duplicate < 0) return error.DuplicateFailed;
-        return duplicate;
-    }
-    return null;
+    const fd = repository.cmdline_fds.items[view.index];
+    if (fd < 0) return null;
+    const duplicate = std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+    if (duplicate < 0) return error.DuplicateFailed;
+    return duplicate;
 }
 
 pub fn resetCommandLine(context: *Context) error{OutOfMemory}!*Repository {
@@ -1038,17 +1039,16 @@ fn TDNFPackageContextAddRpmFd(
 
 fn TDNFPackageContextDuplicateRpmFd(
     context: ?*const Context,
-    raw_path: ?[*:0]const u8,
+    package_id: i32,
     output: ?*c_int,
 ) callconv(.c) u32 {
     const out = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     out.* = -1;
-    const path = raw_path orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
     const package_context = context orelse
         return abi.ERROR_TDNF_INVALID_PARAMETER;
-    out.* = (duplicateCommandLineRpmFd(
+    out.* = (duplicateCommandLineRpmFdForPackage(
         package_context,
-        std.mem.span(path),
+        package_id,
     ) catch return abi.ERROR_TDNF_FILESYS_IO) orelse return 0;
     return 0;
 }
@@ -1853,9 +1853,9 @@ test "command-line rpm fd remains authoritative after path substitution" {
         "downloaded",
         packageModel(context, @intCast(id)).?.nevra.name,
     );
-    const duplicate = (try duplicateCommandLineRpmFd(
+    const duplicate = (try duplicateCommandLineRpmFdForPackage(
         context,
-        path,
+        @intCast(id),
     )) orelse return error.TestUnexpectedResult;
     defer _ = std.c.close(duplicate);
     var rpm = try rpm_pkgfile.RpmFile.openFd(testing.allocator, duplicate);
@@ -1863,6 +1863,114 @@ test "command-line rpm fd remains authoritative after path substitution" {
     try testing.expectEqualStrings(
         "downloaded",
         rpm.main.getString(.name).?,
+    );
+}
+
+test "repeated command-line paths keep descriptors bound to package handles" {
+    const testing = std.testing;
+    const context = try create(testing.allocator, null, null, "x86_64");
+    defer destroy(context);
+    const command_line = try createCommandLine(context);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const first = try rpmpkg.makeMinimalRpmBytesForTest(
+        testing.allocator,
+        "first",
+        "1",
+        "1",
+        "x86_64",
+    );
+    defer testing.allocator.free(first);
+    const second = try rpmpkg.makeMinimalRpmBytesForTest(
+        testing.allocator,
+        "second",
+        "1",
+        "1",
+        "x86_64",
+    );
+    defer testing.allocator.free(second);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "package.rpm",
+        .data = first,
+    });
+    const path = try std.fmt.allocPrintSentinel(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/package.rpm",
+        .{&tmp.sub_path},
+        0,
+    );
+    defer testing.allocator.free(path);
+    const first_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try testing.expect(first_fd >= 0);
+    defer _ = std.c.close(first_fd);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "replacement.rpm",
+        .data = second,
+    });
+    try tmp.dir.rename(
+        "replacement.rpm",
+        tmp.dir,
+        "package.rpm",
+        testing.io,
+    );
+    const second_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try testing.expect(second_fd >= 0);
+    defer _ = std.c.close(second_fd);
+
+    const first_id = try addCommandLineRpmWithFd(
+        context,
+        command_line,
+        path,
+        first_fd,
+    );
+    const second_id = try addCommandLineRpmWithFd(
+        context,
+        command_line,
+        path,
+        second_fd,
+    );
+    try testing.expectEqualStrings(
+        "first",
+        packageModel(context, @intCast(first_id)).?.nevra.name,
+    );
+    try testing.expectEqualStrings(
+        "second",
+        packageModel(context, @intCast(second_id)).?.nevra.name,
+    );
+
+    const first_duplicate = (try duplicateCommandLineRpmFdForPackage(
+        context,
+        @intCast(first_id),
+    )) orelse return error.TestUnexpectedResult;
+    defer _ = std.c.close(first_duplicate);
+    const second_duplicate = (try duplicateCommandLineRpmFdForPackage(
+        context,
+        @intCast(second_id),
+    )) orelse return error.TestUnexpectedResult;
+    defer _ = std.c.close(second_duplicate);
+    var first_rpm = try rpm_pkgfile.RpmFile.openFd(
+        testing.allocator,
+        first_duplicate,
+    );
+    defer first_rpm.close(testing.allocator);
+    var second_rpm = try rpm_pkgfile.RpmFile.openFd(
+        testing.allocator,
+        second_duplicate,
+    );
+    defer second_rpm.close(testing.allocator);
+    try testing.expectEqualStrings(
+        "first",
+        first_rpm.main.getString(.name).?,
+    );
+    try testing.expectEqualStrings(
+        "second",
+        second_rpm.main.getString(.name).?,
     );
 }
 
