@@ -136,6 +136,10 @@ fn acquireInDirectoryMode(
 }
 
 fn defaultLockDirectoryAlloc(allocator: Allocator) Error![]u8 {
+    if (std.c.geteuid() == 0) {
+        return allocator.dupe(u8, "/run/tdnf/locks") catch
+            error.OutOfMemory;
+    }
     if (getenv("XDG_RUNTIME_DIR")) |raw| {
         const runtime = std.mem.span(raw);
         if (runtime.len != 0 and runtime[0] == '/') {
