@@ -454,7 +454,7 @@ extern fn TDNFRemovePackageFromCache(
     ?*abi.Tdnf,
     ?[*:0]const u8,
 ) callconv(.c) u32;
-extern fn TDNFPackageContextDuplicateRpmFd(
+extern fn TDNFPackageContextBorrowRpmFd(
     ?*const anyopaque,
     i32,
     *c_int,
@@ -918,12 +918,13 @@ fn addInstallPackage(
     const package_name = info.pszName orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var path: ?[*:0]u8 = null;
     var rpm_fd: c_int = -1;
+    var rpm_fd_borrowed = false;
     var rpm_file: ?*c.tdnf_rpm_file = null;
     var cache_entry: ?*c.TDNF_CACHED_RPM_ENTRY = null;
     var header_evr: ?[*:0]u8 = null;
     defer {
         c.tdnf_rpm_file_close(rpm_file);
-        if (rpm_fd >= 0) _ = close(rpm_fd);
+        if (rpm_fd >= 0 and !rpm_fd_borrowed) _ = close(rpm_fd);
         free(header_evr);
         free(path);
         if (cache_entry) |entry| free(entry);
@@ -938,12 +939,13 @@ fn addInstallPackage(
     {
         if (info.dwSourcePackageHandle == 0)
             return errors.ERROR_TDNF_INVALID_PARAMETER;
-        rc = TDNFPackageContextDuplicateRpmFd(
+        rc = TDNFPackageContextBorrowRpmFd(
             tdnf.pSack,
             @intCast(info.dwSourcePackageHandle),
             &rpm_fd,
         );
         if (rc == 0 and rpm_fd < 0) return ERROR_TDNF_RPMTS_FDDUP_FAILED;
+        if (rc == 0) rpm_fd_borrowed = true;
     }
     if (rc != 0) return rc;
     if (rpm_fd >= 0) {
@@ -4679,6 +4681,15 @@ test "normal preparation mutation probes hold the replay target lock" {
         &.{ base, "locks" },
     );
     defer std.testing.allocator.free(lock_directory);
+    const lock_directory_z = try std.testing.allocator.dupeZ(
+        u8,
+        lock_directory,
+    );
+    defer std.testing.allocator.free(lock_directory_z);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.chmod(lock_directory_z.ptr, 0o700),
+    );
     const root_z = try std.testing.allocator.dupeZ(u8, root);
     defer std.testing.allocator.free(root_z);
 
@@ -4750,6 +4761,15 @@ test "normal target binds config only from stable caller storage" {
         &.{ base, "locks" },
     );
     defer std.testing.allocator.free(lock_directory);
+    const lock_directory_z = try std.testing.allocator.dupeZ(
+        u8,
+        lock_directory,
+    );
+    defer std.testing.allocator.free(lock_directory_z);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.chmod(lock_directory_z.ptr, 0o700),
+    );
     const root_z = try std.testing.allocator.dupeZ(u8, root);
     defer std.testing.allocator.free(root_z);
 

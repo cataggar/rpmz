@@ -639,14 +639,8 @@ fn fetchRemoteGpgKeyPinned(
     defer {
         if (!keep_directory) _ = std.c.close(directory_fd);
     }
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(std.mem.span(url), &digest, .{});
-    const encoded = std.fmt.bytesToHex(digest, .lower);
-    const name = std.fmt.bufPrintZ(
-        &remote.name,
-        "key-{s}",
-        .{&encoded},
-    ) catch return fetchError(url, errors.ERROR_TDNF_INVALID_PARAMETER);
+    const name = makeRemoteKeyName(url, &remote.name) catch
+        return fetchError(url, errors.ERROR_TDNF_INVALID_PARAMETER);
 
     var file_fd: c_int = -1;
     result = TDNFDownloadFileAt(
@@ -667,6 +661,39 @@ fn fetchRemoteGpgKeyPinned(
     remote.present = true;
     keep_directory = true;
     return 0;
+}
+
+fn makeRemoteKeyName(
+    url: [*:0]const u8,
+    buffer: *[80]u8,
+) error{ NoSpaceLeft, RandomFailed }![:0]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(std.mem.span(url), &digest, .{});
+    var url_tag: [16]u8 = undefined;
+    @memcpy(&url_tag, digest[0..url_tag.len]);
+    var nonce: [16]u8 = undefined;
+    var offset: usize = 0;
+    while (offset < nonce.len) {
+        const count = std.c.getrandom(
+            nonce[offset..].ptr,
+            nonce.len - offset,
+            0,
+        );
+        if (count < 0 and
+            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+        {
+            continue;
+        }
+        if (count <= 0) return error.RandomFailed;
+        offset += @intCast(count);
+    }
+    const encoded_url = std.fmt.bytesToHex(url_tag, .lower);
+    const encoded_nonce = std.fmt.bytesToHex(nonce, .lower);
+    return std.fmt.bufPrintZ(
+        buffer,
+        "key-{s}-{s}",
+        .{ &encoded_url, &encoded_nonce },
+    );
 }
 
 fn sameFile(left: std.os.linux.Statx, right: std.os.linux.Statx) bool {
@@ -1696,6 +1723,127 @@ fn expectAlternateRootRemoteKey(conflicting_host: bool) !void {
     }
 }
 
+const ConcurrentRemoteKey = struct {
+    directory_fd: c_int,
+    url: [*:0]const u8,
+    payload: []const u8,
+    remote: RemoteKey = .{},
+    status: u8 = 1,
+
+    fn run(self: *@This()) void {
+        self.remote.directory_fd = std.c.fcntl(
+            self.directory_fd,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 0),
+        );
+        if (self.remote.directory_fd < 0) return;
+        const name = makeRemoteKeyName(
+            self.url,
+            &self.remote.name,
+        ) catch return;
+        self.remote.file_fd = std.c.openat(
+            self.remote.directory_fd,
+            name,
+            .{
+                .ACCMODE = .RDWR,
+                .CREAT = true,
+                .EXCL = true,
+                .CLOEXEC = true,
+                .NOFOLLOW = true,
+            },
+            @as(std.c.mode_t, 0o600),
+        );
+        if (self.remote.file_fd < 0) return;
+        self.remote.present = true;
+        if (std.c.write(
+            self.remote.file_fd,
+            self.payload.ptr,
+            self.payload.len,
+        ) != @as(isize, @intCast(self.payload.len))) return;
+        self.status = 0;
+    }
+};
+
+fn expectRemoteKeyBytes(remote: *RemoteKey, expected: []const u8) !void {
+    var data: ?[*:0]u8 = null;
+    var size: c_int = 0;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        readRemoteGpgKey(remote, &data, &size),
+    );
+    defer if (data) |value| TDNFFreeMemory(@ptrCast(value));
+    try std.testing.expectEqualStrings(
+        expected,
+        data.?[0..@intCast(size)],
+    );
+}
+
+test "concurrent same-URL remote keys retain independent pinned inodes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const directory_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(directory_fd >= 0);
+    defer _ = std.c.close(directory_fd);
+
+    var first = ConcurrentRemoteKey{
+        .directory_fd = directory_fd,
+        .url = "https://example.invalid/shared-key",
+        .payload = "first-key",
+    };
+    var second = ConcurrentRemoteKey{
+        .directory_fd = directory_fd,
+        .url = "https://example.invalid/shared-key",
+        .payload = "second-key",
+    };
+    defer releaseRemoteGpgKey(&first.remote);
+    defer releaseRemoteGpgKey(&second.remote);
+    const first_thread = try std.Thread.spawn(
+        .{},
+        ConcurrentRemoteKey.run,
+        .{&first},
+    );
+    const second_thread = std.Thread.spawn(
+        .{},
+        ConcurrentRemoteKey.run,
+        .{&second},
+    ) catch |err| {
+        first_thread.join();
+        return err;
+    };
+    first_thread.join();
+    second_thread.join();
+
+    try std.testing.expectEqual(@as(u8, 0), first.status);
+    try std.testing.expectEqual(@as(u8, 0), second.status);
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        std.mem.span(@as([*:0]const u8, @ptrCast(&first.remote.name))),
+        std.mem.span(@as([*:0]const u8, @ptrCast(&second.remote.name))),
+    ));
+    try expectRemoteKeyBytes(&first.remote, first.payload);
+    try expectRemoteKeyBytes(&second.remote, second.payload);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        removeRemoteGpgKey(&first.remote),
+    );
+    try expectRemoteKeyBytes(&second.remote, second.payload);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        removeRemoteGpgKey(&second.remote),
+    );
+}
+
 test "remote key uses a clean pinned alternate-root namespace" {
     try expectAlternateRootRemoteKey(false);
 }
@@ -1835,6 +1983,15 @@ test "RepoSync key import acquires the shared pinned target lock" {
         &.{ base, "locks" },
     );
     defer std.testing.allocator.free(lock_directory);
+    const lock_directory_z = try std.testing.allocator.dupeZ(
+        u8,
+        lock_directory,
+    );
+    defer std.testing.allocator.free(lock_directory_z);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.chmod(lock_directory_z.ptr, 0o700),
+    );
     var config = try TxnConfig.init(std.testing.allocator, root);
     defer config.deinit();
     var contender = try TxnConfig.init(std.testing.allocator, root);

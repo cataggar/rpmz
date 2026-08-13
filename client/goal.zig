@@ -2858,7 +2858,7 @@ pub extern fn TDNFPackageContextRootDir(pContext: ?*const TDNF_PACKAGE_CONTEXT) 
 pub extern fn TDNFPackageContextInitCommandLine(pContext: PTDNF_PACKAGE_CONTEXT, ppRepository: [*c]PTDNF_REPOSITORY_CONTEXT) u32;
 pub extern fn TDNFPackageContextResetCommandLine(pContext: PTDNF_PACKAGE_CONTEXT, ppRepository: [*c]PTDNF_REPOSITORY_CONTEXT) u32;
 pub extern fn TDNFPackageContextAddRpm(pContext: PTDNF_PACKAGE_CONTEXT, pRepository: PTDNF_REPOSITORY_CONTEXT, pszPath: [*c]const u8, pdwPkgId: [*c]u32) u32;
-pub extern fn TDNFPackageContextDuplicateRpmFd(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, pFd: [*c]c_int) u32;
+pub extern fn TDNFPackageContextBorrowRpmFd(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, pFd: [*c]c_int) u32;
 pub extern fn TDNFPackageContextGetFields(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, pFields: PTDNF_PKG_FIELDS) u32;
 pub extern fn TDNFPackageContextGetRepoNevra(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, ppszRepo: [*c][*c]const u8, ppszNevra: [*c][*c]u8) u32;
 pub extern fn TDNFPackageContextGetInstalledPkgIds(pContext: PTDNF_PACKAGE_CONTEXT, pIdList: PTDNF_ID_LIST) u32;
@@ -5107,7 +5107,7 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
                     if (!false) break;
                 }
                 pJob.*.dwSourcePackageHandle = @intCast(dwPkgId);
-                dwError = TDNFPackageContextDuplicateRpmFd(
+                dwError = TDNFPackageContextBorrowRpmFd(
                     pTdnf.*.pSack,
                     dwPkgId,
                     &pJob.*.nRpmFd,
@@ -5215,12 +5215,6 @@ pub fn TDNFGoalFreeNativeSolverJobs(arg_pJobs: PTDNF_REPOMD_NATIVE_SOLVER_LIVE_J
     {
         dwIndex = 0;
         while (dwIndex < dwJobCount) : (dwIndex +%= 1) {
-            if (pJobs[dwIndex].dwSourcePackageHandle != 0 and
-                pJobs[dwIndex].nRpmFd >= 0)
-            {
-                _ = close(pJobs[dwIndex].nRpmFd);
-                pJobs[dwIndex].nRpmFd = -1;
-            }
             var pszName: [*c]u8 = @ptrCast(@alignCast(@constCast(pJobs[dwIndex].pszName)));
             _ = &pszName;
             var pszVersion: [*c]u8 = @ptrCast(@alignCast(@constCast(pJobs[dwIndex].pszVersion)));

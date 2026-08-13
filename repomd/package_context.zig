@@ -507,6 +507,18 @@ pub fn addCommandLineRpmWithFd(
         repository.cmdline_paths.items,
         repository.cmdline_fds.items,
     );
+    const appended_package = repository_model.packages[
+        repository_model.packages.len - 1
+    ];
+    for (repository.model.packages, 0..) |existing, existing_index| {
+        if (!samePackageIdentity(existing, appended_package)) continue;
+        arena_state.deinit();
+        const discarded_fd = repository.cmdline_fds.pop().?;
+        if (discarded_fd >= 0) _ = std.c.close(discarded_fd);
+        const discarded_path = repository.cmdline_paths.pop().?;
+        context.impl.allocator.free(discarded_path);
+        return repository.handles[existing_index];
+    }
     const id = try arena_state.allocator().dupeZ(u8, repository.id);
     const fields = try buildFields(
         arena_state.allocator(),
@@ -543,6 +555,23 @@ pub fn duplicateCommandLineRpmFdForPackage(
     context: *const Context,
     package_id: i32,
 ) error{DuplicateFailed}!?c_int {
+    const fd = (try borrowCommandLineRpmFdForPackage(
+        context,
+        package_id,
+    )) orelse return null;
+    const duplicate = std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+    if (duplicate < 0) return error.DuplicateFailed;
+    return duplicate;
+}
+
+pub fn borrowCommandLineRpmFdForPackage(
+    context: *const Context,
+    package_id: i32,
+) error{DuplicateFailed}!?c_int {
     const view = packageView(context, package_id) orelse
         return error.DuplicateFailed;
     const repository = context.impl.command_line orelse
@@ -558,13 +587,7 @@ pub fn duplicateCommandLineRpmFdForPackage(
     }
     const fd = repository.cmdline_fds.items[view.index];
     if (fd < 0) return null;
-    const duplicate = std.c.fcntl(
-        fd,
-        std.c.F.DUPFD_CLOEXEC,
-        @as(c_int, 0),
-    );
-    if (duplicate < 0) return error.DuplicateFailed;
-    return duplicate;
+    return fd;
 }
 
 pub fn resetCommandLine(context: *Context) error{OutOfMemory}!*Repository {
@@ -1058,6 +1081,22 @@ fn TDNFPackageContextDuplicateRpmFd(
     const package_context = context orelse
         return abi.ERROR_TDNF_INVALID_PARAMETER;
     out.* = (duplicateCommandLineRpmFdForPackage(
+        package_context,
+        package_id,
+    ) catch return abi.ERROR_TDNF_FILESYS_IO) orelse return 0;
+    return 0;
+}
+
+fn TDNFPackageContextBorrowRpmFd(
+    context: ?*const Context,
+    package_id: i32,
+    output: ?*c_int,
+) callconv(.c) u32 {
+    const out = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    out.* = -1;
+    const package_context = context orelse
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
+    out.* = (borrowCommandLineRpmFdForPackage(
         package_context,
         package_id,
     ) catch return abi.ERROR_TDNF_FILESYS_IO) orelse return 0;
@@ -1598,6 +1637,7 @@ comptime {
         .{ &TDNFPackageContextResetCommandLine, "TDNFPackageContextResetCommandLine" },
         .{ &TDNFPackageContextAddRpm, "TDNFPackageContextAddRpm" },
         .{ &TDNFPackageContextAddRpmFd, "TDNFPackageContextAddRpmFd" },
+        .{ &TDNFPackageContextBorrowRpmFd, "TDNFPackageContextBorrowRpmFd" },
         .{ &TDNFPackageContextDuplicateRpmFd, "TDNFPackageContextDuplicateRpmFd" },
         .{ &TDNFPackageContextGetFields, "TDNFPackageContextGetFields" },
         .{ &TDNFPackageContextGetRepoNevra, "TDNFPackageContextGetRepoNevra" },
@@ -1874,6 +1914,64 @@ test "command-line rpm fd remains authoritative after path substitution" {
     try testing.expectEqualStrings(
         "downloaded",
         rpm.main.getString(.name).?,
+    );
+}
+
+test "identical command-line rpm inputs reuse one package and descriptor" {
+    const testing = std.testing;
+    const context = try create(testing.allocator, null, null, "x86_64");
+    defer destroy(context);
+    const command_line = try createCommandLine(context);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const bytes = try rpmpkg.makeMinimalRpmBytesForTest(
+        testing.allocator,
+        "same",
+        "1",
+        "1",
+        "x86_64",
+    );
+    defer testing.allocator.free(bytes);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "same.rpm",
+        .data = bytes,
+    });
+    const path = try std.fmt.allocPrintSentinel(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/same.rpm",
+        .{&tmp.sub_path},
+        0,
+    );
+    defer testing.allocator.free(path);
+    const source_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try testing.expect(source_fd >= 0);
+    defer _ = std.c.close(source_fd);
+
+    const first_id = try addCommandLineRpmWithFd(
+        context,
+        command_line,
+        path,
+        source_fd,
+    );
+    const second_id = try addCommandLineRpmWithFd(
+        context,
+        command_line,
+        path,
+        source_fd,
+    );
+    try testing.expectEqual(first_id, second_id);
+    try testing.expectEqual(@as(usize, 1), command_line.model.packages.len);
+    try testing.expectEqual(@as(usize, 1), command_line.cmdline_paths.items.len);
+    try testing.expectEqual(@as(usize, 1), command_line.cmdline_fds.items.len);
+    try testing.expectEqual(
+        command_line.cmdline_fds.items[0],
+        (try borrowCommandLineRpmFdForPackage(
+            context,
+            @intCast(first_id),
+        )).?,
     );
 }
 
