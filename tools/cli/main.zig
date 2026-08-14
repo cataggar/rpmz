@@ -805,7 +805,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             abi.TDNFCliShowHelp();
         } else if (hasSetOption(cmd_args, "rpmdb-path")) {
             common.log(
-                LOG_CRIT,
+                LOG_ERR,
                 "--rpmdb-path is only valid with the replay command\n",
                 .{},
             );

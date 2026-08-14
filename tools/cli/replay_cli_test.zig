@@ -502,6 +502,33 @@ fn parseResult(
     return parsed;
 }
 
+fn expectLegacyOptionJson(
+    binary: []const u8,
+    args: []const []const u8,
+) !void {
+    const result = try runCli(binary, args);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    try std.testing.expectEqual(@as(u8, 140), exitCode(result));
+
+    const parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        result.stdout,
+        .{},
+    );
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 2), parsed.value.object.count());
+    try std.testing.expectEqual(
+        @as(i64, 908),
+        parsed.value.object.get("Error").?.integer,
+    );
+    try std.testing.expectEqualStrings(
+        "Command line error: option is invalid.",
+        parsed.value.object.get("ErrorMessage").?.string,
+    );
+}
+
 fn apiCanonical(
     bundle: []const u8,
     root: []const u8,
@@ -686,6 +713,56 @@ fn expectUsage(binary: []const u8, args: []const []const u8) !void {
         u8,
         result.stderr,
         "Usage: tdnf replay",
+    ) != null);
+}
+
+test "replay-only options preserve legacy JSON and diagnostic channels" {
+    const binary = try tdnfPath();
+    defer allocator.free(binary);
+
+    try expectLegacyOptionJson(binary, &.{
+        "--json",
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "list",
+    });
+    try expectLegacyOptionJson(binary, &.{
+        "--json",
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "unknown-command",
+    });
+    try expectLegacyOptionJson(binary, &.{
+        "--json",
+        "--rpmdb-path",
+        "/var/lib/rpm",
+    });
+    try expectLegacyOptionJson(binary, &.{
+        "--json",
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "list",
+        "extra",
+    });
+
+    const non_json = try runCli(binary, &.{
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "list",
+    });
+    defer allocator.free(non_json.stdout);
+    defer allocator.free(non_json.stderr);
+    try std.testing.expectEqual(@as(u8, 140), exitCode(non_json));
+    try std.testing.expectEqual(@as(usize, 0), non_json.stdout.len);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        non_json.stderr,
+        "--rpmdb-path is only valid with the replay command",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        non_json.stderr,
+        "Error(908) : Command line error: option is invalid.",
     ) != null);
 }
 
