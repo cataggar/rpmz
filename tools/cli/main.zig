@@ -63,6 +63,7 @@ const ReplayParseError = error{
     DuplicateOption,
     ExtraOperand,
     MissingBundle,
+    EmptyBundle,
     MissingInstallRoot,
     MissingRpmDbPath,
     MissingArchitecture,
@@ -156,11 +157,6 @@ fn findCommand(pszCmd: [*c]const u8) ?*const abi.TDNF_CLI_CMD_MAP {
     return null;
 }
 
-fn isReplayCommand(cmd_args: *const abi.TDNF_CMD_ARGS) bool {
-    return cmd_args.nCmdCount > 0 and
-        c.strcmp(cmd_args.ppszCmds[0], "replay") == 0;
-}
-
 fn hasSetOption(
     cmd_args: *const abi.TDNF_CMD_ARGS,
     name: [*:0]const u8,
@@ -189,6 +185,50 @@ fn matchNamedOption(arg: []const u8, name: []const u8) ?OptionMatch {
         return .{ .attached = body[name.len + 1 ..] };
     }
     return null;
+}
+
+fn isLegacyNoArgumentOption(arg: []const u8) bool {
+    const prefix_len: usize = if (std.mem.startsWith(u8, arg, "--"))
+        2
+    else if (std.mem.startsWith(u8, arg, "-"))
+        1
+    else
+        return false;
+    const body = arg[prefix_len..];
+    if (std.mem.indexOfScalar(u8, body, '=') != null) return false;
+    const names = [_][]const u8{
+        "4",               "6",                 "alldeps",
+        "allowerasing",    "assumeno",          "assumeyes",
+        "best",            "builddeps",         "cacheonly",
+        "debugsolver",     "disableexcludes",   "downloadonly",
+        "help",            "json",              "noautoremove",
+        "nodeps",          "nogpgcheck",        "nocligpgcheck",
+        "noplugins",       "quiet",             "refresh",
+        "reboot-required", "security",          "skip-broken",
+        "skipconflicts",   "skipdigest",        "skipobsoletes",
+        "skipsignature",   "source",            "testonly",
+        "urls",            "verbose",           "version",
+        "delete",          "download-metadata", "gpgcheck",
+        "newest-only",     "norepopath",        "available",
+        "extras",          "installed",         "userinstalled",
+        "upgrades",        "changelogs",        "conflicts",
+        "depends",         "duplicates",        "enhances",
+        "list",            "location",          "obsoletes",
+        "provides",        "recommends",        "requires",
+        "requires-pre",    "suggests",          "supplements",
+        "all",             "info",              "summary",
+        "recent",          "updates",           "downgrades",
+        "reverse",
+    };
+    for (names) |name| {
+        if (std.mem.eql(u8, body, name)) return true;
+    }
+    if (prefix_len != 1) return false;
+    for (body) |letter| {
+        if (std.mem.indexOfScalar(u8, "46bChqvxy", letter) == null)
+            return false;
+    }
+    return body.len != 0;
 }
 
 fn replayOptionValue(
@@ -268,6 +308,7 @@ fn parseReplayInvocation(
             if (!std.mem.eql(u8, arg, "replay")) return error.ExtraOperand;
             saw_command = true;
         } else if (bundle_directory == null) {
+            if (arg.len == 0) return error.EmptyBundle;
             bundle_directory = arg;
         } else {
             return error.ExtraOperand;
@@ -284,12 +325,57 @@ fn parseReplayInvocation(
     } };
 }
 
+fn isReplayInvocation(argv: []const [*:0]const u8) bool {
+    var index: usize = 1;
+    while (index < argv.len) : (index += 1) {
+        const arg = std.mem.span(argv[index]);
+        if (std.mem.eql(u8, arg, "replay")) return true;
+        if (std.mem.eql(u8, arg, "--")) {
+            return index + 1 < argv.len and
+                std.mem.eql(u8, std.mem.span(argv[index + 1]), "replay");
+        }
+        if (arg.len == 0 or arg[0] != '-') return false;
+
+        var takes_value = false;
+        if (matchNamedOption(arg, "installroot")) |matched| {
+            takes_value = matched == .separate;
+        } else if (std.mem.eql(u8, arg, "-i")) {
+            takes_value = true;
+        } else if (arg.len > 2 and std.mem.startsWith(u8, arg, "-i") and
+            !std.mem.startsWith(u8, arg, "-installroot"))
+        {
+            takes_value = false;
+        } else if (matchNamedOption(arg, "rpmdb-path")) |matched| {
+            takes_value = matched == .separate;
+        } else if (matchNamedOption(arg, "forcearch")) |matched| {
+            takes_value = matched == .separate;
+        } else if (!isLegacyNoArgumentOption(arg) and
+            !std.mem.containsAtLeast(u8, arg, 1, "=") and
+            index + 2 < argv.len and
+            !std.mem.eql(u8, std.mem.span(argv[index + 1]), "replay") and
+            std.mem.span(argv[index + 1]).len != 0 and
+            std.mem.span(argv[index + 1])[0] != '-')
+        {
+            // An unsupported option may take one operand. Probe past it so
+            // options-first replay mistakes still use the replay contract.
+            takes_value = true;
+        }
+        if (takes_value and index + 1 < argv.len) {
+            const value = std.mem.span(argv[index + 1]);
+            if (std.mem.eql(u8, value, "replay")) return true;
+            if (value.len == 0 or value[0] != '-') index += 1;
+        }
+    }
+    return false;
+}
+
 fn printReplayUsage(parse_error: ?ReplayParseError) void {
     if (parse_error) |err| {
         const message = switch (err) {
             error.DuplicateOption => "target options must appear exactly once",
             error.ExtraOperand => "expected exactly one bundle directory",
             error.MissingBundle => "missing bundle directory",
+            error.EmptyBundle => "bundle directory must be non-empty",
             error.MissingInstallRoot => "missing required --installroot",
             error.MissingRpmDbPath => "missing required --rpmdb-path",
             error.MissingArchitecture => "missing required --forcearch",
@@ -308,7 +394,11 @@ const ReplayStdoutGuard = struct {
 
     fn begin() error{RedirectFailed}!ReplayStdoutGuard {
         if (c.fflush(c.stdout) != 0) return error.RedirectFailed;
-        const saved = c.dup(c.STDOUT_FILENO);
+        const saved = std.c.fcntl(
+            c.STDOUT_FILENO,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 0),
+        );
         if (saved < 0) return error.RedirectFailed;
         if (c.dup2(c.STDERR_FILENO, c.STDOUT_FILENO) < 0) {
             _ = c.close(saved);
@@ -721,24 +811,11 @@ fn TDNFCliInvokeMark(
 
 pub fn main(init: std.process.Init.Minimal) u8 {
     const argv = init.args.vector;
-    if (argv.len > 1 and std.mem.eql(u8, std.mem.span(argv[1]), "replay"))
+    if (isReplayInvocation(argv))
         return dispatchReplay(argv);
 
     const argc: c_int = @intCast(argv.len);
     const argv_ptr: [*c]?[*:0]u8 = @ptrCast(@constCast(argv.ptr));
-
-    var original_replay_argv: ?[][*:0]const u8 = null;
-    for (argv[1..]) |arg| {
-        if (std.mem.eql(u8, std.mem.span(arg), "replay")) {
-            original_replay_argv = std.heap.c_allocator.dupe(
-                [*:0]const u8,
-                argv,
-            ) catch null;
-            break;
-        }
-    }
-    defer if (original_replay_argv) |copy|
-        std.heap.c_allocator.free(copy);
 
     var dwError: u32 = 0;
     var pTdnf: abi.PTDNF = null;
@@ -759,12 +836,6 @@ pub fn main(init: std.process.Init.Minimal) u8 {
 
         if (cmd_args.nShowVersion != 0) {
             TDNFCliShowVersion(cmd_args);
-        } else if (isReplayCommand(cmd_args)) {
-            const replay_argv = original_replay_argv orelse {
-                common.log(LOG_ERR, "tdnf replay: out of memory parsing arguments\n", .{});
-                return replay_exit.internal;
-            };
-            return dispatchReplay(replay_argv);
         } else if (cmd_args.nShowHelp != 0) {
             abi.TDNFCliShowHelp();
         } else if (hasSetOption(cmd_args, "rpmdb-path")) {

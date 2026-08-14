@@ -102,9 +102,12 @@ fn standaloneHeader(blob: []const u8, region_tag: u32) ![]u8 {
     return bytes;
 }
 
-fn minimalRpm(preinstall: ?[]const u8) ![]u8 {
-    var tags: [7]u32 = undefined;
-    var values: [7][]const u8 = undefined;
+fn minimalRpm(
+    preinstall: ?[]const u8,
+    preinstall_interpreter: ?[]const u8,
+) ![]u8 {
+    var tags: [8]u32 = undefined;
+    var values: [8][]const u8 = undefined;
     var count: usize = 0;
     for ([_]struct { u32, []const u8 }{
         .{ 1000, "replay-app" },
@@ -120,6 +123,11 @@ fn minimalRpm(preinstall: ?[]const u8) ![]u8 {
         tags[count] = 1023;
         values[count] = script;
         count += 1;
+        if (preinstall_interpreter) |interpreter| {
+            tags[count] = 1085;
+            values[count] = interpreter;
+            count += 1;
+        }
     }
     tags[count] = 1124;
     values[count] = "cpio";
@@ -233,6 +241,13 @@ const Fixture = struct {
     repositories: [1]resolver.Repository,
 
     fn create(preinstall: ?[]const u8) !Fixture {
+        return createWithInterpreter(preinstall, null);
+    }
+
+    fn createWithInterpreter(
+        preinstall: ?[]const u8,
+        preinstall_interpreter: ?[]const u8,
+    ) !Fixture {
         var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
         try tmp.dir.createDirPath(io, "snapshot/repodata");
@@ -250,7 +265,7 @@ const Fixture = struct {
             .{base},
         );
 
-        const rpm = try minimalRpm(preinstall);
+        const rpm = try minimalRpm(preinstall, preinstall_interpreter);
         defer allocator.free(rpm);
         const primary = try primaryXml(rpm);
         defer allocator.free(primary);
@@ -361,6 +376,66 @@ fn runCli(binary: []const u8, args: []const []const u8) !std.process.RunResult {
         .stdout_limit = .limited(1024 * 1024),
         .stderr_limit = .limited(1024 * 1024),
     });
+}
+
+fn installHostRuntime(
+    fixture: *Fixture,
+    root_name: []const u8,
+    executable: []const u8,
+) !void {
+    const copyFile = struct {
+        fn call(
+            target: *Fixture,
+            target_root: []const u8,
+            source: []const u8,
+        ) !void {
+            const destination = try std.fmt.allocPrint(
+                allocator,
+                "{s}{s}",
+                .{ target_root, source },
+            );
+            defer allocator.free(destination);
+            try std.Io.Dir.copyFile(
+                .cwd(),
+                source,
+                target.tmp.dir,
+                destination,
+                io,
+                .{ .make_path = true },
+            );
+        }
+    }.call;
+    try copyFile(fixture, root_name, executable);
+    try copyFile(fixture, root_name, executable);
+
+    const dependencies = try runCli("ldd", &.{executable});
+    defer allocator.free(dependencies.stdout);
+    defer allocator.free(dependencies.stderr);
+    if (exitCode(dependencies) != 0) {
+        const source = try std.Io.Dir.cwd().readFileAlloc(
+            io,
+            executable,
+            allocator,
+            .limited(4096),
+        );
+        defer allocator.free(source);
+        if (!std.mem.startsWith(u8, source, "#!"))
+            return error.RuntimeInspectionFailed;
+        const line_end = std.mem.indexOfScalar(u8, source, '\n') orelse
+            source.len;
+        var fields = std.mem.tokenizeScalar(u8, source[2..line_end], ' ');
+        const interpreter = fields.next() orelse
+            return error.RuntimeInspectionFailed;
+        if (!std.mem.startsWith(u8, interpreter, "/"))
+            return error.RuntimeInspectionFailed;
+        return installHostRuntime(fixture, root_name, interpreter);
+    }
+
+    var tokens = std.mem.tokenizeAny(u8, dependencies.stdout, " \t\r\n");
+    while (tokens.next()) |token| {
+        if (!std.mem.startsWith(u8, token, "/")) continue;
+        try copyFile(fixture, root_name, token);
+    }
 }
 
 fn exitCode(result: std.process.RunResult) u8 {
@@ -587,6 +662,7 @@ test "replay CLI success is canonical offline and bypasses normal initialization
     const bundle = try fixture.exportBundle("success");
     const api_root = try fixture.createDir("api-root");
     const network_root = try fixture.createDir("network-root");
+    const parity_root = try fixture.createDir("parity-root");
     const trap_root = try fixture.createDir("trap-root");
 
     const expected = try apiCanonical(bundle, api_root, "x86_64");
@@ -619,6 +695,21 @@ test "replay CLI success is canonical offline and bypasses normal initialization
     try std.testing.expectEqual(@as(u8, 0), exitCode(network_result));
     try std.testing.expectEqualStrings(expected, network_result.stdout);
     try std.testing.expectEqual(@as(usize, 0), network_attempts);
+
+    const options_first = try runCli(binary, &.{
+        "--installroot",
+        parity_root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        "replay",
+        bundle,
+    });
+    defer allocator.free(options_first.stdout);
+    defer allocator.free(options_first.stderr);
+    try std.testing.expectEqual(@as(u8, 0), exitCode(options_first));
+    try std.testing.expectEqualStrings(network_result.stdout, options_first.stdout);
 
     try configureRepositoryTrap(&fixture, "trap-root");
     const ordinary = try runCli(binary, &.{
@@ -747,6 +838,19 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     const binary = try tdnfPath();
     defer allocator.free(binary);
 
+    const ordinary_version = try runCli(
+        binary,
+        &.{ "--version", "install", "replay" },
+    );
+    defer allocator.free(ordinary_version.stdout);
+    defer allocator.free(ordinary_version.stderr);
+    try std.testing.expectEqual(@as(u8, 0), exitCode(ordinary_version));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        ordinary_version.stderr,
+        "Usage: tdnf replay",
+    ) == null);
+
     try expectUsage(binary, &.{"replay"});
     try expectUsage(binary, &.{ "replay", "--installroot" });
     try expectUsage(binary, &.{
@@ -815,6 +919,58 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         bundle,
     });
     try expectUsage(binary, &.{
+        "--config",
+        "/does/not/apply",
+        "replay",
+        "--installroot",
+        root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        bundle,
+    });
+    try expectUsage(binary, &.{
+        "--unknown-replay-option",
+        "replay",
+        "--installroot",
+        root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        bundle,
+    });
+    try expectUsage(binary, &.{
+        "--installroot",
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        "replay",
+        bundle,
+    });
+    try expectUsage(binary, &.{
+        "replay",
+        "--installroot",
+        root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        "",
+    });
+    try expectUsage(binary, &.{
+        "--installroot",
+        root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        "replay",
+        "",
+    });
+    try expectUsage(binary, &.{
         "replay",
         "--json",
         "--installroot",
@@ -868,4 +1024,64 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         help.stderr,
         "Usage: tdnf replay",
     ) != null);
+}
+
+test "replay CLI isolates canonical stdout from exec scriptlets and descendants" {
+    var fixture = try Fixture.createWithInterpreter(
+        \\print("scriptlet stdout")
+        \\os.execute("printf 'canonical contamination' >&3")
+        \\local ok, status, code =
+        \\  os.execute("/bin/sleep 2 >/dev/null 2>&1 &")
+        \\assert(ok == true and status == "exit" and code == 0)
+        \\
+    ,
+        "<lua>",
+    );
+    defer fixture.deinit();
+    const bundle = try fixture.exportBundle("scriptlet-output");
+    const root = try fixture.createDir("scriptlet-root");
+    try installHostRuntime(&fixture, "scriptlet-root", "/bin/sh");
+    try installHostRuntime(&fixture, "scriptlet-root", "/bin/sleep");
+    try fixture.tmp.dir.createDirPath(io, "scriptlet-root/dev");
+    try fixture.tmp.dir.writeFile(io, .{
+        .sub_path = "scriptlet-root/dev/null",
+        .data = "",
+        .flags = .{
+            .permissions = .fromMode(0o666),
+        },
+    });
+
+    const binary = try tdnfPath();
+    defer allocator.free(binary);
+    const started = std.Io.Clock.awake.now(io);
+    const result = try runCli(binary, &.{
+        "replay",
+        "--installroot",
+        root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        bundle,
+    });
+    const elapsed_ms = started.durationTo(
+        std.Io.Clock.awake.now(io),
+    ).toMilliseconds();
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expectEqual(@as(u8, 0), exitCode(result));
+    var parsed = try parseResult(result.stdout, "succeeded");
+    defer parsed.deinit();
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        result.stdout,
+        "canonical contamination",
+    ) == null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        result.stderr,
+        "scriptlet stdout",
+    ) != null);
+    try std.testing.expect(elapsed_ms < 1500);
 }
