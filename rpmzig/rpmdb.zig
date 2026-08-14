@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const sqlite = @import("sqlite");
+const confined_sqlite = @import("confined_sqlite");
 const header = @import("rpm_header");
 const pkgfile = @import("rpm_pkgfile");
 const checksum = @import("checksum.zig");
@@ -78,13 +79,31 @@ fn clearError() void {
     last_error_len = 0;
 }
 
+fn duplicateFdCloexec(fd: c_int) c_int {
+    return std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+}
+
 const PinnedReadDb = struct {
     root: ?install_engine.RootDir,
     dir_fd: c_int,
-    path: ?[:0]u8,
+    connection: ?confined_sqlite.Connection,
     exists: bool,
 
     fn initConfig(config: *const TxnConfig) !PinnedReadDb {
+        if (config.pinnedRpmDbMainWasAbsent()) {
+            config.revalidatePinnedRpmDbAbsence() catch
+                return error.SqliteOpenFailed;
+            return .{
+                .root = null,
+                .dir_fd = -1,
+                .connection = null,
+                .exists = false,
+            };
+        }
         const expanded = try config.expandMacroAlloc(
             std.heap.c_allocator,
             .dbpath,
@@ -103,64 +122,76 @@ const PinnedReadDb = struct {
         const raw_dir = allocated_dir orelse expanded;
         const trimmed = std.mem.trimEnd(u8, raw_dir, "/");
         const db_dir = if (trimmed.len == 0) "/" else trimmed;
-        var root = (try install_engine.RootDir.initExisting(
-            std.heap.c_allocator,
-            config.installRoot(),
-            null,
-            null,
-        )) orelse return .{
-            .root = null,
-            .dir_fd = -1,
-            .path = null,
-            .exists = false,
-        };
+        var root = if (config.pinnedInstallRootFd() != null)
+            try install_engine.RootDir.initConfig(
+                std.heap.c_allocator,
+                config,
+                null,
+                null,
+            )
+        else
+            (try install_engine.RootDir.initExisting(
+                std.heap.c_allocator,
+                config.installRoot(),
+                null,
+                null,
+            )) orelse return .{
+                .root = null,
+                .dir_fd = -1,
+                .connection = null,
+                .exists = false,
+            };
         errdefer root.deinit();
-        const dir_fd_opt = try root.openDirectory(db_dir, false);
-        const dir_fd = dir_fd_opt orelse return .{
+        const dir_fd = if (config.pinnedRpmDbDirFd()) |pinned_dir| blk: {
+            const duplicate = duplicateFdCloexec(pinned_dir);
+            if (duplicate < 0) return error.SqliteOpenFailed;
+            break :blk duplicate;
+        } else (try root.openDirectory(db_dir, false)) orelse return .{
             .root = root,
             .dir_fd = -1,
-            .path = null,
+            .connection = null,
             .exists = false,
         };
         errdefer _ = std.c.close(dir_fd);
-        const basename_z = txn_config.DEFAULT_RPMDB_BASENAME;
-        const probe_fd = std.c.openat(dir_fd, basename_z, .{
-            .ACCMODE = .RDONLY,
-            .CLOEXEC = true,
-            .NOFOLLOW = true,
-        });
-        if (probe_fd < 0) {
-            if (std.c.errno(probe_fd) == .NOENT) {
+        var connection = confined_sqlite.openAt(
+            std.heap.c_allocator,
+            dir_fd,
+            txn_config.DEFAULT_RPMDB_BASENAME,
+            .{
+                .mode = .read_only,
+                .pinned_main_fd = config.pinnedRpmDbMainFd(),
+            },
+        ) catch |err| {
+            if (err == error.NotFound) {
                 return .{
                     .root = root,
                     .dir_fd = dir_fd,
-                    .path = null,
+                    .connection = null,
                     .exists = false,
                 };
             }
+            setError("confined rpmdb open failed: {t}", .{err});
             return error.SqliteOpenFailed;
-        }
-        _ = std.c.close(probe_fd);
-        const path = try std.fmt.allocPrintSentinel(
-            std.heap.c_allocator,
-            "/proc/self/fd/{d}/{s}",
-            .{ dir_fd, basename_z },
-            0,
-        );
+        };
+        errdefer connection.close();
         return .{
             .root = root,
             .dir_fd = dir_fd,
-            .path = path,
+            .connection = connection,
             .exists = true,
         };
     }
 
     fn deinit(self: *PinnedReadDb) void {
-        if (self.path) |path| std.heap.c_allocator.free(path);
+        if (self.connection) |*connection| connection.close();
         if (self.dir_fd >= 0) _ = std.c.close(self.dir_fd);
         if (self.root) |*root| root.deinit();
         self.dir_fd = -1;
-        self.path = null;
+        self.connection = null;
+    }
+
+    fn db(self: *const PinnedReadDb) ?*c.sqlite3 {
+        return if (self.connection) |connection| connection.db else null;
     }
 };
 
@@ -207,7 +238,7 @@ export fn tdnf_rpmdb_count_packages_config(config: ?*const TxnConfig) i64 {
     };
     defer pinned.deinit();
     if (!pinned.exists) return 0;
-    return countPackagesAtPath(pinned.path.?) catch -1;
+    return countPackagesDb(pinned.db()) catch -1;
 }
 
 fn countPackagesAtPath(db_path: []const u8) CountPackagesError!i64 {
@@ -244,7 +275,10 @@ fn countPackagesAtPath(db_path: []const u8) CountPackagesError!i64 {
         });
         return error.SqliteOpenFailed;
     }
+    return countPackagesDb(db);
+}
 
+fn countPackagesDb(db: ?*c.sqlite3) CountPackagesError!i64 {
     var stmt: ?*c.sqlite3_stmt = null;
     const sql = "SELECT COUNT(*) FROM " ++ PKG_TABLE;
     const prepare_rc = c.sqlite3_prepare_v2(
@@ -313,6 +347,33 @@ export fn tdnf_rpm_config_destroy(config: ?*TxnConfig) void {
     std.heap.c_allocator.destroy(cfg);
 }
 
+export fn tdnf_rpm_config_duplicate_cache_dir_fd(
+    config: ?*const TxnConfig,
+) c_int {
+    const fd = (config orelse return -1).pinnedCacheDirFd() orelse
+        return -1;
+    return std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+}
+
+export fn tdnf_rpm_config_finalize_rpmdb_pin(
+    config: ?*TxnConfig,
+) c_int {
+    clearError();
+    const cfg = config orelse {
+        setError("null rpm configuration", .{});
+        return -1;
+    };
+    cfg.finalizeRpmDbPin() catch |err| {
+        setError("rpm_config_finalize_rpmdb_pin: {t}", .{err});
+        return -1;
+    };
+    return 0;
+}
+
 fn rpmConfigInstallRoot(
     config: ?*const TxnConfig,
 ) callconv(.c) ?[*:0]u8 {
@@ -327,9 +388,9 @@ fn rpmConfigOpenRootFd(
     config: ?*const TxnConfig,
 ) callconv(.c) c_int {
     const cfg = config orelse return -1;
-    var root = install_engine.RootDir.init(
+    var root = install_engine.RootDir.initConfig(
         std.heap.c_allocator,
-        cfg.installRoot(),
+        cfg,
         null,
         null,
     ) catch return -1;
@@ -468,7 +529,7 @@ export fn tdnf_rpmdb_cookie_config(config: ?*const TxnConfig) ?[*:0]u8 {
     };
     defer pinned.deinit();
     if (!pinned.exists) return dupZ("0:0");
-    return cookieAtPath(pinned.path.?);
+    return cookieFromDb(pinned.db());
 }
 
 fn cookieAtPath(db_path: []const u8) ?[*:0]u8 {
@@ -607,8 +668,20 @@ pub const Iter = struct {
             empty.* = .{ .db = null, .stmt = null, .pinned = null };
             return empty;
         }
-        const iter = try openAtPath(pinned.path.?);
-        iter.pinned = pinned;
+        const db = pinned.db();
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT hnum, blob FROM " ++ PKG_TABLE ++ " ORDER BY hnum";
+        if (c.sqlite3_prepare_v2(db, sql, sql.len, &stmt, null) != c.SQLITE_OK) {
+            setError(
+                "rpmdb iterator prepare failed: {s}",
+                .{std.mem.span(@as([*:0]const u8, c.sqlite3_errmsg(db)))},
+            );
+            return error.SqlitePrepareFailed;
+        }
+        errdefer _ = c.sqlite3_finalize(stmt);
+        const iter = std.heap.c_allocator.create(Iter) catch
+            return error.OutOfMemory;
+        iter.* = .{ .db = db, .stmt = stmt, .pinned = pinned };
         return iter;
     }
 
@@ -672,8 +745,11 @@ pub const Iter = struct {
                 null,
             );
         }
-        if (self.db) |d| _ = c.sqlite3_close(d);
-        if (self.pinned) |*pinned| pinned.deinit();
+        if (self.pinned) |*pinned| {
+            pinned.deinit();
+        } else if (self.db) |d| {
+            _ = c.sqlite3_close(d);
+        }
         std.heap.c_allocator.destroy(self);
     }
 
@@ -741,7 +817,8 @@ export fn tdnf_rpmdb_iter_open_config(config: ?*const TxnConfig) ?*Iter {
         return null;
     };
     return Iter.openConfig(cfg) catch |err| {
-        setError("rpmdb_iter_open_config: {t}", .{err});
+        if (last_error_len == 0)
+            setError("rpmdb_iter_open_config: {t}", .{err});
         return null;
     };
 }
@@ -873,7 +950,7 @@ fn writeTransactionPlanFileProvider(config: *const TxnConfig) !void {
         std.heap.c_allocator,
     );
     defer std.heap.c_allocator.free(blob);
-    var writer = try rpmdb_write.Writer.openConfig(config);
+    var writer = try rpmdb_write.Writer.openConfig(@constCast(config));
     defer writer.close();
     try writer.beginTransaction();
     errdefer writer.rollbackTransaction() catch {};
@@ -888,6 +965,70 @@ fn transactionPlanTestWriteFileProvider(
     return 0;
 }
 
+fn prepareRpmDbWriteConfig(
+    config: ?*const TxnConfig,
+) callconv(.c) c_int {
+    clearError();
+    const cfg = config orelse {
+        setError("null rpm config", .{});
+        return -1;
+    };
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
+        setError("rpmdb prepare write failed: {t}", .{err});
+        return -1;
+    };
+    writer.close();
+    return 0;
+}
+
+const PreparedRpmDbWrite = struct {
+    prepared: rpmdb_write.PreparedConfig,
+};
+
+fn beginPreparedRpmDbWrite(
+    config: ?*TxnConfig,
+    output: ?*?*PreparedRpmDbWrite,
+) callconv(.c) c_int {
+    const out = output orelse return 2;
+    out.* = null;
+    const cfg = config orelse return 2;
+    const state = std.heap.c_allocator.create(PreparedRpmDbWrite) catch
+        return 1;
+    state.prepared = rpmdb_write.PreparedConfig.init(cfg) catch |err| {
+        std.heap.c_allocator.destroy(state);
+        return if (err == error.OutOfMemory) 1 else 2;
+    };
+    out.* = state;
+    return 0;
+}
+
+fn materializePreparedRpmDbWrite(
+    state: ?*PreparedRpmDbWrite,
+) callconv(.c) c_int {
+    const prepared = state orelse return 2;
+    prepared.prepared.materializeAbsentMain() catch |err|
+        return if (err == error.OutOfMemory) 1 else 2;
+    return 0;
+}
+
+fn initializePreparedRpmDbWrite(
+    state: ?*PreparedRpmDbWrite,
+) callconv(.c) c_int {
+    const prepared = state orelse return 2;
+    var writer = prepared.prepared.openMaterialized() catch |err|
+        return if (err == error.OutOfMemory) 1 else 2;
+    writer.close();
+    return 0;
+}
+
+fn destroyPreparedRpmDbWrite(
+    state: ?*PreparedRpmDbWrite,
+) callconv(.c) void {
+    const prepared = state orelse return;
+    prepared.prepared.deinit();
+    std.heap.c_allocator.destroy(prepared);
+}
+
 comptime {
     @export(&transactionPlanSnapshotOpenConfig, .{
         .name = "TDNFTransactionPlanRpmdbSnapshotOpenConfig",
@@ -895,6 +1036,26 @@ comptime {
     });
     @export(&transactionPlanTestWriteFileProvider, .{
         .name = "TDNFTransactionPlanTestWriteFileProvider",
+        .visibility = .hidden,
+    });
+    @export(&prepareRpmDbWriteConfig, .{
+        .name = "TDNFRpmDbPrepareWriteConfig",
+        .visibility = .hidden,
+    });
+    @export(&beginPreparedRpmDbWrite, .{
+        .name = "TDNFRpmDbPreparedWriteBegin",
+        .visibility = .hidden,
+    });
+    @export(&materializePreparedRpmDbWrite, .{
+        .name = "TDNFRpmDbPreparedWriteMaterialize",
+        .visibility = .hidden,
+    });
+    @export(&initializePreparedRpmDbWrite, .{
+        .name = "TDNFRpmDbPreparedWriteInitialize",
+        .visibility = .hidden,
+    });
+    @export(&destroyPreparedRpmDbWrite, .{
+        .name = "TDNFRpmDbPreparedWriteDestroy",
         .visibility = .hidden,
     });
 }
@@ -1136,7 +1297,14 @@ fn resolveProviderVersionAtPath(
         return error.SqliteOpenFailed;
     }
     defer _ = c.sqlite3_close(db);
+    return resolveProviderVersionDb(allocator, db, provide_name);
+}
 
+fn resolveProviderVersionDb(
+    allocator: std.mem.Allocator,
+    db: ?*c.sqlite3,
+    provide_name: []const u8,
+) ProviderQueryError!?[]u8 {
     var stmt: ?*c.sqlite3_stmt = null;
     const sql =
         "SELECT packages.blob FROM 'Providename' AS provider " ++
@@ -1202,9 +1370,9 @@ export fn tdnf_rpmdb_resolve_provider_version_config(
     };
     defer pinned.deinit();
     if (!pinned.exists) return 0;
-    const version = resolveProviderVersionAtPath(
+    const version = resolveProviderVersionDb(
         std.heap.c_allocator,
-        pinned.path.?,
+        pinned.db(),
         name,
     ) catch |err| {
         setError("provider query for {s}: {t}", .{ name, err });
@@ -1296,7 +1464,7 @@ export fn tdnf_rpmdb_write_install_config(
         return -1;
     };
     defer std.heap.c_allocator.free(path_z);
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -1349,7 +1517,7 @@ export fn tdnf_rpmdb_write_install_file_config(
         setError("null file_states with non-zero count", .{});
         return -1;
     };
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -1453,7 +1621,7 @@ export fn tdnf_rpmdb_write_replace_file_config(
         setError("null file_states with non-zero count", .{});
         return -1;
     };
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -1497,7 +1665,7 @@ export fn tdnf_rpmdb_write_replace_config(
         return -1;
     };
     defer std.heap.c_allocator.free(path_z);
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -1550,7 +1718,7 @@ export fn tdnf_rpmdb_write_erase_hnum_config(config: ?*const TxnConfig, hnum: u3
         setError("null rpm config", .{});
         return -1;
     };
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -2207,9 +2375,13 @@ export fn tdnf_rpmdb_pubkeys_open_config(
         pinned.deinit();
         return allocEmptyPubkeyIter();
     }
-    const iter = pubkeysOpenAtPath(pinned.path.?) orelse {
+    const iter_opt = preparePubkeysDb(pinned.db()) catch {
         pinned.deinit();
         return null;
+    };
+    const iter = iter_opt orelse {
+        pinned.deinit();
+        return allocEmptyPubkeyIter();
     };
     iter.pinned = pinned;
     return iter;
@@ -2242,28 +2414,34 @@ fn pubkeysOpenAtPath(db_path: []const u8) ?*PubkeyIter {
         return null;
     }
 
+    const iter_opt = preparePubkeysDb(db) catch {
+        _ = c.sqlite3_close(db);
+        return null;
+    };
+    const iter = iter_opt orelse {
+        _ = c.sqlite3_close(db);
+        return allocEmptyPubkeyIter();
+    };
+    return iter;
+}
+
+fn preparePubkeysDb(db: ?*c.sqlite3) !?*PubkeyIter {
     var stmt: ?*c.sqlite3_stmt = null;
     // Same query as iter_open; we filter the gpg-pubkey rows in Zig
     // because the NAME tag is buried inside the binary blob.
     const sql = "SELECT blob FROM " ++ PKG_TABLE ++ " ORDER BY hnum";
     const prepare_rc = c.sqlite3_prepare_v2(db, sql, sql.len, &stmt, null);
     if (prepare_rc != c.SQLITE_OK) {
-        if (databaseHasNoTables(db)) {
-            _ = c.sqlite3_close(db);
-            return allocEmptyPubkeyIter();
-        }
+        if (databaseHasNoTables(db)) return null;
         setError("sqlite3_prepare_v2: {s}", .{
             std.mem.span(@as([*:0]const u8, c.sqlite3_errmsg(db))),
         });
-        _ = c.sqlite3_close(db);
-        return null;
+        return error.SqlitePrepareFailed;
     }
-
+    errdefer _ = c.sqlite3_finalize(stmt);
     const iter = std.heap.c_allocator.create(PubkeyIter) catch {
         setError("out of memory", .{});
-        _ = c.sqlite3_finalize(stmt);
-        _ = c.sqlite3_close(db);
-        return null;
+        return error.OutOfMemory;
     };
     iter.* = .{ .db = db, .stmt = stmt, .pinned = null };
     return iter;
@@ -2292,8 +2470,11 @@ fn databaseHasNoTables(db: ?*c.sqlite3) bool {
 export fn tdnf_rpmdb_pubkeys_close(it: ?*PubkeyIter) void {
     const iter = it orelse return;
     if (iter.stmt) |s| _ = c.sqlite3_finalize(s);
-    if (iter.db) |d| _ = c.sqlite3_close(d);
-    if (iter.pinned) |*pinned| pinned.deinit();
+    if (iter.pinned) |*pinned| {
+        pinned.deinit();
+    } else if (iter.db) |d| {
+        _ = c.sqlite3_close(d);
+    }
     std.heap.c_allocator.destroy(iter);
 }
 
@@ -2685,6 +2866,22 @@ export fn tdnf_rpm_file_open(path: ?[*:0]const u8) ?*FileHandle {
     return fh;
 }
 
+/// Open and parse a `.rpm` from an already pinned descriptor. The descriptor
+/// remains owned by the caller.
+export fn tdnf_rpm_file_open_fd(fd: c_int) ?*FileHandle {
+    clearError();
+    const fh = std.heap.c_allocator.create(FileHandle) catch {
+        setError("out of memory", .{});
+        return null;
+    };
+    fh.file = pkgfile.RpmFile.openFd(std.heap.c_allocator, fd) catch |err| {
+        setError("rpm_file_open_fd({d}): {t}", .{ fd, err });
+        std.heap.c_allocator.destroy(fh);
+        return null;
+    };
+    return fh;
+}
+
 /// Free a file handle. Accepts NULL.
 export fn tdnf_rpm_file_close(fh: ?*FileHandle) void {
     const f = fh orelse return;
@@ -2883,9 +3080,9 @@ fn rpmCanonicalPathConfig(
         setError("null canonical path output", .{});
         return -1;
     };
-    var root = install_engine.RootDir.init(
+    var root = install_engine.RootDir.initConfig(
         std.heap.c_allocator,
-        cfg.installRoot(),
+        cfg,
         null,
         null,
     ) catch |err| {
@@ -2925,9 +3122,9 @@ fn rpmHeaderOwnsPathConfig(
         hdr,
     ) catch return -1;
     defer manifest.deinit();
-    var root = install_engine.RootDir.init(
+    var root = install_engine.RootDir.initConfig(
         std.heap.c_allocator,
-        cfg.installRoot(),
+        cfg,
         null,
         null,
     ) catch return -1;
@@ -4448,7 +4645,7 @@ export fn tdnf_rpm_erase_hnum(
     const opts = options orelse &default_opts;
     var writer = blk: {
         if (opts.config) |config| {
-            break :blk rpmdb_write.Writer.openConfig(config) catch |err| {
+            break :blk rpmdb_write.Writer.openConfig(@constCast(config)) catch |err| {
                 setError("Writer.openConfig: {t}", .{err});
                 return -1;
             };
@@ -4577,7 +4774,7 @@ export fn tdnf_rpm_erase_header_blob(
         &custom_bridge
     else blk: {
         writer = if (opts.config) |config|
-            rpmdb_write.Writer.openConfig(config) catch |err| {
+            rpmdb_write.Writer.openConfig(@constCast(config)) catch |err| {
                 setError("Writer.openConfig: {t}", .{err});
                 return -1;
             }

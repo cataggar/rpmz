@@ -22,6 +22,7 @@ pub const Package = extern struct {
     nChecksumIsHeaderOnly: c_int,
     nHasPackageSize: c_int,
     nHasInstalledSize: c_int,
+    dwSourcePackageHandle: u32 = 0,
 };
 
 pub const Action = extern struct {

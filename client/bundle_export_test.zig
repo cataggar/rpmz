@@ -16,6 +16,7 @@ const std = @import("std");
 const client = @import("client_root");
 const bundle_reader = @import("bundle_reader");
 const transaction_bundle = @import("transaction_bundle");
+const transaction_plan = @import("transaction_plan");
 const repository_metadata = @import("repository_metadata");
 
 comptime {
@@ -27,14 +28,106 @@ const resolver = client.resolver;
 const io = std.testing.io;
 const allocator = std.testing.allocator;
 
+const TxnConfig = opaque {};
+extern fn tdnf_rpm_config_create(
+    root: ?[*:0]const u8,
+) ?*TxnConfig;
+extern fn tdnf_rpm_config_destroy(config: ?*TxnConfig) void;
+extern fn tdnf_rpm_config_resolve_path(
+    config: ?*const TxnConfig,
+    name: ?[*:0]const u8,
+) ?[*:0]u8;
+extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
+extern fn tdnf_rpmdb_write_install(
+    root: ?[*:0]const u8,
+    rpm_path: ?[*:0]const u8,
+    install_tid: u32,
+    install_time: u32,
+    install_color: u32,
+    file_states: ?[*]const u8,
+    file_state_count: usize,
+    hnum_out: ?*u32,
+) i32;
+extern fn tdnf_rpmdb_write_install_config(
+    config: ?*const TxnConfig,
+    rpm_path: ?[*:0]const u8,
+    install_tid: u32,
+    install_time: u32,
+    install_color: u32,
+    file_states: ?[*]const u8,
+    file_state_count: usize,
+    hnum_out: ?*u32,
+) i32;
+extern fn tdnf_rpmdb_count_packages(root: ?[*:0]const u8) i64;
+const ReplayBeforeExecutionHook =
+    *const fn (?*anyopaque) callconv(.c) void;
+extern fn TDNFReplaySetBeforeExecutionTestHook(
+    context: ?*anyopaque,
+    hook: ?ReplayBeforeExecutionHook,
+) void;
+const ReplayStageHook =
+    *const fn (?*anyopaque, u32) callconv(.c) void;
+extern fn TDNFReplaySetStageTestHook(
+    context: ?*anyopaque,
+    hook: ?ReplayStageHook,
+) void;
+extern fn TDNFReplayTestFailStage(stage: u32) void;
+
 fn rpmPayload(version: []const u8) ![]u8 {
+    return namedRpmPayload("app", version);
+}
+
+fn namedRpmPayload(name: []const u8, version: []const u8) ![]u8 {
     return repository_metadata.rpm_package.makeMinimalRpmBytesForTest(
         allocator,
-        "app",
+        name,
         version,
         "1",
         "x86_64",
     );
+}
+
+fn sharedObsoletePrimaryXml(
+    gpa: std.mem.Allocator,
+    first: []const u8,
+    second: []const u8,
+) ![]u8 {
+    const first_digest = sha256Hex(first);
+    const second_digest = sha256Hex(second);
+    return std.fmt.allocPrint(gpa,
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<metadata xmlns="http://linux.duke.edu/metadata/common"
+        \\              xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="2">
+        \\  <package type="rpm">
+        \\    <name>replacement-a</name>
+        \\    <arch>x86_64</arch>
+        \\    <version epoch="0" ver="1" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">{s}</checksum>
+        \\    <size package="{d}"/>
+        \\    <location href="packages/replacement-a.rpm"/>
+        \\    <format>
+        \\      <rpm:provides><rpm:entry name="replacement-a" flags="EQ" epoch="0" ver="1" rel="1"/></rpm:provides>
+        \\      <rpm:obsoletes>
+        \\        <rpm:entry name="old"/>
+        \\        <rpm:entry name="retired"/>
+        \\      </rpm:obsoletes>
+        \\    </format>
+        \\  </package>
+        \\  <package type="rpm">
+        \\    <name>replacement-b</name>
+        \\    <arch>x86_64</arch>
+        \\    <version epoch="0" ver="1" rel="1"/>
+        \\    <checksum type="sha256" pkgid="YES">{s}</checksum>
+        \\    <size package="{d}"/>
+        \\    <location href="packages/replacement-b.rpm"/>
+        \\    <format>
+        \\      <rpm:provides><rpm:entry name="replacement-b" flags="EQ" epoch="0" ver="1" rel="1"/></rpm:provides>
+        \\      <rpm:obsoletes><rpm:entry name="old"/></rpm:obsoletes>
+        \\    </format>
+        \\  </package>
+        \\</metadata>
+        \\
+    , .{ &first_digest, first.len, &second_digest, second.len });
 }
 
 fn sha256Hex(bytes: []const u8) [64]u8 {
@@ -157,6 +250,37 @@ const Fixture = struct {
         });
     }
 
+    fn publishSharedObsoleteRepository(self: *Fixture) !void {
+        const first = try namedRpmPayload("replacement-a", "1");
+        defer allocator.free(first);
+        const second = try namedRpmPayload("replacement-b", "1");
+        defer allocator.free(second);
+        const primary = try sharedObsoletePrimaryXml(
+            allocator,
+            first,
+            second,
+        );
+        defer allocator.free(primary);
+        const repomd = try repomdFor(allocator, primary);
+        defer allocator.free(repomd);
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = "snapshot/repodata/primary.xml",
+            .data = primary,
+        });
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = "snapshot/repodata/repomd.xml",
+            .data = repomd,
+        });
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = "snapshot/packages/replacement-a.rpm",
+            .data = first,
+        });
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = "snapshot/packages/replacement-b.rpm",
+            .data = second,
+        });
+    }
+
     fn destroy(self: *Fixture) void {
         self.arena.deinit();
         allocator.free(self.scratch);
@@ -226,6 +350,91 @@ const Fixture = struct {
             .gpg_check = false,
         };
     }
+
+    fn sharedObsoleteInput(
+        self: *Fixture,
+        name: []const u8,
+    ) !bundle_export.ExportInput {
+        try self.publishSharedObsoleteRepository();
+        var request = try self.input(name);
+        request.resolve.subjects = &.{ "replacement-a", "replacement-b" };
+        try self.installTargetPackage(request, "old");
+        try self.installTargetPackage(request, "retired");
+        return request;
+    }
+
+    fn installTargetPackage(
+        self: *Fixture,
+        request: bundle_export.ExportInput,
+        package_name: []const u8,
+    ) !void {
+        const payload = try namedRpmPayload(package_name, "1");
+        defer allocator.free(payload);
+        const relative_path = try std.fmt.allocPrint(
+            self.arena.allocator(),
+            "{s}.rpm",
+            .{package_name},
+        );
+        const package_path = try std.fmt.allocPrintSentinel(
+            self.arena.allocator(),
+            "{s}/{s}",
+            .{ self.base, relative_path },
+            0,
+        );
+        try self.tmp.dir.writeFile(io, .{
+            .sub_path = relative_path,
+            .data = payload,
+        });
+        const root_z = try self.arena.allocator().dupeZ(
+            u8,
+            request.resolve.installed.install_root,
+        );
+        var hnum: u32 = 0;
+        if (tdnf_rpmdb_write_install(
+            root_z.ptr,
+            package_path.ptr,
+            1,
+            1,
+            3,
+            null,
+            0,
+            &hnum,
+        ) != 0 or hnum == 0) {
+            return error.TestUnexpectedResult;
+        }
+        const config = tdnf_rpm_config_create(root_z.ptr) orelse
+            return error.TestUnexpectedResult;
+        defer tdnf_rpm_config_destroy(config);
+        const configured_dir = tdnf_rpm_config_resolve_path(
+            config,
+            "_dbpath",
+        ) orelse return error.TestUnexpectedResult;
+        defer tdnf_rpmdb_string_free(configured_dir);
+        const default_dir = try std.fmt.allocPrint(
+            self.arena.allocator(),
+            "{s}/var/lib/rpm",
+            .{request.resolve.installed.install_root},
+        );
+        if (!std.mem.eql(
+            u8,
+            std.mem.span(configured_dir),
+            default_dir,
+        )) {
+            hnum = 0;
+            if (tdnf_rpmdb_write_install_config(
+                config,
+                package_path.ptr,
+                1,
+                1,
+                3,
+                null,
+                0,
+                &hnum,
+            ) != 0 or hnum == 0) {
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
 };
 
 /// Recursively reads every regular file under `path`, so a test can make a
@@ -283,6 +492,23 @@ fn packageFile(
     return bundle.findFile(bundle.model().packages[0].path).?;
 }
 
+fn planPackageIdByName(
+    plan: *const transaction_plan.Plan,
+    name: []const u8,
+) ?[]const u8 {
+    for (plan.model().packages) |package| {
+        if (std.mem.eql(u8, package.identity.name, name)) return package.id;
+    }
+    return null;
+}
+
+fn containsString(values: []const []const u8, wanted: []const u8) bool {
+    for (values) |value| {
+        if (std.mem.eql(u8, value, wanted)) return true;
+    }
+    return false;
+}
+
 test "an exported bundle validates as a closed set" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
@@ -321,6 +547,676 @@ test "an exported bundle validates as a closed set" {
     try std.testing.expect(bundle.findFile("plan.json") != null);
     try std.testing.expectEqual(@as(usize, 1), bundle.model().packages.len);
     try std.testing.expectEqualStrings("app", bundle.model().packages[0].identity.name);
+}
+
+test "replay initializes a clean absent rpmdb before execution" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const input = try fixture.input("clean-empty-root");
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+
+    const database_path = try std.fs.path.join(
+        allocator,
+        &.{
+            input.resolve.installed.install_root,
+            "var/lib/rpm/rpmdb.sqlite",
+        },
+    );
+    defer allocator.free(database_path);
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(io, database_path, .{}),
+    );
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+
+    const database = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        database_path,
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(database);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        database,
+        "SQLite format 3\x00",
+    ));
+    const root_z = try allocator.dupeZ(
+        u8,
+        input.resolve.installed.install_root,
+    );
+    defer allocator.free(root_z);
+    try std.testing.expectEqual(
+        @as(i64, 1),
+        tdnf_rpmdb_count_packages(root_z.ptr),
+    );
+}
+
+test "rpmdb appearing after replay preflight is never adopted" {
+    const Race = struct {
+        root: []const u8,
+        failed: bool = false,
+
+        fn inject(raw: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            var root = std.Io.Dir.cwd().openDir(
+                io,
+                self.root,
+                .{},
+            ) catch {
+                self.failed = true;
+                return;
+            };
+            defer root.close(io);
+            root.createDirPath(io, "var/lib/rpm") catch {
+                self.failed = true;
+                return;
+            };
+            root.writeFile(io, .{
+                .sub_path = "var/lib/rpm/rpmdb.sqlite",
+                .data = "appeared-after-preflight",
+            }) catch {
+                self.failed = true;
+                return;
+            };
+        }
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const input = try fixture.input("rpmdb-race");
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+
+    var race = Race{
+        .root = input.resolve.installed.install_root,
+    };
+    TDNFReplaySetBeforeExecutionTestHook(&race, Race.inject);
+    defer TDNFReplaySetBeforeExecutionTestHook(null, null);
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expect(!race.failed);
+    try std.testing.expectEqual(
+        client.replay.Status.validation_failed,
+        replayed.status,
+    );
+    try std.testing.expectEqual(
+        client.replay.ValidationFailure.rpmdb_mismatch,
+        replayed.validation_failure.?,
+    );
+    for (replayed.actions) |action| {
+        try std.testing.expectEqual(
+            client.replay.ActionStatus.not_attempted,
+            action.status,
+        );
+    }
+
+    var root = try std.Io.Dir.cwd().openDir(
+        io,
+        input.resolve.installed.install_root,
+        .{},
+    );
+    defer root.close(io);
+    const database = try root.readFileAlloc(
+        io,
+        "var/lib/rpm/rpmdb.sqlite",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(database);
+    try std.testing.expectEqualStrings(
+        "appeared-after-preflight",
+        database,
+    );
+    inline for (.{ "-journal", "-wal", "-shm" }) |suffix| {
+        var path_buffer: [128]u8 = undefined;
+        const path = try std.fmt.bufPrint(
+            &path_buffer,
+            "var/lib/rpm/rpmdb.sqlite{s}",
+            .{suffix},
+        );
+        try std.testing.expectError(
+            error.FileNotFound,
+            root.access(io, path, .{}),
+        );
+    }
+}
+
+test "zero-action replay freshly rejects rpmdb appearance" {
+    const Race = struct {
+        root: []const u8,
+        failed: bool = false,
+
+        fn inject(raw: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            var root = std.Io.Dir.cwd().openDir(io, self.root, .{}) catch {
+                self.failed = true;
+                return;
+            };
+            defer root.close(io);
+            root.createDirPath(io, "var/lib/rpm") catch {
+                self.failed = true;
+                return;
+            };
+            root.writeFile(io, .{
+                .sub_path = "var/lib/rpm/rpmdb.sqlite",
+                .data = "appeared-after-zero-action-preflight",
+            }) catch {
+                self.failed = true;
+                return;
+            };
+        }
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    var input = try fixture.input("zero-action-rpmdb-race");
+    input.resolve.operation = .upgrade_all;
+    input.resolve.subjects = &.{};
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        exported.exported.plan.model().actions.len,
+    );
+
+    var race = Race{ .root = input.resolve.installed.install_root };
+    TDNFReplaySetBeforeExecutionTestHook(&race, Race.inject);
+    defer TDNFReplaySetBeforeExecutionTestHook(null, null);
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expect(!race.failed);
+    try std.testing.expectEqual(
+        client.replay.Status.validation_failed,
+        replayed.status,
+    );
+    try std.testing.expectEqual(
+        client.replay.ValidationFailure.rpmdb_mismatch,
+        replayed.validation_failure.?,
+    );
+    try std.testing.expectEqual(@as(usize, 0), replayed.actions.len);
+}
+
+test "post-create replay faults are transaction failures with truthful inventory" {
+    const cases = [_]struct {
+        stage: u32,
+        inventory_len: ?usize,
+        action_status: client.replay.ActionStatus,
+        failure: client.replay.TransactionFailure,
+    }{
+        .{ .stage = 1, .inventory_len = null, .action_status = .indeterminate, .failure = .final_inventory_unreadable },
+        .{ .stage = 2, .inventory_len = 0, .action_status = .indeterminate, .failure = .execution_failed },
+        .{ .stage = 3, .inventory_len = 1, .action_status = .applied, .failure = .execution_failed },
+        .{ .stage = 4, .inventory_len = null, .action_status = .applied, .failure = .final_inventory_unreadable },
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    for (cases) |case| {
+        var name_buffer: [64]u8 = undefined;
+        const name = try std.fmt.bufPrint(
+            &name_buffer,
+            "post-create-fault-{d}",
+            .{case.stage},
+        );
+        const input = try fixture.input(name);
+        var exported = try bundle_export.exportBundle(allocator, io, input);
+        defer exported.deinit();
+        try std.testing.expect(exported == .exported);
+
+        TDNFReplayTestFailStage(case.stage);
+        const replayed = try client.replay.run(allocator, io, .{
+            .bundle_directory = input.destination,
+            .target = .{
+                .install_root = input.resolve.installed.install_root,
+                .rpmdb_path = "/var/lib/rpm",
+                .architecture = "x86_64",
+            },
+        });
+        TDNFReplayTestFailStage(0);
+        defer replayed.deinit();
+        try std.testing.expectEqual(
+            client.replay.Status.transaction_failed,
+            replayed.status,
+        );
+        try std.testing.expect(replayed.validation_failure == null);
+        try std.testing.expectEqual(
+            case.failure,
+            replayed.transaction_failure.?,
+        );
+        try std.testing.expectEqual(
+            case.action_status,
+            replayed.actions[0].status,
+        );
+        if (case.inventory_len) |length| {
+            try std.testing.expectEqual(
+                length,
+                replayed.final_inventory.?.len,
+            );
+        } else {
+            try std.testing.expect(replayed.final_inventory == null);
+        }
+    }
+}
+
+test "absent rpmdb lease rejects sidecars appearing before initialization" {
+    const Race = struct {
+        root: []const u8,
+        suffix: []const u8,
+        failed: bool = false,
+
+        fn inject(raw: ?*anyopaque, stage: u32) callconv(.c) void {
+            if (stage != 1) return;
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            var root = std.Io.Dir.cwd().openDir(io, self.root, .{}) catch {
+                self.failed = true;
+                return;
+            };
+            defer root.close(io);
+            var path_buffer: [128]u8 = undefined;
+            const path = std.fmt.bufPrint(
+                &path_buffer,
+                "var/lib/rpm/rpmdb.sqlite{s}",
+                .{self.suffix},
+            ) catch {
+                self.failed = true;
+                return;
+            };
+            root.writeFile(io, .{
+                .sub_path = path,
+                .data = "appeared-first",
+            }) catch {
+                self.failed = true;
+                return;
+            };
+        }
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    inline for (.{ "-wal", "-shm" }, 0..) |suffix, index| {
+        var name_buffer: [64]u8 = undefined;
+        const name = try std.fmt.bufPrint(
+            &name_buffer,
+            "sidecar-first-{d}",
+            .{index},
+        );
+        const input = try fixture.input(name);
+        var exported = try bundle_export.exportBundle(allocator, io, input);
+        defer exported.deinit();
+        try std.testing.expect(exported == .exported);
+
+        var race = Race{
+            .root = input.resolve.installed.install_root,
+            .suffix = suffix,
+        };
+        TDNFReplaySetStageTestHook(&race, Race.inject);
+        const replayed = try client.replay.run(allocator, io, .{
+            .bundle_directory = input.destination,
+            .target = .{
+                .install_root = input.resolve.installed.install_root,
+                .rpmdb_path = "/var/lib/rpm",
+                .architecture = "x86_64",
+            },
+        });
+        TDNFReplaySetStageTestHook(null, null);
+        defer replayed.deinit();
+        try std.testing.expect(!race.failed);
+        try std.testing.expectEqual(
+            client.replay.Status.transaction_failed,
+            replayed.status,
+        );
+        try std.testing.expectEqual(
+            client.replay.TransactionFailure.final_inventory_unreadable,
+            replayed.transaction_failure.?,
+        );
+        try std.testing.expect(replayed.final_inventory == null);
+    }
+}
+
+test "absent rpmdb lease retains sidecar identities through execution and capture" {
+    const Race = struct {
+        root: []const u8,
+        suffix: []const u8,
+        wanted_stage: u32,
+        failed: bool = false,
+
+        fn inject(raw: ?*anyopaque, stage: u32) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (stage != self.wanted_stage) return;
+            var root = std.Io.Dir.cwd().openDir(io, self.root, .{}) catch {
+                self.failed = true;
+                return;
+            };
+            defer root.close(io);
+            var path_buffer: [128]u8 = undefined;
+            const path = std.fmt.bufPrint(
+                &path_buffer,
+                "var/lib/rpm/rpmdb.sqlite{s}",
+                .{self.suffix},
+            ) catch {
+                self.failed = true;
+                return;
+            };
+            var saved_buffer: [160]u8 = undefined;
+            const saved = std.fmt.bufPrint(
+                &saved_buffer,
+                "{s}.saved",
+                .{path},
+            ) catch {
+                self.failed = true;
+                return;
+            };
+            root.rename(path, root, saved, io) catch {
+                self.failed = true;
+                return;
+            };
+            root.writeFile(io, .{
+                .sub_path = path,
+                .data = "replacement-sidecar",
+            }) catch {
+                self.failed = true;
+                return;
+            };
+        }
+    };
+    const cases = [_]struct {
+        stage: u32,
+        suffix: []const u8,
+    }{
+        .{ .stage = 2, .suffix = "-wal" },
+        .{ .stage = 3, .suffix = "-shm" },
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    for (cases, 0..) |case, index| {
+        var name_buffer: [64]u8 = undefined;
+        const name = try std.fmt.bufPrint(
+            &name_buffer,
+            "sidecar-retained-{d}",
+            .{index},
+        );
+        const input = try fixture.input(name);
+        var exported = try bundle_export.exportBundle(allocator, io, input);
+        defer exported.deinit();
+        try std.testing.expect(exported == .exported);
+
+        var race = Race{
+            .root = input.resolve.installed.install_root,
+            .suffix = case.suffix,
+            .wanted_stage = case.stage,
+        };
+        TDNFReplaySetStageTestHook(&race, Race.inject);
+        const replayed = try client.replay.run(allocator, io, .{
+            .bundle_directory = input.destination,
+            .target = .{
+                .install_root = input.resolve.installed.install_root,
+                .rpmdb_path = "/var/lib/rpm",
+                .architecture = "x86_64",
+            },
+        });
+        TDNFReplaySetStageTestHook(null, null);
+        defer replayed.deinit();
+        try std.testing.expect(!race.failed);
+        try std.testing.expectEqual(
+            client.replay.Status.transaction_failed,
+            replayed.status,
+        );
+        try std.testing.expectEqual(
+            client.replay.TransactionFailure.final_inventory_unreadable,
+            replayed.transaction_failure.?,
+        );
+        try std.testing.expect(replayed.final_inventory == null);
+    }
+}
+
+test "cachedir trailing separator resolves exports and replays" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    var input = try fixture.input("cachedir-trailing");
+    input.resolve.cache_dir = "/var/cache/tdnf/";
+
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+    try std.testing.expectEqual(@as(usize, 1), replayed.final_inventory.?.len);
+}
+
+test "root cachedir resolves exports and replays through confinement" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    var input = try fixture.input("cachedir-root");
+    input.resolve.cache_dir = "/";
+
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+    try std.testing.expectEqual(@as(usize, 1), replayed.final_inventory.?.len);
+}
+
+test "alldeps replay projects actions onto a nonempty target" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    var input = try fixture.input("alldeps-nonempty");
+    input.resolve.policy.all_deps = true;
+    try fixture.installTargetPackage(input, "retained");
+
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+    try std.testing.expect(
+        !exported.exported.plan.model().environment.policy.include_installed,
+    );
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+    try std.testing.expectEqual(@as(usize, 2), replayed.final_inventory.?.len);
+    var saw_app = false;
+    var saw_retained = false;
+    for (replayed.final_inventory.?) |package| {
+        if (std.mem.eql(u8, package.identity.name, "app")) saw_app = true;
+        if (std.mem.eql(u8, package.identity.name, "retained"))
+            saw_retained = true;
+    }
+    try std.testing.expect(saw_app);
+    try std.testing.expect(saw_retained);
+}
+
+test "shared obsolete priors export parse bundle and replay end to end" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const input = try fixture.sharedObsoleteInput("shared-obsolete");
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+
+    const plan_json = try exported.exported.plan.canonicalJsonAlloc(allocator);
+    defer allocator.free(plan_json);
+    const parsed = try transaction_plan.parse(allocator, plan_json);
+    defer parsed.destroy();
+    try std.testing.expect(parsed.isReplayable());
+    try std.testing.expectEqual(@as(usize, 2), parsed.model().actions.len);
+    try std.testing.expectEqual(
+        @as(usize, 4),
+        parsed.model().execution_steps.?.len,
+    );
+    try std.testing.expectEqual(
+        transaction_plan.ActionKind.obsolete,
+        parsed.model().actions[0].kind,
+    );
+    try std.testing.expectEqual(
+        transaction_plan.ActionKind.obsolete,
+        parsed.model().actions[1].kind,
+    );
+    const old_id = planPackageIdByName(parsed, "old") orelse
+        return error.TestUnexpectedResult;
+    const retired_id = planPackageIdByName(parsed, "retired") orelse
+        return error.TestUnexpectedResult;
+    const first_id = planPackageIdByName(parsed, "replacement-a") orelse
+        return error.TestUnexpectedResult;
+    const second_id = planPackageIdByName(parsed, "replacement-b") orelse
+        return error.TestUnexpectedResult;
+    var saw_two_priors = false;
+    var saw_shared_prior = false;
+    for (parsed.model().actions) |action| {
+        try std.testing.expectEqual(
+            transaction_plan.ActionKind.obsolete,
+            action.kind,
+        );
+        if (action.prior_package_ids.len == 2) saw_two_priors = true;
+        if (containsString(action.prior_package_ids, old_id))
+            saw_shared_prior = true;
+    }
+    try std.testing.expect(saw_two_priors);
+    try std.testing.expect(saw_shared_prior);
+    var old_erases: usize = 0;
+    var retired_erases: usize = 0;
+    for (parsed.model().execution_steps.?) |step| {
+        if (step.operation != .erase) continue;
+        if (std.mem.eql(u8, step.package_id, old_id)) old_erases += 1;
+        if (std.mem.eql(u8, step.package_id, retired_id))
+            retired_erases += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), old_erases);
+    try std.testing.expectEqual(@as(usize, 1), retired_erases);
+    const captured_steps = parsed.model().execution_steps.?;
+    try std.testing.expectEqual(
+        transaction_plan.ExecutionOperation.install,
+        captured_steps[0].operation,
+    );
+    try std.testing.expectEqualStrings(second_id, captured_steps[0].package_id);
+    try std.testing.expectEqual(
+        transaction_plan.ExecutionOperation.install,
+        captured_steps[1].operation,
+    );
+    try std.testing.expectEqualStrings(first_id, captured_steps[1].package_id);
+    try std.testing.expectEqual(
+        transaction_plan.ExecutionOperation.erase,
+        captured_steps[2].operation,
+    );
+    try std.testing.expectEqualStrings(old_id, captured_steps[2].package_id);
+    try std.testing.expectEqual(
+        transaction_plan.ExecutionOperation.erase,
+        captured_steps[3].operation,
+    );
+    try std.testing.expectEqualStrings(
+        retired_id,
+        captured_steps[3].package_id,
+    );
+
+    const bundle = try bundle_reader.openBundle(
+        allocator,
+        io,
+        input.destination,
+    );
+    defer bundle.destroy();
+    try std.testing.expect(bundle.isReplayable());
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    if (replayed.status != .succeeded) {
+        std.debug.print(
+            "shared-obsolete replay failed: validation={?s} transaction={?s}\n",
+            .{
+                if (replayed.validation_failure) |failure|
+                    @tagName(failure)
+                else
+                    null,
+                if (replayed.transaction_failure) |failure|
+                    @tagName(failure)
+                else
+                    null,
+            },
+        );
+    }
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+    try std.testing.expectEqual(@as(usize, 2), replayed.actions.len);
+    for (replayed.actions) |action| {
+        try std.testing.expectEqual(
+            client.replay.ActionStatus.applied,
+            action.status,
+        );
+    }
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        replayed.final_inventory.?.len,
+    );
+    for (replayed.final_inventory.?) |package| {
+        try std.testing.expect(!std.mem.eql(
+            u8,
+            package.identity.name,
+            "old",
+        ));
+        try std.testing.expect(!std.mem.eql(
+            u8,
+            package.identity.name,
+            "retired",
+        ));
+    }
 }
 
 test "v2 package facts are bound exactly to the plan" {

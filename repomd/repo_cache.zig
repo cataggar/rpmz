@@ -38,6 +38,34 @@ pub export fn TDNFRepoMdCalculateCookieForFile(
     return 0;
 }
 
+pub export fn TDNFRepoMdCalculateCookieForFd(
+    fd: c_int,
+    cookie: ?[*]u8,
+) u32 {
+    const output = cookie orelse
+        return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    if (fd < 0 or std.c.lseek(fd, 0, 0) < 0)
+        return error_codes.ERROR_TDNF_SOLV_IO;
+    var hasher = Sha256.init(.{});
+    hasher.update(cookie_ident);
+    var buffer: [4096]u8 = undefined;
+    while (true) {
+        const got = std.c.read(fd, &buffer, buffer.len);
+        if (got < 0 and
+            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+        {
+            continue;
+        }
+        if (got < 0) return error_codes.ERROR_TDNF_SOLV_IO;
+        if (got == 0) break;
+        hasher.update(buffer[0..@intCast(got)]);
+    }
+    var digest: [cookie_len]u8 = undefined;
+    hasher.final(&digest);
+    @memcpy(output[0..cookie_len], &digest);
+    return 0;
+}
+
 pub export fn TDNFRepoMdCreateRepoCacheName(
     pszName: ?[*:0]const u8,
     pszUrl: ?[*:0]const u8,

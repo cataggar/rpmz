@@ -28,6 +28,12 @@ pub fn materialize(
     if (inputs.len == 0 and plan.model().actions.len != 0) {
         return error.InvalidInput;
     }
+    if (inputs.len == 0) {
+        return plan.withExecutionSteps(allocator, &.{}) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.InvalidInput,
+        };
+    }
 
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
@@ -89,10 +95,13 @@ pub fn materialize(
     defer abi.TDNFRepoMdNativeTransactionPlanFree(native_plan);
     if (native_plan[0].dwProblemCount != 0 or
         native_plan[0].dwItemCount != inputs.len or
-        (inputs.len != 0 and native_plan[0].pdwOrderIndices == null))
+        (inputs.len != 0 and
+            (native_plan[0].pdwOrderIndices == null or
+                native_plan[0].pItems == null)))
     {
         return error.NativeRejected;
     }
+    try validateNativePriors(plan.model(), inputs, native_plan);
 
     const ordered = try arena.alloc(transaction_plan.ExecutionStep, inputs.len);
     const seen = try arena.alloc(bool, inputs.len);
@@ -111,6 +120,57 @@ pub fn materialize(
         error.OutOfMemory => error.OutOfMemory,
         else => error.InvalidInput,
     };
+}
+
+fn validateNativePriors(
+    data: *const transaction_plan.Data,
+    inputs: []const transaction_plan.ExecutionStep,
+    native_plan: [*c]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+) MaterializeError!void {
+    for (inputs, 0..) |step, input_index| {
+        if (step.action_index >= data.actions.len) return error.InvalidInput;
+        const action = data.actions[step.action_index];
+        const planned = &native_plan[0].pItems[input_index];
+        if (planned.dwPriorOffset > native_plan[0].dwPriorHnumCount or
+            planned.dwPriorCount >
+                native_plan[0].dwPriorHnumCount - planned.dwPriorOffset or
+            (planned.dwPriorCount != 0 and native_plan[0].pdwPriorHnums == null))
+        {
+            return error.NativeRejected;
+        }
+        const expected = if (isPrimaryStep(action, step) and
+            (action.kind == .upgrade or action.kind == .reinstall))
+            action.prior_package_ids
+        else
+            &.{};
+        if (planned.dwPriorCount != expected.len)
+            return error.InvalidInput;
+        for (expected, 0..) |prior_id, offset| {
+            const prior = findPackage(data.packages, prior_id) orelse
+                return error.InvalidInput;
+            const hnum = prior.rpmdb_hnum orelse return error.InvalidInput;
+            if (native_plan[0].pdwPriorHnums[
+                planned.dwPriorOffset + offset
+            ] != hnum) {
+                return error.InvalidInput;
+            }
+        }
+    }
+}
+
+fn isPrimaryStep(
+    action: transaction_plan.Action,
+    step: transaction_plan.ExecutionStep,
+) bool {
+    if (!std.mem.eql(u8, action.target_package_id, step.package_id))
+        return false;
+    const expected: transaction_plan.ExecutionOperation = switch (action.kind) {
+        .erase => .erase,
+        .reinstall => .reinstall,
+        .upgrade => .upgrade,
+        .downgrade, .install, .obsolete => .install,
+    };
+    return step.operation == expected;
 }
 
 fn operationValue(operation: transaction_plan.ExecutionOperation) u32 {

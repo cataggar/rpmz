@@ -1,3 +1,5 @@
+const plugin_metadata = @import("plugin_metadata");
+
 pub fn BuiltinMetalinkCreate(_: ?*anyopaque, _: ?*?*anyopaque) u32 {
     return 1622;
 }
@@ -11,7 +13,7 @@ pub fn BuiltinMetalinkRepoConfig(_: ?*anyopaque, _: ?*const anyopaque) u32 {
 pub fn BuiltinMetalinkRepoMDDownloadStart(
     _: ?*anyopaque,
     _: ?[*:0]const u8,
-    _: ?[*:0]const u8,
+    _: ?*const plugin_metadata.PinnedDirectory,
 ) u32 {
     return 1622;
 }
@@ -19,7 +21,7 @@ pub fn BuiltinMetalinkRepoMDDownloadStart(
 pub fn BuiltinMetalinkRepoMDDownloadEnd(
     _: ?*anyopaque,
     _: ?[*:0]const u8,
-    _: ?[*:0]const u8,
+    _: ?*const plugin_metadata.PinnedFile,
 ) u32 {
     return 1622;
 }
@@ -40,7 +42,7 @@ pub fn BuiltinRepoGPGCheckRepoConfig(
 pub fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
     _: ?*anyopaque,
     _: ?[*:0]const u8,
-    _: ?[*:0]const u8,
+    _: ?*const plugin_metadata.PinnedFile,
 ) u32 {
     return 1622;
 }

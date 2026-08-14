@@ -9,6 +9,7 @@ const error_codes = @import("tdnf_error");
 const native_capture = @import("transaction_plan_native");
 const repository_capture = @import("transaction_plan_repository");
 const repository_metadata = @import("repository_metadata");
+const txn_config = @import("rpm_txn_config");
 const transaction_plan = @import("transaction_plan");
 
 const package_context = repository_metadata.package_context;
@@ -331,12 +332,25 @@ const RefreshEntry = struct {
 };
 
 extern fn TDNFGetCachePath(?*anyopaque, ?*anyopaque, ?[*:0]const u8, ?[*:0]const u8, *?[*:0]u8) u32;
+extern fn TDNFEnsureRepoCacheDir(
+    ?*anyopaque,
+    ?*anyopaque,
+    ?[*:0]const u8,
+) u32;
 extern fn TDNFShouldSyncMetadata(?[*:0]const u8, c_long, *c_int) u32;
+extern fn TDNFShouldSyncRepoMetadata(
+    ?*anyopaque,
+    ?*anyopaque,
+    c_long,
+    *c_int,
+) u32;
 extern fn TDNFRepoRemoveCache(?*anyopaque, ?*anyopaque) u32;
 extern fn TDNFRemoveSolvCache(?*anyopaque, ?*anyopaque) u32;
 extern fn TDNFFreeMemory(?*anyopaque) void;
 extern fn TDNFBuildRefreshInput(?*anyopaque, ?*anyopaque, *abi.RepositoryRefreshInput) u32;
 extern fn TDNFRemoveLastRefreshMarker(?*anyopaque, ?*anyopaque) u32;
+extern fn TDNFRepoMdCalculateCookieForFd(c_int, ?[*]u8) u32;
+extern fn TDNFOpenSnapshotFd(?*anyopaque, ?*anyopaque) c_int;
 
 const IdList = extern struct {
     pnElements: ?[*]i32,
@@ -438,6 +452,210 @@ fn mapDirectoryLoadError(err: anyerror) u32 {
     };
 }
 
+const OpenedMetadata = struct {
+    paths: repository_metadata.available_repository_loader.FdPaths,
+    fds: [5]c_int,
+    count: usize,
+
+    fn deinit(self: *OpenedMetadata) void {
+        for (self.fds[0..self.count]) |fd| _ = std.c.close(fd);
+        self.count = 0;
+    }
+};
+
+fn openCacheMetadataFile(
+    root_fd: c_int,
+    raw_cache_prefix: []const u8,
+    full_path: []const u8,
+) !c_int {
+    const cache_prefix = normalizeDirectoryPath(raw_cache_prefix);
+    const relative = if (std.mem.eql(u8, cache_prefix, "/")) blk: {
+        if (full_path.len <= 1 or full_path[0] != '/')
+            return error.InvalidPath;
+        break :blk full_path[1..];
+    } else blk: {
+        if (full_path.len <= cache_prefix.len or
+            !std.mem.startsWith(u8, full_path, cache_prefix) or
+            full_path[cache_prefix.len] != '/')
+        {
+            return error.InvalidPath;
+        }
+        break :blk full_path[cache_prefix.len + 1 ..];
+    };
+    var components = std.mem.splitScalar(u8, relative, '/');
+    var component = components.next() orelse return error.InvalidPath;
+    var current = std.c.fcntl(
+        root_fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+    if (current < 0) return error.OpenFailed;
+    errdefer _ = std.c.close(current);
+    while (components.next()) |next| {
+        if (component.len == 0 or component.len > std.fs.max_name_bytes or
+            std.mem.eql(u8, component, ".") or
+            std.mem.eql(u8, component, ".."))
+        {
+            return error.InvalidPath;
+        }
+        var buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+        @memcpy(buffer[0..component.len], component);
+        buffer[component.len] = 0;
+        const child = std.c.openat(current, @ptrCast(&buffer), .{
+            .ACCMODE = .RDONLY,
+            .DIRECTORY = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+        if (child < 0) return error.OpenFailed;
+        _ = std.c.close(current);
+        current = child;
+        component = next;
+    }
+    if (component.len == 0 or component.len > std.fs.max_name_bytes or
+        std.mem.eql(u8, component, ".") or
+        std.mem.eql(u8, component, ".."))
+    {
+        return error.InvalidPath;
+    }
+    var buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+    @memcpy(buffer[0..component.len], component);
+    buffer[component.len] = 0;
+    const fd = std.c.openat(current, @ptrCast(&buffer), .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    if (fd < 0) return error.OpenFailed;
+    _ = std.c.close(current);
+    current = -1;
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &stat,
+    ) != 0 or (stat.mode & 0o170000) != 0o100000 or stat.nlink != 1) {
+        _ = std.c.close(fd);
+        return error.OpenFailed;
+    }
+    return fd;
+}
+
+fn normalizeDirectoryPath(path: []const u8) []const u8 {
+    const trimmed = std.mem.trimEnd(u8, path, "/");
+    return if (trimmed.len == 0 and path.len != 0 and path[0] == '/')
+        path[0..1]
+    else
+        trimmed;
+}
+
+test "metadata cache boundaries normalize trailing separators and root" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache/repo");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "cache/repo/repomd.xml",
+        .data = "metadata",
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const root_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    const cache_fd = std.c.openat(root_fd, "cache", .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(cache_fd >= 0);
+    defer _ = std.c.close(cache_fd);
+
+    const trailing = try openCacheMetadataFile(
+        cache_fd,
+        "/var/cache/tdnf/",
+        "/var/cache/tdnf/repo/repomd.xml",
+    );
+    _ = std.c.close(trailing);
+    const root = try openCacheMetadataFile(
+        root_fd,
+        "/",
+        "/cache/repo/repomd.xml",
+    );
+    _ = std.c.close(root);
+    const root_alias = try openCacheMetadataFile(
+        root_fd,
+        "////",
+        "/cache/repo/repomd.xml",
+    );
+    _ = std.c.close(root_alias);
+    try std.testing.expectError(
+        error.InvalidPath,
+        openCacheMetadataFile(
+            cache_fd,
+            "/var/cache/tdnf/",
+            "/var/cache/tdnf-other/repo/repomd.xml",
+        ),
+    );
+}
+
+fn openMetadataPaths(
+    config: *const txn_config.TxnConfig,
+    cache_prefix: []const u8,
+    paths: *const RepoMetadata,
+) !OpenedMetadata {
+    var opened = OpenedMetadata{
+        .paths = undefined,
+        .fds = undefined,
+        .count = 0,
+    };
+    errdefer opened.deinit();
+    const root_fd = config.pinnedCacheDirFd() orelse return error.InvalidPath;
+    const PathInput = struct {
+        raw: ?[*:0]u8,
+        output: *?repository_metadata.available_repository_loader.FdPath,
+    };
+    var repomd: ?repository_metadata.available_repository_loader.FdPath = null;
+    var primary: ?repository_metadata.available_repository_loader.FdPath = null;
+    var filelists: ?repository_metadata.available_repository_loader.FdPath = null;
+    var updateinfo: ?repository_metadata.available_repository_loader.FdPath = null;
+    var other: ?repository_metadata.available_repository_loader.FdPath = null;
+    const inputs = [_]PathInput{
+        .{ .raw = paths.repomd, .output = &repomd },
+        .{ .raw = paths.primary, .output = &primary },
+        .{ .raw = paths.filelists, .output = &filelists },
+        .{ .raw = paths.updateinfo, .output = &updateinfo },
+        .{ .raw = paths.other, .output = &other },
+    };
+    for (inputs) |input| {
+        const raw = input.raw orelse continue;
+        const path = std.mem.span(raw);
+        const fd = try openCacheMetadataFile(root_fd, cache_prefix, path);
+        opened.fds[opened.count] = fd;
+        opened.count += 1;
+        input.output.* = .{ .fd = fd, .path = path };
+    }
+    opened.paths = .{
+        .repomd = repomd orelse return error.InvalidPath,
+        .primary = primary orelse return error.InvalidPath,
+        .filelists = filelists,
+        .updateinfo = updateinfo,
+        .other = other,
+    };
+    return opened;
+}
+
 fn loadRepository(
     input: *const abi.RepositoryInitInput,
     context: *package_context.Context,
@@ -466,7 +684,14 @@ fn loadRepository(
             0,
         ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
         defer std.heap.c_allocator.free(repo_data_dir);
-        result = callbacks.make_dirs.?(repo_data_dir.ptr);
+        result = if (comptime integration_options.standalone_test)
+            callbacks.make_dirs.?(repo_data_dir.ptr)
+        else
+            TDNFEnsureRepoCacheDir(
+                input.tdnf_handle,
+                input.repo_data,
+                "repodata",
+            );
         if (result != 0 and result != error_codes.fromErrno(.EXIST)) return result;
         result = callbacks.get_repo_md.?(
             input.tdnf_handle,
@@ -479,8 +704,33 @@ fn loadRepository(
             if (metadata) |value| @ptrCast(value) else null,
         );
         const paths = metadata orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+        const refresh = input.refresh_input orelse
+            return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+        const config: ?*const txn_config.TxnConfig =
+            if (comptime integration_options.standalone_test)
+                null
+            else if (refresh.rpm_config) |raw_config|
+                @ptrCast(@alignCast(raw_config))
+            else
+                return error_codes.ERROR_TDNF_INVALID_PARAMETER;
         var content_cookie = [_]u8{0} ** 32;
-        result = callbacks.calculate_cookie.?(
+        result = if (config != null and
+            config.?.pinnedCacheDirFd() != null)
+        blk: {
+            const repomd_path = std.mem.span(paths.repomd orelse
+                return error_codes.ERROR_TDNF_INVALID_PARAMETER);
+            const fd = openCacheMetadataFile(
+                config.?.pinnedCacheDirFd().?,
+                std.mem.span(refresh.cache_dir orelse
+                    return error_codes.ERROR_TDNF_INVALID_PARAMETER),
+                repomd_path,
+            ) catch break :blk error_codes.ERROR_TDNF_SOLV_IO;
+            defer _ = std.c.close(fd);
+            break :blk TDNFRepoMdCalculateCookieForFd(
+                fd,
+                &content_cookie,
+            );
+        } else callbacks.calculate_cookie.?(
             paths.repomd,
             &content_cookie,
         );
@@ -493,7 +743,41 @@ fn loadRepository(
             }
         }
         const prior = package_context.findRepositoryByOwner(context, input.repo_data);
-        const repository = package_context.loadAvailableMetadata(
+        const verify_integrity = if (state) |value| value.enabled else false;
+        var snapshot_fd: c_int = -1;
+        if (!comptime integration_options.standalone_test) {
+            snapshot_fd = TDNFOpenSnapshotFd(
+                input.tdnf_handle,
+                input.repo_data,
+            );
+            if (snapshot_fd == -1 and input.repo_data != null)
+                return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+        }
+        var snapshot_transferred = false;
+        defer {
+            if (snapshot_fd >= 0 and !snapshot_transferred)
+                _ = std.c.close(snapshot_fd);
+        }
+        const repository = if (config != null and
+            config.?.pinnedCacheDirFd() != null)
+        blk: {
+            var opened = openMetadataPaths(
+                config.?,
+                std.mem.span(refresh.cache_dir orelse
+                    return error_codes.ERROR_TDNF_INVALID_PARAMETER),
+                paths,
+            ) catch return error_codes.fromErrno(.ACCES);
+            defer opened.deinit();
+            break :blk package_context.loadAvailableMetadataFds(
+                context,
+                std.mem.span(repository_id),
+                input.repo_data,
+                input.priority,
+                opened.paths,
+                verify_integrity,
+                snapshot_fd,
+            ) catch |err| return mapMetadataLoadError(err);
+        } else package_context.loadAvailableMetadata(
             context,
             std.mem.span(repository_id),
             input.repo_data,
@@ -507,8 +791,10 @@ fn loadRepository(
                 .updateinfo = if (paths.updateinfo) |path| std.mem.span(path) else null,
                 .other = if (paths.other) |path| std.mem.span(path) else null,
             },
-            if (state) |value| value.enabled else false,
+            verify_integrity,
+            snapshot_fd,
         ) catch |err| return mapMetadataLoadError(err);
+        snapshot_transferred = snapshot_fd >= 0;
         if (state) |value| {
             if (value.enabled) value.replaceRepositoryRecord(
                 if (prior) |old| @ptrCast(old) else null,
@@ -521,13 +807,29 @@ fn loadRepository(
         return 0;
     }
 
+    var snapshot_fd: c_int = -1;
+    if (!comptime integration_options.standalone_test) {
+        snapshot_fd = TDNFOpenSnapshotFd(
+            input.tdnf_handle,
+            input.repo_data,
+        );
+        if (snapshot_fd == -1 and input.repo_data != null)
+            return error_codes.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    var snapshot_transferred = false;
+    defer {
+        if (snapshot_fd >= 0 and !snapshot_transferred)
+            _ = std.c.close(snapshot_fd);
+    }
     const repository = package_context.loadAvailableDirectory(
         context,
         std.mem.span(repository_id),
         input.repo_data,
         input.priority,
         std.mem.span(input.base_url orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER),
+        snapshot_fd,
     ) catch |err| return mapDirectoryLoadError(err);
+    snapshot_transferred = snapshot_fd >= 0;
     if (input.live_repository_slot) |slot| slot.* = @ptrCast(repository);
     return 0;
 }
@@ -613,6 +915,21 @@ fn refreshContext(
             std.mem.span(package_context.architecture(target)),
     ) catch return error_codes.ERROR_TDNF_OUT_OF_MEMORY;
     defer package_context.destroy(replacement);
+    if (comptime !integration_options.standalone_test) {
+        if (input.rpm_config) |raw_config| {
+            const config: *const txn_config.TxnConfig =
+                @ptrCast(@alignCast(raw_config));
+            if (config.pinnedCacheDirFd()) |fd| {
+                const duplicate = std.c.fcntl(
+                    fd,
+                    std.c.F.DUPFD_CLOEXEC,
+                    @as(c_int, 0),
+                );
+                if (duplicate < 0) return error_codes.ERROR_TDNF_SOLV_IO;
+                package_context.adoptCacheDirFd(replacement, duplicate);
+            }
+        }
+    }
     if (input.all_deps == 0) {
         package_context.loadInstalled(
             replacement,
@@ -655,18 +972,9 @@ fn refreshContext(
     for (entries, 0..) |entry, index| {
         var metadata_expired: c_int = 0;
         if (entry.view.metadata_expire >= 0 and input.cache_only == 0) {
-            var cache_path: ?[*:0]u8 = null;
-            var result = TDNFGetCachePath(
+            const result = TDNFShouldSyncRepoMetadata(
                 input.tdnf_handle,
                 entry.data,
-                null,
-                null,
-                &cache_path,
-            );
-            if (result != 0) return result;
-            defer if (cache_path) |path| TDNFFreeMemory(path);
-            result = TDNFShouldSyncMetadata(
-                cache_path,
                 entry.view.metadata_expire,
                 &metadata_expired,
             );
@@ -1409,6 +1717,10 @@ fn captureRepositories(
             .priority = input.priority,
             .cost = input.cost,
             .cache_dir = cache_dir,
+            .cache_dir_fd = if (input.cache_dir_fd >= 0)
+                input.cache_dir_fd
+            else
+                null,
             .options = (state.repositoryRecord(
                 input.repository orelse return error.InvalidRepository,
             ) orelse return error.InvalidRepository).options,

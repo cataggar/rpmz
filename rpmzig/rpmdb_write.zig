@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sqlite = @import("sqlite");
+const confined_sqlite = @import("confined_sqlite");
 const header = @import("rpm_header");
 const install_engine = @import("install.zig");
 const pkgfile = @import("rpm_pkgfile");
@@ -151,10 +152,169 @@ const secondary_tables = [_]SecondaryTable{
     .{ .name = "Enhancename", .key_sql_type = "TEXT", .key_index = true, .hnum_index = true },
 };
 
+var test_fail_open_config_after_writer = false;
+var test_close_probe_context: ?*anyopaque = null;
+var test_close_probe: ?*const fn (?*anyopaque, c_int) void = null;
+
+pub const PreparedConfig = struct {
+    config: *txn_config.TxnConfig,
+    db_dir: []u8,
+    root: install_engine.RootDir,
+    dir_fd: c_int,
+    backend_checked: bool,
+
+    pub fn init(config: *txn_config.TxnConfig) Error!PreparedConfig {
+        const expanded = config.expandMacroAlloc(
+            std.heap.c_allocator,
+            .dbpath,
+        ) catch return error.PathTooLong;
+        defer std.heap.c_allocator.free(expanded);
+        const raw_dir = if (expanded.len != 0 and expanded[0] == '/')
+            expanded
+        else
+            try std.fmt.allocPrint(
+                std.heap.c_allocator,
+                "/{s}",
+                .{expanded},
+            );
+        defer if (raw_dir.ptr != expanded.ptr)
+            std.heap.c_allocator.free(raw_dir);
+        const trimmed_dir = std.mem.trimEnd(u8, raw_dir, "/");
+        const normalized_dir = if (trimmed_dir.len == 0)
+            "/"
+        else
+            trimmed_dir;
+        const db_dir = try std.heap.c_allocator.dupe(u8, normalized_dir);
+        errdefer std.heap.c_allocator.free(db_dir);
+        var root = install_engine.RootDir.initConfig(
+            std.heap.c_allocator,
+            config,
+            null,
+            null,
+        ) catch return error.UnsafePath;
+        errdefer root.deinit();
+        const dir_fd = if (config.pinnedRpmDbDirFd()) |pinned_dir| blk: {
+            const duplicate = std.c.fcntl(
+                pinned_dir,
+                std.c.F.DUPFD_CLOEXEC,
+                @as(c_int, 0),
+            );
+            if (duplicate < 0) return error.SyscallFailed;
+            break :blk duplicate;
+        } else (root.openDirectory(normalized_dir, false) catch
+            return error.UnsafePath) orelse -1;
+        errdefer {
+            if (dir_fd >= 0) _ = sysc.close(dir_fd);
+        }
+        if (dir_fd < 0 and config.pinnedInstallRootFd() != null and
+            !config.pinnedRpmDbMainWasAbsent())
+            return error.UnsafePath;
+        if (dir_fd >= 0) try ensureCompatibleBackendFd(
+            dir_fd,
+            txn_config.DEFAULT_RPMDB_BASENAME,
+        );
+        return .{
+            .config = config,
+            .db_dir = db_dir,
+            .root = root,
+            .dir_fd = dir_fd,
+            .backend_checked = dir_fd >= 0,
+        };
+    }
+
+    pub fn deinit(self: *PreparedConfig) void {
+        if (self.dir_fd >= 0) _ = sysc.close(self.dir_fd);
+        self.root.deinit();
+        std.heap.c_allocator.free(self.db_dir);
+        self.* = undefined;
+    }
+
+    pub fn materializeAbsentMain(self: *PreparedConfig) Error!void {
+        if (!self.config.pinnedRpmDbMainWasAbsent() or
+            self.config.pinnedRpmDbMainFd() != null)
+        {
+            return error.UnsafePath;
+        }
+        if (self.dir_fd < 0) {
+            self.dir_fd = (self.root.openDirectory(
+                self.db_dir,
+                true,
+            ) catch return error.UnsafePath) orelse
+                return error.SyscallFailed;
+        }
+        if (!self.backend_checked) {
+            try ensureCompatibleBackendFd(
+                self.dir_fd,
+                txn_config.DEFAULT_RPMDB_BASENAME,
+            );
+            self.backend_checked = true;
+        }
+        if (self.config.pinnedInstallRootFd() != null and
+            self.config.pinnedRpmDbDirFd() == null)
+        {
+            self.config.adoptPinnedRpmDbDirFd(self.dir_fd) catch
+                return error.UnsafePath;
+        }
+        var main_pin = confined_sqlite.createExclusiveMainPinAt(
+            std.heap.c_allocator,
+            self.dir_fd,
+            txn_config.DEFAULT_RPMDB_BASENAME,
+        ) catch |err| return mapConfinedOpenError(err);
+        errdefer main_pin.deinit();
+        self.config.adoptPinnedRpmDbMainLease(
+            main_pin.fd,
+            main_pin.database,
+            confined_sqlite.MainFdPin.retainOpaque,
+            confined_sqlite.MainFdPin.releaseOpaque,
+        ) catch return error.UnsafePath;
+        main_pin.disown();
+    }
+
+    pub fn open(self: *PreparedConfig) Error!Writer {
+        if (self.config.pinnedInstallRootFd() == null) {
+            if (self.dir_fd < 0) {
+                self.dir_fd = (self.root.openDirectory(
+                    self.db_dir,
+                    true,
+                ) catch return error.UnsafePath) orelse
+                    return error.SyscallFailed;
+            }
+            if (!self.backend_checked) {
+                try ensureCompatibleBackendFd(
+                    self.dir_fd,
+                    txn_config.DEFAULT_RPMDB_BASENAME,
+                );
+                self.backend_checked = true;
+            }
+            return Writer.openAtDirFd(
+                &self.root,
+                &self.dir_fd,
+                txn_config.DEFAULT_RPMDB_BASENAME,
+                null,
+            );
+        }
+        if (self.config.pinnedRpmDbMainWasAbsent())
+            try self.materializeAbsentMain();
+        return self.openMaterialized();
+    }
+
+    pub fn openMaterialized(self: *PreparedConfig) Error!Writer {
+        if (self.dir_fd < 0 or self.config.pinnedRpmDbMainFd() == null)
+            return error.UnsafePath;
+        return Writer.openAtDirFd(
+            &self.root,
+            &self.dir_fd,
+            txn_config.DEFAULT_RPMDB_BASENAME,
+            self.config.pinnedRpmDbMainFd(),
+        );
+    }
+};
+
 pub const Writer = struct {
     db: ?*c.sqlite3,
     dir_fd: c_int,
     root: install_engine.RootDir,
+    connection: confined_sqlite.Connection,
 
     pub fn openRoot(root: []const u8) Error!Writer {
         var pinned_root = install_engine.RootDir.initCreating(
@@ -167,48 +327,30 @@ pub const Writer = struct {
             true,
         ) catch return error.UnsafePath) orelse
             return error.SyscallFailed;
-        return openAtDirFd(
-            pinned_root,
-            dir_fd,
+        var owned_dir_fd = dir_fd;
+        errdefer {
+            if (owned_dir_fd >= 0) _ = sysc.close(owned_dir_fd);
+        }
+        try ensureCompatibleBackendFd(
+            owned_dir_fd,
             txn_config.DEFAULT_RPMDB_BASENAME,
+        );
+        return openAtDirFd(
+            &pinned_root,
+            &owned_dir_fd,
+            txn_config.DEFAULT_RPMDB_BASENAME,
+            null,
         );
     }
 
-    pub fn openConfig(config: *const txn_config.TxnConfig) Error!Writer {
-        const expanded = config.expandMacroAlloc(
-            std.heap.c_allocator,
-            .dbpath,
-        ) catch return error.PathTooLong;
-        defer std.heap.c_allocator.free(expanded);
-        const db_dir = if (expanded.len != 0 and expanded[0] == '/')
-            expanded
-        else
-            try std.fmt.allocPrint(
-                std.heap.c_allocator,
-                "/{s}",
-                .{expanded},
-            );
-        defer if (db_dir.ptr != expanded.ptr)
-            std.heap.c_allocator.free(db_dir);
-        const trimmed_dir = std.mem.trimEnd(u8, db_dir, "/");
-        const normalized_dir = if (trimmed_dir.len == 0)
-            "/"
-        else
-            trimmed_dir;
-        var root = install_engine.RootDir.init(
-            std.heap.c_allocator,
-            config.installRoot(),
-            null,
-            null,
-        ) catch return error.UnsafePath;
-        errdefer root.deinit();
-        const dir_fd = (root.openDirectory(normalized_dir, true) catch
-            return error.UnsafePath) orelse return error.SyscallFailed;
-        return openAtDirFd(
-            root,
-            dir_fd,
-            txn_config.DEFAULT_RPMDB_BASENAME,
-        );
+    pub fn openConfig(config: *txn_config.TxnConfig) Error!Writer {
+        var prepared = try PreparedConfig.init(config);
+        defer prepared.deinit();
+        var writer = try prepared.open();
+        errdefer writer.close();
+        if (builtin.is_test and test_fail_open_config_after_writer)
+            return error.SyscallFailed;
+        return writer;
     }
 
     pub fn openAtPath(db_path: []const u8) Error!Writer {
@@ -259,61 +401,76 @@ pub const Writer = struct {
             ) catch return error.UnsafePath;
         };
         errdefer root.deinit();
-        const dir_fd = (root.openDirectory(dir_path, true) catch
+        var dir_fd = (root.openDirectory(dir_path, true) catch
             return error.UnsafePath) orelse return error.SyscallFailed;
-        return openAtDirFd(root, dir_fd, basename);
+        errdefer {
+            if (dir_fd >= 0) _ = sysc.close(dir_fd);
+        }
+        try ensureCompatibleBackendFd(dir_fd, basename);
+        return openAtDirFd(&root, &dir_fd, basename, null);
     }
 
     fn openAtDirFd(
-        root: install_engine.RootDir,
-        dir_fd: c_int,
+        root: *install_engine.RootDir,
+        dir_fd: *c_int,
         basename: []const u8,
+        pinned_main_fd: ?c_int,
     ) Error!Writer {
-        var owned_root = root;
-        errdefer owned_root.deinit();
-        errdefer _ = sysc.close(dir_fd);
-        try ensureCompatibleBackendFd(dir_fd, basename);
-        const db_path = try std.fmt.allocPrint(
+        var connection = confined_sqlite.openAt(
             std.heap.c_allocator,
-            "/proc/self/fd/{d}/{s}",
-            .{ dir_fd, basename },
-        );
-        defer std.heap.c_allocator.free(db_path);
-        const db_path_z = try std.heap.c_allocator.dupeZ(u8, db_path);
-        defer std.heap.c_allocator.free(db_path_z);
-
-        var db: ?*c.sqlite3 = null;
-        const open_rc = c.sqlite3_open_v2(
-            db_path_z.ptr,
-            &db,
-            c.SQLITE_OPEN_READWRITE | c.SQLITE_OPEN_CREATE | c.SQLITE_OPEN_NOMUTEX,
-            null,
-        );
-        if (open_rc != c.SQLITE_OK) {
-            if (db != null) _ = c.sqlite3_close(db);
-            return error.SqliteOpenFailed;
-        }
-        errdefer _ = c.sqlite3_close(db);
+            dir_fd.*,
+            basename,
+            .{
+                .mode = .read_write,
+                .create = true,
+                .pinned_main_fd = pinned_main_fd,
+            },
+        ) catch |err| return mapConfinedOpenError(err);
+        errdefer connection.close();
+        const db = connection.db;
 
         if (c.sqlite3_busy_timeout(db, 10000) != c.SQLITE_OK) {
             return error.SqliteBusyTimeoutFailed;
         }
+        var persist_wal: c_int = 1;
+        if (c.sqlite3_file_control(
+            db,
+            "main",
+            c.SQLITE_FCNTL_PERSIST_WAL,
+            &persist_wal,
+        ) != c.SQLITE_OK) {
+            return error.SqliteExecFailed;
+        }
 
         var writer = Writer{
             .db = db,
-            .dir_fd = dir_fd,
-            .root = owned_root,
+            .dir_fd = dir_fd.*,
+            .root = root.*,
+            .connection = connection,
         };
         try writer.execSql("PRAGMA secure_delete = OFF");
         try writer.execSql("PRAGMA journal_mode = WAL");
         try writer.execSql("PRAGMA wal_autocheckpoint = 10000");
         try writer.initSchema();
+        writer.connection.verify() catch return error.UnsafePath;
+        root.fd = -1;
+        dir_fd.* = -1;
         return writer;
     }
 
     pub fn close(self: *Writer) void {
+        const root_fd = self.root.fd;
         if (self.db != null) {
-            _ = c.sqlite3_close(self.db);
+            var log_frames: c_int = 0;
+            var checkpointed_frames: c_int = 0;
+            _ = c.sqlite3_wal_checkpoint_v2(
+                self.db,
+                null,
+                c.SQLITE_CHECKPOINT_TRUNCATE,
+                &log_frames,
+                &checkpointed_frames,
+            );
+            self.connection.close();
             self.db = null;
         }
         if (self.dir_fd >= 0) {
@@ -321,6 +478,11 @@ pub const Writer = struct {
             self.dir_fd = -1;
         }
         self.root.deinit();
+        if (builtin.is_test) {
+            if (test_close_probe) |probe| {
+                probe(test_close_probe_context, root_fd);
+            }
+        }
     }
 
     pub fn installRpmPath(self: *Writer, path: [:0]const u8, options: InstallOptions) Error!u32 {
@@ -903,6 +1065,283 @@ test "rpmdb writer confines database and sidecars beneath pinned root" {
             return error.TestUnexpectedResult;
         } else |_| {}
     }
+}
+
+test "rpmdb writer aborts when the pinned main filename is replaced" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "db");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "outside",
+        .data = "outside",
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const db_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/db/rpmdb.sqlite",
+        .{base},
+    );
+    defer allocator.free(db_path);
+    var writer = try Writer.openAtPath(db_path);
+    defer writer.close();
+
+    try tmp.dir.rename(
+        "db/rpmdb.sqlite",
+        tmp.dir,
+        "db/rpmdb.pinned",
+        std.testing.io,
+    );
+    try tmp.dir.symLink(
+        std.testing.io,
+        "../outside",
+        "db/rpmdb.sqlite",
+        .{},
+    );
+    try std.testing.expectError(
+        error.SqliteExecFailed,
+        writer.execSql("CREATE TABLE replacement_probe(value INTEGER)"),
+    );
+    const outside = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "outside",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(outside);
+    try std.testing.expectEqualStrings("outside", outside);
+}
+
+test "pinned config rejects regular rpmdb substitution across opens" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root_path = try std.fs.path.join(
+        allocator,
+        &.{ base, "root" },
+    );
+    defer allocator.free(root_path);
+    var config = try txn_config.TxnConfig.init(allocator, root_path);
+    defer config.deinit();
+    var initial = try Writer.openConfig(&config);
+    initial.close();
+
+    const root_z = try allocator.dupeZ(u8, root_path);
+    defer allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var pinned = try config.cloneWithPinnedInstallRoot(
+        allocator,
+        root_path,
+        root_fd,
+    );
+    defer pinned.deinit();
+    try std.testing.expect(pinned.pinnedRpmDbDirFd() != null);
+    try std.testing.expect(pinned.pinnedRpmDbMainFd() != null);
+
+    try tmp.dir.rename(
+        "root/var/lib/rpm/rpmdb.sqlite",
+        tmp.dir,
+        "root/var/lib/rpm/rpmdb.pinned",
+        std.testing.io,
+    );
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/var/lib/rpm/rpmdb.sqlite",
+        .data = "replacement",
+    });
+    try std.testing.expectError(
+        error.UnsafePath,
+        Writer.openConfig(&pinned),
+    );
+    const replacement = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "root/var/lib/rpm/rpmdb.sqlite",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(replacement);
+    try std.testing.expectEqualStrings("replacement", replacement);
+}
+
+test "pinned absent rpmdb is created exclusively before schema initialization" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root_path = try std.fs.path.join(
+        allocator,
+        &.{ base, "root" },
+    );
+    defer allocator.free(root_path);
+    const root_z = try allocator.dupeZ(u8, root_path);
+    defer allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var config = try txn_config.TxnConfig.init(allocator, root_path);
+    defer config.deinit();
+    var pinned = try config.cloneWithPinnedInstallRoot(
+        allocator,
+        root_path,
+        root_fd,
+    );
+    defer pinned.deinit();
+    try std.testing.expect(pinned.pinnedRpmDbMainWasAbsent());
+
+    try tmp.dir.createDirPath(std.testing.io, "root/var/lib/rpm");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/var/lib/rpm/rpmdb.sqlite",
+        .data = "appeared-after-pin",
+    });
+    try std.testing.expectError(
+        error.UnsafePath,
+        Writer.openConfig(&pinned),
+    );
+    const appeared = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "root/var/lib/rpm/rpmdb.sqlite",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(appeared);
+    try std.testing.expectEqualStrings("appeared-after-pin", appeared);
+    inline for (.{ "-journal", "-wal", "-shm" }) |suffix| {
+        var path_buffer: [128]u8 = undefined;
+        const path = try std.fmt.bufPrint(
+            &path_buffer,
+            "root/var/lib/rpm/rpmdb.sqlite{s}",
+            .{suffix},
+        );
+        try std.testing.expectError(
+            error.FileNotFound,
+            tmp.dir.access(std.testing.io, path, .{}),
+        );
+    }
+
+    try tmp.dir.deleteFile(
+        std.testing.io,
+        "root/var/lib/rpm/rpmdb.sqlite",
+    );
+    var writer = try Writer.openConfig(&pinned);
+    writer.close();
+    try std.testing.expect(!pinned.pinnedRpmDbMainWasAbsent());
+    const database = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "root/var/lib/rpm/rpmdb.sqlite",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(database);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        database,
+        "SQLite format 3\x00",
+    ));
+}
+
+test "rpmdb writer retains its lease across fallible initialization" {
+    const Probe = struct {
+        source_fd: c_int,
+        reused_fd: c_int = -1,
+
+        fn reuse(raw: ?*anyopaque, closed_fd: c_int) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (closed_fd < 0) return;
+            self.reused_fd = std.c.fcntl(
+                self.source_fd,
+                std.c.F.DUPFD_CLOEXEC,
+                closed_fd,
+            );
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root_path);
+    const root_z = try std.testing.allocator.dupeZ(u8, root_path);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root_path,
+    );
+    defer config.deinit();
+    var pinned = try config.cloneWithPinnedInstallRoot(
+        std.testing.allocator,
+        root_path,
+        root_fd,
+    );
+    defer pinned.deinit();
+
+    var probe = Probe{ .source_fd = root_fd };
+    test_close_probe_context = &probe;
+    test_close_probe = Probe.reuse;
+    test_fail_open_config_after_writer = true;
+    defer {
+        test_fail_open_config_after_writer = false;
+        test_close_probe = null;
+        test_close_probe_context = null;
+        if (probe.reused_fd >= 0) _ = std.c.close(probe.reused_fd);
+    }
+    try std.testing.expectError(
+        error.SyscallFailed,
+        Writer.openConfig(&pinned),
+    );
+    test_fail_open_config_after_writer = false;
+    test_close_probe = null;
+    test_close_probe_context = null;
+    try std.testing.expect(probe.reused_fd >= 0);
+    try std.testing.expect(std.c.fcntl(
+        probe.reused_fd,
+        std.c.F.GETFD,
+    ) >= 0);
+    try std.testing.expect(
+        (std.c.fcntl(probe.reused_fd, std.c.F.GETFD) &
+            std.c.FD_CLOEXEC) != 0,
+    );
+    try std.testing.expect(pinned.pinnedRpmDbMainFd() != null);
+    var retry = try Writer.openConfig(&pinned);
+    retry.close();
 }
 
 pub fn buildInstalledHeaderBlob(
@@ -1544,12 +1983,16 @@ fn ensureCompatibleBackendFd(
     dir_fd: c_int,
     basename: []const u8,
 ) Error!void {
-    const basename_z = try std.heap.c_allocator.dupeZ(u8, basename);
-    defer std.heap.c_allocator.free(basename_z);
+    if (basename.len > std.fs.max_name_bytes)
+        return error.PathTooLong;
+    var basename_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+    @memcpy(basename_buffer[0..basename.len], basename);
+    basename_buffer[basename.len] = 0;
+    const basename_z: [*:0]const u8 = @ptrCast(&basename_buffer);
     var st: sysc.struct_stat = undefined;
     const db_rc = sysc.fstatat(
         dir_fd,
-        basename_z.ptr,
+        basename_z,
         &st,
         0x100,
     );
@@ -1560,14 +2003,34 @@ fn ensureCompatibleBackendFd(
         return;
     }
     if (std.c.errno(db_rc) != .NOENT) return error.SyscallFailed;
-    const markers = [_][]const u8{ "Packages", "Packages.db", "Packages.db-wal", "Packages.db-shm" };
+    const markers = [_][*:0]const u8{
+        "Packages",
+        "Packages.db",
+        "Packages.db-wal",
+        "Packages.db-shm",
+    };
     for (markers) |marker| {
-        const marker_z = try std.heap.c_allocator.dupeZ(u8, marker);
-        defer std.heap.c_allocator.free(marker_z);
-        if (sysc.fstatat(dir_fd, marker_z.ptr, &st, 0x100) == 0) {
+        if (sysc.fstatat(dir_fd, marker, &st, 0x100) == 0) {
             return error.UnsupportedBackend;
         }
+        if (std.c._errno().* != @intFromEnum(std.posix.E.NOENT))
+            return error.SyscallFailed;
     }
+}
+
+fn mapConfinedOpenError(err: confined_sqlite.Error) Error {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.NotFound => error.NotFound,
+        error.SyscallFailed => error.SyscallFailed,
+        error.InvalidPath,
+        error.PathChanged,
+        error.UnsafeFile,
+        => error.UnsafePath,
+        error.SqliteOpenFailed,
+        error.VfsFailed,
+        => error.SqliteOpenFailed,
+    };
 }
 
 fn buildHeaderBlobForTest(

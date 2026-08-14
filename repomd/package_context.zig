@@ -5,6 +5,11 @@ const cmdline_repository = @import("cmdline_repository.zig");
 const directory_repository = @import("directory_repository.zig");
 const installed_repository = @import("installed_repository.zig");
 const model = @import("model.zig");
+const rpm_pkgfile = @import("rpm_pkgfile");
+
+extern fn tdnf_rpm_config_duplicate_cache_dir_fd(
+    config: ?*const anyopaque,
+) c_int;
 const rpmpkg = @import("rpmpkg.zig");
 
 const abi = @import("tdnf_internal_abi");
@@ -51,11 +56,18 @@ pub const Repository = struct {
     cookie_sha256: [32]u8 = [_]u8{0} ** 32,
     cache_options: available_loader.CacheOptions = .{},
     has_cookie: bool = false,
+    snapshot_fd: c_int = -1,
     cmdline_paths: std.ArrayList([:0]u8) = .empty,
+    cmdline_fds: std.ArrayList(c_int) = .empty,
 
     fn deinit(self: *Repository, allocator: std.mem.Allocator) void {
         for (self.cmdline_paths.items) |path| allocator.free(path);
         self.cmdline_paths.deinit(allocator);
+        for (self.cmdline_fds.items) |fd| {
+            if (fd >= 0) _ = std.c.close(fd);
+        }
+        self.cmdline_fds.deinit(allocator);
+        if (self.snapshot_fd >= 0) _ = std.c.close(self.snapshot_fd);
         self.arena_state.deinit();
         allocator.destroy(self);
     }
@@ -64,6 +76,7 @@ pub const Repository = struct {
 const Impl = struct {
     allocator: std.mem.Allocator,
     cache_dir: ?[:0]u8,
+    cache_dir_fd: c_int = -1,
     root_dir: ?[:0]u8,
     architecture: [:0]u8,
     repositories: std.ArrayList(*Repository) = .empty,
@@ -78,6 +91,7 @@ const Impl = struct {
         self.repositories.deinit(self.allocator);
         self.package_slots.deinit(self.allocator);
         if (self.cache_dir) |value| self.allocator.free(value);
+        if (self.cache_dir_fd >= 0) _ = std.c.close(self.cache_dir_fd);
         if (self.root_dir) |value| self.allocator.free(value);
         self.allocator.free(self.architecture);
         self.allocator.destroy(self);
@@ -138,6 +152,19 @@ pub fn swap(left: *Context, right: *Context) error{OutOfMemory}!void {
 
 pub fn cacheDir(context: *const Context) ?[*:0]const u8 {
     return if (context.impl.cache_dir) |value| value.ptr else null;
+}
+
+pub fn cacheDirFd(context: *const Context) ?c_int {
+    return if (context.impl.cache_dir_fd >= 0)
+        context.impl.cache_dir_fd
+    else
+        null;
+}
+
+pub fn adoptCacheDirFd(context: *Context, fd: c_int) void {
+    if (context.impl.cache_dir_fd >= 0)
+        _ = std.c.close(context.impl.cache_dir_fd);
+    context.impl.cache_dir_fd = fd;
 }
 
 pub fn rootDir(context: *const Context) ?[*:0]const u8 {
@@ -224,6 +251,7 @@ pub fn loadAvailableMetadata(
     priority: i32,
     paths: available_loader.Paths,
     verify_integrity: bool,
+    snapshot_fd: c_int,
 ) available_loader.LoadError!*Repository {
     var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
     errdefer arena_state.deinit();
@@ -232,6 +260,64 @@ pub fn loadAvailableMetadata(
         try available_loader.loadModelWithRepomd(arena, paths)
     else
         try available_loader.loadLegacyModelWithRepomd(arena, paths);
+    return finishAvailableMetadata(
+        context,
+        arena_state,
+        id,
+        owner,
+        priority,
+        loaded,
+        .{
+            .include_filelists = paths.filelists != null,
+            .include_updateinfo = paths.updateinfo != null,
+            .include_other = paths.other != null,
+        },
+        snapshot_fd,
+    );
+}
+
+pub fn loadAvailableMetadataFds(
+    context: *Context,
+    id: []const u8,
+    owner: ?*anyopaque,
+    priority: i32,
+    paths: available_loader.FdPaths,
+    verify_integrity: bool,
+    snapshot_fd: c_int,
+) available_loader.LoadError!*Repository {
+    var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
+    errdefer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const loaded = if (verify_integrity)
+        try available_loader.loadModelWithRepomdFds(arena, paths)
+    else
+        try available_loader.loadLegacyModelWithRepomdFds(arena, paths);
+    return finishAvailableMetadata(
+        context,
+        arena_state,
+        id,
+        owner,
+        priority,
+        loaded,
+        .{
+            .include_filelists = paths.filelists != null,
+            .include_updateinfo = paths.updateinfo != null,
+            .include_other = paths.other != null,
+        },
+        snapshot_fd,
+    );
+}
+
+fn finishAvailableMetadata(
+    context: *Context,
+    arena_state: std.heap.ArenaAllocator,
+    id: []const u8,
+    owner: ?*anyopaque,
+    priority: i32,
+    loaded: available_loader.PathModel,
+    cache_options: available_loader.CacheOptions,
+    snapshot_fd: c_int,
+) available_loader.LoadError!*Repository {
     const repository = try finishAvailable(
         context,
         arena_state,
@@ -240,16 +326,13 @@ pub fn loadAvailableMetadata(
         priority,
         loaded.repository,
     );
-    repository.cache_options = .{
-        .include_filelists = paths.filelists != null,
-        .include_updateinfo = paths.updateinfo != null,
-        .include_other = paths.other != null,
-    };
+    repository.cache_options = cache_options;
     repository.cookie_sha256 = available_loader.solvCacheCookie(
         loaded.repomd_bytes,
         repository.cache_options,
     );
     repository.has_cookie = true;
+    repository.snapshot_fd = snapshot_fd;
     return repository;
 }
 
@@ -259,6 +342,7 @@ pub fn loadAvailableDirectory(
     owner: ?*anyopaque,
     priority: i32,
     directory: []const u8,
+    snapshot_fd: c_int,
 ) directory_repository.LoadError!*Repository {
     var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
     errdefer arena_state.deinit();
@@ -267,7 +351,7 @@ pub fn loadAvailableDirectory(
         directory,
         .read,
     );
-    return finishAvailable(
+    const repository = try finishAvailable(
         context,
         arena_state,
         id,
@@ -275,6 +359,8 @@ pub fn loadAvailableDirectory(
         priority,
         repository_model,
     );
+    repository.snapshot_fd = snapshot_fd;
+    return repository;
 }
 
 fn finishAvailable(
@@ -379,22 +465,60 @@ pub fn addCommandLineRpm(
     repository: *Repository,
     path: []const u8,
 ) cmdline_repository.LoadError!u32 {
+    return addCommandLineRpmWithFd(context, repository, path, -1);
+}
+
+pub fn addCommandLineRpmWithFd(
+    context: *Context,
+    repository: *Repository,
+    path: []const u8,
+    source_fd: c_int,
+) cmdline_repository.LoadError!u32 {
     if (repository != context.impl.command_line or
         repository.kind != .command_line)
     {
         return error.RpmFileOpenFailed;
     }
+    const retained_fd = if (source_fd >= 0)
+        std.c.fcntl(
+            source_fd,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 0),
+        )
+    else
+        -1;
+    if (source_fd >= 0 and retained_fd < 0)
+        return error.RpmFileOpenFailed;
+    errdefer {
+        if (retained_fd >= 0) _ = std.c.close(retained_fd);
+    }
+
     const owned_path = try context.impl.allocator.dupeZ(u8, path);
     errdefer context.impl.allocator.free(owned_path);
     try repository.cmdline_paths.append(context.impl.allocator, owned_path);
     errdefer _ = repository.cmdline_paths.pop();
+    try repository.cmdline_fds.append(context.impl.allocator, retained_fd);
+    errdefer _ = repository.cmdline_fds.pop();
 
     var arena_state = std.heap.ArenaAllocator.init(context.impl.allocator);
     errdefer arena_state.deinit();
-    const repository_model = try cmdline_repository.loadModel(
+    const repository_model = try cmdline_repository.loadModelWithFds(
         arena_state.allocator(),
         repository.cmdline_paths.items,
+        repository.cmdline_fds.items,
     );
+    const appended_package = repository_model.packages[
+        repository_model.packages.len - 1
+    ];
+    for (repository.model.packages, 0..) |existing, existing_index| {
+        if (!samePackageIdentity(existing, appended_package)) continue;
+        arena_state.deinit();
+        const discarded_fd = repository.cmdline_fds.pop().?;
+        if (discarded_fd >= 0) _ = std.c.close(discarded_fd);
+        const discarded_path = repository.cmdline_paths.pop().?;
+        context.impl.allocator.free(discarded_path);
+        return repository.handles[existing_index];
+    }
     const id = try arena_state.allocator().dupeZ(u8, repository.id);
     const fields = try buildFields(
         arena_state.allocator(),
@@ -427,6 +551,45 @@ pub fn addCommandLineRpm(
     return packageIdFor(repository, repository_model.packages.len - 1);
 }
 
+pub fn duplicateCommandLineRpmFdForPackage(
+    context: *const Context,
+    package_id: i32,
+) error{DuplicateFailed}!?c_int {
+    const fd = (try borrowCommandLineRpmFdForPackage(
+        context,
+        package_id,
+    )) orelse return null;
+    const duplicate = std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
+    if (duplicate < 0) return error.DuplicateFailed;
+    return duplicate;
+}
+
+pub fn borrowCommandLineRpmFdForPackage(
+    context: *const Context,
+    package_id: i32,
+) error{DuplicateFailed}!?c_int {
+    const view = packageView(context, package_id) orelse
+        return error.DuplicateFailed;
+    const repository = context.impl.command_line orelse
+        return error.DuplicateFailed;
+    if (view.repository != repository or
+        repository.kind != .command_line or
+        view.index >= repository.cmdline_fds.items.len)
+    {
+        return error.DuplicateFailed;
+    }
+    if (repository.cmdline_paths.items.len != repository.cmdline_fds.items.len) {
+        return error.DuplicateFailed;
+    }
+    const fd = repository.cmdline_fds.items[view.index];
+    if (fd < 0) return null;
+    return fd;
+}
+
 pub fn resetCommandLine(context: *Context) error{OutOfMemory}!*Repository {
     const current = context.impl.command_line orelse return createCommandLine(context);
     var replacement_arena = std.heap.ArenaAllocator.init(context.impl.allocator);
@@ -437,6 +600,10 @@ pub fn resetCommandLine(context: *Context) error{OutOfMemory}!*Repository {
     );
     for (current.cmdline_paths.items) |path| context.impl.allocator.free(path);
     current.cmdline_paths.clearRetainingCapacity();
+    for (current.cmdline_fds.items) |fd| {
+        if (fd >= 0) _ = std.c.close(fd);
+    }
+    current.cmdline_fds.clearRetainingCapacity();
     invalidateRepositoryHandles(context.impl, current);
     current.arena_state.deinit();
     current.arena_state = replacement_arena;
@@ -809,6 +976,10 @@ fn TDNFPackageContextCreate(
         error.RpmDbOpenFailed => abi.ERROR_TDNF_RPMTS_OPENDB_FAILED,
         error.RpmDbReadFailed => abi.ERROR_TDNF_SOLV_IO,
     };
+    if (rpm_config) |config| {
+        const cache_fd = tdnf_rpm_config_duplicate_cache_dir_fd(config);
+        if (cache_fd >= 0) adoptCacheDirFd(context, cache_fd);
+    }
     slot.* = context;
     return 0;
 }
@@ -873,6 +1044,62 @@ fn TDNFPackageContextAddRpm(
         error.InvalidRpmHeader => abi.ERROR_TDNF_INVALID_REPO_FILE,
     };
     if (package_id) |value| value.* = id;
+    return 0;
+}
+
+fn TDNFPackageContextAddRpmFd(
+    context: ?*Context,
+    repository: ?*Repository,
+    raw_path: ?[*:0]const u8,
+    fd: c_int,
+    package_id: ?*u32,
+) callconv(.c) u32 {
+    if (package_id) |value| value.* = 0;
+    const path = raw_path orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    if (fd < 0) return abi.ERROR_TDNF_INVALID_PARAMETER;
+    const id = addCommandLineRpmWithFd(
+        context orelse return abi.ERROR_TDNF_INVALID_PARAMETER,
+        repository orelse return abi.ERROR_TDNF_INVALID_PARAMETER,
+        std.mem.span(path),
+        fd,
+    ) catch |err| return switch (err) {
+        error.OutOfMemory => abi.ERROR_TDNF_OUT_OF_MEMORY,
+        error.RpmFileOpenFailed => abi.ERROR_TDNF_FILE_NOT_FOUND,
+        error.InvalidRpmHeader => abi.ERROR_TDNF_INVALID_REPO_FILE,
+    };
+    if (package_id) |value| value.* = id;
+    return 0;
+}
+
+fn TDNFPackageContextDuplicateRpmFd(
+    context: ?*const Context,
+    package_id: i32,
+    output: ?*c_int,
+) callconv(.c) u32 {
+    const out = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    out.* = -1;
+    const package_context = context orelse
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
+    out.* = (duplicateCommandLineRpmFdForPackage(
+        package_context,
+        package_id,
+    ) catch return abi.ERROR_TDNF_FILESYS_IO) orelse return 0;
+    return 0;
+}
+
+fn TDNFPackageContextBorrowRpmFd(
+    context: ?*const Context,
+    package_id: i32,
+    output: ?*c_int,
+) callconv(.c) u32 {
+    const out = output orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
+    out.* = -1;
+    const package_context = context orelse
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
+    out.* = (borrowCommandLineRpmFdForPackage(
+        package_context,
+        package_id,
+    ) catch return abi.ERROR_TDNF_FILESYS_IO) orelse return 0;
     return 0;
 }
 
@@ -1409,6 +1636,9 @@ comptime {
         .{ &TDNFPackageContextInitCommandLine, "TDNFPackageContextInitCommandLine" },
         .{ &TDNFPackageContextResetCommandLine, "TDNFPackageContextResetCommandLine" },
         .{ &TDNFPackageContextAddRpm, "TDNFPackageContextAddRpm" },
+        .{ &TDNFPackageContextAddRpmFd, "TDNFPackageContextAddRpmFd" },
+        .{ &TDNFPackageContextBorrowRpmFd, "TDNFPackageContextBorrowRpmFd" },
+        .{ &TDNFPackageContextDuplicateRpmFd, "TDNFPackageContextDuplicateRpmFd" },
         .{ &TDNFPackageContextGetFields, "TDNFPackageContextGetFields" },
         .{ &TDNFPackageContextGetRepoNevra, "TDNFPackageContextGetRepoNevra" },
         .{ &TDNFPackageContextGetInstalledPkgIds, "TDNFPackageContextGetInstalledPkgIds" },
@@ -1611,6 +1841,246 @@ test "command-line rpm handles append and reset" {
     _ = try resetCommandLine(context);
     try testing.expect(packageModel(context, 2) == null);
     try testing.expectEqual(@as(usize, 0), command_line.cmdline_paths.items.len);
+}
+
+test "command-line rpm fd remains authoritative after path substitution" {
+    const testing = std.testing;
+    const context = try create(testing.allocator, null, null, "x86_64");
+    defer destroy(context);
+    const command_line = try createCommandLine(context);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const downloaded = try rpmpkg.makeMinimalRpmBytesForTest(
+        testing.allocator,
+        "downloaded",
+        "1",
+        "1",
+        "x86_64",
+    );
+    defer testing.allocator.free(downloaded);
+    const substituted = try rpmpkg.makeMinimalRpmBytesForTest(
+        testing.allocator,
+        "substituted",
+        "1",
+        "1",
+        "x86_64",
+    );
+    defer testing.allocator.free(substituted);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "package.rpm",
+        .data = downloaded,
+    });
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "replacement.rpm",
+        .data = substituted,
+    });
+    const path = try std.fmt.allocPrintSentinel(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/package.rpm",
+        .{&tmp.sub_path},
+        0,
+    );
+    defer testing.allocator.free(path);
+    const source_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try testing.expect(source_fd >= 0);
+    defer _ = std.c.close(source_fd);
+    try tmp.dir.rename(
+        "replacement.rpm",
+        tmp.dir,
+        "package.rpm",
+        testing.io,
+    );
+
+    const id = try addCommandLineRpmWithFd(
+        context,
+        command_line,
+        path,
+        source_fd,
+    );
+    try testing.expectEqualStrings(
+        "downloaded",
+        packageModel(context, @intCast(id)).?.nevra.name,
+    );
+    const duplicate = (try duplicateCommandLineRpmFdForPackage(
+        context,
+        @intCast(id),
+    )) orelse return error.TestUnexpectedResult;
+    defer _ = std.c.close(duplicate);
+    var rpm = try rpm_pkgfile.RpmFile.openFd(testing.allocator, duplicate);
+    defer rpm.close(testing.allocator);
+    try testing.expectEqualStrings(
+        "downloaded",
+        rpm.main.getString(.name).?,
+    );
+}
+
+test "identical command-line rpm inputs reuse one package and descriptor" {
+    const testing = std.testing;
+    const context = try create(testing.allocator, null, null, "x86_64");
+    defer destroy(context);
+    const command_line = try createCommandLine(context);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const bytes = try rpmpkg.makeMinimalRpmBytesForTest(
+        testing.allocator,
+        "same",
+        "1",
+        "1",
+        "x86_64",
+    );
+    defer testing.allocator.free(bytes);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "same.rpm",
+        .data = bytes,
+    });
+    const path = try std.fmt.allocPrintSentinel(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/same.rpm",
+        .{&tmp.sub_path},
+        0,
+    );
+    defer testing.allocator.free(path);
+    const source_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try testing.expect(source_fd >= 0);
+    defer _ = std.c.close(source_fd);
+
+    const first_id = try addCommandLineRpmWithFd(
+        context,
+        command_line,
+        path,
+        source_fd,
+    );
+    const second_id = try addCommandLineRpmWithFd(
+        context,
+        command_line,
+        path,
+        source_fd,
+    );
+    try testing.expectEqual(first_id, second_id);
+    try testing.expectEqual(@as(usize, 1), command_line.model.packages.len);
+    try testing.expectEqual(@as(usize, 1), command_line.cmdline_paths.items.len);
+    try testing.expectEqual(@as(usize, 1), command_line.cmdline_fds.items.len);
+    try testing.expectEqual(
+        command_line.cmdline_fds.items[0],
+        (try borrowCommandLineRpmFdForPackage(
+            context,
+            @intCast(first_id),
+        )).?,
+    );
+}
+
+test "repeated command-line paths keep descriptors bound to package handles" {
+    const testing = std.testing;
+    const context = try create(testing.allocator, null, null, "x86_64");
+    defer destroy(context);
+    const command_line = try createCommandLine(context);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const first = try rpmpkg.makeMinimalRpmBytesForTest(
+        testing.allocator,
+        "first",
+        "1",
+        "1",
+        "x86_64",
+    );
+    defer testing.allocator.free(first);
+    const second = try rpmpkg.makeMinimalRpmBytesForTest(
+        testing.allocator,
+        "second",
+        "1",
+        "1",
+        "x86_64",
+    );
+    defer testing.allocator.free(second);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "package.rpm",
+        .data = first,
+    });
+    const path = try std.fmt.allocPrintSentinel(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/package.rpm",
+        .{&tmp.sub_path},
+        0,
+    );
+    defer testing.allocator.free(path);
+    const first_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try testing.expect(first_fd >= 0);
+    defer _ = std.c.close(first_fd);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "replacement.rpm",
+        .data = second,
+    });
+    try tmp.dir.rename(
+        "replacement.rpm",
+        tmp.dir,
+        "package.rpm",
+        testing.io,
+    );
+    const second_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try testing.expect(second_fd >= 0);
+    defer _ = std.c.close(second_fd);
+
+    const first_id = try addCommandLineRpmWithFd(
+        context,
+        command_line,
+        path,
+        first_fd,
+    );
+    const second_id = try addCommandLineRpmWithFd(
+        context,
+        command_line,
+        path,
+        second_fd,
+    );
+    try testing.expectEqualStrings(
+        "first",
+        packageModel(context, @intCast(first_id)).?.nevra.name,
+    );
+    try testing.expectEqualStrings(
+        "second",
+        packageModel(context, @intCast(second_id)).?.nevra.name,
+    );
+
+    const first_duplicate = (try duplicateCommandLineRpmFdForPackage(
+        context,
+        @intCast(first_id),
+    )) orelse return error.TestUnexpectedResult;
+    defer _ = std.c.close(first_duplicate);
+    const second_duplicate = (try duplicateCommandLineRpmFdForPackage(
+        context,
+        @intCast(second_id),
+    )) orelse return error.TestUnexpectedResult;
+    defer _ = std.c.close(second_duplicate);
+    var first_rpm = try rpm_pkgfile.RpmFile.openFd(
+        testing.allocator,
+        first_duplicate,
+    );
+    defer first_rpm.close(testing.allocator);
+    var second_rpm = try rpm_pkgfile.RpmFile.openFd(
+        testing.allocator,
+        second_duplicate,
+    );
+    defer second_rpm.close(testing.allocator);
+    try testing.expectEqualStrings(
+        "first",
+        first_rpm.main.getString(.name).?,
+    );
+    try testing.expectEqualStrings(
+        "second",
+        second_rpm.main.getString(.name).?,
+    );
 }
 
 test "repository replacement never retargets stable package handles" {

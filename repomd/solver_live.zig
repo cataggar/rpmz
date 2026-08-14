@@ -18,6 +18,14 @@ const solver_legacy_abi = @import("solver_legacy_abi.zig");
 const solver_legacy_result = @import("solver_legacy_result.zig");
 const solver_visibility = @import("solver_visibility.zig");
 
+const Rlimit = extern struct {
+    current: usize,
+    maximum: usize,
+};
+extern fn getrlimit(resource: c_int, limit: *Rlimit) callconv(.c) c_int;
+extern fn setrlimit(resource: c_int, limit: *const Rlimit) callconv(.c) c_int;
+const rlimit_nofile: c_int = 7;
+
 pub const system_repository_id = "@System";
 
 /// libsolv's pseudo-repository for packages named directly on the command
@@ -30,6 +38,7 @@ pub const RepositoryInput = struct {
     /// Directory holding the repository's downloaded metadata. Empty when
     /// `rpm_directory` is set, because such a repository has no metadata.
     cache_dir: []const u8,
+    cache_dir_fd: ?c_int = null,
     /// Directory of `.rpm` files backing the repository, as `--repofromdir`
     /// declares. Null for an ordinary metadata-backed repository.
     rpm_directory: ?[]const u8 = null,
@@ -44,6 +53,10 @@ pub const JobInput = struct {
     /// published transaction plan numbers jobs. Null for a job the request
     /// layer never queued.
     queue_pair: ?u32 = null,
+    /// Exact retained descriptor and package-context handle for an `@cmdline`
+    /// job. Both are absent for every ordinary repository job.
+    cmdline_rpm_fd: ?c_int = null,
+    source_package_handle: u32 = 0,
 };
 
 pub const EraseJobInput = struct {
@@ -200,7 +213,8 @@ pub fn prepare(
     // jobs at all is likewise solvable, and its answer is an empty
     // transaction: `history undo` and `history rollback` reach a target whose
     // delta is already satisfied and issue nothing.
-    if ((input.repositories.len == 0 and !input.include_installed) or
+    if ((input.repositories.len == 0 and !input.include_installed and
+        input.cmdline_rpm_paths.len == 0) or
         input.native_arch.len == 0)
     {
         return error.InvalidInput;
@@ -237,9 +251,9 @@ pub fn prepare(
     arena_state.* = std.heap.ArenaAllocator.init(parent_allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
-    const cmdline_paths = try collectCmdlineRpmPaths(arena, input);
+    var cmdline = try collectCmdlineRpms(arena, input);
     const available_offset: usize = @intFromBool(input.include_installed);
-    const cmdline_count: usize = @intFromBool(cmdline_paths.len != 0);
+    const cmdline_count: usize = @intFromBool(cmdline.paths.len != 0);
     const repository_inputs = try arena.alloc(
         solver_model.RepositoryInput,
         input.repositories.len + available_offset + cmdline_count,
@@ -289,7 +303,9 @@ pub fn prepare(
         }
         if (repository.rpm_directory) |directory| {
             if (directory.len == 0) return error.InvalidInput;
-        } else if (repository.cache_dir.len == 0) {
+        } else if (repository.cache_dir.len == 0 and
+            repository.cache_dir_fd == null)
+        {
             return error.InvalidInput;
         }
         if (repository.snapshot_file != null and
@@ -306,6 +322,16 @@ pub fn prepare(
             // Package order decides which problem the solver reports, so a
             // sorted walk here answered differently than the plan did (#266).
             try directory_repository.loadModelOrdered(arena, directory, .read)
+        else if (repository.cache_dir_fd) |fd|
+            (try available_loader.loadCacheModelWithRepomdFd(
+                arena,
+                fd,
+                .{
+                    .include_filelists = true,
+                    .include_updateinfo = false,
+                    .include_other = false,
+                },
+            )).repository
         else
             try available_loader.loadCacheModel(
                 arena,
@@ -326,7 +352,25 @@ pub fn prepare(
 
     if (cmdline_count != 0) {
         const last = repository_inputs.len - 1;
-        models[last] = try cmdline_repository.loadModel(arena, cmdline_paths);
+        const loaded = try cmdline_repository.loadMappedModelWithFds(
+            arena,
+            cmdline.paths,
+            cmdline.fds,
+        );
+        models[last] = loaded.repository;
+        cmdline.package_indices = loaded.input_to_package;
+        const canonical_handles = try arena.alloc(
+            u32,
+            models[last].packages.len,
+        );
+        @memset(canonical_handles, 0);
+        for (
+            cmdline.handles,
+            cmdline.package_indices,
+        ) |handle, package_index| {
+            if (canonical_handles[package_index] == 0)
+                canonical_handles[package_index] = handle;
+        }
         repository_inputs[last] = .{
             .id = cmdline_repository_id,
             .model = &models[last],
@@ -334,6 +378,7 @@ pub fn prepare(
             // and cost; only the explicit job makes its packages reachable.
             .priority = solver_model.default_repository_priority,
             .cost = solver_model.default_repository_cost,
+            .source_package_handles = canonical_handles,
         };
     }
 
@@ -400,7 +445,12 @@ pub fn prepare(
         translated.* = .{
             .action = .install,
             .selection = .{
-                .package = try identity.resolveAvailable(job.selector),
+                .package = try resolveJobPackage(
+                    universe,
+                    &identity,
+                    job,
+                    cmdline,
+                ),
             },
             .reason = .user,
         };
@@ -627,19 +677,88 @@ pub fn produce(
     };
 }
 
-/// Mirrors the libsolv `SOLVER_USERINSTALLED` feed: names present in
-/// `user_installed_names` were requested by the user, everything else on the
-/// system arrived as a dependency and is therefore clean-deps eligible.
-/// Collects the distinct `.rpm` paths named on the command line, preserving
-/// argument order. Duplicates are folded because libsolv resolves repeated
-/// arguments to the same solvable, and two identical NEVRAs in one repository
-/// would make the job selector ambiguous.
-fn collectCmdlineRpmPaths(
+const CmdlineRpms = struct {
+    paths: []const [:0]const u8,
+    fds: []const c_int,
+    handles: []const u32,
+    package_indices: []const usize = &.{},
+};
+
+fn resolveJobPackage(
+    universe: *const solver_model.Universe,
+    identity: *const solver_identity.Index,
+    job: JobInput,
+    cmdline: CmdlineRpms,
+) ProduceError!solver_model.PackageId {
+    if (job.source_package_handle == 0)
+        return identity.resolveAvailable(job.selector);
+
+    if (cmdline.handles.len != cmdline.package_indices.len)
+        return error.InvalidInput;
+    var found_index: ?usize = null;
+    for (cmdline.handles, cmdline.package_indices) |handle, package_index| {
+        if (handle != job.source_package_handle) continue;
+        if (found_index != null and found_index.? != package_index)
+            return error.InvalidInput;
+        found_index = package_index;
+    }
+    const package_index = found_index orelse return error.PackageNotFound;
+    var found: ?solver_model.PackageId = null;
+    for (universe.repositories) |repository| {
+        if (!std.mem.eql(
+            u8,
+            repository.name,
+            cmdline_repository_id,
+        )) continue;
+        if (package_index >= repository.packages.len)
+            return error.InvalidInput;
+        found = @enumFromInt(repository.packages.start + package_index);
+        break;
+    }
+    const package_id = found orelse return error.PackageNotFound;
+    const package = universe.package(package_id) orelse
+        return error.PackageNotFound;
+    const source = package.source;
+    if (!std.mem.eql(u8, job.selector.repository, cmdline_repository_id) or
+        !std.mem.eql(u8, source.nevra.name, job.selector.name) or
+        (source.nevra.epoch orelse 0) != (job.selector.epoch orelse 0) or
+        !std.mem.eql(u8, source.nevra.version, job.selector.version) or
+        !std.mem.eql(u8, source.nevra.release, job.selector.release) or
+        !std.mem.eql(u8, source.nevra.arch, job.selector.arch))
+    {
+        return error.InvalidInput;
+    }
+    if (job.selector.checksum) |checksum| {
+        if (!std.mem.eql(u8, source.checksum.kind, checksum.kind) or
+            !std.mem.eql(u8, source.checksum.value, checksum.value) or
+            source.checksum.is_pkgid != checksum.is_pkgid)
+        {
+            return error.InvalidInput;
+        }
+    }
+    return package_id;
+}
+
+/// Collects pinned command-line RPM inputs in job order. The repository loader
+/// later deduplicates identical bytes while retaining this complete handle map.
+fn collectCmdlineRpms(
     arena: std.mem.Allocator,
     input: Input,
-) ProduceError![]const [:0]const u8 {
-    if (input.cmdline_rpm_paths.len == 0) return &.{};
+) ProduceError!CmdlineRpms {
+    if (input.cmdline_rpm_paths.len == 0) return .{
+        .paths = &.{},
+        .fds = &.{},
+        .handles = &.{},
+    };
     var paths = try std.ArrayList([:0]const u8).initCapacity(
+        arena,
+        input.cmdline_rpm_paths.len,
+    );
+    var fds = try std.ArrayList(c_int).initCapacity(
+        arena,
+        input.cmdline_rpm_paths.len,
+    );
+    var handles = try std.ArrayList(u32).initCapacity(
         arena,
         input.cmdline_rpm_paths.len,
     );
@@ -653,19 +772,27 @@ fn collectCmdlineRpmPaths(
         if (!is_cmdline_job) {
             // A path is meaningless for any other repository, so the caller
             // and the selector disagree about where this package came from.
-            if (path.len != 0) return error.InvalidInput;
+            if (path.len != 0 or job.cmdline_rpm_fd != null or
+                job.source_package_handle != 0)
+            {
+                return error.InvalidInput;
+            }
             continue;
         }
-        // libsolv can hold a command-line solvable with no recorded location;
-        // the native side simply has no way to rebuild it.
-        if (path.len == 0) return error.UnsupportedInput;
-        for (paths.items) |seen| {
-            if (std.mem.eql(u8, seen, path)) break;
-        } else {
-            paths.appendAssumeCapacity(path);
+        if (path.len == 0 or job.cmdline_rpm_fd == null or
+            job.source_package_handle == 0)
+        {
+            return error.UnsupportedInput;
         }
+        paths.appendAssumeCapacity(path);
+        fds.appendAssumeCapacity(job.cmdline_rpm_fd.?);
+        handles.appendAssumeCapacity(job.source_package_handle);
     }
-    return paths.items;
+    return .{
+        .paths = paths.items,
+        .fds = fds.items,
+        .handles = handles.items,
+    };
 }
 
 /// Every installed row the universe holds under `name`, in universe order.
@@ -683,6 +810,9 @@ fn installedPackagesNamed(
     return found.items;
 }
 
+/// Mirrors the libsolv `SOLVER_USERINSTALLED` feed: names present in
+/// `user_installed_names` were requested by the user, everything else on the
+/// system arrived as a dependency and is therefore clean-deps eligible.
 fn applyInstallReasons(
     arena: std.mem.Allocator,
     packages: []const model.Package,
@@ -1993,14 +2123,24 @@ test "live producer installs a package named on the command line" {
         &jobs,
     );
     const rpm_path = try fixture.addCmdlineRpm(&rpm_buffer, "cmdline-pkg");
-    jobs[0] = .{ .selector = .{
-        .repository = cmdline_repository_id,
-        .name = "cmdline-pkg",
-        .epoch = null,
-        .version = "1.0",
-        .release = "1",
-        .arch = "x86_64",
-    } };
+    const rpm_fd = std.c.open(rpm_path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(rpm_fd >= 0);
+    defer _ = std.c.close(rpm_fd);
+    jobs[0] = .{
+        .selector = .{
+            .repository = cmdline_repository_id,
+            .name = "cmdline-pkg",
+            .epoch = null,
+            .version = "1.0",
+            .release = "1",
+            .arch = "x86_64",
+        },
+        .cmdline_rpm_fd = rpm_fd,
+        .source_package_handle = 41,
+    };
     const cmdline_rpm_paths = [_]?[:0]const u8{rpm_path};
     input.cmdline_rpm_paths = &cmdline_rpm_paths;
 
@@ -2017,6 +2157,318 @@ test "live producer installs a package named on the command line" {
         "cmdline-pkg",
         solved.universe.package(actions[0].package).?.source.nevra.name,
     );
+    try std.testing.expectEqual(
+        @as(u32, 41),
+        solved.universe.package(actions[0].package).?.source_package_handle,
+    );
+}
+
+test "repeated identical command-line path maps every job to one package" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const bytes = try rpmpkg.makeMinimalRpmBytesForTest(
+        std.testing.allocator,
+        "repeated",
+        "1.0",
+        "1",
+        "x86_64",
+    );
+    defer std.testing.allocator.free(bytes);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "package.rpm",
+        .data = bytes,
+    });
+    const path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/package.rpm",
+        .{&tmp.sub_path},
+        0,
+    );
+    defer std.testing.allocator.free(path);
+    const first_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(first_fd >= 0);
+    defer _ = std.c.close(first_fd);
+    const second_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(second_fd >= 0);
+    defer _ = std.c.close(second_fd);
+
+    const selector = solver_identity.AvailableSelector{
+        .repository = cmdline_repository_id,
+        .name = "repeated",
+        .epoch = null,
+        .version = "1.0",
+        .release = "1",
+        .arch = "x86_64",
+    };
+    const jobs = [_]JobInput{
+        .{
+            .selector = selector,
+            .cmdline_rpm_fd = first_fd,
+            .source_package_handle = 101,
+        },
+        .{
+            .selector = selector,
+            .cmdline_rpm_fd = second_fd,
+            .source_package_handle = 202,
+        },
+    };
+    const paths = [_]?[:0]const u8{ path, path };
+    var prepared = try prepare(std.testing.allocator, .{
+        .repositories = &.{},
+        .rpmdb = .{ .root_dir = "/" },
+        .native_arch = "x86_64",
+        .jobs = &jobs,
+        .cmdline_rpm_paths = &paths,
+        .include_installed = false,
+    });
+    defer prepared.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), prepared.universe.packages.len);
+    try std.testing.expectEqual(
+        prepared.jobs[0].selection.package,
+        prepared.jobs[1].selection.package,
+    );
+    try std.testing.expectEqual(
+        @as(u32, 101),
+        prepared.universe.packages[0].source_package_handle,
+    );
+}
+
+fn countOpenFileDescriptors() usize {
+    var count: usize = 0;
+    for (0..4096) |raw_fd| {
+        if (std.c.fcntl(@intCast(raw_fd), std.c.F.GETFD) >= 0)
+            count += 1;
+    }
+    return count;
+}
+
+test "mass command-line RPM solve borrows pinned descriptors under RLIMIT" {
+    const package_count = 128;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const jobs = try std.testing.allocator.alloc(JobInput, package_count);
+    defer std.testing.allocator.free(jobs);
+    const paths = try std.testing.allocator.alloc(
+        ?[:0]const u8,
+        package_count,
+    );
+    defer std.testing.allocator.free(paths);
+    const fds = try std.testing.allocator.alloc(c_int, package_count);
+    defer std.testing.allocator.free(fds);
+    @memset(fds, -1);
+    defer for (fds) |fd| {
+        if (fd >= 0) _ = std.c.close(fd);
+    };
+    const names = try std.testing.allocator.alloc([]u8, package_count);
+    var name_count: usize = 0;
+    defer {
+        for (names[0..name_count]) |name| std.testing.allocator.free(name);
+        std.testing.allocator.free(names);
+    }
+    const owned_paths = try std.testing.allocator.alloc(
+        [:0]u8,
+        package_count,
+    );
+    var path_count: usize = 0;
+    defer {
+        for (owned_paths[0..path_count]) |path|
+            std.testing.allocator.free(path);
+        std.testing.allocator.free(owned_paths);
+    }
+
+    for (0..package_count) |index| {
+        names[index] = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "mass-local-{d}",
+            .{index},
+        );
+        name_count += 1;
+        const bytes = try rpmpkg.makeMinimalRpmBytesForTest(
+            std.testing.allocator,
+            names[index],
+            "1.0",
+            "1",
+            "x86_64",
+        );
+        defer std.testing.allocator.free(bytes);
+        const file_name = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "package-{d}.rpm",
+            .{index},
+        );
+        defer std.testing.allocator.free(file_name);
+        try tmp.dir.writeFile(std.testing.io, .{
+            .sub_path = file_name,
+            .data = bytes,
+        });
+        owned_paths[index] = try std.fmt.allocPrintSentinel(
+            std.testing.allocator,
+            ".zig-cache/tmp/{s}/{s}",
+            .{ &tmp.sub_path, file_name },
+            0,
+        );
+        path_count += 1;
+        paths[index] = owned_paths[index];
+        fds[index] = std.c.open(owned_paths[index].ptr, .{
+            .ACCMODE = .RDONLY,
+            .CLOEXEC = true,
+        });
+        try std.testing.expect(fds[index] >= 0);
+        jobs[index] = .{
+            .selector = .{
+                .repository = cmdline_repository_id,
+                .name = names[index],
+                .epoch = null,
+                .version = "1.0",
+                .release = "1",
+                .arch = "x86_64",
+            },
+            .cmdline_rpm_fd = fds[index],
+            .source_package_handle = @intCast(index + 1),
+        };
+    }
+
+    const baseline = countOpenFileDescriptors();
+    var original_limit: Rlimit = undefined;
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        getrlimit(rlimit_nofile, &original_limit),
+    );
+    var limited = original_limit;
+    limited.current = @min(original_limit.current, baseline + 12);
+    if (limited.current <= baseline + 4) return error.SkipZigTest;
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        setrlimit(rlimit_nofile, &limited),
+    );
+    defer _ = setrlimit(rlimit_nofile, &original_limit);
+
+    var prepared = try prepare(std.testing.allocator, .{
+        .repositories = &.{},
+        .rpmdb = .{ .root_dir = "/" },
+        .native_arch = "x86_64",
+        .jobs = jobs,
+        .cmdline_rpm_paths = paths,
+        .include_installed = false,
+    });
+    defer prepared.deinit();
+    try std.testing.expectEqual(
+        @as(usize, package_count),
+        prepared.universe.packages.len,
+    );
+    try std.testing.expectEqual(baseline, countOpenFileDescriptors());
+}
+
+test "repeated command-line paths resolve by pinned handle and bytes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const first_bytes = try rpmpkg.makeMinimalRpmBytesForTest(
+        std.testing.allocator,
+        "repeated",
+        "1.0",
+        "1",
+        "x86_64",
+    );
+    defer std.testing.allocator.free(first_bytes);
+    const second_bytes = try std.testing.allocator.alloc(
+        u8,
+        first_bytes.len + 1,
+    );
+    defer std.testing.allocator.free(second_bytes);
+    @memcpy(second_bytes[0..first_bytes.len], first_bytes);
+    second_bytes[first_bytes.len] = 0x5a;
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "package.rpm",
+        .data = first_bytes,
+    });
+    const path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/package.rpm",
+        .{&tmp.sub_path},
+        0,
+    );
+    defer std.testing.allocator.free(path);
+    const first_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(first_fd >= 0);
+    defer _ = std.c.close(first_fd);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "replacement.rpm",
+        .data = second_bytes,
+    });
+    try tmp.dir.rename(
+        "replacement.rpm",
+        tmp.dir,
+        "package.rpm",
+        std.testing.io,
+    );
+    const second_fd = std.c.open(path.ptr, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(second_fd >= 0);
+    defer _ = std.c.close(second_fd);
+
+    const selector = solver_identity.AvailableSelector{
+        .repository = cmdline_repository_id,
+        .name = "repeated",
+        .epoch = null,
+        .version = "1.0",
+        .release = "1",
+        .arch = "x86_64",
+    };
+    const jobs = [_]JobInput{
+        .{
+            .selector = selector,
+            .cmdline_rpm_fd = first_fd,
+            .source_package_handle = 101,
+        },
+        .{
+            .selector = selector,
+            .cmdline_rpm_fd = second_fd,
+            .source_package_handle = 202,
+        },
+    };
+    const paths = [_]?[:0]const u8{ path, path };
+    var prepared = try prepare(std.testing.allocator, .{
+        .repositories = &.{},
+        .rpmdb = .{ .root_dir = "/" },
+        .native_arch = "x86_64",
+        .jobs = &jobs,
+        .cmdline_rpm_paths = &paths,
+        .include_installed = false,
+    });
+    defer prepared.deinit();
+
+    const first_id = prepared.jobs[0].selection.package;
+    const second_id = prepared.jobs[1].selection.package;
+    try std.testing.expect(first_id != second_id);
+    const first = prepared.universe.package(first_id).?;
+    const second = prepared.universe.package(second_id).?;
+    try std.testing.expectEqual(@as(u32, 101), first.source_package_handle);
+    try std.testing.expectEqual(@as(u32, 202), second.source_package_handle);
+    try std.testing.expectEqual(
+        @as(?u64, first_bytes.len),
+        first.source.size.package,
+    );
+    try std.testing.expectEqual(
+        @as(?u64, second_bytes.len),
+        second.source.size.package,
+    );
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        first.source.checksum.value,
+        second.source.checksum.value,
+    ));
 }
 
 test "live producer rejects inconsistent command-line paths" {
@@ -2046,6 +2498,7 @@ test "live producer rejects inconsistent command-line paths" {
 
     // A command-line job with no backing file cannot be rebuilt.
     jobs[0].selector.repository = cmdline_repository_id;
+    jobs[0].source_package_handle = 1;
     const missing = [_]?[:0]const u8{null};
     input.cmdline_rpm_paths = &missing;
     try std.testing.expectError(

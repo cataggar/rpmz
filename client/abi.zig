@@ -201,6 +201,9 @@ pub const Tdnf = extern struct {
     ppszCmdLinePkgPaths: ?[*]?[*:0]u8 = null,
     dwCmdLinePkgCount: u32 = 0,
     nTestReloadFailureStage: u32 = 0,
+    pTransactionTargetLock: ?*anyopaque = null,
+    pszPinnedInstallRoot: ?[*:0]u8 = null,
+    pszOriginalInstallRoot: ?[*:0]u8 = null,
 };
 
 pub const HistoryInfoItem = extern struct {
@@ -458,6 +461,9 @@ comptime {
         "ppszCmdLinePkgPaths",
         "dwCmdLinePkgCount",
         "nTestReloadFailureStage",
+        "pTransactionTargetLock",
+        "pszPinnedInstallRoot",
+        "pszOriginalInstallRoot",
     });
     assertLayout(HistoryInfoItem, C.TDNF_HISTORY_INFO_ITEM, .{
         "nId",

@@ -10,6 +10,7 @@ extern fn time(tloc: ?*std.posix.time_t) std.posix.time_t;
 
 pub const HistoryCtx = extern struct {
     db: ?*sqlite.c.sqlite3,
+    db_owner: ?*anyopaque,
     installed_ids: ?[*]c_int,
     installed_count: c_int,
     cookie: ?[*:0]u8,
@@ -57,6 +58,9 @@ const DiffArraysResult = struct {
 };
 
 fn ctxDb(ctx: *HistoryCtx) history_db.Database {
+    if (ctx.db_owner) |owner| {
+        return @as(*history_db.Database, @ptrCast(@alignCast(owner))).*;
+    }
     return history_db.Database.fromPtr(ctx.db);
 }
 
@@ -193,20 +197,58 @@ fn stateIdsAt(db: history_db.Database, trans_id: c_int) ![]c_int {
 pub fn Api(comptime Rpmdb: type) type {
     return struct {
         pub fn createHistoryCtx(db_filename: [*:0]const u8) !*HistoryCtx {
-            var db = try history_db.Database.init(db_filename);
-            errdefer db.close();
+            return createHistoryCtxFromDb(
+                try history_db.Database.init(db_filename),
+            );
+        }
 
-            const ctx = try allocator.create(HistoryCtx);
-            errdefer allocator.destroy(ctx);
+        pub fn createHistoryCtxConfig(
+            config: *const @import("rpm_txn_config").TxnConfig,
+            persist_dir: []const u8,
+            must_exist: bool,
+        ) !*HistoryCtx {
+            return createHistoryCtxFromDb(
+                try history_db.Database.initConfig(
+                    config,
+                    persist_dir,
+                    must_exist,
+                ),
+            );
+        }
+
+        fn createHistoryCtxFromDb(opened: history_db.Database) !*HistoryCtx {
+            return createHistoryCtxFromDbWithAllocator(opened, allocator);
+        }
+
+        fn createHistoryCtxFromDbWithAllocator(
+            opened_value: history_db.Database,
+            context_allocator: std.mem.Allocator,
+        ) !*HistoryCtx {
+            var opened = opened_value;
+            const db_owner = context_allocator.create(
+                history_db.Database,
+            ) catch |err| {
+                opened.close();
+                return err;
+            };
+            db_owner.* = opened;
+            errdefer {
+                db_owner.close();
+                context_allocator.destroy(db_owner);
+            }
+            const ctx = try context_allocator.create(HistoryCtx);
+            errdefer context_allocator.destroy(ctx);
 
             ctx.* = .{
-                .db = db.raw.ptr,
+                .db = db_owner.raw.ptr,
+                .db_owner = db_owner,
                 .installed_ids = null,
                 .installed_count = 0,
                 .cookie = null,
                 .trans_id = 0,
             };
 
+            const db = db_owner.*;
             if (try store.tableExists(db, "transactions")) {
                 if (try store.latestTransaction(db)) |latest_value| {
                     var latest = latest_value;
@@ -225,7 +267,16 @@ pub fn Api(comptime Rpmdb: type) type {
         pub fn destroyHistoryCtx(ctx: ?*HistoryCtx) void {
             if (ctx) |value| {
                 if (value.db != null) {
-                    ctxDb(value).close();
+                    if (value.db_owner) |owner| {
+                        const db_owner: *history_db.Database =
+                            @ptrCast(@alignCast(owner));
+                        db_owner.close();
+                        allocator.destroy(db_owner);
+                        value.db_owner = null;
+                    } else {
+                        var db = ctxDb(value);
+                        db.close();
+                    }
                 }
                 freeIntArray(value.installed_ids, @intCast(value.installed_count));
                 history_db.freeZ(value.cookie);
@@ -670,4 +721,48 @@ pub fn Api(comptime Rpmdb: type) type {
             try setCookie(ctx, cookie);
         }
     };
+}
+
+test "history context allocation failure closes the opened database" {
+    const TestApi = Api(struct {
+        pub const Source = void;
+    });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const path = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/history.db",
+        .{base},
+        0,
+    );
+    defer std.testing.allocator.free(path);
+
+    for (0..2) |fail_index| {
+        const opened = try history_db.Database.init(path.ptr);
+        const dir_fd = opened.dir_fd;
+        var failing = std.testing.FailingAllocator.init(
+            std.testing.allocator,
+            .{ .fail_index = fail_index },
+        );
+        try std.testing.expectError(
+            error.OutOfMemory,
+            TestApi.createHistoryCtxFromDbWithAllocator(
+                opened,
+                failing.allocator(),
+            ),
+        );
+        try std.testing.expectEqual(
+            @as(c_int, -1),
+            std.c.fcntl(dir_fd, std.c.F.GETFD),
+        );
+        try std.testing.expectEqual(
+            @intFromEnum(std.posix.E.BADF),
+            std.c._errno().*,
+        );
+    }
 }

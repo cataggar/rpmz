@@ -225,6 +225,9 @@ pub const struct__TDNF_ = extern struct {
     ppszCmdLinePkgPaths: [*c][*c]u8 = null,
     dwCmdLinePkgCount: u32 = 0,
     nTestReloadFailureStage: u32 = 0,
+    pTransactionTargetLock: ?*anyopaque = null,
+    pszPinnedInstallRoot: [*c]u8 = null,
+    pszOriginalInstallRoot: [*c]u8 = null,
 };
 pub const PTDNF = [*c]struct__TDNF_;
 pub const struct__TDNF_PKG_CHANGELOG_ENTRY = extern struct {
@@ -259,6 +262,7 @@ pub const struct__TDNF_PKG_INFO = extern struct {
     pbChecksum: [*c]u8 = null,
     pChangeLogEntries: PTDNF_PKG_CHANGELOG_ENTRY = null,
     pNext: [*c]struct__TDNF_PKG_INFO = null,
+    dwSourcePackageHandle: u32 = 0,
 };
 pub const TDNF_PKG_INFO = struct__TDNF_PKG_INFO;
 pub const PTDNF_PKG_INFO = [*c]struct__TDNF_PKG_INFO;
@@ -470,6 +474,8 @@ pub const struct__TDNF_REPOMD_NATIVE_REPO_INPUT = extern struct {
     pszCacheDir: [*c]const u8 = null,
     pszSnapshotFile: [*c]const u8 = null,
     pszDirectory: [*c]const u8 = null,
+    nCacheDirFd: c_int = -1,
+    nSnapshotFd: c_int = -1,
 };
 pub const TDNF_REPOMD_NATIVE_REPO_INPUT = struct__TDNF_REPOMD_NATIVE_REPO_INPUT;
 pub const PTDNF_REPOMD_NATIVE_REPO_INPUT = [*c]struct__TDNF_REPOMD_NATIVE_REPO_INPUT;
@@ -550,6 +556,7 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_PACKAGE = extern struct {
     nChecksumIsHeaderOnly: c_int = 0,
     nHasPackageSize: c_int = 0,
     nHasInstalledSize: c_int = 0,
+    dwSourcePackageHandle: u32 = 0,
 };
 pub const TDNF_REPOMD_NATIVE_SOLVER_PACKAGE = struct__TDNF_REPOMD_NATIVE_SOLVER_PACKAGE;
 pub const struct__TDNF_REPOMD_NATIVE_SOLVER_ACTION = extern struct {
@@ -610,6 +617,7 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 = extern struct 
     pszDirectory: [*c]const u8 = null,
     nPriority: i32 = 0,
     dwCost: u32 = 0,
+    nCacheDirFd: c_int = -1,
 };
 pub const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 = struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16;
 pub const struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB = extern struct {
@@ -624,6 +632,8 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB = extern struct {
     nChecksumIsPkgId: c_int = 0,
     dwQueuePair: u32 = 0,
     nHasQueuePair: c_int = 0,
+    nRpmFd: c_int = -1,
+    dwSourcePackageHandle: u32 = 0,
 };
 pub const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB = struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB;
 pub extern fn TDNFRepoMdNativeTransactionLastError() [*c]const u8;
@@ -653,6 +663,7 @@ pub const tdnf_rpmdb_label_match = struct_tdnf_rpmdb_label_match;
 pub extern fn tdnf_rpmdb_find_label_matches_config(config: ?*const tdnf_rpm_config, name: [*c]const u8, evr: [*c]const u8, matches_out: [*c][*c]tdnf_rpmdb_label_match, count_out: [*c]usize) c_int;
 pub extern fn tdnf_rpmdb_label_matches_free(matches: [*c]tdnf_rpmdb_label_match, count: usize) void;
 pub extern fn tdnf_rpm_file_open(path: [*c]const u8) ?*tdnf_rpm_file;
+pub extern fn tdnf_rpm_file_open_fd(fd: c_int) ?*tdnf_rpm_file;
 pub extern fn tdnf_rpm_file_close(fh: ?*tdnf_rpm_file) void;
 pub const struct_tdnf_rpm_file_metadata = extern struct {
     name: [*c]const u8 = null,

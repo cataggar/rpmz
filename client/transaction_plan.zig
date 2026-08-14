@@ -1055,46 +1055,57 @@ fn validateExecution(
     package_index: *const PackageIndex,
 ) ValidationError!void {
     const steps = execution_steps orelse return;
-    var expected_count: usize = 0;
+    const primary_seen = try allocator.alloc(bool, actions.len);
+    defer allocator.free(primary_seen);
+    @memset(primary_seen, false);
+    var required_erases: std.StringHashMapUnmanaged(void) = .empty;
+    defer required_erases.deinit(allocator);
+    var recorded_erases: std.StringHashMapUnmanaged(void) = .empty;
+    defer recorded_erases.deinit(allocator);
+
     for (actions) |action| {
-        expected_count += 1;
-        if ((action.kind == .obsolete or action.kind == .downgrade) and
-            action.prior_package_ids.len != 0)
-        {
-            expected_count += 1;
+        if (action.kind != .obsolete and action.kind != .downgrade) continue;
+        for (action.prior_package_ids) |prior_id| {
+            try required_erases.put(allocator, prior_id, {});
         }
     }
-    if (steps.len != expected_count) return error.InvalidExecutionOrder;
-
-    const seen = try allocator.alloc(bool, expected_count);
-    defer allocator.free(seen);
-    @memset(seen, false);
+    if (steps.len != actions.len + required_erases.count())
+        return error.InvalidExecutionOrder;
 
     for (steps) |step| {
         if (step.action_index >= actions.len) return error.InvalidExecutionOrder;
         const action = actions[step.action_index];
-        _ = package_index.find(packages, step.package_id) orelse
+        const package = package_index.find(packages, step.package_id) orelse
             return error.UnknownReference;
 
-        var ordinal: ?usize = null;
         if (std.mem.eql(u8, step.package_id, action.target_package_id) and
             step.operation == targetExecutionOperation(action.kind))
         {
-            ordinal = executionOrdinal(actions, step.action_index, 0);
-        } else if (step.operation == .erase and
-            (action.kind == .obsolete or action.kind == .downgrade))
-        {
-            if (std.mem.eql(
-                u8,
-                action.prior_package_ids[0],
-                step.package_id,
-            )) {
-                ordinal = executionOrdinal(actions, step.action_index, 1);
-            }
+            if (primary_seen[step.action_index])
+                return error.InvalidExecutionOrder;
+            primary_seen[step.action_index] = true;
+            continue;
         }
-        const index = ordinal orelse return error.InvalidExecutionOrder;
-        if (seen[index]) return error.InvalidExecutionOrder;
-        seen[index] = true;
+
+        if (step.operation != .erase or
+            package.state != .installed or
+            (action.kind != .obsolete and action.kind != .downgrade) or
+            !containsString(action.prior_package_ids, step.package_id))
+        {
+            return error.InvalidExecutionOrder;
+        }
+        const entry = try recorded_erases.getOrPut(allocator, step.package_id);
+        if (entry.found_existing) return error.InvalidExecutionOrder;
+    }
+    for (primary_seen) |seen| {
+        if (!seen) return error.InvalidExecutionOrder;
+    }
+    if (recorded_erases.count() != required_erases.count())
+        return error.InvalidExecutionOrder;
+    var iterator = required_erases.keyIterator();
+    while (iterator.next()) |id| {
+        if (!recorded_erases.contains(id.*))
+            return error.InvalidExecutionOrder;
     }
 }
 
@@ -1107,21 +1118,11 @@ fn targetExecutionOperation(kind: ActionKind) ExecutionOperation {
     };
 }
 
-fn executionOrdinal(
-    actions: []const Action,
-    action_index: usize,
-    offset: usize,
-) usize {
-    var ordinal: usize = 0;
-    for (actions[0..action_index]) |action| {
-        ordinal += 1;
-        if ((action.kind == .obsolete or action.kind == .downgrade) and
-            action.prior_package_ids.len != 0)
-        {
-            ordinal += 1;
-        }
+fn containsString(values: []const []const u8, wanted: []const u8) bool {
+    for (values) |value| {
+        if (std.mem.eql(u8, value, wanted)) return true;
     }
-    return ordinal + offset;
+    return false;
 }
 
 fn actionReasonMatchesJob(action: ActionReason, job: RequestReason) bool {

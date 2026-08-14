@@ -78,7 +78,7 @@ test "db wrapper opens sqlite, preserves busy timeout, and handles transactions"
     var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const path = dbPath(&tmp, &path_buf);
 
-    const db = try history_db.Database.init(path);
+    var db = try history_db.Database.init(path);
     defer db.close();
 
     {
@@ -125,7 +125,7 @@ test "store dictionary helpers deduplicate rpms and names" {
     var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const path = dbPath(&tmp, &path_buf);
 
-    const db = try history_db.Database.init(path);
+    var db = try history_db.Database.init(path);
     defer db.close();
 
     try db.exec(store.sql_create_table_rpms, .{});

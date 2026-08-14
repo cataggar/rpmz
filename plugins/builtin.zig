@@ -1,5 +1,6 @@
 const std = @import("std");
 const metalink_xml = @import("metalink_xml");
+const plugin_metadata = @import("plugin_metadata");
 
 const c = @cImport({
     @cInclude("stddef.h");
@@ -11,20 +12,25 @@ extern fn TDNFAllocateString([*c]const u8, [*c][*c]u8) u32;
 extern fn TDNFFreeStringArray([*c][*c]u8) void;
 extern fn TDNFCheckHexDigest([*c]const u8, c_int) u32;
 extern fn TDNFChecksumFromHexDigest([*c]const u8, [*c]u8) u32;
-extern fn TDNFCheckHash([*c]const u8, [*c]const u8, c_int) u32;
+extern fn TDNFCheckHashFd(c_int, [*c]const u8, c_int) u32;
 extern fn BuiltinRefreshRequested(?*anyopaque) c_int;
 extern fn BuiltinGetEnv([*c]const u8) [*c]const u8;
-extern fn BuiltinFileExists([*c]const u8) c_int;
-extern fn BuiltinUnlink([*c]const u8) void;
-extern fn BuiltinMakeDirs([*c]const u8) u32;
 extern fn BuiltinFindRepo(?*anyopaque, [*c]const u8, [*c]?*anyopaque) u32;
-extern fn BuiltinDownloadMetalink(?*anyopaque, ?*anyopaque, [*c]const u8) u32;
+extern fn BuiltinDownloadMetalink(
+    ?*anyopaque,
+    ?*anyopaque,
+    ?*const plugin_metadata.PinnedDirectory,
+    [*c]const u8,
+    ?*plugin_metadata.PinnedFile,
+) u32;
 extern fn BuiltinDownloadRepoFile(
     ?*anyopaque,
     ?*anyopaque,
     [*c]const u8,
+    ?*const plugin_metadata.PinnedDirectory,
     [*c]const u8,
     [*c]const u8,
+    ?*plugin_metadata.PinnedFile,
 ) u32;
 extern fn BuiltinReplaceBaseUrls(?*anyopaque, [*c][*c]u8) void;
 extern fn rpmzig_verify_detached_armored(
@@ -38,6 +44,8 @@ extern fn rpmzig_verify_detached_armored(
 ) c_int;
 
 const allocator = std.heap.c_allocator;
+const PinnedDirectory = plugin_metadata.PinnedDirectory;
+const PinnedFile = plugin_metadata.PinnedFile;
 
 const TDNF_HASH_MD5: c_int = 0;
 const TDNF_HASH_SHA1: c_int = 1;
@@ -47,7 +55,6 @@ const TDNF_HASH_SHA512: c_int = 3;
 const ERROR_TDNF_INVALID_PARAMETER: u32 = 1622;
 const ERROR_TDNF_OUT_OF_MEMORY: u32 = 1612;
 const ERROR_TDNF_INVALID_REPO_FILE: u32 = 1403;
-const ERROR_TDNF_ALREADY_EXISTS: u32 = 1617;
 const ERROR_TDNF_CHECKSUM_VALIDATION_FAILED: u32 = 2501;
 const ERROR_TDNF_GPG_SIGNATURE_CHECK: u32 = 2004;
 const ERROR_TDNF_METALINK_INVALID_FILE_NAME: u32 = 2704;
@@ -183,6 +190,117 @@ fn readFile(path: []const u8) ![]u8 {
     );
 }
 
+fn readPinnedFd(fd: c_int, limit: usize) ![]u8 {
+    if (fd < 0) return error.InvalidFile;
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &stat,
+    ) != 0 or
+        stat.mode & std.os.linux.S.IFMT != std.os.linux.S.IFREG or
+        stat.nlink != 1 or stat.size > limit)
+    {
+        return error.InvalidFile;
+    }
+    const bytes = try allocator.alloc(u8, @intCast(stat.size));
+    errdefer allocator.free(bytes);
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const count = std.c.pread(
+            fd,
+            bytes.ptr + offset,
+            bytes.len - offset,
+            @intCast(offset),
+        );
+        if (count < 0 and
+            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+        {
+            continue;
+        }
+        if (count <= 0) return error.InvalidFile;
+        offset += @intCast(count);
+    }
+    return bytes;
+}
+
+fn safeName(name_z: [*:0]const u8) bool {
+    const name = std.mem.span(name_z);
+    return name.len != 0 and name.len <= std.fs.max_name_bytes and
+        !std.mem.eql(u8, name, ".") and
+        !std.mem.eql(u8, name, "..") and
+        std.mem.indexOfScalar(u8, name, '/') == null;
+}
+
+fn openPinnedRegular(
+    directory: *const PinnedDirectory,
+    name: [*:0]const u8,
+) !PinnedFile {
+    if (directory.fd < 0 or !safeName(name)) return error.InvalidFile;
+    const fd = std.c.openat(directory.fd, name, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    if (fd < 0) return error.OpenFailed;
+    var file = PinnedFile{
+        .fd = fd,
+        .directory_fd = directory.fd,
+        .name = name,
+    };
+    errdefer file.close();
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &stat,
+    ) != 0 or
+        stat.mode & std.os.linux.S.IFMT != std.os.linux.S.IFREG or
+        stat.nlink != 1)
+    {
+        return error.InvalidFile;
+    }
+    return file;
+}
+
+fn samePinnedIdentity(left: std.os.linux.Statx, right: std.os.linux.Statx) bool {
+    return left.dev_major == right.dev_major and
+        left.dev_minor == right.dev_minor and
+        left.ino == right.ino;
+}
+
+fn removePinnedFile(file: *const PinnedFile) void {
+    const name = file.name orelse return;
+    if (file.fd < 0 or file.directory_fd < 0 or !safeName(name)) return;
+    var opened = std.mem.zeroes(std.os.linux.Statx);
+    var named = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        file.fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        .{ .TYPE = true, .INO = true },
+        &opened,
+    ) != 0 or
+        std.c.statx(
+            file.directory_fd,
+            name,
+            std.os.linux.AT.SYMLINK_NOFOLLOW,
+            .{ .TYPE = true, .INO = true },
+            &named,
+        ) != 0 or
+        opened.mode & std.os.linux.S.IFMT != std.os.linux.S.IFREG or
+        named.mode & std.os.linux.S.IFMT != std.os.linux.S.IFREG or
+        !samePinnedIdentity(opened, named))
+    {
+        return;
+    }
+    _ = std.c.unlinkat(file.directory_fd, name, 0);
+}
+
 fn sectionHasOption(
     section: *const c.struct_cnfnode,
     option: []const u8,
@@ -238,11 +356,13 @@ pub export fn BuiltinMetalinkRepoConfig(
 pub export fn BuiltinMetalinkRepoMDDownloadStart(
     handle: ?*anyopaque,
     repo_id_ptr: ?[*:0]const u8,
-    repo_data_dir_ptr: ?[*:0]const u8,
+    repo_data_dir_ptr: ?*const PinnedDirectory,
 ) u32 {
     const state = metalinkState(handle) orelse return ERROR_TDNF_INVALID_PARAMETER;
     const repo_id_z = repo_id_ptr orelse return ERROR_TDNF_INVALID_PARAMETER;
-    const repo_data_dir_z = repo_data_dir_ptr orelse return ERROR_TDNF_INVALID_PARAMETER;
+    const repo_data_dir = repo_data_dir_ptr orelse
+        return ERROR_TDNF_INVALID_PARAMETER;
+    if (repo_data_dir.fd < 0) return ERROR_TDNF_INVALID_PARAMETER;
     const repo_id = std.mem.span(repo_id_z);
     const entry = state.find(repo_id) orelse return 0;
 
@@ -251,28 +371,40 @@ pub export fn BuiltinMetalinkRepoMDDownloadStart(
     if (rc != 0) return rc;
     if (repo == null) return ERROR_TDNF_INVALID_PARAMETER;
 
-    const metalink_path = std.fmt.allocPrintSentinel(
-        allocator,
-        "{s}/metalink",
-        .{std.mem.span(repo_data_dir_z)},
-        0,
-    ) catch return ERROR_TDNF_OUT_OF_MEMORY;
-    defer allocator.free(metalink_path);
-
-    if (BuiltinRefreshRequested(state.tdnf) != 0 or
-        BuiltinFileExists(metalink_path.ptr) == 0)
-    {
-        rc = BuiltinMakeDirs(repo_data_dir_z);
-        if (rc != 0 and rc != ERROR_TDNF_ALREADY_EXISTS) return rc;
+    var metalink_file = PinnedFile{};
+    defer metalink_file.close();
+    var need_download = BuiltinRefreshRequested(state.tdnf) != 0;
+    if (!need_download) {
+        const opened = openPinnedRegular(
+            repo_data_dir,
+            "metalink",
+        );
+        if (opened) |file| {
+            metalink_file = file;
+        } else |err| {
+            switch (err) {
+                error.OpenFailed => {
+                    if (std.c._errno().* != @intFromEnum(std.posix.E.NOENT))
+                        return ERROR_TDNF_INVALID_REPO_FILE;
+                    need_download = true;
+                },
+                error.InvalidFile => return ERROR_TDNF_INVALID_REPO_FILE,
+            }
+        }
+    }
+    if (need_download) {
         rc = BuiltinDownloadMetalink(
             state.tdnf,
             repo,
-            metalink_path.ptr,
+            repo_data_dir,
+            "metalink",
+            &metalink_file,
         );
         if (rc != 0) return rc;
     }
 
-    const bytes = readFile(metalink_path) catch return ERROR_TDNF_INVALID_REPO_FILE;
+    const bytes = readPinnedFd(metalink_file.fd, max_file_size) catch
+        return ERROR_TDNF_INVALID_REPO_FILE;
     defer allocator.free(bytes);
     var parsed = ParsedMetalink.init();
     const callbacks = metalink_xml.TDNF_METALINK_XML_CALLBACKS{
@@ -311,14 +443,16 @@ pub export fn BuiltinMetalinkRepoMDDownloadStart(
 pub export fn BuiltinMetalinkRepoMDDownloadEnd(
     handle: ?*anyopaque,
     repo_id_ptr: ?[*:0]const u8,
-    repomd_file_ptr: ?[*:0]const u8,
+    repomd_file_ptr: ?*const PinnedFile,
 ) u32 {
     const state = metalinkState(handle) orelse return ERROR_TDNF_INVALID_PARAMETER;
     const repo_id_z = repo_id_ptr orelse return ERROR_TDNF_INVALID_PARAMETER;
-    const repomd_file_z = repomd_file_ptr orelse return ERROR_TDNF_INVALID_PARAMETER;
+    const repomd_file = repomd_file_ptr orelse
+        return ERROR_TDNF_INVALID_PARAMETER;
+    if (repomd_file.fd < 0) return ERROR_TDNF_INVALID_PARAMETER;
     const entry = state.find(std.mem.span(repo_id_z)) orelse return 0;
     const parsed = &(entry.parsed orelse return ERROR_TDNF_INVALID_PARAMETER);
-    return checkMetalinkHashes(repomd_file_z, parsed.hashes.items);
+    return checkMetalinkHashes(repomd_file.fd, parsed.hashes.items);
 }
 
 fn metalinkOnFile(ctx: ?*anyopaque, name: [*:0]const u8) callconv(.c) u32 {
@@ -466,7 +600,7 @@ fn hashKind(kind: []const u8) ?struct { rank: u8, c_kind: c_int, len: usize } {
     return null;
 }
 
-fn checkMetalinkHashes(path: [*:0]const u8, hashes: []const MetalinkHash) u32 {
+fn checkMetalinkHashes(fd: c_int, hashes: []const MetalinkHash) u32 {
     var best: ?u8 = null;
     for (hashes) |hash| {
         const kind = hashKind(hash.kind) orelse continue;
@@ -484,7 +618,7 @@ fn checkMetalinkHashes(path: [*:0]const u8, hashes: []const MetalinkHash) u32 {
         if (TDNFCheckHexDigest(value_z.ptr, @intCast(kind.len)) == 0) continue;
         var rc = TDNFChecksumFromHexDigest(value_z.ptr, &digest);
         if (rc != 0) return rc;
-        rc = TDNFCheckHash(path, &digest, kind.c_kind);
+        rc = TDNFCheckHashFd(fd, &digest, kind.c_kind);
         if (rc == 0) return 0;
         if (rc != ERROR_TDNF_CHECKSUM_VALIDATION_FAILED) return rc;
     }
@@ -532,13 +666,20 @@ pub export fn BuiltinRepoGPGCheckRepoConfig(
 pub export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
     handle: ?*anyopaque,
     repo_id_ptr: ?[*:0]const u8,
-    repomd_file_ptr: ?[*:0]const u8,
+    repomd_file_ptr: ?*const PinnedFile,
 ) u32 {
     const state = repoGPGCheckState(handle) orelse
         return ERROR_TDNF_INVALID_PARAMETER;
     const repo_id_z = repo_id_ptr orelse return ERROR_TDNF_INVALID_PARAMETER;
-    const repomd_file_z = repomd_file_ptr orelse
+    const repomd_file = repomd_file_ptr orelse
         return ERROR_TDNF_INVALID_PARAMETER;
+    const downloaded_name = repomd_file.name orelse
+        return ERROR_TDNF_INVALID_PARAMETER;
+    if (repomd_file.fd < 0 or repomd_file.directory_fd < 0 or
+        !safeName(downloaded_name))
+    {
+        return ERROR_TDNF_INVALID_PARAMETER;
+    }
     if (!state.has(std.mem.span(repo_id_z))) return 0;
 
     var repo: ?*anyopaque = null;
@@ -546,28 +687,37 @@ pub export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
     if (rc != 0) return rc;
     if (repo == null) return ERROR_TDNF_INVALID_PARAMETER;
 
-    const signature_path = std.fmt.allocPrintSentinel(
+    const signature_name = std.fmt.allocPrintSentinel(
         allocator,
         "{s}.asc",
-        .{std.mem.span(repomd_file_z)},
+        .{std.mem.span(downloaded_name)},
         0,
     ) catch return ERROR_TDNF_OUT_OF_MEMORY;
-    defer allocator.free(signature_path);
+    defer allocator.free(signature_name);
+    if (!safeName(signature_name.ptr)) return ERROR_TDNF_INVALID_PARAMETER;
     const signature_location: [:0]const u8 = repomd_path ++ ".asc";
+    const directory = PinnedDirectory{ .fd = repomd_file.directory_fd };
+    var signature_file = PinnedFile{};
     rc = BuiltinDownloadRepoFile(
         state.tdnf,
         repo,
         signature_location.ptr,
-        signature_path.ptr,
+        &directory,
+        signature_name.ptr,
         repo_id_z,
+        &signature_file,
     );
     if (rc != 0) return rc;
-    defer BuiltinUnlink(signature_path.ptr);
+    defer signature_file.close();
+    defer removePinnedFile(&signature_file);
 
-    const signed_data = readFile(std.mem.span(repomd_file_z)) catch
+    const signed_data = readPinnedFd(repomd_file.fd, max_file_size) catch
         return ERROR_TDNF_GPG_SIGNATURE_CHECK;
     defer allocator.free(signed_data);
-    const armored_signature = readFile(signature_path) catch
+    const armored_signature = readPinnedFd(
+        signature_file.fd,
+        max_file_size,
+    ) catch
         return ERROR_TDNF_GPG_SIGNATURE_CHECK;
     defer allocator.free(armored_signature);
     var keys = loadAmbientKeys() catch

@@ -22,6 +22,7 @@ pub const LegacyPackage = extern struct {
     pbChecksum: ?*anyopaque,
     pChangeLogEntries: ?*anyopaque,
     pNext: [*c]LegacyPackage,
+    dwSourcePackageHandle: u32,
 };
 
 pub const LegacyResult = extern struct {

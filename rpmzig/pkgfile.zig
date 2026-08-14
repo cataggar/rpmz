@@ -31,6 +31,8 @@ const c = @cImport({
     @cInclude("sys/stat.h");
 });
 
+extern fn pread(c_int, [*]u8, usize, std.c.off_t) isize;
+
 const LEAD_SIZE: usize = 96;
 const LEAD_MAGIC = [_]u8{ 0xed, 0xab, 0xee, 0xdb };
 
@@ -131,6 +133,40 @@ pub const RpmFile = struct {
 
         const got = c.fread(buf.ptr, 1, size, fp);
         if (got != size) return error.ReadFailed;
+
+        return parseBytes(buf);
+    }
+
+    /// Read and parse an RPM from an already pinned descriptor. The caller
+    /// retains ownership of `fd`; reads do not change its file offset.
+    pub fn openFd(alloc: std.mem.Allocator, fd: c_int) Error!RpmFile {
+        if (fd < 0) return error.OpenFailed;
+        var st: c.struct_stat = undefined;
+        if (c.fstat(fd, &st) != 0) return error.StatFailed;
+        if (st.st_size < 0) return error.StatFailed;
+        const size = std.math.cast(usize, st.st_size) orelse
+            return error.StatFailed;
+        if (size == 0) return error.BadLeadMagic;
+
+        const buf = alloc.alloc(u8, size) catch return error.OutOfMemory;
+        errdefer alloc.free(buf);
+
+        var offset: usize = 0;
+        while (offset < size) {
+            const got = pread(
+                fd,
+                buf.ptr + offset,
+                size - offset,
+                @intCast(offset),
+            );
+            if (got < 0) {
+                if (std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+                    continue;
+                return error.ReadFailed;
+            }
+            if (got == 0) return error.ReadFailed;
+            offset += @intCast(got);
+        }
 
         return parseBytes(buf);
     }

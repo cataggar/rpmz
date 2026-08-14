@@ -842,6 +842,10 @@ fn nativeSolverLiveSolve(
                         setError("invalid native live repository cache", .{});
                         return abi.ERROR_TDNF_INVALID_PARAMETER;
                     },
+                .cache_dir_fd = if (raw.nCacheDirFd >= 0)
+                    raw.nCacheDirFd
+                else
+                    null,
                 .rpm_directory = rpm_directory,
                 .snapshot_file = spanOptional(raw.pszSnapshotFile),
                 .priority = raw.nPriority,
@@ -1169,9 +1173,20 @@ fn liveJobFromC(
             return null
     else
         return null;
+    const repository = spanRequired(raw.pszRepository) orelse return null;
+    const command_line = std.mem.eql(
+        u8,
+        repository,
+        solver_live.cmdline_repository_id,
+    );
+    if (command_line !=
+        (raw.nRpmFd >= 0 and raw.dwSourcePackageHandle != 0))
+    {
+        return null;
+    }
     return .{
         .selector = .{
-            .repository = spanRequired(raw.pszRepository) orelse return null,
+            .repository = repository,
             .name = spanRequired(raw.pszName) orelse return null,
             .epoch = raw.dwEpoch,
             .version = spanRequired(raw.pszVersion) orelse return null,
@@ -1180,6 +1195,8 @@ fn liveJobFromC(
             .checksum = checksum,
         },
         .queue_pair = if (raw.nHasQueuePair != 0) raw.dwQueuePair else null,
+        .cmdline_rpm_fd = if (command_line) raw.nRpmFd else null,
+        .source_package_handle = raw.dwSourcePackageHandle,
     };
 }
 

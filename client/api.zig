@@ -10,6 +10,8 @@ const abi = @import("client_abi");
 const errors = @import("tdnf_error");
 const options = @import("client_config_options");
 const transaction_plan_abi = @import("transaction_plan_capture_abi");
+const transaction_lock = @import("transaction_lock");
+const txn_config = @import("rpm_txn_config");
 const resolve_service = @import("resolve_service.zig");
 
 const c = abi.C;
@@ -52,10 +54,103 @@ const command_line_repo_name: [*:0]const u8 = "@cmdline";
 const system_repo_name: [*:0]const u8 = "@System";
 const config_file: [*:0]const u8 = "/etc/tdnf/tdnf.conf";
 const config_group: [*:0]const u8 = "main";
-const instance_lock_file: [*:0]const u8 = "/var/run/.tdnf-instance-lockfile";
 
 export var gEuid: std.posix.uid_t = 0;
-var instance_lock_fd: c_int = -1;
+
+fn commandRequiresTargetLock(args: *const CmdArgs) bool {
+    if (args.ppszCmds == null or args.nCmdCount <= 0)
+        return false;
+    const command = args.ppszCmds.?[0] orelse return false;
+    const name = std.mem.span(command);
+    inline for (.{
+        "autoerase",
+        "autoremove",
+        "distro-sync",
+        "downgrade",
+        "erase",
+        "history",
+        "install",
+        "mark",
+        "plan",
+        "reinstall",
+        "remove",
+        "update",
+        "update-to",
+        "upgrade",
+        "upgrade-to",
+    }) |candidate| {
+        if (std.ascii.eqlIgnoreCase(name, candidate)) return true;
+    }
+    return false;
+}
+
+fn bindTransactionTarget(handle: *Tdnf) u32 {
+    const raw_config = handle.pRpmConfig orelse
+        return errors.ERROR_TDNF_RPMRC_FAIL;
+    const config: *txn_config.TxnConfig = @ptrCast(@alignCast(raw_config));
+    const acquired = transaction_lock.acquireRoot(
+        std.heap.c_allocator,
+        config,
+    ) catch |err| {
+        common.log(
+            LOG_ERR,
+            "Unable to lock transaction target: %s\n",
+            .{@errorName(err)},
+        );
+        return errors.ERROR_TDNF_RPMRC_FAIL;
+    };
+    const guard = std.heap.c_allocator.create(
+        transaction_lock.Guard,
+    ) catch {
+        var cleanup = acquired;
+        cleanup.deinit();
+        return errors.ERROR_TDNF_OUT_OF_MEMORY;
+    };
+    guard.* = acquired;
+    const pinned_root = std.heap.c_allocator.dupeZ(
+        u8,
+        guard.config().installRoot(),
+    ) catch {
+        guard.deinit();
+        std.heap.c_allocator.destroy(guard);
+        return errors.ERROR_TDNF_OUT_OF_MEMORY;
+    };
+    const args = handle.pArgs orelse {
+        std.heap.c_allocator.free(pinned_root);
+        guard.deinit();
+        std.heap.c_allocator.destroy(guard);
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    };
+    const original_config = handle.pRpmConfig;
+    handle.pTransactionTargetLock = guard;
+    handle.pszPinnedInstallRoot = pinned_root.ptr;
+    handle.pszOriginalInstallRoot = args.pszInstallRoot;
+    handle.pRpmConfig = @ptrCast(guard.config());
+    args.pszInstallRoot = pinned_root.ptr;
+    tdnf_rpm_config_destroy(original_config);
+    return 0;
+}
+
+fn releaseTransactionTarget(handle: *Tdnf) void {
+    const raw_guard = handle.pTransactionTargetLock orelse {
+        tdnf_rpm_config_destroy(handle.pRpmConfig);
+        handle.pRpmConfig = null;
+        return;
+    };
+    const guard: *transaction_lock.Guard = @ptrCast(@alignCast(raw_guard));
+    if (handle.pArgs) |args| {
+        args.pszInstallRoot = handle.pszOriginalInstallRoot;
+    }
+    if (handle.pszPinnedInstallRoot) |root| {
+        std.heap.c_allocator.free(std.mem.span(root));
+    }
+    handle.pszPinnedInstallRoot = null;
+    handle.pszOriginalInstallRoot = null;
+    handle.pRpmConfig = null;
+    handle.pTransactionTargetLock = null;
+    guard.deinit();
+    std.heap.c_allocator.destroy(guard);
+}
 
 extern fn TDNFAllocateMemory(
     count: usize,
@@ -101,14 +196,17 @@ extern fn TDNFStringMatchesOneOf(
 extern fn TDNFIdListInit(list: *IdList) callconv(.c) void;
 extern fn TDNFIdListFree(list: *IdList) callconv(.c) void;
 extern fn TDNFIdListPush(list: *IdList, value: i32) callconv(.c) u32;
-extern fn tdnfLockAcquire(path: ?[*:0]const u8) callconv(.c) c_int;
-extern fn tdnfLockFree(path: ?[*:0]const u8, fd: c_int) callconv(.c) void;
 extern fn GlobalSetQuiet(value: i32) callconv(.c) void;
 extern fn GlobalSetJson(value: i32) callconv(.c) void;
 extern fn GlobalSetDnfCheckUpdateCompat(value: i32) callconv(.c) void;
 
 extern fn TDNFRefresh(handle: ?*Tdnf) callconv(.c) u32;
 extern fn TDNFReadConfig(
+    handle: ?*Tdnf,
+    path: ?[*:0]const u8,
+    group: ?[*:0]const u8,
+) callconv(.c) u32;
+extern fn TDNFReadConfigPinned(
     handle: ?*Tdnf,
     path: ?[*:0]const u8,
     group: ?[*:0]const u8,
@@ -136,6 +234,9 @@ extern fn tdnf_rpm_config_destroy(config: ?*anyopaque) callconv(.c) void;
 extern fn tdnf_rpm_config_apply_define(
     config: ?*anyopaque,
     value: ?[*:0]const u8,
+) callconv(.c) c_int;
+extern fn tdnf_rpm_config_finalize_rpmdb_pin(
+    config: ?*anyopaque,
 ) callconv(.c) c_int;
 extern fn tdnf_rpm_config_last_error() callconv(.c) [*:0]const u8;
 
@@ -536,19 +637,6 @@ fn systemError() u32 {
     return errors.ERROR_TDNF_SYSTEM_BASE + @as(u32, @intCast(std.c._errno().*));
 }
 
-fn exitHandler() void {
-    if (gEuid != 0) return;
-    tdnfLockFree(instance_lock_file, instance_lock_fd);
-}
-
-fn acquireInstanceLock() void {
-    if (gEuid != 0) return;
-    instance_lock_fd = tdnfLockAcquire(instance_lock_file);
-    if (instance_lock_fd < 0) {
-        common.log(LOG_ERR, "Failed to acquire tdnfInstance lock\n", .{});
-    }
-}
-
 pub export fn TDNFInit() callconv(.c) u32 {
     return 0;
 }
@@ -856,7 +944,6 @@ pub export fn TDNFOpenHandle(
     const args = args_opt.?;
     const output = output_opt.?;
     gEuid = geteuid();
-    acquireInstanceLock();
     GlobalSetQuiet(args.nQuiet);
     GlobalSetJson(args.nJsonOutput);
 
@@ -873,27 +960,41 @@ pub export fn TDNFOpenHandle(
     defer freeString(&conf_path);
     var rooted_conf_path: ?[*:0]u8 = null;
     defer freeString(&rooted_conf_path);
+    var use_pinned_conf = false;
 
     handle.pRpmConfig = tdnf_rpm_config_create(args.pszInstallRoot);
     if (handle.pRpmConfig == null) {
         common.log(LOG_ERR, "Failed to initialize native rpm configuration: %s\n", .{tdnf_rpm_config_last_error()});
         result = errors.ERROR_TDNF_RPMRC_FAIL;
     }
+    if (result == 0 and commandRequiresTargetLock(args))
+        result = bindTransactionTarget(handle);
 
     if (result == 0 and isNullOrEmpty(args.pszConfFile) and
         !isNullOrEmpty(args.pszInstallRoot) and
         !eqlZ(args.pszInstallRoot.?, "/"))
     {
-        const nodes = [_]?[*:0]const u8{ args.pszInstallRoot, config_file };
-        result = joinPath(&rooted_conf_path, &nodes);
-        var exists: c_int = 0;
-        if (result == 0)
-            result = TDNFIsFileOrSymlink(rooted_conf_path, &exists);
-        if (result == 0) {
-            result = TDNFAllocateString(
-                if (exists != 0) rooted_conf_path else config_file,
-                &conf_path,
-            );
+        const config: *const txn_config.TxnConfig = @ptrCast(@alignCast(
+            handle.pRpmConfig.?,
+        ));
+        if (config.pinnedInstallRootFd() != null) {
+            use_pinned_conf = true;
+            result = TDNFAllocateString(config_file, &conf_path);
+        } else {
+            const nodes = [_]?[*:0]const u8{
+                args.pszInstallRoot,
+                config_file,
+            };
+            result = joinPath(&rooted_conf_path, &nodes);
+            var exists: c_int = 0;
+            if (result == 0)
+                result = TDNFIsFileOrSymlink(rooted_conf_path, &exists);
+            if (result == 0) {
+                result = TDNFAllocateString(
+                    if (exists != 0) rooted_conf_path else config_file,
+                    &conf_path,
+                );
+            }
         }
     } else if (result == 0) {
         result = TDNFAllocateString(
@@ -902,8 +1003,14 @@ pub export fn TDNFOpenHandle(
         );
     }
 
-    if (result == 0)
-        result = TDNFReadConfig(handle, conf_path, config_group);
+    if (result == 0) {
+        result = if (use_pinned_conf)
+            TDNFReadConfigPinned(handle, conf_path, config_group)
+        else
+            TDNFReadConfig(handle, conf_path, config_group);
+        if (use_pinned_conf and result == errors.ERROR_TDNF_FILE_NOT_FOUND)
+            result = TDNFReadConfig(handle, config_file, config_group);
+    }
     if (result == 0) {
         var node = handle.pArgs.?.cn_setopts.?.first_child;
         while (node) |current| : (node = current.next) {
@@ -913,6 +1020,8 @@ pub export fn TDNFOpenHandle(
             }
         }
     }
+    if (result == 0 and handle.pTransactionTargetLock != null)
+        result = finalizeTransactionRpmDb(handle);
     if (result == 0) result = TDNFConfigExpandVars(handle);
     if (result == 0) {
         GlobalSetDnfCheckUpdateCompat(handle.pConf.?.nCheckUpdateCompat);
@@ -950,6 +1059,18 @@ fn applyRpmDefine(handle_opt: ?*Tdnf, value: ?[*:0]const u8) u32 {
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (tdnf_rpm_config_apply_define(handle.pRpmConfig, value) != 0) {
         common.log(LOG_ERR, "Invalid rpmdefine '%s': %s\n", .{ value.?, tdnf_rpm_config_last_error() });
+        return errors.ERROR_TDNF_RPMRC_FAIL;
+    }
+    return 0;
+}
+
+fn finalizeTransactionRpmDb(handle: *Tdnf) u32 {
+    if (tdnf_rpm_config_finalize_rpmdb_pin(handle.pRpmConfig) != 0) {
+        common.log(
+            LOG_ERR,
+            "Failed to pin native rpm database: %s\n",
+            .{tdnf_rpm_config_last_error()},
+        );
         return errors.ERROR_TDNF_RPMRC_FAIL;
     }
     return 0;
@@ -2035,7 +2156,7 @@ pub export fn TDNFCloseHandle(handle_opt: ?*Tdnf) callconv(.c) void {
         if (handle.pRepos != null) TDNFFreeReposInternal(handle.pRepos);
         if (handle.pConf != null) TDNFFreeConfig(handle.pConf);
         if (handle.pSack != null) TDNFPackageContextFree(handle.pSack);
-        tdnf_rpm_config_destroy(handle.pRpmConfig);
+        releaseTransactionTarget(handle);
         TDNFFreePlugins(handle.pPlugins);
         TDNFFreeStringArray(handle.ppszRepoFromDirIds);
         TDNFFreeStringArray(handle.ppszHiddenRefs);
@@ -2052,7 +2173,6 @@ pub export fn TDNFCloseHandle(handle_opt: ?*Tdnf) callconv(.c) void {
         TDNFTransactionPlanStateDestroy(handle.pTransactionPlanState);
         TDNFFreeMemory(handle);
     }
-    exitHandler();
 }
 
 pub export fn TDNFGetVersion() callconv(.c) [*:0]const u8 {
@@ -2296,5 +2416,116 @@ test "record command-line path clears parallel arrays on every allocation failur
             handle.ppszCmdLinePkgPaths,
         );
         try std.testing.expectEqual(@as(u32, 0), handle.dwCmdLinePkgCount);
+    }
+}
+
+test "normal handle target lock spans the handle lifetime" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/custom/rpm");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/custom/rpm/rpmdb.sqlite",
+        .data = "",
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    var args = CmdArgs{ .pszInstallRoot = root_z.ptr };
+    const original_root = args.pszInstallRoot;
+    const config = tdnf_rpm_config_create(root_z.ptr) orelse
+        return error.TestUnexpectedResult;
+    var handle = Tdnf{
+        .pArgs = &args,
+        .pRpmConfig = config,
+    };
+    try std.testing.expectEqual(@as(u32, 0), bindTransactionTarget(&handle));
+    defer if (handle.pTransactionTargetLock != null)
+        releaseTransactionTarget(&handle);
+    try std.testing.expect(handle.pTransactionTargetLock != null);
+    const pinned: *txn_config.TxnConfig = @ptrCast(@alignCast(
+        handle.pRpmConfig.?,
+    ));
+    try std.testing.expect(pinned.pinnedInstallRootFd() != null);
+    try std.testing.expect(pinned.pinnedRpmDbDirFd() == null);
+    try pinned.setMacro(.dbpath, "/custom/rpm");
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        finalizeTransactionRpmDb(&handle),
+    );
+    try std.testing.expect(pinned.pinnedRpmDbDirFd() != null);
+    try std.testing.expectError(
+        error.InvalidMacroValue,
+        pinned.setMacro(.dbpath, "/var/lib/rpm"),
+    );
+
+    var contender = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer contender.deinit();
+    try std.testing.expectError(
+        error.WouldBlock,
+        transaction_lock.tryAcquireInDirectory(
+            std.testing.allocator,
+            &contender,
+            "",
+        ),
+    );
+
+    releaseTransactionTarget(&handle);
+    try std.testing.expectEqual(original_root, args.pszInstallRoot);
+    try std.testing.expect(handle.pRpmConfig == null);
+    try std.testing.expect(handle.pTransactionTargetLock == null);
+}
+
+test "only transaction commands require a handle-lifetime root lock" {
+    inline for (.{
+        "install",
+        "erase",
+        "update",
+        "downgrade",
+        "distro-sync",
+        "reinstall",
+        "autoremove",
+        "history",
+        "mark",
+        "plan",
+    }) |name| {
+        var commands = [_]?[*:0]u8{
+            @ptrCast(@constCast(name.ptr)),
+            null,
+        };
+        const args = CmdArgs{ .ppszCmds = &commands, .nCmdCount = 1 };
+        try std.testing.expect(commandRequiresTargetLock(&args));
+    }
+    inline for (.{
+        "check",
+        "check-update",
+        "count",
+        "help",
+        "info",
+        "list",
+        "provides",
+        "repolist",
+        "repoquery",
+        "reposync",
+        "search",
+        "updateinfo",
+    }) |name| {
+        var commands = [_]?[*:0]u8{
+            @ptrCast(@constCast(name.ptr)),
+            null,
+        };
+        const args = CmdArgs{ .ppszCmds = &commands, .nCmdCount = 1 };
+        try std.testing.expect(!commandRequiresTargetLock(&args));
     }
 }

@@ -56,12 +56,13 @@ extern fn TDNFFindRepoById(
     id: ?[*:0]const u8,
     output: *?*RepoData,
 ) callconv(.c) u32;
-extern fn TDNFDownloadPackageToCache(
+extern fn TDNFDownloadPackageToCacheFd(
     handle: ?*Tdnf,
     location: ?[*:0]const u8,
     name: ?[*:0]const u8,
     repo: ?*RepoData,
     output: *?[*:0]u8,
+    output_fd: *c_int,
 ) callconv(.c) u32;
 extern fn TDNFIsFileOrSymlink(
     path: ?[*:0]const u8,
@@ -79,6 +80,13 @@ extern fn TDNFPackageContextAddRpm(
     context: ?*anyopaque,
     repository: ?*anyopaque,
     path: ?[*:0]const u8,
+    output: *u32,
+) callconv(.c) u32;
+extern fn TDNFPackageContextAddRpmFd(
+    context: ?*anyopaque,
+    repository: ?*anyopaque,
+    path: ?[*:0]const u8,
+    fd: c_int,
     output: *u32,
 ) callconv(.c) u32;
 
@@ -108,6 +116,10 @@ extern fn TDNFGoalNoDeps(
 ) callconv(.c) u32;
 extern fn TDNFGetAvailableCacheBytes(
     conf: ?*abi.Conf,
+    available: *u64,
+) callconv(.c) u32;
+extern fn TDNFGetAvailableCacheBytesHandle(
+    handle: ?*Tdnf,
     available: *u64,
 ) callconv(.c) u32;
 extern fn TDNFCheckDownloadCacheBytes(
@@ -427,6 +439,12 @@ pub fn stageCommandLinePackages(
     while (index < args.nCmdCount) : (index += 1) {
         const package_name = args.ppszCmds.?[@intCast(index)].?;
         if (fnmatch("*.rpm", package_name, 0) != 0) continue;
+        freeString(&path);
+        freeString(&package_copy);
+        var package_fd: c_int = -1;
+        defer {
+            if (package_fd >= 0) _ = std.c.close(package_fd);
+        }
         if (fnmatch("*.src.rpm", package_name, 0) == 0 or
             fnmatch("*.nosrc.rpm", package_name, 0) == 0)
         {
@@ -469,23 +487,32 @@ pub fn stageCommandLinePackages(
                 var repo: ?*RepoData = null;
                 result = TDNFFindRepoById(handle, command_line_repo_name, &repo);
                 if (result != 0) return result;
-                result = TDNFDownloadPackageToCache(
+                result = TDNFDownloadPackageToCacheFd(
                     handle,
                     package_name,
                     basename(package_copy.?),
                     repo,
                     &path,
+                    &package_fd,
                 );
                 if (result != 0) return result;
                 freeString(&package_copy);
             }
         }
 
+        if (package_fd < 0) {
+            package_fd = std.c.open(path.?, .{
+                .ACCMODE = .RDONLY,
+                .CLOEXEC = true,
+            });
+            if (package_fd < 0) return systemError();
+        }
         var package_id: u32 = 0;
-        result = TDNFPackageContextAddRpm(
+        result = TDNFPackageContextAddRpmFd(
             handle.pSack,
             handle.pCmdLineRepo,
             path,
+            package_fd,
             &package_id,
         );
         if (result != 0) return result;
@@ -526,7 +553,7 @@ fn finalizeSolved(handle: *Tdnf, info: *SolvedPackageInfo) u32 {
             info.pPkgsToReinstall != null,
     );
     var available: u64 = 0;
-    var result = TDNFGetAvailableCacheBytes(handle.pConf, &available);
+    var result = TDNFGetAvailableCacheBytesHandle(handle, &available);
     if (result == 0 and info.nNeedDownload != 0)
         result = TDNFCheckDownloadCacheBytes(info, available);
     return result;

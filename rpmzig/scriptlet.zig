@@ -190,9 +190,9 @@ pub fn runPreparedScript(
             null,
             null,
         );
-    } else try install_engine.RootDir.init(
+    } else try install_engine.RootDir.initConfig(
         allocator,
-        config.installRoot(),
+        &config,
         null,
         null,
     );

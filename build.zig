@@ -251,6 +251,30 @@ pub fn build(b: *Build) void {
         "Run client updateinfo production-logic tests",
     );
     const sqlite_dep = sqlite_dep_optional.?;
+    const sqlite_confined_mod = b.createModule(.{
+        .root_source_file = b.path("common/sqlite_confined.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+        },
+    });
+    const sqlite_confined_lib = b.addLibrary(.{
+        .name = "tdnfsqliteconfined",
+        .linkage = .static,
+        .root_module = sqlite_confined_mod,
+    });
+    const sqlite_confined_api_mod = b.createModule(.{
+        .root_source_file = b.path("common/sqlite_confined_api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+        },
+    });
+    sqlite_confined_api_mod.linkLibrary(sqlite_confined_lib);
     const tls_dep = tls_dep_optional.?;
     const zlua_mod = zlua_dep_optional.?.module("zlua");
 
@@ -334,6 +358,26 @@ pub fn build(b: *Build) void {
     run_native_dependency_audit.setCwd(b.path("."));
     run_native_dependency_audit.step.dependOn(b.getInstallStep());
     native_dependency_audit_step.dependOn(&run_native_dependency_audit.step);
+    const sqlite_singleton_audit_step = b.step(
+        "sqlite-confined-singleton-audit",
+        "Require one confined SQLite registry in each installed consumer",
+    );
+    const run_sqlite_singleton_audit = b.addSystemCommand(
+        &.{
+            "python3",
+            "scripts/sqlite-confined-singleton-audit.py",
+            "--prefix",
+            b.getInstallPath(.prefix, ""),
+        },
+    );
+    run_sqlite_singleton_audit.setCwd(b.path("."));
+    run_sqlite_singleton_audit.step.dependOn(b.getInstallStep());
+    sqlite_singleton_audit_step.dependOn(
+        &run_sqlite_singleton_audit.step,
+    );
+    native_dependency_audit_step.dependOn(
+        &run_sqlite_singleton_audit.step,
+    );
     const product_no_libsolv_fetch_audit_step = b.step(
         "product-no-libsolv-fetch-audit",
         "Build the product cleanly with fetching disabled and no libsolv",
@@ -622,6 +666,13 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     metalink_xml_mod.addImport("xml", xml_mod);
+    const plugin_metadata_mod = b.createModule(.{
+        .root_source_file = b.path("client/plugin_metadata.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
+    });
     const repository_metadata_mod = b.createModule(.{
         .root_source_file = b.path(
             "repomd/transaction_plan_repository_dependencies.zig",
@@ -679,6 +730,13 @@ pub fn build(b: *Build) void {
     });
     rpmzig_pkgfile_mod.addImport("rpm_header", rpmzig_header_mod);
 
+    const rpmzig_txn_config_mod = b.createModule(.{
+        .root_source_file = b.path("rpmzig/txn_config.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
     const rpmzig_file_handle_mod = b.createModule(.{
         .root_source_file = b.path("rpmzig/file_handle.zig"),
         .target = target,
@@ -718,6 +776,7 @@ pub fn build(b: *Build) void {
         .link_libc = true,
         .imports = &.{
             .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+            .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
         },
     });
     rpmzig_rpmdb_test_mod.addImport("rpm_header", rpmzig_header_mod);
@@ -816,6 +875,10 @@ pub fn build(b: *Build) void {
         "tdnf_common",
         common_api_mod,
     );
+    transaction_plan_integration_mod.addImport(
+        "rpm_txn_config",
+        rpmzig_txn_config_mod,
+    );
     transaction_plan_integration_mod.addImport("tdnf_error", tdnf_error_mod);
 
     // ----- static libraries ----- //
@@ -881,6 +944,8 @@ pub fn build(b: *Build) void {
             .pic = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
+                .{ .name = "rpm_txn_config", .module = rpmzig_txn_config_mod },
             },
         });
         const lib = b.addLibrary(.{
@@ -904,6 +969,7 @@ pub fn build(b: *Build) void {
             .pic = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
             },
         });
         mod.addImport("rpm_header", rpmzig_header_mod);
@@ -999,6 +1065,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
+        test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
         test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addIncludePath(b.path("client"));
@@ -1054,6 +1121,7 @@ pub fn build(b: *Build) void {
                 .{ .name = "tdnf_common", .module = common_api_mod },
                 .{ .name = "tdnf_error", .module = tdnf_error_mod },
                 .{ .name = "uri_sanitize", .module = uri_sanitize_mod },
+                .{ .name = "rpm_txn_config", .module = rpmzig_txn_config_mod },
             },
         });
         test_mod.addIncludePath(b.path("client"));
@@ -1103,6 +1171,7 @@ pub fn build(b: *Build) void {
             transaction_plan_request_trace_mod,
         );
         test_mod.addImport("rpm_header", rpmzig_header_mod);
+        test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
         test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         const test_options = b.addOptions();
@@ -1167,6 +1236,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
             },
         });
         test_mod.addImport("rpm_header", rpmzig_header_mod);
@@ -1210,6 +1280,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("client_abi", client_abi_mod);
         test_mod.addImport("client_config_options", client_config_options.createModule());
         test_mod.addImport("client_varsdir", client_varsdir_mod);
+        test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
         test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
         test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
@@ -1297,6 +1368,16 @@ pub fn build(b: *Build) void {
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);
     }
+    {
+        const tests = b.addTest(.{ .root_module = sqlite_confined_mod });
+        const run_tests = b.addRunArtifact(tests);
+        const step = b.step(
+            "sqlite-confined-test",
+            "Run confined SQLite VFS tests",
+        );
+        step.dependOn(&run_tests.step);
+        zig_test_step.dependOn(&run_tests.step);
+    }
 
     const client_download_test_step = b.step(
         "client-download-test",
@@ -1329,6 +1410,8 @@ pub fn build(b: *Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
+                .{ .name = "rpm_txn_config", .module = rpmzig_txn_config_mod },
             },
         });
         const tests = b.addTest(.{ .root_module = test_mod });
@@ -1652,6 +1735,7 @@ pub fn build(b: *Build) void {
             .pic = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
             },
         });
         mod.addImport("rpm_header", rpmzig_header_mod);
@@ -1679,6 +1763,7 @@ pub fn build(b: *Build) void {
             .pic = true,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_dep.module("sqlite") },
+                .{ .name = "confined_sqlite", .module = sqlite_confined_api_mod },
             },
         });
         mod.addImport("rpm_header", rpmzig_header_mod);
@@ -1754,6 +1839,7 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     builtin_plugins_mod.addImport("metalink_xml", metalink_xml_mod);
+    builtin_plugins_mod.addImport("plugin_metadata", plugin_metadata_mod);
     builtin_plugins_mod.addIncludePath(b.path("client"));
     builtin_plugins_mod.addIncludePath(b.path("llconf"));
     builtin_plugins_mod.addIncludePath(b.path("rpmzig"));
@@ -1772,6 +1858,8 @@ pub fn build(b: *Build) void {
     client_plugins_mod.addImport("tdnf_common", common_api_mod);
     client_plugins_mod.addImport("tdnf_error", tdnf_error_mod);
     client_plugins_mod.addImport("builtin_plugins", builtin_plugins_mod);
+    client_plugins_mod.addImport("plugin_metadata", plugin_metadata_mod);
+    client_plugins_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
 
     const client_history_mod = b.createModule(.{
         .root_source_file = b.path("client/history.zig"),
@@ -1810,6 +1898,17 @@ pub fn build(b: *Build) void {
     client_init_mod.addImport("tdnf_common", common_api_mod);
     client_init_mod.addImport("tdnf_error", tdnf_error_mod);
 
+    const transaction_lock_mod = b.createModule(.{
+        .root_source_file = b.path("client/transaction_lock.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    transaction_lock_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    transaction_lock_mod.linkLibrary(common_lib);
+    transaction_lock_mod.linkLibrary(llconf_lib);
+    transaction_lock_mod.linkLibrary(rpmzig_lib);
+
     const client_mod = b.createModule(.{
         .root_source_file = b.path("client/root.zig"),
         .target = target,
@@ -1836,6 +1935,7 @@ pub fn build(b: *Build) void {
         transaction_plan_integration_mod,
     );
     client_mod.addImport("transaction_plan", transaction_plan_mod);
+    client_mod.addImport("transaction_bundle", transaction_bundle_mod);
     client_mod.addImport(
         "transaction_plan_execution",
         transaction_plan_execution_mod,
@@ -1851,6 +1951,7 @@ pub fn build(b: *Build) void {
     client_mod.addImport("repomd_client_exports", repomd_mod);
     client_mod.addImport("builtin_plugins", builtin_plugins_mod);
     client_mod.addImport("client_plugins", client_plugins_mod);
+    client_mod.addImport("plugin_metadata", plugin_metadata_mod);
     client_mod.addImport("client_history", client_history_mod);
     client_mod.addImport("client_abi", client_abi_mod);
     client_mod.addImport("client_download", client_download_mod);
@@ -1858,6 +1959,10 @@ pub fn build(b: *Build) void {
     client_mod.addImport("client_varsdir", client_varsdir_mod);
     client_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     client_mod.addImport("rpm_header", rpmzig_header_mod);
+    client_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    client_mod.addImport("transaction_lock", transaction_lock_mod);
+    client_mod.addImport("canonical_json", canonical_json_mod);
+    client_mod.addImport("content_digest", content_digest_mod);
     client_mod.addImport("rpm_evr", rpm_evr_mod);
     client_mod.addImport("tdnf_common", common_api_mod);
     client_mod.addImport("tdnf_error", tdnf_error_mod);
@@ -1914,6 +2019,8 @@ pub fn build(b: *Build) void {
     transaction_test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     transaction_test_mod.addImport("rpm_header", rpmzig_header_mod);
     transaction_test_mod.addImport("rpm_evr", rpm_evr_mod);
+    transaction_test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    transaction_test_mod.addImport("transaction_lock", transaction_lock_mod);
     transaction_test_mod.addImport(
         "rpm_package_test",
         transaction_rpm_package_test_mod,
@@ -1933,6 +2040,74 @@ pub fn build(b: *Build) void {
     );
     transaction_test_step.dependOn(&run_transaction_tests.step);
     zig_test_step.dependOn(&run_transaction_tests.step);
+
+    const replay_test_mod = b.createModule(.{
+        .root_source_file = b.path("client/replay.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    replay_test_mod.addImport("client_abi", client_abi_mod);
+    replay_test_mod.addImport(
+        "client_transaction_options",
+        client_transaction_test_options.createModule(),
+    );
+    replay_test_mod.addImport("bundle_reader", bundle_reader_mod);
+    replay_test_mod.addImport("bundle_selection", bundle_selection_mod);
+    replay_test_mod.addImport("canonical_json", canonical_json_mod);
+    replay_test_mod.addImport("content_digest", content_digest_mod);
+    replay_test_mod.addImport("repomd_client_exports", repomd_mod);
+    replay_test_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
+    replay_test_mod.addImport("rpm_header", rpmzig_header_mod);
+    replay_test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    replay_test_mod.addImport("transaction_lock", transaction_lock_mod);
+    replay_test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
+    replay_test_mod.addImport("rpm_evr", rpm_evr_mod);
+    const replay_rpm_package_test_mod = b.createModule(.{
+        .root_source_file = b.path("client/replay_rpm_package_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    replay_rpm_package_test_mod.addImport(
+        "repomd_client_exports",
+        repomd_mod,
+    );
+    replay_test_mod.addImport(
+        "rpm_package_test",
+        replay_rpm_package_test_mod,
+    );
+    replay_test_mod.addImport("tdnf_common", common_api_mod);
+    replay_test_mod.addImport("tdnf_error", tdnf_error_mod);
+    replay_test_mod.addImport("transaction_bundle", transaction_bundle_mod);
+    replay_test_mod.addImport("transaction_plan", transaction_plan_mod);
+    replay_test_mod.addImport("verified_fetch", verified_fetch_mod);
+    replay_test_mod.addIncludePath(b.path("client"));
+    replay_test_mod.addIncludePath(b.path("rpmzig"));
+    replay_test_mod.linkLibrary(common_lib);
+    replay_test_mod.linkLibrary(llconf_lib);
+    replay_test_mod.linkLibrary(rpmzig_lib);
+    const replay_tests = b.addTest(.{ .root_module = replay_test_mod });
+    const run_replay_tests = b.addRunArtifact(replay_tests);
+    const replay_test_step = b.step(
+        "client-replay-test",
+        "Run offline replay preflight and result tests",
+    );
+    replay_test_step.dependOn(&run_replay_tests.step);
+    zig_test_step.dependOn(&run_replay_tests.step);
+
+    const transaction_lock_tests = b.addTest(.{
+        .root_module = transaction_lock_mod,
+    });
+    const run_transaction_lock_tests = b.addRunArtifact(
+        transaction_lock_tests,
+    );
+    const transaction_lock_test_step = b.step(
+        "client-transaction-lock-test",
+        "Run shared transaction target lock tests",
+    );
+    transaction_lock_test_step.dependOn(&run_transaction_lock_tests.step);
+    zig_test_step.dependOn(&run_transaction_lock_tests.step);
+
     const client_repositories_test_step = b.step(
         "client-repositories-test",
         "Run direct repository management production tests",
@@ -2012,6 +2187,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("client_root", client_mod);
         test_mod.addImport("bundle_reader", bundle_reader_mod);
         test_mod.addImport("transaction_bundle", transaction_bundle_mod);
+        test_mod.addImport("transaction_plan", transaction_plan_mod);
         test_mod.addImport("repository_metadata", repomd_mod);
         const tests = b.addTest(.{
             .name = "bundle-export-test",
@@ -2038,6 +2214,8 @@ pub fn build(b: *Build) void {
         test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
+        test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+        test_mod.addImport("transaction_lock", transaction_lock_mod);
         const test_options = b.addOptions();
         test_options.addOption(bool, "test_mode", true);
         test_mod.addImport(
@@ -2099,6 +2277,7 @@ pub fn build(b: *Build) void {
         });
         test_mod.addImport("client_history", client_history_mod);
         test_mod.addImport("client_root", client_mod);
+        test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
@@ -2156,6 +2335,7 @@ pub fn build(b: *Build) void {
             .target = target,
             .optimize = optimize,
         });
+        test_backend_mod.addImport("plugin_metadata", plugin_metadata_mod);
         const test_mod = b.createModule(.{
             .root_source_file = b.path("client/plugins.zig"),
             .target = target,
@@ -2166,6 +2346,8 @@ pub fn build(b: *Build) void {
         test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addImport("builtin_plugins", test_backend_mod);
+        test_mod.addImport("plugin_metadata", plugin_metadata_mod);
+        test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(llconf_lib);
         test_mod.linkLibrary(rpmzig_lib);
@@ -2330,6 +2512,8 @@ pub fn build(b: *Build) void {
         "history_config",
         history_util_options.createModule(),
     );
+    history_util_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
+    history_util_mod.addImport("transaction_lock", transaction_lock_mod);
     history_util_mod.linkLibrary(rpmzig_lib);
     const history_util_exe = b.addExecutable(.{
         .name = "tdnf-history-util",
@@ -2812,6 +2996,7 @@ pub fn build(b: *Build) void {
             .root_source_file = b.path("ztests/root.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         });
         const ztests = b.addTest(.{ .root_module = ztest_mod });
         const run_ztests = b.addRunArtifact(ztests);
@@ -2835,6 +3020,7 @@ pub fn build(b: *Build) void {
             .root_source_file = b.path("ztests/plugin_test.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         });
         const plugin_ztests = b.addTest(.{
             .root_module = plugin_ztest_mod,

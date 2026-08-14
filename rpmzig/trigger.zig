@@ -1,5 +1,6 @@
 const std = @import("std");
 const sqlite = @import("sqlite");
+const confined_sqlite = @import("confined_sqlite");
 const header = @import("rpm_header");
 const install_engine = @import("install.zig");
 const query_format = @import("queryformat.zig");
@@ -157,9 +158,9 @@ pub fn runHeaderTriggers(
             null,
             null,
         );
-    } else try install_engine.RootDir.init(
+    } else try install_engine.RootDir.initConfig(
         allocator,
-        config.installRoot(),
+        &config,
         null,
         null,
     );
@@ -1026,9 +1027,9 @@ pub fn runFileTriggers(
             null,
             null,
         );
-    } else try install_engine.RootDir.init(
+    } else try install_engine.RootDir.initConfig(
         identity_allocator,
-        config.installRoot(),
+        &config,
         null,
         null,
     );
@@ -1328,35 +1329,69 @@ fn shouldSkipFilePhase(
 
 const Db = struct {
     db: ?*c.sqlite3,
+    connection: confined_sqlite.Connection,
+    dir_fd: c_int,
+    root: install_engine.RootDir,
 
     fn openConfig(allocator: Allocator, config: *const txn_config.TxnConfig) Error!Db {
-        var db_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const db_path = config.resolveRpmDbSqlitePath(&db_path_buf) catch return error.PathTooLong;
-        const db_path_z = try allocator.dupeZ(u8, db_path);
-        defer allocator.free(db_path_z);
-
-        var db: ?*c.sqlite3 = null;
-        const open_rc = c.sqlite3_open_v2(
-            db_path_z.ptr,
-            &db,
-            c.SQLITE_OPEN_READONLY | c.SQLITE_OPEN_NOMUTEX,
+        const expanded = config.expandMacroAlloc(
+            allocator,
+            .dbpath,
+        ) catch return error.PathTooLong;
+        defer allocator.free(expanded);
+        const db_dir = if (expanded.len != 0 and expanded[0] == '/')
+            expanded
+        else
+            try std.fmt.allocPrint(allocator, "/{s}", .{expanded});
+        defer if (db_dir.ptr != expanded.ptr) allocator.free(db_dir);
+        const trimmed = std.mem.trimEnd(u8, db_dir, "/");
+        const normalized = if (trimmed.len == 0) "/" else trimmed;
+        var root = install_engine.RootDir.initConfig(
+            allocator,
+            config,
             null,
-        );
-        if (open_rc != c.SQLITE_OK) {
-            if (db != null) {
-                _ = c.sqlite3_close(db);
-            }
-            return error.SqliteOpenFailed;
-        }
-
-        return .{ .db = db };
+            null,
+        ) catch return error.SqliteOpenFailed;
+        errdefer root.deinit();
+        const dir_fd = if (config.pinnedRpmDbDirFd()) |pinned_dir| blk: {
+            const duplicate = std.c.fcntl(
+                pinned_dir,
+                std.c.F.DUPFD_CLOEXEC,
+                @as(c_int, 0),
+            );
+            if (duplicate < 0) return error.SqliteOpenFailed;
+            break :blk duplicate;
+        } else (root.openDirectory(normalized, false) catch
+            return error.SqliteOpenFailed) orelse return error.SqliteOpenFailed;
+        errdefer _ = std.c.close(dir_fd);
+        var connection = confined_sqlite.openAt(
+            allocator,
+            dir_fd,
+            txn_config.DEFAULT_RPMDB_BASENAME,
+            .{
+                .mode = .read_only,
+                .pinned_main_fd = config.pinnedRpmDbMainFd(),
+            },
+        ) catch return error.SqliteOpenFailed;
+        errdefer connection.close();
+        return .{
+            .db = connection.db,
+            .connection = connection,
+            .dir_fd = dir_fd,
+            .root = root,
+        };
     }
 
     fn close(self: *Db) void {
         if (self.db != null) {
-            _ = c.sqlite3_close(self.db);
+            self.connection.close();
             self.db = null;
         }
+        if (self.dir_fd >= 0) {
+            _ = std.c.close(self.dir_fd);
+            self.dir_fd = -1;
+        }
+        self.root.deinit();
     }
 
     fn countPackagesByName(self: *Db, name: []const u8) Error!u32 {

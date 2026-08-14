@@ -337,8 +337,8 @@ test "public resolver returns an owned plan built only from declared inputs" {
     defer plan.destroy();
 
     for ([_][]u8{
-        subject,     repository_id, snapshot, root,
-        scratch,     architecture,  distro,   releasever,
+        subject, repository_id, snapshot, root,
+        scratch, architecture,  distro,   releasever,
     }) |borrowed| {
         @memset(borrowed, 0xaa);
         allocator.free(borrowed);
@@ -390,6 +390,27 @@ test "public resolver returns an owned plan built only from declared inputs" {
     const work = try inventory(allocator, fixture.tmp.dir, "work");
     defer allocator.free(work);
     try std.testing.expectEqualStrings("", work);
+}
+
+test "cachedir trailing separator resolves through the pinned cache" {
+    const allocator = std.testing.allocator;
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const declared = [_]resolver.Repository{fixture.declared()};
+    var request = fixture.input(&declared);
+    request.cache_dir = "/var/cache/tdnf/";
+
+    const plan = try resolver.resolvePlan(allocator, io, request);
+    defer plan.destroy();
+    try std.testing.expectEqual(
+        transaction_plan.ResolutionStatus.resolved,
+        plan.model().environment.resolution_status,
+    );
+    try fixture.tmp.dir.access(
+        io,
+        "root/var/cache/tdnf",
+        .{},
+    );
 }
 
 test "undeclared host repositories and caches cannot change the plan digest" {
@@ -724,6 +745,42 @@ test "provider-supplied secrets reach neither the plan nor the scratch tree" {
     defer allocator.free(work);
     try std.testing.expectEqualStrings("", work);
     try expectSecretFree(allocator, fixture.tmp.dir, "root");
+}
+
+test "local snapshot reserved bytes select the exact directory" {
+    const allocator = std.testing.allocator;
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const reserved = "snapshot %2e%2e ?#% $releasever %{name}";
+    try fixture.tmp.dir.rename(
+        "snapshot",
+        fixture.tmp.dir,
+        reserved,
+        io,
+    );
+    const exact = try std.fs.path.join(
+        allocator,
+        &.{ fixture.base, reserved },
+    );
+    defer allocator.free(exact);
+    const repositories = [_]resolver.Repository{.{
+        .id = "base",
+        .metadata = .{ .local_snapshot = exact },
+    }};
+    const plan = try resolver.resolvePlan(
+        allocator,
+        io,
+        fixture.input(&repositories),
+    );
+    defer plan.destroy();
+    try std.testing.expectEqualStrings(
+        "base",
+        plan.model().repositories[0].id,
+    );
+    try std.testing.expectEqualStrings(
+        "app",
+        plan.model().packages[0].identity.name,
+    );
 }
 
 // Reads every regular file under `sub_path` and fails if any of them contains

@@ -1743,6 +1743,9 @@ pub const struct__TDNF_ = extern struct {
     ppszCmdLinePkgPaths: [*c][*c]u8 = null,
     dwCmdLinePkgCount: u32 = 0,
     nTestReloadFailureStage: u32 = 0,
+    pTransactionTargetLock: ?*anyopaque = null,
+    pszPinnedInstallRoot: [*c]u8 = null,
+    pszOriginalInstallRoot: [*c]u8 = null,
     pub const TDNFRefresh = __root.TDNFRefresh;
     pub const TDNFCheckUpdates = __root.TDNFCheckUpdates;
     pub const TDNFClean = __root.TDNFClean;
@@ -1878,6 +1881,7 @@ pub const struct__TDNF_PKG_INFO = extern struct {
     pbChecksum: [*c]u8 = null,
     pChangeLogEntries: PTDNF_PKG_CHANGELOG_ENTRY = null,
     pNext: [*c]struct__TDNF_PKG_INFO = null,
+    dwSourcePackageHandle: u32 = 0,
     pub const TDNFFreePackageInfo = __root.TDNFFreePackageInfo;
     pub const TDNFFreePackageInfoArray = __root.TDNFFreePackageInfoArray;
     pub const TDNFNativeQuerySerializePackageInfoRefs = __root.TDNFNativeQuerySerializePackageInfoRefs;
@@ -2175,6 +2179,7 @@ pub const struct__TDNF_REPOMD_NATIVE_REPO_INPUT = extern struct {
     pszCacheDir: [*c]const u8 = null,
     pszSnapshotFile: [*c]const u8 = null,
     pszDirectory: [*c]const u8 = null,
+    nCacheDirFd: c_int = -1,
     pub const TDNFRepoMdNativeList = __root.TDNFRepoMdNativeList;
     pub const TDNFRepoMdNativeSearch = __root.TDNFRepoMdNativeSearch;
     pub const TDNFRepoMdNativeProvides = __root.TDNFRepoMdNativeProvides;
@@ -2336,6 +2341,7 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_PACKAGE = extern struct {
     nChecksumIsHeaderOnly: c_int = 0,
     nHasPackageSize: c_int = 0,
     nHasInstalledSize: c_int = 0,
+    dwSourcePackageHandle: u32 = 0,
 };
 pub const TDNF_REPOMD_NATIVE_SOLVER_PACKAGE = struct__TDNF_REPOMD_NATIVE_SOLVER_PACKAGE;
 pub const struct__TDNF_REPOMD_NATIVE_SOLVER_ACTION = extern struct {
@@ -2397,6 +2403,7 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16 = extern struct 
     pszDirectory: [*c]const u8 = null,
     nPriority: i32 = 0,
     dwCost: u32 = 0,
+    nCacheDirFd: c_int = -1,
     pub const TDNFRepoMdNativeSolverLiveSolve = __root.TDNFRepoMdNativeSolverLiveSolve;
     pub const TDNFGoalFreeNativeSolverRepoInputs = __root.TDNFGoalFreeNativeSolverRepoInputs;
 };
@@ -2414,6 +2421,8 @@ pub const struct__TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB = extern struct {
     nChecksumIsPkgId: c_int = 0,
     dwQueuePair: u32 = 0,
     nHasQueuePair: c_int = 0,
+    nRpmFd: c_int = -1,
+    dwSourcePackageHandle: u32 = 0,
     pub const TDNFGoalFreeNativeSolverJobs = __root.TDNFGoalFreeNativeSolverJobs;
     pub const TDNFGoalFreeNativeSolverHiddenAvailable = __root.TDNFGoalFreeNativeSolverHiddenAvailable;
 };
@@ -2849,6 +2858,7 @@ pub extern fn TDNFPackageContextRootDir(pContext: ?*const TDNF_PACKAGE_CONTEXT) 
 pub extern fn TDNFPackageContextInitCommandLine(pContext: PTDNF_PACKAGE_CONTEXT, ppRepository: [*c]PTDNF_REPOSITORY_CONTEXT) u32;
 pub extern fn TDNFPackageContextResetCommandLine(pContext: PTDNF_PACKAGE_CONTEXT, ppRepository: [*c]PTDNF_REPOSITORY_CONTEXT) u32;
 pub extern fn TDNFPackageContextAddRpm(pContext: PTDNF_PACKAGE_CONTEXT, pRepository: PTDNF_REPOSITORY_CONTEXT, pszPath: [*c]const u8, pdwPkgId: [*c]u32) u32;
+pub extern fn TDNFPackageContextBorrowRpmFd(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, pFd: [*c]c_int) u32;
 pub extern fn TDNFPackageContextGetFields(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, pFields: PTDNF_PKG_FIELDS) u32;
 pub extern fn TDNFPackageContextGetRepoNevra(pContext: PTDNF_PACKAGE_CONTEXT, dwPkgId: TDNF_PKG_ID, ppszRepo: [*c][*c]const u8, ppszNevra: [*c][*c]u8) u32;
 pub extern fn TDNFPackageContextGetInstalledPkgIds(pContext: PTDNF_PACKAGE_CONTEXT, pIdList: PTDNF_ID_LIST) u32;
@@ -3044,6 +3054,7 @@ pub const struct_history_ctx = opaque {
 };
 pub extern fn TDNFNativeQueryBuildRepoInputs(pTdnf: PTDNF, ppRepos: [*c]PTDNF_REPOMD_NATIVE_REPO_INPUT, pdwRepoCount: [*c]u32) u32;
 pub extern fn TDNFNativeQueryBuildSingleRepoInput(pTdnf: PTDNF, pRepoData: PTDNF_REPO_DATA, pRepo: [*c]TDNF_REPOMD_NATIVE_REPO_INPUT) u32;
+pub extern fn TDNFNativeQueryOpenRepoCacheFd(pTdnf: PTDNF, pRepoData: PTDNF_REPO_DATA) c_int;
 pub extern fn TDNFNativeQueryFreeRepoInputs(pRepos: PTDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32) void;
 pub extern fn TDNFNativeQueryInstallRoot(pTdnf: PTDNF) [*c]const u8;
 pub extern fn TDNFNativeQueryFilterUserInstalled(pTdnf: PTDNF, pPkgInfos: PTDNF_PKG_INFO, pdwCount: [*c]u32) u32;
@@ -3233,12 +3244,9 @@ pub const TDNF_PKG_DETAIL = c_uint;
 pub const TDNF_ML_FREE_FUNC = ?*const fn (data: ?*anyopaque) callconv(.c) void;
 pub extern fn BuiltinRefreshRequested(pTdnf: ?*anyopaque) c_int;
 pub extern fn BuiltinGetEnv(pszName: [*c]const u8) [*c]const u8;
-pub extern fn BuiltinFileExists(pszPath: [*c]const u8) c_int;
-pub extern fn BuiltinUnlink(pszPath: [*c]const u8) void;
-pub extern fn BuiltinMakeDirs(pszPath: [*c]const u8) u32;
 pub extern fn BuiltinFindRepo(pTdnf: ?*anyopaque, pszRepoId: [*c]const u8, ppRepo: [*c]?*anyopaque) u32;
-pub extern fn BuiltinDownloadMetalink(pTdnf: ?*anyopaque, pRepo: ?*anyopaque, pszDestination: [*c]const u8) u32;
-pub extern fn BuiltinDownloadRepoFile(pTdnf: ?*anyopaque, pRepo: ?*anyopaque, pszLocation: [*c]const u8, pszDestination: [*c]const u8, pszProgress: [*c]const u8) u32;
+pub extern fn BuiltinDownloadMetalink(pTdnf: ?*anyopaque, pRepo: ?*anyopaque, pDestination: ?*const anyopaque, pszName: [*c]const u8, pOutput: ?*anyopaque) u32;
+pub extern fn BuiltinDownloadRepoFile(pTdnf: ?*anyopaque, pRepo: ?*anyopaque, pszLocation: [*c]const u8, pDestination: ?*const anyopaque, pszName: [*c]const u8, pszProgress: [*c]const u8, pOutput: ?*anyopaque) u32;
 pub extern fn BuiltinReplaceBaseUrls(pRepo: ?*anyopaque, ppszBaseUrls: [*c][*c]u8) void;
 pub extern fn rpmzig_verify_detached_armored(pSig: [*c]const u8, nSig: usize, pData: [*c]const u8, nData: usize, ppKeys: [*c]const [*c]const u8, pnKeyLengths: [*c]const usize, nKeyCount: usize) c_int;
 pub extern fn TDNFGetHistoryCtx(pTdnf: PTDNF, ppCtx: [*c]?*struct_history_ctx, nMustExist: c_int) u32;
@@ -3489,6 +3497,7 @@ fn captureSolved(
                 .cache_dir = repos[repo_index].pszCacheDir,
                 .priority = repos[repo_index].nPriority,
                 .cost = TDNF_REPOMD_NATIVE_SOLVER_DEFAULT_REPOSITORY_COST,
+                .cache_dir_fd = repos[repo_index].nCacheDirFd,
             };
         }
     }
@@ -4083,8 +4092,8 @@ pub export fn TDNFReportNativeSolverProblems(arg_pHandle: ?*anyopaque, arg_dwSki
 pub extern fn TDNFLoadPlugins(pTdnf: PTDNF) u32;
 pub extern fn TDNFFreePlugins(pPlugins: PTDNF_PLUGIN) void;
 pub extern fn BuiltinPluginsRepoConfig(pTdnf: PTDNF, pSection: [*c]const struct_cnfnode) u32;
-pub extern fn BuiltinPluginsRepoMDDownloadStart(pTdnf: PTDNF, pszRepoId: [*c]const u8, pszRepoDataDir: [*c]const u8) u32;
-pub extern fn BuiltinPluginsRepoMDDownloadEnd(pTdnf: PTDNF, pszRepoId: [*c]const u8, pszRepoMDFile: [*c]const u8) u32;
+pub extern fn BuiltinPluginsRepoMDDownloadStart(pTdnf: PTDNF, pszRepoId: [*c]const u8, pRepoDataDir: ?*const anyopaque) u32;
+pub extern fn BuiltinPluginsRepoMDDownloadEnd(pTdnf: PTDNF, pszRepoId: [*c]const u8, pRepoMDFile: ?*const anyopaque) u32;
 pub extern fn parse_varsdirs(dirs: [*c][*c]u8) [*c]struct_cnfnode;
 pub extern fn replace_vars(cn_vars: [*c]struct_cnfnode, source: [*c]const u8) [*c]u8;
 pub fn TDNFSolvAddPkgLocks(arg_pTdnf: PTDNF, arg_pQueueJobs: PTDNF_ID_LIST, arg_pInstalled: PTDNF_PKG_INFO, arg_dwInstalledCount: u32) callconv(.c) u32 {
@@ -4675,10 +4684,20 @@ pub fn TDNFGoalBuildNativeSolverRepoInputs(arg_pTdnf: PTDNF, arg_ppRepos: [*c]PT
                     if (!false) break;
                 }
             }
+            pRepos[dwCount].nCacheDirFd = -1;
             pRepos[dwCount].pszId = pRepoData.*.pszId;
             pRepos[dwCount].pszSnapshotFile = pRepoData.*.pszSnapshotFile;
             pRepos[dwCount].nPriority = pRepoData.*.nPriority;
             pRepos[dwCount].dwCost = TDNF_REPOMD_NATIVE_SOLVER_DEFAULT_REPOSITORY_COST;
+            if (!(pRepos[dwCount].pszDirectory != null)) {
+                pRepos[dwCount].nCacheDirFd = TDNFNativeQueryOpenRepoCacheFd(
+                    pTdnf,
+                    pRepoData,
+                );
+                if (pRepos[dwCount].nCacheDirFd == -2) {
+                    return ERROR_TDNF_INVALID_PARAMETER;
+                }
+            }
             dwCount +%= 1;
         }
     }
@@ -4710,6 +4729,10 @@ pub fn TDNFGoalFreeNativeSolverRepoInputs(arg_pRepos: PTDNF_REPOMD_NATIVE_SOLVER
                 if (!false) break;
             }
             pRepos[dwIndex].pszCacheDir = null;
+            if (pRepos[dwIndex].nCacheDirFd >= 0) {
+                _ = close(pRepos[dwIndex].nCacheDirFd);
+                pRepos[dwIndex].nCacheDirFd = -1;
+            }
         }
     }
     while (true) {
@@ -5079,6 +5102,23 @@ pub fn TDNFGoalBuildNativeSolverJobs(arg_pTdnf: PTDNF, arg_pQueueJobs: [*c]const
                 while (true) {
                     if (dwError != @as(u32, 0)) return dwError;
                     if (!false) break;
+                }
+                pJob.*.dwSourcePackageHandle = @intCast(dwPkgId);
+                dwError = TDNFPackageContextBorrowRpmFd(
+                    pTdnf.*.pSack,
+                    dwPkgId,
+                    &pJob.*.nRpmFd,
+                );
+                while (true) {
+                    if (dwError != @as(u32, 0)) return dwError;
+                    if (!false) break;
+                }
+                if (pJob.*.nRpmFd < 0) {
+                    dwError = @bitCast(@as(c_int, ERROR_TDNF_SYSTEM_BASE + ENODATA));
+                    while (true) {
+                        if (dwError != @as(u32, 0)) return dwError;
+                        if (!false) break;
+                    }
                 }
             }
             pJob.*.dwEpoch = dwJobEpoch;

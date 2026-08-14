@@ -10,4 +10,6 @@ pub const Job = extern struct {
     nChecksumIsPkgId: c_int,
     dwQueuePair: u32,
     nHasQueuePair: c_int,
+    nRpmFd: c_int,
+    dwSourcePackageHandle: u32,
 };

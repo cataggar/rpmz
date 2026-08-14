@@ -102,9 +102,9 @@ pub const Context = struct {
         else
             try txn_config.TxnConfig.init(allocator, options.install_root);
         errdefer cfg.deinit();
-        var root = try RootDir.init(
+        var root = try RootDir.initConfig(
             allocator,
-            cfg.installRoot(),
+            &cfg,
             options.mutation_fn,
             options.mutation_ctx,
         );
@@ -277,8 +277,7 @@ pub const Context = struct {
         entry: cpio.Entry,
     ) Error!Metadata {
         return resolveFileMetadata(
-            self.allocator,
-            self.config.installRoot(),
+            &self.root,
             file.mode,
             file.mtime,
             file.username,
@@ -498,11 +497,10 @@ pub const Metadata = struct {
     gid: u32,
 };
 
-/// Resolve header ownership names under the install root, falling back to the
-/// cpio numeric metadata exactly as the native binary installer does.
+/// Resolve header ownership names through the pinned install root, falling
+/// back to the cpio numeric metadata exactly as the native installer does.
 pub fn resolveFileMetadata(
-    allocator: Allocator,
-    install_root: []const u8,
+    root: *const RootDir,
     mode: u32,
     mtime: ?u32,
     username: ?[]const u8,
@@ -513,11 +511,11 @@ pub fn resolveFileMetadata(
     fallback_gid: u32,
 ) Error!Metadata {
     const uid = if (username) |name|
-        (try lookupUserId(allocator, install_root, name)) orelse fallback_uid
+        (try lookupUserId(root, name)) orelse fallback_uid
     else
         fallback_uid;
     const gid = if (groupname) |name|
-        (try lookupGroupId(allocator, install_root, name)) orelse fallback_gid
+        (try lookupGroupId(root, name)) orelse fallback_gid
     else
         fallback_gid;
 
@@ -818,6 +816,26 @@ pub fn writeRegularFileBeneath(
         null,
     );
     defer root.deinit();
+    return writeRegularFileBeneathRoot(
+        &root,
+        install_root,
+        base_path,
+        relative_path,
+        data,
+        metadata,
+    );
+}
+
+pub fn writeRegularFileBeneathRoot(
+    root: *const RootDir,
+    install_root: []const u8,
+    base_path: []const u8,
+    relative_path: []const u8,
+    data: []const u8,
+    metadata: Metadata,
+) Error!void {
+    const allocator = root.allocator;
+    if (!isSafeRelativePath(relative_path)) return error.UnsafeExtractionPath;
     const logical_base = try root.logicalPathFromFullOwned(
         install_root,
         base_path,
@@ -851,6 +869,22 @@ pub fn validateRegularFileDestinationBeneath(
         null,
     );
     defer root.deinit();
+    return validateRegularFileDestinationBeneathRoot(
+        &root,
+        install_root,
+        base_path,
+        relative_path,
+    );
+}
+
+pub fn validateRegularFileDestinationBeneathRoot(
+    root: *const RootDir,
+    install_root: []const u8,
+    base_path: []const u8,
+    relative_path: []const u8,
+) Error!void {
+    const allocator = root.allocator;
+    if (!isSafeRelativePath(relative_path)) return error.UnsafeExtractionPath;
     const logical_base = try root.logicalPathFromFullOwned(
         install_root,
         base_path,
@@ -879,6 +913,14 @@ pub fn isSafeRelativePath(path: []const u8) bool {
         }
     }
     return true;
+}
+
+fn duplicateFdCloexec(fd: c_int) c_int {
+    return std.c.fcntl(
+        fd,
+        std.c.F.DUPFD_CLOEXEC,
+        @as(c_int, 0),
+    );
 }
 
 const ParentDir = struct {
@@ -910,6 +952,30 @@ pub const RootDir = struct {
             mutation_fn,
             mutation_ctx,
         )) orelse error.SyscallFailed;
+    }
+
+    pub fn initConfig(
+        allocator: Allocator,
+        config: *const txn_config.TxnConfig,
+        mutation_fn: ?MutationFn,
+        mutation_ctx: ?*anyopaque,
+    ) Error!RootDir {
+        if (config.pinnedInstallRootFd()) |fd| {
+            const duplicate = duplicateFdCloexec(fd);
+            if (duplicate < 0) return error.SyscallFailed;
+            return initFromOwnedFd(
+                allocator,
+                duplicate,
+                mutation_fn,
+                mutation_ctx,
+            );
+        }
+        return init(
+            allocator,
+            config.installRoot(),
+            mutation_fn,
+            mutation_ctx,
+        );
     }
 
     pub fn initExisting(
@@ -1087,11 +1153,15 @@ pub const RootDir = struct {
         self: *const RootDir,
         path: []const u8,
     ) Error![]u8 {
-        const relative = try self.logicalPath(path);
+        if (path.len == 0) return error.InvalidPackagePath;
+        const normalized_path = trimTrailingSlashKeepRoot(path);
+        if (std.mem.eql(u8, normalized_path, "/"))
+            return self.allocator.dupe(u8, normalized_path);
+        const relative = try self.logicalPath(normalized_path);
         const slash = std.mem.indexOfScalar(u8, relative, '/');
         const first = if (slash) |index| relative[0..index] else relative;
         if (!isCanonicalDirectoryAlias(first)) {
-            return self.allocator.dupe(u8, path);
+            return self.allocator.dupe(u8, normalized_path);
         }
         var name_buf: [std.fs.max_name_bytes + 1]u8 = undefined;
         if (first.len >= name_buf.len) return error.UnsafeExtractionPath;
@@ -1108,7 +1178,7 @@ pub const RootDir = struct {
         if (stat_rc != 0 or
             (alias_st.st_mode & c.S_IFMT) != c.S_IFLNK)
         {
-            return self.allocator.dupe(u8, path);
+            return self.allocator.dupe(u8, normalized_path);
         }
         var target_buf: [std.fs.max_path_bytes]u8 = undefined;
         const target_len = std.c.readlinkat(
@@ -1122,7 +1192,7 @@ pub const RootDir = struct {
             first,
             target_buf[0..@intCast(target_len)],
         ) orelse return error.UnsafeExtractionPath;
-        const alias_fd = try self.openTrustedAlias(self.fd, name_z, first);
+        const alias_fd = try self.openTrustedAlias(self.fd, first);
         _ = c.close(alias_fd);
         const remainder = if (slash) |index| relative[index..] else "";
         return std.fmt.allocPrint(
@@ -1135,9 +1205,13 @@ pub const RootDir = struct {
     fn openTrustedAlias(
         self: *const RootDir,
         parent_fd: c_int,
-        name_z: [*:0]const u8,
         name: []const u8,
     ) Error!c_int {
+        var name_buf: [std.fs.max_name_bytes + 1]u8 = undefined;
+        if (name.len >= name_buf.len) return error.UnsafeExtractionPath;
+        @memcpy(name_buf[0..name.len], name);
+        name_buf[name.len] = 0;
+        const name_z: [*:0]const u8 = @ptrCast(&name_buf);
         var link_st: c.struct_stat = undefined;
         if (c.fstatat(
             parent_fd,
@@ -1161,8 +1235,7 @@ pub const RootDir = struct {
         const target = target_buf[0..@intCast(target_len)];
         const expected = canonicalDirectoryTarget(name, target) orelse
             return error.UnsafeExtractionPath;
-
-        var current_fd = c.dup(self.fd);
+        var current_fd = duplicateFdCloexec(self.fd);
         if (current_fd < 0) return error.SyscallFailed;
         errdefer _ = c.close(current_fd);
         var components = std.mem.splitScalar(u8, expected, '/');
@@ -1174,12 +1247,53 @@ pub const RootDir = struct {
             @memcpy(component_buf[0..component.len], component);
             component_buf[component.len] = 0;
             const component_z: [*:0]const u8 = @ptrCast(&component_buf);
-            const next_fd = std.c.openat(current_fd, component_z, .{
+            var next_fd = std.c.openat(current_fd, component_z, .{
                 .ACCMODE = .RDONLY,
                 .DIRECTORY = true,
                 .CLOEXEC = true,
                 .NOFOLLOW = true,
             });
+            if (next_fd < 0 and
+                (std.c.errno(next_fd) == .LOOP or
+                    std.c.errno(next_fd) == .NOTDIR))
+            {
+                var nested_st: c.struct_stat = undefined;
+                if (c.fstatat(
+                    current_fd,
+                    component_z,
+                    &nested_st,
+                    AT_SYMLINK_NOFOLLOW,
+                ) != 0 or
+                    (nested_st.st_mode & c.S_IFMT) != c.S_IFLNK or
+                    nested_st.st_uid != self.trusted_uid)
+                {
+                    return error.UnsafeExtractionPath;
+                }
+                var nested_target_buf: [std.fs.max_path_bytes]u8 = undefined;
+                const nested_target_len = std.c.readlinkat(
+                    current_fd,
+                    component_z,
+                    &nested_target_buf,
+                    nested_target_buf.len,
+                );
+                if (nested_target_len < 0) return error.SyscallFailed;
+                const nested_target =
+                    nested_target_buf[0..@intCast(nested_target_len)];
+                if (std.mem.indexOfScalar(u8, nested_target, '/') != null or
+                    std.mem.eql(u8, nested_target, ".") or
+                    std.mem.eql(u8, nested_target, ".."))
+                {
+                    return error.UnsafeExtractionPath;
+                }
+                const nested_z = try self.allocator.dupeZ(u8, nested_target);
+                defer self.allocator.free(nested_z);
+                next_fd = std.c.openat(current_fd, nested_z.ptr, .{
+                    .ACCMODE = .RDONLY,
+                    .DIRECTORY = true,
+                    .CLOEXEC = true,
+                    .NOFOLLOW = true,
+                });
+            }
             if (next_fd < 0) return error.UnsafeExtractionPath;
             var st: c.struct_stat = undefined;
             if (c.fstat(next_fd, &st) != 0 or
@@ -1200,7 +1314,7 @@ pub const RootDir = struct {
         relative_path: []const u8,
         create: bool,
     ) Error!?c_int {
-        var current_fd = c.dup(self.fd);
+        var current_fd = duplicateFdCloexec(self.fd);
         if (current_fd < 0) return error.SyscallFailed;
         errdefer _ = c.close(current_fd);
         if (relative_path.len == 0) return current_fd;
@@ -1235,7 +1349,6 @@ pub const RootDir = struct {
             {
                 next_fd = try self.openTrustedAlias(
                     current_fd,
-                    name_z,
                     component,
                 );
             } else if (next_fd < 0 and std.c.errno(next_fd) == .NOENT) {
@@ -1423,7 +1536,7 @@ pub const RootDir = struct {
         create: bool,
     ) Error!?c_int {
         if (std.mem.eql(u8, path, "/")) {
-            const fd = c.dup(self.fd);
+            const fd = duplicateFdCloexec(self.fd);
             if (fd < 0) return error.SyscallFailed;
             return fd;
         }
@@ -1440,6 +1553,50 @@ pub const RootDir = struct {
         const basename_z = try self.basenameZ(parent.basename);
         defer self.allocator.free(basename_z);
         return (try self.statAt(&parent, basename_z.ptr)) != null;
+    }
+
+    fn readRegularFileOwned(
+        self: *const RootDir,
+        path: []const u8,
+    ) Error!?[]u8 {
+        var parent = (try self.openParent(path, false)) orelse return null;
+        defer parent.deinit();
+        const basename_z = try self.basenameZ(parent.basename);
+        defer self.allocator.free(basename_z);
+        const fd = std.c.openat(parent.fd, basename_z.ptr, .{
+            .ACCMODE = .RDONLY,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+        if (fd < 0) {
+            return switch (std.c.errno(fd)) {
+                .NOENT => null,
+                .LOOP, .NOTDIR => error.UnsafeExtractionPath,
+                else => error.SyscallFailed,
+            };
+        }
+        defer _ = c.close(fd);
+
+        var st: c.struct_stat = undefined;
+        if (c.fstat(fd, &st) != 0) return error.SyscallFailed;
+        if ((st.st_mode & c.S_IFMT) != c.S_IFREG)
+            return error.UnsafeExtractionPath;
+        if (st.st_size < 0) return error.SyscallFailed;
+        const size: usize = @intCast(st.st_size);
+        const contents = try self.allocator.alloc(u8, size);
+        errdefer self.allocator.free(contents);
+        var offset: usize = 0;
+        while (offset < contents.len) {
+            const read_count = c.read(
+                fd,
+                contents.ptr + offset,
+                contents.len - offset,
+            );
+            if (read_count < 0 and std.c.errno(read_count) == .INTR) continue;
+            if (read_count <= 0) return error.SyscallFailed;
+            offset += @intCast(read_count);
+        }
+        return contents;
     }
 
     pub fn writeRegularFile(
@@ -1783,7 +1940,7 @@ pub const RootDir = struct {
             .NOFOLLOW = true,
         });
         if (fd < 0) return error.SyscallFailed;
-        const stream_fd = c.dup(fd);
+        const stream_fd = duplicateFdCloexec(fd);
         _ = c.close(fd);
         if (stream_fd < 0) return error.SyscallFailed;
         const fp = c.fdopen(stream_fd, "rb") orelse {
@@ -1817,7 +1974,7 @@ fn openExistingDirectoryTree(
     start_fd: c_int,
     relative_path: []const u8,
 ) Error!?c_int {
-    var current_fd = c.dup(start_fd);
+    var current_fd = duplicateFdCloexec(start_fd);
     if (current_fd < 0) return error.SyscallFailed;
     errdefer _ = c.close(current_fd);
 
@@ -1862,7 +2019,7 @@ fn openOrCreateDirectoryTree(
     start_fd: c_int,
     relative_path: []const u8,
 ) Error!c_int {
-    var current_fd = c.dup(start_fd);
+    var current_fd = duplicateFdCloexec(start_fd);
     if (current_fd < 0) return error.SyscallFailed;
     errdefer _ = c.close(current_fd);
     var parts = std.mem.splitScalar(u8, relative_path, '/');
@@ -2041,41 +2198,31 @@ fn encodeHexLower(buf: []u8, bytes: []const u8) []const u8 {
 }
 
 fn lookupUserId(
-    allocator: Allocator,
-    install_root: []const u8,
+    root: *const RootDir,
     name: []const u8,
-) Allocator.Error!?u32 {
-    return lookupNamedId(allocator, install_root, "/etc/passwd", name, .passwd);
+) Error!?u32 {
+    return lookupNamedId(root, "/etc/passwd", name);
 }
 
 fn lookupGroupId(
-    allocator: Allocator,
-    install_root: []const u8,
+    root: *const RootDir,
     name: []const u8,
-) Allocator.Error!?u32 {
-    return lookupNamedId(allocator, install_root, "/etc/group", name, .group);
+) Error!?u32 {
+    return lookupNamedId(root, "/etc/group", name);
 }
 
-const LookupKind = enum {
-    passwd,
-    group,
-};
-
 fn lookupNamedId(
-    allocator: Allocator,
-    install_root: []const u8,
+    root: *const RootDir,
     relative_path: []const u8,
     name: []const u8,
-    kind: LookupKind,
-) Allocator.Error!?u32 {
+) Error!?u32 {
     if (parseNumericId(name)) |numeric| {
         return numeric;
     }
 
-    const full_path = try joinInstallRootAndPathOwned(allocator, install_root, relative_path);
-    defer allocator.free(full_path);
-    const contents = (try readFileOwned(allocator, full_path)) orelse return null;
-    defer allocator.free(contents);
+    const contents = (try root.readRegularFileOwned(relative_path)) orelse
+        return null;
+    defer root.allocator.free(contents);
 
     var lines = std.mem.splitScalar(u8, contents, '\n');
     while (lines.next()) |line_raw| {
@@ -2091,13 +2238,7 @@ fn lookupNamedId(
             continue;
         }
 
-        const id_field = switch (kind) {
-            .passwd => fields.next() orelse continue,
-            .group => blk: {
-                _ = fields.next() orelse continue;
-                break :blk fields.next() orelse continue;
-            },
-        };
+        const id_field = fields.next() orelse continue;
         return std.fmt.parseUnsigned(u32, id_field, 10) catch null;
     }
 
@@ -2183,6 +2324,109 @@ test "chooseConfigAction handles noreplace" {
     try std.testing.expectEqual(ConfigAction.skip, chooseConfigAction(false, true, true));
     try std.testing.expectEqual(ConfigAction.rpmnew, chooseConfigAction(false, false, true));
     try std.testing.expectEqual(ConfigAction.rpmsave, chooseConfigAction(false, false, false));
+}
+
+test "ownership lookup stays on pinned root after pathname replacement" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/etc");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/passwd",
+        .data = "package-user:x:1201:1202::/:/sbin/nologin\n",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/group",
+        .data = "package-group:x:1202:\n",
+    });
+
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root_path);
+    var root = try RootDir.init(
+        std.testing.allocator,
+        root_path,
+        null,
+        null,
+    );
+    defer root.deinit();
+
+    try tmp.dir.rename("root", tmp.dir, "parked", std.testing.io);
+    try tmp.dir.createDirPath(std.testing.io, "root/etc");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/passwd",
+        .data = "package-user:x:2201:2202::/:/sbin/nologin\n",
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/etc/group",
+        .data = "package-group:x:2202:\n",
+    });
+
+    const metadata = try resolveFileMetadata(
+        &root,
+        S_IFREG_U32 | 0o640,
+        1234,
+        "package-user",
+        "package-group",
+        S_IFREG_U32 | 0o600,
+        1,
+        42,
+        43,
+    );
+    try std.testing.expectEqual(@as(u32, 1201), metadata.uid);
+    try std.testing.expectEqual(@as(u32, 1202), metadata.gid);
+}
+
+test "RootDir duplicates a pinned config descriptor with CLOEXEC" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root_path);
+    const root_z = try std.testing.allocator.dupeZ(u8, root_path);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root_path,
+    );
+    defer config.deinit();
+    var pinned = try config.cloneWithPinnedInstallRoot(
+        std.testing.allocator,
+        root_path,
+        root_fd,
+    );
+    defer pinned.deinit();
+    var root = try RootDir.initConfig(
+        std.testing.allocator,
+        &pinned,
+        null,
+        null,
+    );
+    defer root.deinit();
+    try std.testing.expect(
+        (std.c.fcntl(root.fd, std.c.F.GETFD) & std.c.FD_CLOEXEC) != 0,
+    );
 }
 
 test "special file metadata stays on pinned created object" {

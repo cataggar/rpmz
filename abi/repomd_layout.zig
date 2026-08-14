@@ -184,6 +184,10 @@ test "native solver package layout remains stable" {
         abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
         "nHasInstalledSize",
     ));
+    try std.testing.expectEqual(scalar_offset + 60, @offsetOf(
+        abi.TDNF_REPOMD_NATIVE_SOLVER_PACKAGE,
+        "dwSourcePackageHandle",
+    ));
 }
 
 test "native solver action and relation layouts remain stable" {
@@ -346,6 +350,7 @@ test "native solver Zig ABI mirror matches the private layouts" {
             "nChecksumIsHeaderOnly",
             "nHasPackageSize",
             "nHasInstalledSize",
+            "dwSourcePackageHandle",
         },
     );
     try expectSameLayout(
@@ -441,6 +446,7 @@ test "native solver shadow ABI mirror matches the private layouts" {
             "pbChecksum",
             "pChangeLogEntries",
             "pNext",
+            "dwSourcePackageHandle",
         },
     );
     try expectSameLayout(
@@ -482,13 +488,15 @@ test "native solver live ABI mirrors match the private layouts" {
             "nChecksumIsPkgId",
             "dwQueuePair",
             "nHasQueuePair",
+            "nRpmFd",
+            "dwSourcePackageHandle",
         },
     );
 }
 
 test "native solver private layouts remain stable" {
     const pointer_size = @sizeOf(*anyopaque);
-    const package_size: usize = if (pointer_size == 8) 168 else 92;
+    const package_size: usize = if (pointer_size == 8) 176 else 96;
     const result_pointer_offset: usize = if (pointer_size == 8) 16 else 12;
     const result_size: usize = if (pointer_size == 8) 112 else 60;
 
@@ -506,6 +514,10 @@ test "native solver private layouts remain stable" {
             @offsetOf(abi.TDNF_PKG_INFO, field[0]),
         );
     }
+    try std.testing.expectEqual(
+        16 + 19 * pointer_size,
+        @offsetOf(abi.TDNF_PKG_INFO, "dwSourcePackageHandle"),
+    );
     inline for (.{
         .{ "pszName", 0 },
         .{ "pszRepoName", 1 },

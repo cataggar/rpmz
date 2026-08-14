@@ -896,16 +896,24 @@ const BuildState = struct {
         var candidates = std.ArrayList(ExecutionCandidate).empty;
         for (self.outcome.actions, 0..) |action, action_index| {
             if (!containsActionKind(kinds, action.kind)) continue;
-            const package = if (use_prior and action.kind != .erase)
-                if (action.priors.len == 0) return error.UnsupportedResult else action.priors[0]
-            else
-                action.package;
-            try candidates.append(self.arena, .{
-                .action_index = action_index,
-                .operation = operation,
-                .package = package,
-                .requested_by = action.requested_by,
-            });
+            if (use_prior and action.kind != .erase) {
+                if (action.priors.len == 0) return error.UnsupportedResult;
+                for (action.priors) |prior| {
+                    try candidates.append(self.arena, .{
+                        .action_index = action_index,
+                        .operation = operation,
+                        .package = prior,
+                        .requested_by = action.requested_by,
+                    });
+                }
+            } else {
+                try candidates.append(self.arena, .{
+                    .action_index = action_index,
+                    .operation = operation,
+                    .package = action.package,
+                    .requested_by = action.requested_by,
+                });
+            }
         }
         std.sort.pdq(
             ExecutionCandidate,
@@ -1591,6 +1599,299 @@ fn buildUniverse(
     return .{
         .universe = try solver_model.Universe.init(testing.allocator, inputs),
     };
+}
+
+const LegacyExecutionInput = struct {
+    operation: u32,
+    package: *const repomd.solver_legacy_result.LegacyPackage,
+};
+
+fn legacyString(value: anytype) []const u8 {
+    return std.mem.span(value) orelse "";
+}
+
+fn legacyIdentityEqual(
+    left: *const repomd.solver_legacy_result.LegacyPackage,
+    right: *const repomd.solver_legacy_result.LegacyPackage,
+) bool {
+    return left.dwEpoch == right.dwEpoch and
+        std.mem.eql(u8, legacyString(left.pszName), legacyString(right.pszName)) and
+        std.mem.eql(u8, legacyString(left.pszVersion), legacyString(right.pszVersion)) and
+        std.mem.eql(u8, legacyString(left.pszRelease), legacyString(right.pszRelease)) and
+        std.mem.eql(u8, legacyString(left.pszArch), legacyString(right.pszArch));
+}
+
+fn appendLegacyExecutionBucket(
+    output: *std.ArrayList(LegacyExecutionInput),
+    erased: *std.ArrayList(*const repomd.solver_legacy_result.LegacyPackage),
+    head: [*c]repomd.solver_legacy_result.LegacyPackage,
+    operation: u32,
+    dedupe_erase: bool,
+) !void {
+    var current = head;
+    while (current != null) : (current = current[0].pNext) {
+        const package: *const repomd.solver_legacy_result.LegacyPackage =
+            @ptrCast(current);
+        if (dedupe_erase) {
+            var duplicate = false;
+            for (erased.items) |prior| {
+                if (legacyIdentityEqual(prior, package)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            try erased.append(testing.allocator, package);
+        }
+        try output.append(testing.allocator, .{
+            .operation = operation,
+            .package = package,
+        });
+    }
+}
+
+fn legacyMatchesCaptured(
+    package: *const repomd.solver_legacy_result.LegacyPackage,
+    captured: abi.PackageIdentity,
+) bool {
+    return package.dwEpoch == (if (captured.has_epoch != 0)
+        captured.epoch
+    else
+        0) and
+        std.mem.eql(
+            u8,
+            legacyString(package.pszName),
+            bytesOrEmpty(captured.name),
+        ) and
+        std.mem.eql(
+            u8,
+            legacyString(package.pszVersion),
+            bytesOrEmpty(captured.version),
+        ) and
+        std.mem.eql(
+            u8,
+            legacyString(package.pszRelease),
+            bytesOrEmpty(captured.release),
+        ) and
+        std.mem.eql(
+            u8,
+            legacyString(package.pszArch),
+            bytesOrEmpty(captured.arch),
+        );
+}
+
+const InventoryIdentity = struct {
+    name: []const u8,
+    epoch: u32,
+    version: []const u8,
+    release: []const u8,
+    arch: []const u8,
+};
+
+fn inventoryFromPackage(
+    universe: *const solver_model.Universe,
+    package_id: solver_model.PackageId,
+) !InventoryIdentity {
+    const package = universe.package(package_id) orelse
+        return error.TestUnexpectedResult;
+    return .{
+        .name = package.source.nevra.name,
+        .epoch = package.source.nevra.epoch orelse 0,
+        .version = package.source.nevra.version,
+        .release = package.source.nevra.release,
+        .arch = package.source.nevra.arch,
+    };
+}
+
+fn inventoryFromLegacy(
+    package: *const repomd.solver_legacy_result.LegacyPackage,
+) InventoryIdentity {
+    return .{
+        .name = legacyString(package.pszName),
+        .epoch = package.dwEpoch,
+        .version = legacyString(package.pszVersion),
+        .release = legacyString(package.pszRelease),
+        .arch = legacyString(package.pszArch),
+    };
+}
+
+fn inventoryEqual(left: InventoryIdentity, right: InventoryIdentity) bool {
+    return left.epoch == right.epoch and
+        std.mem.eql(u8, left.name, right.name) and
+        std.mem.eql(u8, left.version, right.version) and
+        std.mem.eql(u8, left.release, right.release) and
+        std.mem.eql(u8, left.arch, right.arch);
+}
+
+fn removeInventory(
+    inventory: *std.ArrayList(InventoryIdentity),
+    identity: InventoryIdentity,
+) bool {
+    for (inventory.items, 0..) |candidate, index| {
+        if (!inventoryEqual(candidate, identity)) continue;
+        _ = inventory.orderedRemove(index);
+        return true;
+    }
+    return false;
+}
+
+fn inventoryLessThan(
+    _: void,
+    left: InventoryIdentity,
+    right: InventoryIdentity,
+) bool {
+    const name_order = std.mem.order(u8, left.name, right.name);
+    if (name_order != .eq) return name_order == .lt;
+    if (left.epoch != right.epoch) return left.epoch < right.epoch;
+    const version_order = std.mem.order(u8, left.version, right.version);
+    if (version_order != .eq) return version_order == .lt;
+    const release_order = std.mem.order(u8, left.release, right.release);
+    if (release_order != .eq) return release_order == .lt;
+    return std.mem.lessThan(u8, left.arch, right.arch);
+}
+
+fn expectNormalProjectionParity(
+    universe: *const solver_model.Universe,
+    outcome: *const solver_model.Outcome,
+    selected: []const solver_model.PackageId,
+    job_count: usize,
+    facts: *const abi.Capture,
+    initially_installed: []const solver_model.PackageId,
+) !void {
+    const result = try repomd.solver_result_c.buildOwned(.{
+        .universe = universe,
+        .job_count = job_count,
+        .selected = selected,
+        .outcome = outcome,
+    });
+    defer repomd.solver_result_c.freeOwnedResult(result);
+    var solved: [*c]repomd.solver_legacy_result.LegacyResult = null;
+    try repomd.solver_legacy_result.build(
+        testing.allocator,
+        result,
+        true,
+        &solved,
+    );
+    defer repomd.solver_legacy_result.free(solved);
+
+    var inputs = std.ArrayList(LegacyExecutionInput).empty;
+    defer inputs.deinit(testing.allocator);
+    var erased = std.ArrayList(
+        *const repomd.solver_legacy_result.LegacyPackage,
+    ).empty;
+    defer erased.deinit(testing.allocator);
+    try appendLegacyExecutionBucket(
+        &inputs,
+        &erased,
+        solved[0].pPkgsToInstall,
+        abi.execution_operation.install,
+        false,
+    );
+    try appendLegacyExecutionBucket(
+        &inputs,
+        &erased,
+        solved[0].pPkgsToReinstall,
+        abi.execution_operation.reinstall,
+        false,
+    );
+    try appendLegacyExecutionBucket(
+        &inputs,
+        &erased,
+        solved[0].pPkgsToUpgrade,
+        abi.execution_operation.upgrade,
+        false,
+    );
+    try appendLegacyExecutionBucket(
+        &inputs,
+        &erased,
+        solved[0].pPkgsToRemove,
+        abi.execution_operation.erase,
+        true,
+    );
+    try appendLegacyExecutionBucket(
+        &inputs,
+        &erased,
+        solved[0].pPkgsObsoleted,
+        abi.execution_operation.erase,
+        true,
+    );
+    try appendLegacyExecutionBucket(
+        &inputs,
+        &erased,
+        solved[0].pPkgsToDowngrade,
+        abi.execution_operation.install,
+        false,
+    );
+    try appendLegacyExecutionBucket(
+        &inputs,
+        &erased,
+        solved[0].pPkgsRemovedByDowngrade,
+        abi.execution_operation.erase,
+        true,
+    );
+
+    const captured = facts.native_execution_inputs.?[0..facts.native_execution_input_count];
+    try testing.expectEqual(captured.len, inputs.items.len);
+    for (captured, inputs.items) |expected, actual| {
+        try testing.expectEqual(expected.operation, actual.operation);
+        try testing.expect(legacyMatchesCaptured(
+            actual.package,
+            facts.packages.?[expected.package_ref].identity,
+        ));
+    }
+
+    var normal_inventory = std.ArrayList(InventoryIdentity).empty;
+    defer normal_inventory.deinit(testing.allocator);
+    var action_inventory = std.ArrayList(InventoryIdentity).empty;
+    defer action_inventory.deinit(testing.allocator);
+    for (initially_installed) |package_id| {
+        const identity = try inventoryFromPackage(universe, package_id);
+        try normal_inventory.append(testing.allocator, identity);
+        try action_inventory.append(testing.allocator, identity);
+    }
+    for (inputs.items) |input| {
+        const identity = inventoryFromLegacy(input.package);
+        if (input.operation == abi.execution_operation.erase) {
+            try testing.expect(removeInventory(&normal_inventory, identity));
+        } else {
+            try normal_inventory.append(testing.allocator, identity);
+        }
+    }
+    for (outcome.actions) |action| {
+        if (action.kind == .erase) {
+            _ = removeInventory(
+                &action_inventory,
+                try inventoryFromPackage(universe, action.package),
+            );
+            continue;
+        }
+        for (action.priors) |prior| {
+            _ = removeInventory(
+                &action_inventory,
+                try inventoryFromPackage(universe, prior),
+            );
+        }
+        try action_inventory.append(
+            testing.allocator,
+            try inventoryFromPackage(universe, action.package),
+        );
+    }
+    std.mem.sort(
+        InventoryIdentity,
+        normal_inventory.items,
+        {},
+        inventoryLessThan,
+    );
+    std.mem.sort(
+        InventoryIdentity,
+        action_inventory.items,
+        {},
+        inventoryLessThan,
+    );
+    try testing.expectEqual(action_inventory.items.len, normal_inventory.items.len);
+    for (action_inventory.items, normal_inventory.items) |expected, actual| {
+        try testing.expect(inventoryEqual(expected, actual));
+    }
 }
 
 fn emptyTrace() abi.RequestTraceView {
@@ -2866,6 +3167,40 @@ test "highest same-name prior determines replacement kind with extra obsoletes" 
     try testing.expectEqual(abi.action_kind.downgrade, facts.actions.?[0].kind);
     try testing.expectEqual(@as(u32, 3), facts.actions.?[0].prior_count);
     try expectPriorNames(facts, facts.actions.?[0], &.{ "pkg", "pkg", "legacy" });
+    try testing.expectEqual(
+        @as(u32, 4),
+        facts.native_execution_input_count,
+    );
+    const expected_execution = [_]struct {
+        operation: u32,
+        name: []const u8,
+        evr: []const u8,
+    }{
+        .{ .operation = abi.execution_operation.install, .name = "pkg", .evr = "2-1" },
+        .{ .operation = abi.execution_operation.erase, .name = "pkg", .evr = "3-1" },
+        .{ .operation = abi.execution_operation.erase, .name = "pkg", .evr = "1-1" },
+        .{ .operation = abi.execution_operation.erase, .name = "legacy", .evr = "1-1" },
+    };
+    for (
+        facts.native_execution_inputs.?[0..facts.native_execution_input_count],
+        expected_execution,
+    ) |input, expected| {
+        try testing.expectEqual(expected.operation, input.operation);
+        const package = facts.packages.?[input.package_ref];
+        try testing.expectEqualStrings(
+            expected.name,
+            bytesOrEmpty(package.identity.name),
+        );
+        try expectPackageEvr(&package, metadata.splitEvrQuery(expected.evr));
+    }
+    try expectNormalProjectionParity(
+        &harness.universe,
+        &outcome,
+        &selected,
+        jobs.len,
+        facts,
+        &.{ low, high, legacy },
+    );
 }
 
 test "obsoletes retain multiple priors and permit a shared prior" {
@@ -2961,6 +3296,42 @@ test "obsoletes retain multiple priors and permit a shared prior" {
         );
         try testing.expectEqual(@as(u32, 2), facts.actions.?[0].prior_count);
         try expectPriorNames(facts, facts.actions.?[0], &.{ "old-a", "old-b" });
+        try testing.expectEqual(
+            @as(u32, 3),
+            facts.native_execution_input_count,
+        );
+        const expected_names = [_][]const u8{
+            "replacement",
+            "old-b",
+            "old-a",
+        };
+        for (
+            facts.native_execution_inputs.?[0..facts.native_execution_input_count],
+            expected_names,
+            0..,
+        ) |input, expected_name, index| {
+            try testing.expectEqual(
+                if (index == 0)
+                    abi.execution_operation.install
+                else
+                    abi.execution_operation.erase,
+                input.operation,
+            );
+            try testing.expectEqualStrings(
+                expected_name,
+                bytesOrEmpty(
+                    facts.packages.?[input.package_ref].identity.name,
+                ),
+            );
+        }
+        try expectNormalProjectionParity(
+            &harness.universe,
+            &outcome,
+            &selected,
+            jobs.len,
+            facts,
+            &.{ old_a, old_b },
+        );
     }
 
     {
@@ -3091,6 +3462,24 @@ test "obsoletes retain multiple priors and permit a shared prior" {
         try testing.expectEqualStrings(
             "old",
             bytesOrEmpty(facts.packages.?[shared_ref.?].identity.name),
+        );
+        try testing.expectEqual(
+            @as(u32, 3),
+            facts.native_execution_input_count,
+        );
+        var erase_count: usize = 0;
+        for (facts.native_execution_inputs.?[0..facts.native_execution_input_count]) |input| {
+            if (input.operation == abi.execution_operation.erase)
+                erase_count += 1;
+        }
+        try testing.expectEqual(@as(usize, 1), erase_count);
+        try expectNormalProjectionParity(
+            &harness.universe,
+            &outcome,
+            &selected,
+            jobs.len,
+            facts,
+            &.{old},
         );
     }
 }

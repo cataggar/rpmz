@@ -10,11 +10,13 @@ const abi = @import("client_abi");
 const options = @import("client_gpgcheck_options");
 const errors = @import("tdnf_error");
 const rpm = @import("rpm_gpgcheck");
+const txn_config = @import("rpm_txn_config");
+const transaction_lock = @import("transaction_lock");
 
 const Repo = abi.C.TDNF_REPO_DATA;
 const Tdnf = abi.Tdnf;
 const FileHandle = rpm.FileHandle;
-const TxnConfig = opaque {};
+const TxnConfig = txn_config.TxnConfig;
 const PubkeyIter = opaque {};
 
 const ERROR_TDNF_INVALID_PUBKEY_FILE: u32 = 1505;
@@ -28,7 +30,9 @@ const ERROR_TDNF_RPM_UNSIGNED: u32 = 1531;
 
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
-const F_OK: c_int = 0;
+const mode_type_mask: u16 = 0o170000;
+const mode_regular: u16 = 0o100000;
+const max_remote_key_size: u64 = 16 * 1024 * 1024;
 
 extern fn TDNFAllocateMemory(
     count: usize,
@@ -67,31 +71,16 @@ extern fn TDNFGetCachePath(
     file: ?[*:0]const u8,
     path: *?[*:0]u8,
 ) callconv(.c) u32;
-extern fn TDNFNormalizePath(
-    path: ?[*:0]const u8,
-    normalized: *?[*:0]u8,
-) callconv(.c) u32;
-extern fn TDNFJoinPathFromArray(
-    path: *?[*:0]u8,
-    nodes: [*]?[*:0]u8,
-    count: c_int,
-) callconv(.c) u32;
-extern fn TDNFDirName(
-    path: ?[*:0]const u8,
-    dirname: *?[*:0]u8,
-) callconv(.c) u32;
-extern fn TDNFUtilsMakeDirs(path: ?[*:0]const u8) callconv(.c) u32;
-extern fn TDNFDownloadFile(
+extern fn TDNFDownloadFileAt(
     tdnf: ?*Tdnf,
     repo: ?*Repo,
     url: ?[*:0]const u8,
-    path: ?[*:0]const u8,
+    directory_fd: c_int,
+    name: ?[*:0]const u8,
     progress: ?[*:0]const u8,
     require_https: c_int,
+    output_fd: ?*c_int,
 ) callconv(.c) u32;
-extern fn access(path: [*:0]const u8, mode: c_int) callconv(.c) c_int;
-extern fn unlink(path: [*:0]const u8) callconv(.c) c_int;
-extern fn basename(path: [*:0]u8) callconv(.c) [*:0]u8;
 extern fn __errno_location() callconv(.c) *c_int;
 extern fn tdnf_rpmdb_import_pubkeys_config(
     config: ?*const TxnConfig,
@@ -113,6 +102,13 @@ extern fn tdnf_rpmdb_string_free(value: ?*anyopaque) callconv(.c) void;
 extern fn tdnf_rpmdb_last_error() callconv(.c) [*:0]const u8;
 
 threadlocal var direct_error: [160]u8 = [_]u8{0} ** 160;
+
+const RemoteKey = struct {
+    directory_fd: c_int = -1,
+    file_fd: c_int = -1,
+    name: [80]u8 = [_]u8{0} ** 80,
+    present: bool = false,
+};
 
 fn setDirectError(comptime format: []const u8, args: anytype) void {
     _ = std.fmt.bufPrintZ(&direct_error, format, args) catch {
@@ -138,7 +134,28 @@ const Ops = struct {
     get_keys: *const fn (?*anyopaque, *Tdnf, *Repo, *?[*]?[*:0]u8) u32,
     yes_no: *const fn (?*anyopaque, ?*abi.CmdArgs, [*:0]const u8, *c_int) u32,
     path_from_uri: *const fn (?*anyopaque, [*:0]const u8, *?[*:0]u8) u32,
-    fetch_remote: *const fn (?*anyopaque, *Tdnf, *Repo, [*:0]const u8, *?[*:0]u8) u32,
+    fetch_remote: *const fn (
+        ?*anyopaque,
+        *Tdnf,
+        *Repo,
+        [*:0]const u8,
+        *RemoteKey,
+    ) u32,
+    read_remote: *const fn (
+        ?*anyopaque,
+        *RemoteKey,
+        *?[*:0]u8,
+        *c_int,
+    ) u32,
+    remove_remote: *const fn (?*anyopaque, *RemoteKey) u32,
+    release_remote: *const fn (?*anyopaque, *RemoteKey) void,
+    read_local: *const fn (
+        ?*anyopaque,
+        *TxnConfig,
+        [*:0]const u8,
+        *?[*:0]u8,
+        *c_int,
+    ) u32,
     import_key: *const fn (?*anyopaque, *TxnConfig, []const u8) u32,
     verify_digests: *const fn (?*anyopaque, *FileHandle, *c_int) c_int,
     is_signed: *const fn (?*anyopaque, *FileHandle) c_int,
@@ -220,13 +237,65 @@ fn productionFetchRemote(
     tdnf: *Tdnf,
     repo: *Repo,
     uri: [*:0]const u8,
-    path: *?[*:0]u8,
+    remote: *RemoteKey,
 ) u32 {
-    return fetchRemoteGpgKey(tdnf, repo, uri, path);
+    return fetchRemoteGpgKeyPinned(tdnf, repo, uri, remote);
+}
+
+fn productionReadRemote(
+    _: ?*anyopaque,
+    remote: *RemoteKey,
+    data: *?[*:0]u8,
+    size: *c_int,
+) u32 {
+    return readRemoteGpgKey(remote, data, size);
+}
+
+fn productionRemoveRemote(_: ?*anyopaque, remote: *RemoteKey) u32 {
+    return removeRemoteGpgKey(remote);
+}
+
+fn productionReleaseRemote(_: ?*anyopaque, remote: *RemoteKey) void {
+    releaseRemoteGpgKey(remote);
+}
+
+fn productionReadLocal(
+    _: ?*anyopaque,
+    config: *TxnConfig,
+    path: [*:0]const u8,
+    data: *?[*:0]u8,
+    size: *c_int,
+) u32 {
+    if (config.pinnedInstallRootFd() == null)
+        return readGpgKeyFile(&production_ops, path, data, size);
+    const fd = config.openPinnedRegular(std.mem.span(path)) catch |err|
+        return switch (err) {
+            error.NotFound => errors.ERROR_TDNF_FILE_NOT_FOUND,
+            error.InvalidTargetPath,
+            error.UnsafeTargetPath,
+            => ERROR_TDNF_KEYURL_INVALID,
+            error.SyscallFailed => systemError(),
+        };
+    defer _ = std.c.close(fd);
+    return readRegularKeyFd(fd, data, size);
 }
 
 fn productionImportKey(
     _: ?*anyopaque,
+    config: *TxnConfig,
+    data: []const u8,
+) u32 {
+    return importKeyWithTargetLock(
+        config,
+        data,
+        null,
+        {},
+        importKeyMutation,
+    );
+}
+
+fn importKeyMutation(
+    _: void,
     config: *TxnConfig,
     data: []const u8,
 ) u32 {
@@ -241,6 +310,48 @@ fn productionImportKey(
         return ERROR_TDNF_INVALID_PUBKEY_FILE;
     }
     return 0;
+}
+
+fn importKeyWithTargetLock(
+    config: *TxnConfig,
+    data: []const u8,
+    lock_directory: ?[]const u8,
+    context: anytype,
+    import_fn: anytype,
+) u32 {
+    if (config.targetLockHeld()) {
+        return import_fn(context, config, data);
+    }
+    var guard = blk: {
+        if (lock_directory) |directory| {
+            break :blk transaction_lock.acquireInDirectory(
+                std.heap.c_allocator,
+                config,
+                directory,
+                true,
+            ) catch |err| {
+                common.log(
+                    LOG_ERR,
+                    "Unable to lock rpmdb key import target: %s\n",
+                    .{@errorName(err)},
+                );
+                return ERROR_TDNF_RPM_CHECK;
+            };
+        }
+        break :blk transaction_lock.acquire(
+            std.heap.c_allocator,
+            config,
+        ) catch |err| {
+            common.log(
+                LOG_ERR,
+                "Unable to lock rpmdb key import target: %s\n",
+                .{@errorName(err)},
+            );
+            return ERROR_TDNF_RPM_CHECK;
+        };
+    };
+    defer guard.deinit();
+    return import_fn(context, guard.config(), data);
 }
 
 fn productionVerifyDigests(
@@ -357,6 +468,10 @@ const production_ops = Ops{
     .yes_no = &productionYesNo,
     .path_from_uri = &productionPathFromUri,
     .fetch_remote = &productionFetchRemote,
+    .read_remote = &productionReadRemote,
+    .remove_remote = &productionRemoveRemote,
+    .release_remote = &productionReleaseRemote,
+    .read_local = &productionReadLocal,
     .import_key = &productionImportKey,
     .verify_digests = &productionVerifyDigests,
     .is_signed = &productionIsSigned,
@@ -367,6 +482,345 @@ const production_ops = Ops{
 
 fn systemError() u32 {
     return errors.ERROR_TDNF_SYSTEM_BASE + @as(u32, @intCast(__errno_location().*));
+}
+
+fn safeComponent(value: []const u8) bool {
+    return value.len != 0 and
+        value.len <= std.fs.max_name_bytes and
+        !std.mem.eql(u8, value, ".") and
+        !std.mem.eql(u8, value, "..") and
+        std.mem.indexOfScalar(u8, value, '/') == null and
+        std.mem.indexOfScalar(u8, value, 0) == null;
+}
+
+fn openDirectoryAt(
+    parent_fd: c_int,
+    name: [*:0]const u8,
+    create: bool,
+    output: *c_int,
+) u32 {
+    output.* = -1;
+    var fd = std.c.openat(parent_fd, name, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    if (fd < 0 and create and
+        __errno_location().* == @intFromEnum(std.posix.E.NOENT))
+    {
+        if (std.c.mkdirat(parent_fd, name, 0o755) != 0 and
+            __errno_location().* != @intFromEnum(std.posix.E.EXIST))
+        {
+            return systemError();
+        }
+        fd = std.c.openat(parent_fd, name, .{
+            .ACCMODE = .RDONLY,
+            .DIRECTORY = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+    }
+    if (fd < 0) return systemError();
+    output.* = fd;
+    return 0;
+}
+
+fn openDirectoryPathNoFollow(
+    path: []const u8,
+    create: bool,
+    output: *c_int,
+) u32 {
+    output.* = -1;
+    if (path.len == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
+    var current = std.c.open(
+        if (std.fs.path.isAbsolute(path)) "/" else ".",
+        .{
+            .ACCMODE = .RDONLY,
+            .DIRECTORY = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        },
+    );
+    if (current < 0) return systemError();
+    defer {
+        if (current >= 0) _ = std.c.close(current);
+    }
+    var components = std.mem.splitScalar(u8, path, '/');
+    while (components.next()) |component| {
+        if (component.len == 0 or std.mem.eql(u8, component, "."))
+            continue;
+        if (!safeComponent(component))
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        var buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+        @memcpy(buffer[0..component.len], component);
+        buffer[component.len] = 0;
+        var next: c_int = -1;
+        const result = openDirectoryAt(
+            current,
+            @ptrCast(&buffer),
+            create,
+            &next,
+        );
+        if (result != 0) return result;
+        _ = std.c.close(current);
+        current = next;
+    }
+    output.* = current;
+    current = -1;
+    return 0;
+}
+
+fn openRemoteKeyDirectory(
+    tdnf: *Tdnf,
+    repo: *Repo,
+    output: *c_int,
+) u32 {
+    output.* = -1;
+    const conf = tdnf.pConf orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const cache_z = conf.pszCacheDir orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const raw_config = tdnf.pRpmConfig orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const config: *const TxnConfig = @ptrCast(@alignCast(raw_config));
+    var cache_fd: c_int = -1;
+    if (config.pinnedCacheDirFd() != null) {
+        cache_fd = std.c.fcntl(
+            config.pinnedCacheDirFd().?,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 0),
+        );
+        if (cache_fd < 0) return systemError();
+    } else if (config.pinnedInstallRootFd() != null) {
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    } else {
+        const result = openDirectoryPathNoFollow(
+            std.mem.span(cache_z),
+            true,
+            &cache_fd,
+        );
+        if (result != 0) return result;
+    }
+    defer _ = std.c.close(cache_fd);
+
+    const component_z = if (repo.pszCacheName != null)
+        @as([*:0]const u8, @ptrCast(repo.pszCacheName))
+    else if (repo.pszId != null)
+        @as([*:0]const u8, @ptrCast(repo.pszId))
+    else
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (!safeComponent(std.mem.span(component_z)))
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    var repo_fd: c_int = -1;
+    var result = openDirectoryAt(cache_fd, component_z, true, &repo_fd);
+    if (result != 0) return result;
+    defer _ = std.c.close(repo_fd);
+    result = openDirectoryAt(repo_fd, "keys", true, output);
+    return result;
+}
+
+fn fetchRemoteGpgKeyPinned(
+    tdnf: *Tdnf,
+    repo: *Repo,
+    url: [*:0]const u8,
+    remote: *RemoteKey,
+) u32 {
+    remote.* = .{};
+    const location = classifyKeyLocation(url) catch
+        return fetchError(url, ERROR_TDNF_KEYURL_INVALID);
+    if (location != .https)
+        return fetchError(url, ERROR_TDNF_KEYURL_INVALID);
+
+    var directory_fd: c_int = -1;
+    var result = openRemoteKeyDirectory(tdnf, repo, &directory_fd);
+    if (result != 0) return fetchError(url, result);
+    var keep_directory = false;
+    defer {
+        if (!keep_directory) _ = std.c.close(directory_fd);
+    }
+    const name = makeRemoteKeyName(url, &remote.name) catch
+        return fetchError(url, errors.ERROR_TDNF_INVALID_PARAMETER);
+
+    var file_fd: c_int = -1;
+    result = TDNFDownloadFileAt(
+        tdnf,
+        repo,
+        url,
+        directory_fd,
+        name,
+        name,
+        1,
+        &file_fd,
+    );
+    if (result == errors.ERROR_TDNF_URL_INVALID)
+        result = ERROR_TDNF_KEYURL_INVALID;
+    if (result != 0) return fetchError(url, result);
+    remote.directory_fd = directory_fd;
+    remote.file_fd = file_fd;
+    remote.present = true;
+    keep_directory = true;
+    return 0;
+}
+
+fn makeRemoteKeyName(
+    url: [*:0]const u8,
+    buffer: *[80]u8,
+) error{ NoSpaceLeft, RandomFailed }![:0]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(std.mem.span(url), &digest, .{});
+    var url_tag: [16]u8 = undefined;
+    @memcpy(&url_tag, digest[0..url_tag.len]);
+    var nonce: [16]u8 = undefined;
+    var offset: usize = 0;
+    while (offset < nonce.len) {
+        const count = std.c.getrandom(
+            nonce[offset..].ptr,
+            nonce.len - offset,
+            0,
+        );
+        if (count < 0 and
+            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+        {
+            continue;
+        }
+        if (count <= 0) return error.RandomFailed;
+        offset += @intCast(count);
+    }
+    const encoded_url = std.fmt.bytesToHex(url_tag, .lower);
+    const encoded_nonce = std.fmt.bytesToHex(nonce, .lower);
+    return std.fmt.bufPrintZ(
+        buffer,
+        "key-{s}-{s}",
+        .{ &encoded_url, &encoded_nonce },
+    );
+}
+
+fn sameFile(left: std.os.linux.Statx, right: std.os.linux.Statx) bool {
+    return left.dev_major == right.dev_major and
+        left.dev_minor == right.dev_minor and
+        left.ino == right.ino;
+}
+
+fn remoteKeyStats(
+    remote: *const RemoteKey,
+    fd_stat: *std.os.linux.Statx,
+    path_stat: *std.os.linux.Statx,
+) bool {
+    return remote.directory_fd >= 0 and remote.file_fd >= 0 and
+        std.c.statx(
+            remote.file_fd,
+            "",
+            std.os.linux.AT.EMPTY_PATH,
+            std.os.linux.STATX.BASIC_STATS,
+            fd_stat,
+        ) == 0 and
+        std.c.statx(
+            remote.directory_fd,
+            @ptrCast(&remote.name),
+            std.os.linux.AT.SYMLINK_NOFOLLOW,
+            std.os.linux.STATX.BASIC_STATS,
+            path_stat,
+        ) == 0 and
+        (fd_stat.mode & mode_type_mask) == mode_regular and
+        (path_stat.mode & mode_type_mask) == mode_regular and
+        fd_stat.nlink == 1 and path_stat.nlink == 1 and
+        sameFile(fd_stat.*, path_stat.*);
+}
+
+fn readRemoteGpgKey(
+    remote: *RemoteKey,
+    data_out: *?[*:0]u8,
+    size_out: *c_int,
+) u32 {
+    var fd_stat = std.mem.zeroes(std.os.linux.Statx);
+    var path_stat = std.mem.zeroes(std.os.linux.Statx);
+    if (!remoteKeyStats(remote, &fd_stat, &path_stat))
+        return ERROR_TDNF_INVALID_PUBKEY_FILE;
+    return readRegularKeyFd(remote.file_fd, data_out, size_out);
+}
+
+fn readRegularKeyFd(
+    fd: c_int,
+    data_out: *?[*:0]u8,
+    size_out: *c_int,
+) u32 {
+    data_out.* = null;
+    size_out.* = 0;
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        &stat,
+    ) != 0 or (stat.mode & mode_type_mask) != mode_regular or
+        stat.nlink != 1 or stat.size == 0 or
+        stat.size > max_remote_key_size or
+        stat.size > std.math.maxInt(c_int))
+    {
+        return ERROR_TDNF_INVALID_PUBKEY_FILE;
+    }
+    if (std.c.lseek(fd, 0, 0) < 0) return systemError();
+    var raw: ?*anyopaque = null;
+    const size: usize = @intCast(stat.size);
+    const result = TDNFAllocateMemory(1, size + 1, &raw);
+    if (result != 0) return result;
+    const bytes: [*]u8 = @ptrCast(raw.?);
+    var offset: usize = 0;
+    while (offset < size) {
+        const count = std.c.read(
+            fd,
+            bytes + offset,
+            size - offset,
+        );
+        if (count < 0 and
+            __errno_location().* == @intFromEnum(std.posix.E.INTR))
+        {
+            continue;
+        }
+        if (count <= 0) {
+            TDNFFreeMemory(raw);
+            return systemError();
+        }
+        offset += @intCast(count);
+    }
+    bytes[size] = 0;
+    data_out.* = @ptrCast(bytes);
+    size_out.* = @intCast(size);
+    return 0;
+}
+
+fn removeRemoteGpgKey(remote: *RemoteKey) u32 {
+    if (!remote.present) return 0;
+    var fd_stat = std.mem.zeroes(std.os.linux.Statx);
+    var path_stat = std.mem.zeroes(std.os.linux.Statx);
+    if (!remoteKeyStats(remote, &fd_stat, &path_stat))
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (std.c.unlinkat(
+        remote.directory_fd,
+        @ptrCast(&remote.name),
+        0,
+    ) != 0) return systemError();
+    remote.present = false;
+    return 0;
+}
+
+fn releaseRemoteGpgKey(remote: *RemoteKey) void {
+    if (remote.present) {
+        var fd_stat = std.mem.zeroes(std.os.linux.Statx);
+        var path_stat = std.mem.zeroes(std.os.linux.Statx);
+        if (remoteKeyStats(remote, &fd_stat, &path_stat)) {
+            _ = std.c.unlinkat(
+                remote.directory_fd,
+                @ptrCast(&remote.name),
+                0,
+            );
+        }
+    }
+    if (remote.file_fd >= 0) _ = std.c.close(remote.file_fd);
+    if (remote.directory_fd >= 0) _ = std.c.close(remote.directory_fd);
+    remote.* = .{};
 }
 
 fn freeValue(ops: *const Ops, value: anytype) void {
@@ -602,21 +1056,17 @@ fn gpgCheckPackage(
 
         var owned_local_key: ?[*:0]u8 = null;
         defer freeValue(ops, owned_local_key);
-        var remove_remote = false;
-        defer {
-            if (remove_remote and owned_local_key != null)
-                _ = unlink(owned_local_key.?);
-        }
+        var remote_key = RemoteKey{};
+        defer ops.release_remote(ops.context, &remote_key);
         if (location == .https) {
             result = ops.fetch_remote(
                 ops.context,
                 tdnf,
                 repo,
                 key_uri,
-                &owned_local_key,
+                &remote_key,
             );
             if (result != 0) return result;
-            remove_remote = true;
         }
 
         common.log(LOG_INFO, "importing key from %s\n", .{key_uri});
@@ -625,8 +1075,8 @@ fn gpgCheckPackage(
         if (result != 0) return result;
         if (answer == 0) return errors.ERROR_TDNF_OPERATION_ABORTED;
 
-        const local_key: [*:0]const u8 = switch (location) {
-            .https => owned_local_key.?,
+        const local_key: ?[*:0]const u8 = switch (location) {
+            .https => null,
             .file_uri => blk: {
                 result = ops.path_from_uri(
                     ops.context,
@@ -636,14 +1086,28 @@ fn gpgCheckPackage(
                 if (result == errors.ERROR_TDNF_URL_INVALID)
                     result = ERROR_TDNF_KEYURL_INVALID;
                 if (result != 0) return result;
-                break :blk owned_local_key.?;
+                break :blk owned_local_key;
             },
             .local_path => key_uri,
         };
 
         var key_data: ?[*:0]u8 = null;
         var key_size: c_int = 0;
-        result = readGpgKeyFile(ops, local_key, &key_data, &key_size);
+        result = if (location == .https)
+            ops.read_remote(
+                ops.context,
+                &remote_key,
+                &key_data,
+                &key_size,
+            )
+        else
+            ops.read_local(
+                ops.context,
+                config,
+                local_key.?,
+                &key_data,
+                &key_size,
+            );
         if (result != 0) return result;
         defer if (key_data) |value| ops.free(ops.context, @ptrCast(value));
         if (key_size <= 0) return ERROR_TDNF_INVALID_PUBKEY_FILE;
@@ -658,8 +1122,8 @@ fn gpgCheckPackage(
         key_data = null;
 
         if (location == .https) {
-            if (unlink(local_key) != 0) return systemError();
-            remove_remote = false;
+            result = ops.remove_remote(ops.context, &remote_key);
+            if (result != 0) return result;
         }
     }
 
@@ -697,69 +1161,25 @@ fn fetchRemoteGpgKey(
     const url = url_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out = location_out orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (url[0] == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const location = classifyKeyLocation(url) catch
-        return fetchError(url, ERROR_TDNF_KEYURL_INVALID);
-    if (location != .https)
-        return fetchError(url, ERROR_TDNF_KEYURL_INVALID);
+    const raw_config = tdnf.pRpmConfig orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const config: *const TxnConfig = @ptrCast(@alignCast(raw_config));
+    if (config.pinnedInstallRootFd() != null)
+        return errors.ERROR_TDNF_CALL_NOT_SUPPORTED;
 
-    var key_location: ?[*:0]u8 = null;
-    defer freeValue(&production_ops, key_location);
-    var result = TDNFPathFromUri(url, &key_location);
-    if (result == errors.ERROR_TDNF_URL_INVALID) result = ERROR_TDNF_KEYURL_INVALID;
-    if (result != 0) return fetchError(url, result);
-
-    var top_cache: ?[*:0]u8 = null;
-    defer freeValue(&production_ops, top_cache);
-    result = TDNFGetCachePath(tdnf, repo, "keys", null, &top_cache);
-    if (result != 0) return fetchError(url, result);
-
-    var real_top_cache: ?[*:0]u8 = null;
-    defer freeValue(&production_ops, real_top_cache);
-    result = TDNFNormalizePath(top_cache, &real_top_cache);
-    if (result != 0) return fetchError(url, result);
-
-    var file_path: ?[*:0]u8 = null;
-    defer freeValue(&production_ops, file_path);
-    var nodes = [_]?[*:0]u8{ real_top_cache, key_location };
-    result = TDNFJoinPathFromArray(&file_path, &nodes, @intCast(nodes.len));
-    if (result != 0) return fetchError(url, result);
-
-    var normal_path: ?[*:0]u8 = null;
-    result = TDNFNormalizePath(file_path, &normal_path);
-    if (result != 0) return fetchError(url, result);
-    defer if (normal_path) |value| TDNFFreeMemory(@ptrCast(value));
-
-    const root = std.mem.span(real_top_cache.?);
-    const normalized = std.mem.span(normal_path.?);
-    if (!std.mem.startsWith(u8, normalized, root))
-        return fetchError(url, ERROR_TDNF_KEYURL_INVALID);
-
-    var download_dir: ?[*:0]u8 = null;
-    defer freeValue(&production_ops, download_dir);
-    result = TDNFDirName(normal_path, &download_dir);
-    if (result != 0) return fetchError(url, result);
-
-    if (access(download_dir.?, F_OK) != 0) {
-        if (__errno_location().* != @intFromEnum(std.posix.E.NOENT))
-            return fetchError(url, systemError());
-        result = TDNFUtilsMakeDirs(download_dir);
-        if (result != 0) return fetchError(url, result);
-    }
-
-    result = TDNFDownloadFile(
+    var remote = RemoteKey{};
+    var result = fetchRemoteGpgKeyPinned(tdnf, repo, url, &remote);
+    if (result != 0) return result;
+    defer releaseRemoteGpgKey(&remote);
+    result = TDNFGetCachePath(
         tdnf,
         repo,
-        url,
-        file_path,
-        basename(file_path.?),
-        1,
+        "keys",
+        @ptrCast(&remote.name),
+        out,
     );
-    if (result == errors.ERROR_TDNF_URL_INVALID)
-        result = ERROR_TDNF_KEYURL_INVALID;
     if (result != 0) return fetchError(url, result);
-
-    out.* = normal_path;
-    normal_path = null;
+    remote.present = false;
     return 0;
 }
 
@@ -900,6 +1320,7 @@ const Mock = struct {
     imported_lengths: [8]usize = [_]usize{0} ** 8,
     prompt_calls: usize = 0,
     fetch_calls: usize = 0,
+    remote_remove_calls: usize = 0,
     open_result: ?*FileHandle = @ptrFromInt(0x1000),
     close_calls: usize = 0,
 
@@ -1017,14 +1438,45 @@ const Mock = struct {
         _: *Tdnf,
         _: *Repo,
         _: [*:0]const u8,
-        output: *?[*:0]u8,
+        output: *RemoteKey,
     ) u32 {
         const mock = self(context);
         mock.fetch_calls += 1;
         if (mock.fetch_result != 0) return mock.fetch_result;
-        output.* = dupeZ("/nonexistent/mock-key") orelse
-            return errors.ERROR_TDNF_OUT_OF_MEMORY;
+        output.* = .{ .directory_fd = -2, .file_fd = -2, .present = true };
         return 0;
+    }
+
+    fn readRemote(
+        context: ?*anyopaque,
+        _: *RemoteKey,
+        data: *?[*:0]u8,
+        size: *c_int,
+    ) u32 {
+        return readAll(context, "/mock-remote-key", data, size);
+    }
+
+    fn removeRemote(
+        context: ?*anyopaque,
+        remote: *RemoteKey,
+    ) u32 {
+        self(context).remote_remove_calls += 1;
+        remote.present = false;
+        return 0;
+    }
+
+    fn releaseRemote(_: ?*anyopaque, remote: *RemoteKey) void {
+        remote.* = .{};
+    }
+
+    fn readLocal(
+        context: ?*anyopaque,
+        _: *TxnConfig,
+        path: [*:0]const u8,
+        data: *?[*:0]u8,
+        size: *c_int,
+    ) u32 {
+        return readAll(context, path, data, size);
     }
 
     fn importKey(
@@ -1099,6 +1551,10 @@ const Mock = struct {
             .yes_no = &yesNo,
             .path_from_uri = &pathFromUri,
             .fetch_remote = &fetchRemote,
+            .read_remote = &readRemote,
+            .remove_remote = &removeRemote,
+            .release_remote = &releaseRemote,
+            .read_local = &readLocal,
             .import_key = &importKey,
             .verify_digests = &verifyDigests,
             .is_signed = &isSigned,
@@ -1128,6 +1584,272 @@ const TestContext = struct {
 
 fn fakeFile() *FileHandle {
     return @ptrFromInt(0x1000);
+}
+
+fn expectAlternateRootRemoteKey(conflicting_host: bool) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(io, &base_buffer)];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "host-cache" },
+    );
+    defer std.testing.allocator.free(cache);
+    const target_cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, cache[1..] },
+    );
+    defer std.testing.allocator.free(target_cache);
+    try cwd.createDirPath(io, target_cache);
+
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const cache_z = try std.testing.allocator.dupeZ(u8, cache);
+    defer std.testing.allocator.free(cache_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var base_config = try TxnConfig.init(std.testing.allocator, root);
+    defer base_config.deinit();
+    var config = try base_config.cloneWithPinnedInstallRootDeferredRpmDb(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer config.deinit();
+    const cache_fd = try config.openPinnedDirectory(cache, false);
+    defer _ = std.c.close(cache_fd);
+    try config.repinCacheDir(cache, cache_fd);
+
+    var conf = abi.Conf{ .pszCacheDir = cache_z.ptr };
+    var tdnf = Tdnf{
+        .pConf = &conf,
+        .pRpmConfig = @ptrCast(&config),
+    };
+    var repo = std.mem.zeroes(Repo);
+    repo.pszId = @constCast("repo");
+    repo.pszCacheName = @constCast("repo");
+    var remote = RemoteKey{};
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        openRemoteKeyDirectory(&tdnf, &repo, &remote.directory_fd),
+    );
+    defer releaseRemoteGpgKey(&remote);
+    const name = try std.fmt.bufPrintZ(&remote.name, "key-test", .{});
+    remote.file_fd = std.c.openat(remote.directory_fd, name, .{
+        .ACCMODE = .RDWR,
+        .CREAT = true,
+        .EXCL = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    }, @as(std.c.mode_t, 0o600));
+    try std.testing.expect(remote.file_fd >= 0);
+    const target_bytes = "target-key";
+    try std.testing.expectEqual(
+        @as(isize, target_bytes.len),
+        std.c.write(
+            remote.file_fd,
+            target_bytes.ptr,
+            target_bytes.len,
+        ),
+    );
+    remote.present = true;
+
+    const host_key = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ cache, "repo", "keys", "key-test" },
+    );
+    defer std.testing.allocator.free(host_key);
+    if (conflicting_host) {
+        const host_dir = std.fs.path.dirname(host_key).?;
+        try cwd.createDirPath(io, host_dir);
+        try cwd.writeFile(io, .{
+            .sub_path = host_key,
+            .data = "host-key",
+        });
+    }
+
+    var data: ?[*:0]u8 = null;
+    var size: c_int = 0;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        readRemoteGpgKey(&remote, &data, &size),
+    );
+    defer if (data) |value| TDNFFreeMemory(@ptrCast(value));
+    try std.testing.expectEqualStrings(
+        target_bytes,
+        data.?[0..@intCast(size)],
+    );
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        removeRemoteGpgKey(&remote),
+    );
+
+    const target_key = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_cache, "repo", "keys", "key-test" },
+    );
+    defer std.testing.allocator.free(target_key);
+    try std.testing.expectError(
+        error.FileNotFound,
+        cwd.access(io, target_key, .{}),
+    );
+    if (conflicting_host) {
+        const host_bytes = try cwd.readFileAlloc(
+            io,
+            host_key,
+            std.testing.allocator,
+            .limited(32),
+        );
+        defer std.testing.allocator.free(host_bytes);
+        try std.testing.expectEqualStrings("host-key", host_bytes);
+    } else {
+        try std.testing.expectError(
+            error.FileNotFound,
+            cwd.access(io, host_key, .{}),
+        );
+    }
+}
+
+const ConcurrentRemoteKey = struct {
+    directory_fd: c_int,
+    url: [*:0]const u8,
+    payload: []const u8,
+    remote: RemoteKey = .{},
+    status: u8 = 1,
+
+    fn run(self: *@This()) void {
+        self.remote.directory_fd = std.c.fcntl(
+            self.directory_fd,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 0),
+        );
+        if (self.remote.directory_fd < 0) return;
+        const name = makeRemoteKeyName(
+            self.url,
+            &self.remote.name,
+        ) catch return;
+        self.remote.file_fd = std.c.openat(
+            self.remote.directory_fd,
+            name,
+            .{
+                .ACCMODE = .RDWR,
+                .CREAT = true,
+                .EXCL = true,
+                .CLOEXEC = true,
+                .NOFOLLOW = true,
+            },
+            @as(std.c.mode_t, 0o600),
+        );
+        if (self.remote.file_fd < 0) return;
+        self.remote.present = true;
+        if (std.c.write(
+            self.remote.file_fd,
+            self.payload.ptr,
+            self.payload.len,
+        ) != @as(isize, @intCast(self.payload.len))) return;
+        self.status = 0;
+    }
+};
+
+fn expectRemoteKeyBytes(remote: *RemoteKey, expected: []const u8) !void {
+    var data: ?[*:0]u8 = null;
+    var size: c_int = 0;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        readRemoteGpgKey(remote, &data, &size),
+    );
+    defer if (data) |value| TDNFFreeMemory(@ptrCast(value));
+    try std.testing.expectEqualStrings(
+        expected,
+        data.?[0..@intCast(size)],
+    );
+}
+
+test "concurrent same-URL remote keys retain independent pinned inodes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const directory_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(directory_fd >= 0);
+    defer _ = std.c.close(directory_fd);
+
+    var first = ConcurrentRemoteKey{
+        .directory_fd = directory_fd,
+        .url = "https://example.invalid/shared-key",
+        .payload = "first-key",
+    };
+    var second = ConcurrentRemoteKey{
+        .directory_fd = directory_fd,
+        .url = "https://example.invalid/shared-key",
+        .payload = "second-key",
+    };
+    defer releaseRemoteGpgKey(&first.remote);
+    defer releaseRemoteGpgKey(&second.remote);
+    const first_thread = try std.Thread.spawn(
+        .{},
+        ConcurrentRemoteKey.run,
+        .{&first},
+    );
+    const second_thread = std.Thread.spawn(
+        .{},
+        ConcurrentRemoteKey.run,
+        .{&second},
+    ) catch |err| {
+        first_thread.join();
+        return err;
+    };
+    first_thread.join();
+    second_thread.join();
+
+    try std.testing.expectEqual(@as(u8, 0), first.status);
+    try std.testing.expectEqual(@as(u8, 0), second.status);
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        std.mem.span(@as([*:0]const u8, @ptrCast(&first.remote.name))),
+        std.mem.span(@as([*:0]const u8, @ptrCast(&second.remote.name))),
+    ));
+    try expectRemoteKeyBytes(&first.remote, first.payload);
+    try expectRemoteKeyBytes(&second.remote, second.payload);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        removeRemoteGpgKey(&first.remote),
+    );
+    try expectRemoteKeyBytes(&second.remote, second.payload);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        removeRemoteGpgKey(&second.remote),
+    );
+}
+
+test "remote key uses a clean pinned alternate-root namespace" {
+    try expectAlternateRootRemoteKey(false);
+}
+
+test "remote key ignores and preserves a conflicting host key" {
+    try expectAlternateRootRemoteKey(true);
 }
 
 test "gpg policy bypass and typed failures preserve rejection semantics" {
@@ -1214,6 +1936,105 @@ test "signature policy handles unsigned skip and trusted rpmdb key" {
     ));
     try std.testing.expectEqual(@as(usize, 1), mock.signature_calls);
     try std.testing.expectEqual(@as(usize, 0), mock.import_calls);
+}
+
+test "RepoSync key import acquires the shared pinned target lock" {
+    const Probe = struct {
+        contender: *const TxnConfig,
+        lock_directory: []const u8,
+        pinned: bool = false,
+        blocked: bool = false,
+
+        fn run(
+            self: *@This(),
+            config: *TxnConfig,
+            _: []const u8,
+        ) u32 {
+            self.pinned = config.pinnedInstallRootFd() != null;
+            var contender = transaction_lock.tryAcquireInDirectory(
+                std.testing.allocator,
+                self.contender,
+                self.lock_directory,
+            ) catch |err| {
+                self.blocked = err == error.WouldBlock;
+                return @intFromBool(!self.pinned or !self.blocked);
+            };
+            contender.deinit();
+            return 1;
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "locks");
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const lock_directory = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "locks" },
+    );
+    defer std.testing.allocator.free(lock_directory);
+    const lock_directory_z = try std.testing.allocator.dupeZ(
+        u8,
+        lock_directory,
+    );
+    defer std.testing.allocator.free(lock_directory_z);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.chmod(lock_directory_z.ptr, 0o700),
+    );
+    var config = try TxnConfig.init(std.testing.allocator, root);
+    defer config.deinit();
+    var contender = try TxnConfig.init(std.testing.allocator, root);
+    defer contender.deinit();
+    var probe = Probe{
+        .contender = &contender,
+        .lock_directory = lock_directory,
+    };
+
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        importKeyWithTargetLock(
+            &config,
+            "key",
+            lock_directory,
+            &probe,
+            Probe.run,
+        ),
+    );
+    try std.testing.expect(probe.pinned);
+    try std.testing.expect(probe.blocked);
+
+    var outer = try transaction_lock.acquireInDirectory(
+        std.testing.allocator,
+        &config,
+        lock_directory,
+        true,
+    );
+    defer outer.deinit();
+    probe.pinned = false;
+    probe.blocked = false;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        importKeyWithTargetLock(
+            outer.config(),
+            "key",
+            lock_directory,
+            &probe,
+            Probe.run,
+        ),
+    );
+    try std.testing.expect(probe.pinned);
+    try std.testing.expect(probe.blocked);
 }
 
 test "approved keys retain binary lengths duplicates and verify after all imports" {

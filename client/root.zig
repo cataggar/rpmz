@@ -4,8 +4,9 @@ pub const resolve = @import("resolve.zig");
 pub const resolve_service = @import("resolve_service.zig");
 pub const resolver = @import("resolver.zig");
 pub const bundle_export = @import("bundle_export.zig");
+pub const replay = @import("replay.zig");
 pub const api = @import("api.zig");
-/// Private replay/preflight integration surface; not re-exported by tdnf.zig.
+/// Private fixed-order integration used by the supported replay namespace.
 pub const fixed_order_executor = @import("transaction.zig");
 
 comptime {
@@ -13,6 +14,7 @@ comptime {
     _ = resolve_service;
     _ = resolver;
     _ = bundle_export;
+    _ = replay;
     _ = @import("repoutils.zig");
     _ = @import("remoterepo.zig");
     _ = @import("utils.zig");

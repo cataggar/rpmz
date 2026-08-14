@@ -10,6 +10,8 @@ const errors = @import("tdnf_error");
 const trans_flags = @import("rpmtrans_flags");
 const rpm_header = @import("rpm_header");
 const rpm_evr = @import("rpm_evr");
+const txn_config = @import("rpm_txn_config");
+const transaction_lock = @import("transaction_lock");
 
 const c = abi.C;
 
@@ -63,6 +65,10 @@ pub const FixedOrderRpmDbRow = struct {
 pub const FixedOrderLocalRpm = struct {
     path: [:0]const u8,
     identity: FixedOrderPackageIdentity,
+    /// Optional caller-owned parsed RPM handle. Replay preflight uses this to
+    /// retain the exact verified bytes through execution instead of reopening
+    /// a path that could have been substituted after validation.
+    handle: ?*anyopaque = null,
 };
 
 pub const FixedOrderReplacement = struct {
@@ -83,6 +89,15 @@ pub const FixedOrderTransaction = struct {
     items: []const FixedOrderItem,
     /// Input indices in the exact order recorded by the originating run.
     order: []const u32,
+};
+
+pub const FixedOrderExecutionObserver = struct {
+    context: ?*anyopaque = null,
+    completedFn: *const fn (context: ?*anyopaque, input_index: usize) void,
+
+    fn completed(self: FixedOrderExecutionObserver, input_index: usize) void {
+        self.completedFn(self.context, input_index);
+    }
 };
 
 pub const FixedOrderExecutionError = error{
@@ -418,20 +433,31 @@ extern fn TDNFAllocateMemory(usize, usize, *?*anyopaque) callconv(.c) u32;
 extern fn TDNFAllocateString(?[*:0]const u8, *?[*:0]u8) callconv(.c) u32;
 extern fn TDNFFreeMemory(?*anyopaque) callconv(.c) void;
 extern fn TDNFFindRepoById(?*abi.Tdnf, ?[*:0]const u8, *?*abi.RepoData) callconv(.c) u32;
-extern fn TDNFDownloadPackageToCache(
+extern fn TDNFDownloadPackageToCacheFd(
     ?*abi.Tdnf,
     ?[*:0]const u8,
     ?[*:0]const u8,
     ?*abi.RepoData,
     *?[*:0]u8,
+    *c_int,
 ) callconv(.c) u32;
-extern fn TDNFDownloadPackageToDirectory(
+extern fn TDNFDownloadPackageToDirectoryFd(
     ?*abi.Tdnf,
     ?[*:0]const u8,
     ?[*:0]const u8,
     ?*abi.RepoData,
     ?[*:0]const u8,
     *?[*:0]u8,
+    *c_int,
+) callconv(.c) u32;
+extern fn TDNFRemovePackageFromCache(
+    ?*abi.Tdnf,
+    ?[*:0]const u8,
+) callconv(.c) u32;
+extern fn TDNFPackageContextBorrowRpmFd(
+    ?*const anyopaque,
+    i32,
+    *c_int,
 ) callconv(.c) u32;
 extern fn TDNFGPGCheckPackageWithFile(
     ?*abi.Tdnf,
@@ -440,7 +466,6 @@ extern fn TDNFGPGCheckPackageWithFile(
     ?*c.tdnf_rpm_file,
     ?*c_int,
 ) callconv(.c) u32;
-extern fn TDNFUtilsMakeDirs(?[*:0]const u8) callconv(.c) u32;
 extern fn TDNFJoinArrayToString(
     ?[*]?[*:0]u8,
     ?[*:0]const u8,
@@ -475,9 +500,7 @@ extern fn tdnf_repomd_native_verified_transaction_solve_config(
     *?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32;
 extern fn access(?[*:0]const u8, c_int) callconv(.c) c_int;
-extern fn unlink(?[*:0]const u8) callconv(.c) c_int;
 extern fn strerror(c_int) callconv(.c) [*:0]const u8;
-extern fn dup(c_int) callconv(.c) c_int;
 extern fn close(c_int) callconv(.c) c_int;
 extern fn time(?*std.c.time_t) callconv(.c) std.c.time_t;
 
@@ -541,12 +564,17 @@ fn freeCached(list_opt: ?*c.TDNF_CACHED_RPM_LIST) void {
     free(list);
 }
 
-fn removeCached(list: *c.TDNF_CACHED_RPM_LIST) u32 {
+fn removeCached(tdnf: *abi.Tdnf, list: *c.TDNF_CACHED_RPM_LIST) u32 {
     var entry = list.pHead;
     while (entry) |current| : (entry = @as(*c.TDNF_CACHED_RPM_ENTRY, @ptrCast(current)).pNext) {
         const current_ptr: *c.TDNF_CACHED_RPM_ENTRY = @ptrCast(current);
-        if (!isEmpty(current_ptr.pszFilePath) and unlink(current_ptr.pszFilePath) != 0)
-            return systemError();
+        if (!isEmpty(current_ptr.pszFilePath)) {
+            const rc = TDNFRemovePackageFromCache(
+                tdnf,
+                current_ptr.pszFilePath,
+            );
+            if (rc != 0) return rc;
+        }
     }
     return 0;
 }
@@ -556,7 +584,7 @@ fn cleanupTransaction(tdnf: *abi.Tdnf, ts: *c.TDNFRPMTS) void {
     const args = tdnf.pArgs.?;
     if (ts.pCachedRpmsArray) |cached| {
         if (conf.nKeepCache == 0 and args.nDownloadOnly == 0)
-            _ = removeCached(cached);
+            _ = removeCached(tdnf, cached);
         freeCached(cached);
     }
     clearPlan(ts);
@@ -738,12 +766,18 @@ fn validateFixedOrderInput(
     const seen = allocator.alloc(bool, transaction.items.len) catch
         return error.OutOfMemory;
     defer allocator.free(seen);
+    const execution_positions = allocator.alloc(
+        usize,
+        transaction.items.len,
+    ) catch return error.OutOfMemory;
+    defer allocator.free(execution_positions);
     @memset(seen, false);
-    for (transaction.order) |index_u32| {
+    for (transaction.order, 0..) |index_u32, execution_position| {
         const index: usize = index_u32;
         if (index >= transaction.items.len or seen[index])
             return error.MalformedOrder;
         seen[index] = true;
+        execution_positions[index] = execution_position;
     }
 
     for (transaction.items, 0..) |item, item_index| {
@@ -766,6 +800,18 @@ fn validateFixedOrderInput(
             if (prior.hnum == 0) return error.InvalidItem;
             for (priors[0..prior_index]) |earlier| {
                 if (earlier.hnum == prior.hnum) return error.InvalidItem;
+            }
+            for (transaction.items, 0..) |owner, owner_index| {
+                if (owner_index == item_index) continue;
+                const owner_primary_index =
+                    fixedReplacementPrimaryIndex(owner) orelse continue;
+                if (fixedItemPriors(owner)[owner_primary_index].hnum ==
+                    prior.hnum and
+                    execution_positions[owner_index] >
+                        execution_positions[item_index])
+                {
+                    return error.InvalidItem;
+                }
             }
         }
 
@@ -798,6 +844,15 @@ fn validateFixedOrderInput(
     }
 }
 
+/// Validate the complete merged item graph without opening RPMs or touching
+/// the target. Replay uses this during preflight so unsupported graphs never
+/// become transaction-time failures.
+pub fn validateFixedOrder(
+    transaction: FixedOrderTransaction,
+) FixedOrderExecutionError!void {
+    return validateFixedOrderInput(transaction);
+}
+
 fn priorListContains(priors: []const FixedOrderRpmDbRow, hnum: u32) bool {
     for (priors) |prior| if (prior.hnum == hnum) return true;
     return false;
@@ -813,7 +868,7 @@ fn identityMatchesMetadata(
     const arch = metadata.arch orelse return false;
     const epoch: ?u32 = if (metadata.has_epoch != 0) metadata.epoch else null;
     return std.mem.eql(u8, expected.name, std.mem.span(name)) and
-        expected.epoch == epoch and
+        effectiveEpoch(expected.epoch) == effectiveEpoch(epoch) and
         std.mem.eql(u8, expected.version, std.mem.span(version)) and
         std.mem.eql(u8, expected.release, std.mem.span(release)) and
         std.mem.eql(u8, expected.arch, std.mem.span(arch));
@@ -830,10 +885,14 @@ fn identityMatchesHeader(
     const arch = (header.getStringChecked(.arch) catch return false) orelse return false;
     const epoch = header.getU32Checked(.epoch) catch return false;
     return std.mem.eql(u8, expected.name, name) and
-        expected.epoch == epoch and
+        effectiveEpoch(expected.epoch) == effectiveEpoch(epoch) and
         std.mem.eql(u8, expected.version, version) and
         std.mem.eql(u8, expected.release, release) and
         std.mem.eql(u8, expected.arch, arch);
+}
+
+fn effectiveEpoch(epoch: ?u32) u32 {
+    return epoch orelse 0;
 }
 
 fn digestLength(kind: c_int) ?usize {
@@ -858,17 +917,41 @@ fn addInstallPackage(
     const location = info.pszLocation orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const package_name = info.pszName orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var path: ?[*:0]u8 = null;
+    var rpm_fd: c_int = -1;
+    var rpm_fd_borrowed = false;
     var rpm_file: ?*c.tdnf_rpm_file = null;
     var cache_entry: ?*c.TDNF_CACHED_RPM_ENTRY = null;
     var header_evr: ?[*:0]u8 = null;
     defer {
         c.tdnf_rpm_file_close(rpm_file);
+        if (rpm_fd >= 0 and !rpm_fd_borrowed) _ = close(rpm_fd);
         free(header_evr);
         free(path);
         if (cache_entry) |entry| free(entry);
     }
     var rc: u32 = 0;
-    if (location[0] == '/') {
+    if (info.pszRepoName != null and
+        std.mem.eql(
+            u8,
+            std.mem.span(info.pszRepoName.?),
+            "@cmdline",
+        ))
+    {
+        if (info.dwSourcePackageHandle == 0)
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        rc = TDNFPackageContextBorrowRpmFd(
+            tdnf.pSack,
+            @intCast(info.dwSourcePackageHandle),
+            &rpm_fd,
+        );
+        if (rc == 0 and rpm_fd < 0) return ERROR_TDNF_RPMTS_FDDUP_FAILED;
+        if (rc == 0) rpm_fd_borrowed = true;
+    }
+    if (rc != 0) return rc;
+    if (rpm_fd >= 0) {
+        rc = TDNFAllocateString(location, &path);
+        if (rc != 0) return rc;
+    } else if (location[0] == '/') {
         rc = TDNFAllocateString(location, &path);
         if (rc != 0) return rc;
     } else if (args.nDownloadOnly == 0 or args.pszDownloadDir == null) {
@@ -898,27 +981,38 @@ fn addInstallPackage(
             }
         }
         if (!in_place) {
-            rc = TDNFDownloadPackageToCache(tdnf, location, package_name, repo, &path);
+            rc = TDNFDownloadPackageToCacheFd(
+                tdnf,
+                location,
+                package_name,
+                repo,
+                &path,
+                &rpm_fd,
+            );
             if (rc != 0) return rc;
         }
     } else {
-        rc = TDNFDownloadPackageToDirectory(
+        rc = TDNFDownloadPackageToDirectoryFd(
             tdnf,
             location,
             package_name,
             repo,
             args.pszDownloadDir,
             &path,
+            &rpm_fd,
         );
         if (rc != 0) return rc;
     }
 
-    if (path == null or access(path, F_OK) != 0) {
+    if (path == null or (rpm_fd < 0 and access(path, F_OK) != 0)) {
         const errno_value = std.c._errno().*;
         common.log(LOG_ERR, "could not access file %s: %s (%d)\n", .{ path orelse "(null)", strerror(errno_value), errno_value });
         return systemError();
     }
-    rpm_file = c.tdnf_rpm_file_open(path);
+    rpm_file = if (rpm_fd >= 0)
+        c.tdnf_rpm_file_open_fd(rpm_fd)
+    else
+        c.tdnf_rpm_file_open(path);
     if (rpm_file == null) {
         common.log(LOG_ERR, "Unable to parse package %s: %s\n", .{ path.?, c.tdnf_rpmdb_last_error() });
         return ERROR_TDNF_RPMRC_NOTFOUND;
@@ -967,6 +1061,19 @@ fn addInstallPackage(
         metadata.package_kind != package_source and
         metadata.package_kind != package_nosrc)
         return ERROR_TDNF_RPM_CHECK;
+    if (info.pszVersion == null or info.pszRelease == null or
+        info.pszArch == null or
+        !identityMatchesMetadata(.{
+            .name = std.mem.span(info.pszName.?),
+            .epoch = info.dwEpoch,
+            .version = std.mem.span(info.pszVersion.?),
+            .release = std.mem.span(info.pszRelease.?),
+            .arch = std.mem.span(info.pszArch.?),
+        }, metadata))
+    {
+        common.log(LOG_ERR, "rpm file (%s) identity does not match selected package\n", .{path.?});
+        return ERROR_TDNF_RPM_CHECK;
+    }
 
     if (ts.pCachedRpmsArray != null and conf.pszCacheDir != null and
         std.mem.startsWith(u8, std.mem.span(path.?), std.mem.span(conf.pszCacheDir.?)))
@@ -1174,6 +1281,16 @@ pub fn executeFixedOrder(
     tdnf: *abi.Tdnf,
     transaction: FixedOrderTransaction,
 ) FixedOrderExecutionError!void {
+    return executeFixedOrderObserved(tdnf, transaction, null);
+}
+
+/// Execute a preflighted transaction and report each input item only after
+/// that item's native mutation path has returned successfully.
+pub fn executeFixedOrderObserved(
+    tdnf: *abi.Tdnf,
+    transaction: FixedOrderTransaction,
+    observer: ?FixedOrderExecutionObserver,
+) FixedOrderExecutionError!void {
     if (tdnf.pArgs == null or tdnf.pConf == null or tdnf.pRpmConfig == null)
         return error.InvalidContext;
     try validateFixedOrderInput(transaction);
@@ -1233,6 +1350,7 @@ pub fn executeFixedOrder(
 
     const ts = allocate(c.TDNFRPMTS) orelse return error.OutOfMemory;
     defer {
+        detachBorrowedFixedHandles(ts, transaction.items);
         freeItems(ts);
         free(ts);
     }
@@ -1266,10 +1384,12 @@ pub fn executeFixedOrder(
         }
 
         const package = fixedItemPackage(item).?;
-        var rpm_file: ?*c.tdnf_rpm_file =
+        var rpm_file: ?*c.tdnf_rpm_file = if (package.handle) |handle|
+            @ptrCast(@alignCast(handle))
+        else
             c.tdnf_rpm_file_open(package.path.ptr) orelse
-            return error.PackageOpenFailed;
-        var transferred = false;
+                return error.PackageOpenFailed;
+        var transferred = package.handle != null;
         defer if (!transferred) c.tdnf_rpm_file_close(rpm_file);
         var metadata = std.mem.zeroes(c.tdnf_rpm_file_metadata);
         if (c.tdnf_rpm_file_get_metadata(rpm_file, &metadata) != 0 or
@@ -1307,8 +1427,29 @@ pub fn executeFixedOrder(
         &plan,
         expected_items,
         &validation_failure,
+        observer,
     );
     if (rc != 0) return mapFixedExecutionError(rc, validation_failure);
+}
+
+fn detachBorrowedFixedHandles(
+    ts: *c.TDNFRPMTS,
+    items: []const FixedOrderItem,
+) void {
+    var current = ts.pTransactionItems;
+    while (current) |raw| {
+        const item: *c.TDNF_RPM_TS_ITEM = @ptrCast(raw);
+        current = item.pNext;
+        const handle = item.pRpmFile orelse continue;
+        for (items) |fixed| {
+            const package = fixedItemPackage(fixed) orelse continue;
+            const borrowed = package.handle orelse continue;
+            if (@intFromPtr(handle) == @intFromPtr(borrowed)) {
+                item.pRpmFile = null;
+                break;
+            }
+        }
+    }
 }
 
 fn reportProblems(ts: *c.TDNFRPMTS) void {
@@ -3044,6 +3185,7 @@ fn runTransactionNativeImpl(
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
     expected_items: ?[]const FixedOrderExpectedItem,
     validation_failure: ?*FixedOrderValidationFailure,
+    observer: ?FixedOrderExecutionObserver,
 ) u32 {
     const ts = ts_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -3150,7 +3292,11 @@ fn runTransactionNativeImpl(
     }
     var redirect: c_int = 0;
     if (tdnf.pArgs.?.nJsonOutput != 0) {
-        script_fd = dup(2);
+        script_fd = std.c.fcntl(
+            2,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 0),
+        );
         if (script_fd < 0) return ERROR_TDNF_RPMTS_FDDUP_FAILED;
         redirect = 1;
     }
@@ -3235,6 +3381,7 @@ fn runTransactionNativeImpl(
             else => errors.ERROR_TDNF_INVALID_PARAMETER,
         };
         if (rc != 0) return rc;
+        if (observer) |value| value.completed(input_index);
     }
     rc = runTransactionScriptletPhase(
         plan,
@@ -3281,12 +3428,130 @@ fn runTransactionNativeImpl(
     );
 }
 
+const PinnedTransactionTarget = struct {
+    tdnf: *abi.Tdnf,
+    args: *abi.CmdArgs,
+    guard: transaction_lock.Guard,
+    pinned_root: [:0]u8,
+    original_config: ?*anyopaque,
+    original_install_root: ?[*:0]u8,
+    bound: bool = false,
+
+    fn init(
+        tdnf: *abi.Tdnf,
+        acquired_guard: transaction_lock.Guard,
+    ) transaction_lock.Error!PinnedTransactionTarget {
+        var guard = acquired_guard;
+        errdefer guard.deinit();
+        const args = tdnf.pArgs orelse return error.InvalidTarget;
+        const pinned_root = allocator.dupeZ(
+            u8,
+            guard.config().installRoot(),
+        ) catch return error.OutOfMemory;
+        errdefer allocator.free(pinned_root);
+        const original_config = tdnf.pRpmConfig;
+        const original_install_root = args.pszInstallRoot;
+        return .{
+            .tdnf = tdnf,
+            .args = args,
+            .guard = guard,
+            .pinned_root = pinned_root,
+            .original_config = original_config,
+            .original_install_root = original_install_root,
+        };
+    }
+
+    fn bind(self: *PinnedTransactionTarget) void {
+        std.debug.assert(!self.bound);
+        self.tdnf.pRpmConfig = @ptrCast(self.guard.config());
+        self.args.pszInstallRoot = @constCast(self.pinned_root.ptr);
+        self.bound = true;
+    }
+
+    fn deinit(self: *PinnedTransactionTarget) void {
+        if (self.bound) {
+            self.args.pszInstallRoot = self.original_install_root;
+            self.tdnf.pRpmConfig = self.original_config;
+            self.bound = false;
+        }
+        allocator.free(self.pinned_root);
+        self.guard.deinit();
+    }
+};
+
+fn runWithAcquiredTransactionTarget(
+    tdnf: *abi.Tdnf,
+    acquired_guard: transaction_lock.Guard,
+    context: anytype,
+    operation: anytype,
+) u32 {
+    var target = PinnedTransactionTarget.init(
+        tdnf,
+        acquired_guard,
+    ) catch |err| return transactionLockFailure(err);
+    defer target.deinit();
+    target.bind();
+    return operation(tdnf, context);
+}
+
+fn runWithTransactionTarget(
+    tdnf: *abi.Tdnf,
+    context: anytype,
+    operation: anytype,
+) u32 {
+    const config: *txn_config.TxnConfig = @ptrCast(@alignCast(
+        tdnf.pRpmConfig orelse
+            return transactionLockFailure(error.InvalidTarget),
+    ));
+    if (config.targetLockHeld()) {
+        return operation(tdnf, context);
+    }
+    const guard = acquireTransactionTarget(tdnf) catch |err|
+        return transactionLockFailure(err);
+    return runWithAcquiredTransactionTarget(
+        tdnf,
+        guard,
+        context,
+        operation,
+    );
+}
+
+const NativeRunContext = struct {
+    ts: ?*c.TDNFRPMTS,
+    plan: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+};
+
+fn runTransactionNativeLocked(
+    tdnf: *abi.Tdnf,
+    context: *const NativeRunContext,
+) u32 {
+    return runTransactionNativeUnlocked(context.ts, tdnf, context.plan);
+}
+
 fn runTransactionNative(
     ts_opt: ?*c.TDNFRPMTS,
     tdnf_opt: ?*abi.Tdnf,
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32 {
-    return runTransactionNativeImpl(ts_opt, tdnf_opt, plan_opt, null, null);
+    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (tdnf.pArgs == null) return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const context = NativeRunContext{
+        .ts = ts_opt,
+        .plan = plan_opt,
+    };
+    return runWithTransactionTarget(
+        tdnf,
+        &context,
+        runTransactionNativeLocked,
+    );
+}
+
+fn runTransactionNativeUnlocked(
+    ts_opt: ?*c.TDNFRPMTS,
+    tdnf_opt: ?*abi.Tdnf,
+    plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
+) callconv(.c) u32 {
+    return runTransactionNativeImpl(ts_opt, tdnf_opt, plan_opt, null, null, null);
 }
 
 fn orderAndCheck(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
@@ -3385,9 +3650,28 @@ fn runTransaction(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
         ts,
         tdnf,
         orderAndCheck,
-        runTransactionNative,
+        runTransactionNativeUnlocked,
         reportProblems,
     );
+}
+
+fn acquireTransactionTarget(
+    tdnf: *abi.Tdnf,
+) transaction_lock.Error!transaction_lock.Guard {
+    const config = tdnf.pRpmConfig orelse return error.InvalidTarget;
+    return transaction_lock.acquire(
+        allocator,
+        @ptrCast(@alignCast(config)),
+    );
+}
+
+fn transactionLockFailure(err: transaction_lock.Error) u32 {
+    common.log(
+        LOG_ERR,
+        "Unable to lock transaction target: %s\n",
+        .{@errorName(err)},
+    );
+    return ERROR_TDNF_TRANSACTION_FAILED;
 }
 
 fn runNormalTransactionWith(
@@ -3414,17 +3698,9 @@ fn runWithHistory(
     history: *HistoryCtx,
     command_line: ?[*:0]const u8,
 ) u32 {
-    var data_dir: ?[*:0]u8 = null;
-    defer free(data_dir);
-    var rc = common.joinPath(&data_dir, &.{ tdnf.pArgs.?.pszInstallRoot, tdnf.pConf.?.pszPersistDir });
-    if (rc == 0 and data_dir != null) {
-        rc = TDNFUtilsMakeDirs(data_dir);
-        if (rc == errors.ERROR_TDNF_ALREADY_EXISTS) rc = 0;
-    }
-    if (rc != 0) return rc;
     if (history_sync_config(history, tdnf.pRpmConfig) != 0)
         return errors.ERROR_TDNF_HISTORY_ERROR;
-    rc = runTransaction(ts, tdnf);
+    const rc = runTransaction(ts, tdnf);
     if (rc != 0) return rc;
     if (history_update_state_config(history, tdnf.pRpmConfig, command_line) != 0)
         return errors.ERROR_TDNF_HISTORY_ERROR;
@@ -3437,14 +3713,10 @@ fn buildCommandLine(args: *abi.CmdArgs, output: *?[*:0]u8) u32 {
     return TDNFJoinArrayToString(args.ppszArgv.? + 1, " ", args.nArgc, output);
 }
 
-fn rpmExecTransaction(
-    tdnf_opt: ?*abi.Tdnf,
-    solved_opt: ?*c.TDNF_SOLVED_PKG_INFO,
-) callconv(.c) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const solved = solved_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf.pArgs == null or tdnf.pConf == null)
-        return errors.ERROR_TDNF_INVALID_PARAMETER;
+fn rpmExecTransactionLocked(
+    tdnf: *abi.Tdnf,
+    solved: *c.TDNF_SOLVED_PKG_INFO,
+) u32 {
     const created = createTransaction(tdnf, solved);
     const ts = created[1] orelse return created[0];
     defer cleanupTransaction(tdnf, ts);
@@ -3467,16 +3739,31 @@ fn rpmExecTransaction(
     return TDNFMarkAutoInstalled(tdnf, history, solved, 0);
 }
 
-fn rpmExecHistoryTransaction(
+fn rpmExecTransaction(
     tdnf_opt: ?*abi.Tdnf,
     solved_opt: ?*c.TDNF_SOLVED_PKG_INFO,
-    history_args_opt: ?*c.TDNF_HISTORY_ARGS,
 ) callconv(.c) u32 {
     const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const solved = solved_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const history_args = history_args_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (tdnf.pArgs == null or tdnf.pConf == null)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
+    // Preparation can import rpmdb keys or extract source RPMs. Pin and lock
+    // the target before createTransaction so those mutations share the same
+    // lifetime as native execution and history updates.
+    return runWithTransactionTarget(tdnf, solved, rpmExecTransactionLocked);
+}
+
+const HistoryTransactionRunContext = struct {
+    solved: *c.TDNF_SOLVED_PKG_INFO,
+    history_args: *c.TDNF_HISTORY_ARGS,
+};
+
+fn rpmExecHistoryTransactionLocked(
+    tdnf: *abi.Tdnf,
+    context: *const HistoryTransactionRunContext,
+) u32 {
+    const solved = context.solved;
+    const history_args = context.history_args;
     const created = createTransaction(tdnf, solved);
     const ts = created[1] orelse return created[0];
     defer cleanupTransaction(tdnf, ts);
@@ -3511,6 +3798,27 @@ fn rpmExecHistoryTransaction(
         else => 0,
     };
     return if (history_rc == 0) 0 else errors.ERROR_TDNF_HISTORY_ERROR;
+}
+
+fn rpmExecHistoryTransaction(
+    tdnf_opt: ?*abi.Tdnf,
+    solved_opt: ?*c.TDNF_SOLVED_PKG_INFO,
+    history_args_opt: ?*c.TDNF_HISTORY_ARGS,
+) callconv(.c) u32 {
+    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const solved = solved_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const history_args = history_args_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (tdnf.pArgs == null or tdnf.pConf == null)
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const context = HistoryTransactionRunContext{
+        .solved = solved,
+        .history_args = history_args,
+    };
+    return runWithTransactionTarget(
+        tdnf,
+        &context,
+        rpmExecHistoryTransactionLocked,
+    );
 }
 
 comptime {
@@ -3782,6 +4090,59 @@ test "fixed order executor compiles against the native engine" {
     ));
 }
 
+test "fixed executor accepts explicit zero for omitted RPM epoch" {
+    const rpmpkg = @import("rpm_package_test");
+    const blob = try rpmpkg.makeMinimalHeaderForTest(
+        std.testing.allocator,
+        "epochless",
+        "1",
+        "1",
+        "noarch",
+    );
+    defer std.testing.allocator.free(blob);
+    const identity = FixedOrderPackageIdentity{
+        .name = "epochless",
+        .epoch = 0,
+        .version = "1",
+        .release = "1",
+        .arch = "noarch",
+    };
+    try std.testing.expect(identityMatchesHeader(identity, blob));
+    const metadata = c.tdnf_rpm_file_metadata{
+        .name = "epochless",
+        .version = "1",
+        .release = "1",
+        .arch = "noarch",
+        .epoch = 0,
+        .has_epoch = 0,
+    };
+    try std.testing.expect(identityMatchesMetadata(identity, metadata));
+}
+
+test "selected package identity rejects substituted RPM metadata" {
+    const identity = FixedOrderPackageIdentity{
+        .name = "selected",
+        .epoch = 2,
+        .version = "3",
+        .release = "4",
+        .arch = "x86_64",
+    };
+    var metadata = c.tdnf_rpm_file_metadata{
+        .name = "selected",
+        .version = "3",
+        .release = "4",
+        .arch = "x86_64",
+        .epoch = 2,
+        .has_epoch = 1,
+    };
+    try std.testing.expect(identityMatchesMetadata(identity, metadata));
+    metadata.name = "substituted";
+    try std.testing.expect(!identityMatchesMetadata(identity, metadata));
+    metadata.name = "selected";
+    metadata.arch = "aarch64";
+    try std.testing.expect(!identityMatchesMetadata(identity, metadata));
+}
+
 test "auxiliary prior can be shared across replacement action kinds" {
     const old_a = FixedOrderPackageIdentity{
         .name = "a",
@@ -3841,6 +4202,58 @@ test "auxiliary prior can be shared across replacement action kinds" {
     try validateFixedOrderInput(.{
         .items = &items,
         .order = &.{ 0, 1 },
+    });
+}
+
+test "shared prior cannot wait for a later primary before failure reporting" {
+    const prior = FixedOrderRpmDbRow{
+        .hnum = 49,
+        .identity = .{
+            .name = "retired",
+            .epoch = null,
+            .version = "1",
+            .release = "1",
+            .arch = "noarch",
+        },
+    };
+    const items = [_]FixedOrderItem{
+        .{ .obsolete = .{
+            .package = .{
+                .path = "/bundle/replacement.rpm",
+                .identity = .{
+                    .name = "replacement",
+                    .epoch = null,
+                    .version = "1",
+                    .release = "1",
+                    .arch = "noarch",
+                },
+            },
+            .priors = &.{prior},
+        } },
+        .{ .upgrade = .{
+            .package = .{
+                .path = "/bundle/retired.rpm",
+                .identity = .{
+                    .name = "retired",
+                    .epoch = null,
+                    .version = "2",
+                    .release = "1",
+                    .arch = "noarch",
+                },
+            },
+            .priors = &.{prior},
+        } },
+    };
+    try std.testing.expectError(
+        error.InvalidItem,
+        validateFixedOrderInput(.{
+            .items = &items,
+            .order = &.{ 0, 1 },
+        }),
+    );
+    try validateFixedOrderInput(.{
+        .items = &items,
+        .order = &.{ 1, 0 },
     });
 }
 
@@ -4205,4 +4618,186 @@ test "normal transaction still prepares order and checks before execution" {
         ),
     );
     try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, &Probe.sequence);
+}
+
+test "normal preparation mutation probes hold the replay target lock" {
+    const Probe = struct {
+        replay_config: *const txn_config.TxnConfig,
+        lock_directory: []const u8,
+        key_import_blocked: bool = false,
+        source_extract_blocked: bool = false,
+        pinned_config_seen: bool = false,
+        failed: bool = false,
+
+        fn observe(self: *@This(), key_import: bool) void {
+            var contender = transaction_lock.tryAcquireInDirectory(
+                std.testing.allocator,
+                self.replay_config,
+                self.lock_directory,
+            ) catch |err| {
+                if (err != error.WouldBlock) {
+                    self.failed = true;
+                } else if (key_import) {
+                    self.key_import_blocked = true;
+                } else {
+                    self.source_extract_blocked = true;
+                }
+                return;
+            };
+            contender.deinit();
+            self.failed = true;
+        }
+
+        fn run(tdnf: *abi.Tdnf, self: *@This()) u32 {
+            const raw_config = tdnf.pRpmConfig orelse {
+                self.failed = true;
+                return 1;
+            };
+            const config: *const txn_config.TxnConfig =
+                @ptrCast(@alignCast(raw_config));
+            self.pinned_config_seen = config.pinnedInstallRootFd() != null;
+            self.observe(true);
+            self.observe(false);
+            return @intFromBool(self.failed);
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "locks");
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const lock_directory = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "locks" },
+    );
+    defer std.testing.allocator.free(lock_directory);
+    const lock_directory_z = try std.testing.allocator.dupeZ(
+        u8,
+        lock_directory,
+    );
+    defer std.testing.allocator.free(lock_directory_z);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.chmod(lock_directory_z.ptr, 0o700),
+    );
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+
+    var normal_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer normal_config.deinit();
+    var replay_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer replay_config.deinit();
+    try replay_config.setMacro(.dbpath, "/var/lib/replay-rpm");
+    const acquired = try transaction_lock.acquireInDirectory(
+        std.testing.allocator,
+        &normal_config,
+        lock_directory,
+        true,
+    );
+
+    var args = abi.CmdArgs{ .pszInstallRoot = root_z.ptr };
+    var conf = abi.Conf{};
+    var tdnf = abi.Tdnf{
+        .pArgs = &args,
+        .pConf = &conf,
+        .pRpmConfig = @ptrCast(&normal_config),
+    };
+    const original_config = tdnf.pRpmConfig;
+    const original_root = args.pszInstallRoot;
+    var probe = Probe{
+        .replay_config = &replay_config,
+        .lock_directory = lock_directory,
+    };
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        runWithAcquiredTransactionTarget(
+            &tdnf,
+            acquired,
+            &probe,
+            Probe.run,
+        ),
+    );
+    try std.testing.expect(probe.pinned_config_seen);
+    try std.testing.expect(probe.key_import_blocked);
+    try std.testing.expect(probe.source_extract_blocked);
+    try std.testing.expect(!probe.failed);
+    try std.testing.expectEqual(original_config, tdnf.pRpmConfig);
+    try std.testing.expectEqual(original_root, args.pszInstallRoot);
+}
+
+test "normal target binds config only from stable caller storage" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "locks");
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const lock_directory = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "locks" },
+    );
+    defer std.testing.allocator.free(lock_directory);
+    const lock_directory_z = try std.testing.allocator.dupeZ(
+        u8,
+        lock_directory,
+    );
+    defer std.testing.allocator.free(lock_directory_z);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.chmod(lock_directory_z.ptr, 0o700),
+    );
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+
+    var config = try txn_config.TxnConfig.init(std.testing.allocator, root);
+    defer config.deinit();
+    const acquired = try transaction_lock.acquireInDirectory(
+        std.testing.allocator,
+        &config,
+        lock_directory,
+        true,
+    );
+    var args = abi.CmdArgs{ .pszInstallRoot = root_z.ptr };
+    var tdnf = abi.Tdnf{
+        .pArgs = &args,
+        .pRpmConfig = @ptrCast(&config),
+    };
+    const original_config = tdnf.pRpmConfig;
+    var target = try PinnedTransactionTarget.init(&tdnf, acquired);
+    defer target.deinit();
+
+    try std.testing.expectEqual(original_config, tdnf.pRpmConfig);
+    target.bind();
+    try std.testing.expectEqual(
+        @as(?*anyopaque, @ptrCast(&target.guard.pinned_config)),
+        tdnf.pRpmConfig,
+    );
+    try std.testing.expectEqual(
+        @as([*:0]u8, @constCast(target.pinned_root.ptr)),
+        args.pszInstallRoot,
+    );
 }
