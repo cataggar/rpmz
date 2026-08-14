@@ -320,7 +320,48 @@ fn openPrivateLockDirectory(path: []const u8) Error!c_int {
     return current;
 }
 
-fn openRootLockParent() Error!c_int {
+fn openDedicatedLockDirectoryAt(
+    parent_fd: c_int,
+    name: [*:0]const u8,
+    owner_uid: u32,
+    create_missing: bool,
+) Error!c_int {
+    var directory_fd = std.c.openat(parent_fd, name, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    var created = false;
+    if (directory_fd < 0 and
+        std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+    {
+        if (!create_missing) return error.LockFailed;
+        if (std.c.mkdirat(parent_fd, name, 0o755) == 0) {
+            created = true;
+        } else if (std.c._errno().* != @intFromEnum(std.posix.E.EXIST)) {
+            return error.LockFailed;
+        }
+        directory_fd = std.c.openat(parent_fd, name, .{
+            .ACCMODE = .RDONLY,
+            .DIRECTORY = true,
+            .CLOEXEC = true,
+            .NOFOLLOW = true,
+        });
+    }
+    if (directory_fd < 0) return error.LockFailed;
+    errdefer _ = std.c.close(directory_fd);
+    if (created and std.c.fchmod(directory_fd, 0o755) != 0)
+        return error.LockFailed;
+    const stat = try directoryStat(directory_fd);
+    if (stat.uid != owner_uid or (stat.mode & 0o7777) != 0o755)
+        return error.LockFailed;
+    return directory_fd;
+}
+
+fn openRootLockParentAt(path: []const u8) Error!c_int {
+    if (path.len < 2 or path[0] != '/' or path[path.len - 1] == '/')
+        return error.LockFailed;
     const root_uid = systemRootUid();
     var current = std.c.open("/", .{
         .ACCMODE = .RDONLY,
@@ -331,17 +372,25 @@ fn openRootLockParent() Error!c_int {
     if (current < 0) return error.LockFailed;
     errdefer _ = std.c.close(current);
 
-    var components = std.mem.splitScalar(
-        u8,
-        default_lock_parent[1..],
-        '/',
-    );
-    while (components.next()) |component| {
+    var components = std.mem.splitScalar(u8, path[1..], '/');
+    var component = components.next() orelse return error.LockFailed;
+    while (true) {
         if (!safeComponent(component)) return error.LockFailed;
         var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
         @memcpy(name_buffer[0..component.len], component);
         name_buffer[component.len] = 0;
         const name: [*:0]const u8 = @ptrCast(&name_buffer);
+        const next_component = components.next();
+        if (next_component == null) {
+            const next = try openDedicatedLockDirectoryAt(
+                current,
+                name,
+                root_uid,
+                privilegedRoot(),
+            );
+            _ = std.c.close(current);
+            return next;
+        }
         var next = std.c.openat(current, name, .{
             .ACCMODE = .RDONLY,
             .DIRECTORY = true,
@@ -354,7 +403,9 @@ fn openRootLockParent() Error!c_int {
             if (!privilegedRoot()) return error.LockFailed;
             if (std.c.mkdirat(current, name, 0o755) != 0 and
                 std.c._errno().* != @intFromEnum(std.posix.E.EXIST))
+            {
                 return error.LockFailed;
+            }
             next = std.c.openat(current, name, .{
                 .ACCMODE = .RDONLY,
                 .DIRECTORY = true,
@@ -373,11 +424,12 @@ fn openRootLockParent() Error!c_int {
         }
         _ = std.c.close(current);
         current = next;
+        component = next_component.?;
     }
-    const parent_stat = try directoryStat(current);
-    if ((parent_stat.mode & 0o7777) != 0o755)
-        return error.LockFailed;
-    return current;
+}
+
+fn openRootLockParent() Error!c_int {
+    return openRootLockParentAt(default_lock_parent);
 }
 
 fn ownerDirectoryName(
@@ -854,6 +906,145 @@ test "default lock parent is root owned and not writable by local users" {
     try std.testing.expectEqual(systemRootUid(), stat.uid);
     try std.testing.expectEqual(@as(u16, 0o755), stat.mode & 0o7777);
     try std.testing.expectEqual(@as(u16, 0), stat.mode & 0o022);
+}
+
+test "new root lock parent works with restrictive umask" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    const target = try fdTarget(root_fd);
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const base_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(base_fd >= 0);
+    defer _ = std.c.close(base_fd);
+    const owner_uid: u32 = @intCast(std.c.geteuid());
+
+    const old_mask = std.c.umask(@as(std.c.mode_t, 0o077));
+    defer _ = std.c.umask(old_mask);
+
+    const first_directory_fd = try openDedicatedLockDirectoryAt(
+        base_fd,
+        "locks",
+        owner_uid,
+        true,
+    );
+    const first_stat = try directoryStat(first_directory_fd);
+    try std.testing.expectEqual(
+        @as(u16, 0o755),
+        first_stat.mode & 0o7777,
+    );
+    const first_lock_fd = try openProtectedLockAt(
+        std.testing.allocator,
+        first_directory_fd,
+        target.identity,
+        target.owner_uid,
+        target.owner_gid,
+        false,
+    );
+    _ = flock(first_lock_fd, lock_unlock);
+    _ = std.c.close(first_lock_fd);
+    _ = std.c.close(first_directory_fd);
+
+    const second_directory_fd = try openDedicatedLockDirectoryAt(
+        base_fd,
+        "locks",
+        owner_uid,
+        true,
+    );
+    defer _ = std.c.close(second_directory_fd);
+    const second_lock_fd = try openProtectedLockAt(
+        std.testing.allocator,
+        second_directory_fd,
+        target.identity,
+        target.owner_uid,
+        target.owner_gid,
+        false,
+    );
+    _ = flock(second_lock_fd, lock_unlock);
+    _ = std.c.close(second_lock_fd);
+}
+
+test "pre-existing root lock parent with wrong mode fails closed" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "locks");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const lock_directory = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "locks" },
+    );
+    defer std.testing.allocator.free(lock_directory);
+    const lock_directory_z = try std.testing.allocator.dupeZ(
+        u8,
+        lock_directory,
+    );
+    defer std.testing.allocator.free(lock_directory_z);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.chmod(lock_directory_z.ptr, 0o700),
+    );
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const base_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(base_fd >= 0);
+    defer _ = std.c.close(base_fd);
+
+    try std.testing.expectError(
+        error.LockFailed,
+        openDedicatedLockDirectoryAt(
+            base_fd,
+            "locks",
+            @intCast(std.c.geteuid()),
+            true,
+        ),
+    );
+    var stat = std.mem.zeroes(std.os.linux.Statx);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.statx(
+            std.os.linux.AT.FDCWD,
+            lock_directory_z.ptr,
+            std.os.linux.AT.SYMLINK_NOFOLLOW,
+            std.os.linux.STATX.BASIC_STATS,
+            &stat,
+        ),
+    );
+    try std.testing.expectEqual(@as(u16, 0o700), stat.mode & 0o7777);
 }
 
 fn protectTestLockDirectory(path: []const u8) !void {
