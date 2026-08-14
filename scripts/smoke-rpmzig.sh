@@ -13,7 +13,7 @@ WORK_DIR="${PREFIX}/.rpmzig-smoke.$$"
 TOP_DIR="${WORK_DIR}/rpmbuild"
 DB_ROOT="${WORK_DIR}/root"
 KEY_ROOT="${WORK_DIR}/key-root"
-GNUPG_ROOT="${WORK_DIR}/gnupg"
+GNUPG_ROOT="${TDNF_SMOKE_GNUPGHOME:-${WORK_DIR}/gnupg}"
 RPM_TMP="${WORK_DIR}/rpm-tmp"
 
 cleanup() {

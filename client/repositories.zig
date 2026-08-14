@@ -8,14 +8,19 @@ const std = @import("std");
 const common = @import("tdnf_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
+const builtin_plugins = @import("builtin_plugins");
 const client_download = @import("client_download");
+const client_plugins = @import("client_plugins");
 const errors = @import("tdnf_error");
+const plugin_metadata = @import("plugin_metadata");
 const txn_config = @import("rpm_txn_config");
 const uri_sanitize = @import("uri_sanitize");
 
 const CnfNode = abi.CnfNode;
 const Conf = abi.Conf;
 const DownloadToFdRequest = client_download.DownloadToFdRequest;
+const PinnedDirectory = plugin_metadata.PinnedDirectory;
+const PinnedFile = plugin_metadata.PinnedFile;
 const RepoData = abi.RepoData;
 const RepoMetadata = abi.RepoMetadata;
 const RepoMdRecord = abi.RepoMdRecord;
@@ -185,10 +190,21 @@ extern fn mknod([*:0]const u8, std.c.mode_t, std.c.dev_t) c_int;
 extern fn fnmatch([*:0]const u8, [*:0]const u8, c_int) c_int;
 extern fn isatty(c_int) c_int;
 extern fn time(?*std.c.time_t) std.c.time_t;
+extern fn getenv([*:0]const u8) ?[*:0]u8;
+extern fn setenv([*:0]const u8, [*:0]const u8, c_int) c_int;
+extern fn unsetenv([*:0]const u8) c_int;
 
 extern fn BuiltinPluginsRepoConfig(?*Tdnf, ?*const CnfNode) u32;
-extern fn BuiltinPluginsRepoMDDownloadStart(?*Tdnf, ?[*:0]const u8, ?[*:0]const u8) u32;
-extern fn BuiltinPluginsRepoMDDownloadEnd(?*Tdnf, ?[*:0]const u8, ?[*:0]const u8) u32;
+extern fn BuiltinPluginsRepoMDDownloadStart(
+    ?*Tdnf,
+    ?[*:0]const u8,
+    ?*const PinnedDirectory,
+) u32;
+extern fn BuiltinPluginsRepoMDDownloadEnd(
+    ?*Tdnf,
+    ?[*:0]const u8,
+    ?*const PinnedFile,
+) u32;
 extern fn TDNFRepoMdCreateRepoCacheName(?[*:0]const u8, ?[*:0]const u8, *?[*:0]u8) u32;
 extern fn TDNFRepoMdCalculateCookieForFile(?[*:0]const u8, ?[*]u8) u32;
 extern fn TDNFRepoMdCalculateCookieForFd(c_int, ?[*]u8) u32;
@@ -703,6 +719,27 @@ fn pinPathForHandle(
         }
     }
     return pinPath(path_z, output);
+}
+
+fn openPinnedDirectoryForHandle(
+    handle: ?*Tdnf,
+    path_z: [*:0]const u8,
+    output: *PinnedDirectory,
+) u32 {
+    output.* = .{};
+    var pinned: PinnedPath = undefined;
+    const result = pinPathForHandle(handle, path_z, &pinned);
+    if (result != 0) return result;
+    defer pinned.deinit();
+    const fd = std.c.openat(pinned.parent_fd, pinned.nameZ(), .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    if (fd < 0) return systemError();
+    output.fd = fd;
+    return 0;
 }
 
 fn statPinned(path_z: [*:0]const u8, output: *Stat) u32 {
@@ -1795,56 +1832,87 @@ fn randomTempName(buffer: *[96]u8) u32 {
     return 0;
 }
 
-fn secureDownload(
+fn safePinnedName(name_z: [*:0]const u8) bool {
+    const name = std.mem.span(name_z);
+    return name.len != 0 and
+        name.len <= std.fs.max_name_bytes and
+        !std.mem.eql(u8, name, ".") and
+        !std.mem.eql(u8, name, "..") and
+        std.mem.indexOfScalar(u8, name, '/') == null;
+}
+
+fn statPinnedRegularFd(fd: c_int, output: *Stat) u32 {
+    if (std.c.statx(
+        fd,
+        "",
+        std.os.linux.AT.EMPTY_PATH,
+        std.os.linux.STATX.BASIC_STATS,
+        output,
+    ) != 0) return systemError();
+    if (output.mode & mode_type_mask != mode_regular or output.nlink != 1)
+        return errors.ERROR_TDNF_INVALID_REPO_FILE;
+    return 0;
+}
+
+fn secureDownloadAt(
     handle: *Tdnf,
     repo: *RepoData,
     source: [*:0]const u8,
-    destination: [*:0]const u8,
+    destination: *const PinnedDirectory,
+    destination_name: [*:0]const u8,
     progress_text: ?[*:0]const u8,
     from_repo: bool,
+    output: *PinnedFile,
 ) u32 {
-    var pinned: PinnedPath = undefined;
-    var result = pinPathForHandle(handle, destination, &pinned);
-    if (result != 0) return result;
-    defer pinned.deinit();
+    output.* = .{};
+    if (destination.fd < 0 or !safePinnedName(destination_name))
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
 
     var destination_stat = std.mem.zeroes(Stat);
     if (std.c.statx(
-        pinned.parent_fd,
-        pinned.nameZ(),
+        destination.fd,
+        destination_name,
         at_symlink_nofollow,
-        .{ .TYPE = true },
+        .{ .TYPE = true, .NLINK = true },
         &destination_stat,
     ) == 0) {
-        if (destination_stat.mode & mode_type_mask != mode_regular)
+        if (destination_stat.mode & mode_type_mask != mode_regular or
+            destination_stat.nlink != 1)
+        {
             return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+        }
     } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
         return systemError();
     }
 
     var temp_name: [96]u8 = undefined;
     var temp_fd: c_int = -1;
+    var temp_named = false;
+    var result: u32 = 0;
     var attempt: usize = 0;
     while (attempt < download_temp_attempts) : (attempt += 1) {
         result = randomTempName(&temp_name);
         if (result != 0) return result;
         const temp_name_z: [*:0]const u8 = @ptrCast(&temp_name);
-        temp_fd = std.c.openat(pinned.parent_fd, temp_name_z, .{
-            .ACCMODE = .WRONLY,
+        temp_fd = std.c.openat(destination.fd, temp_name_z, .{
+            .ACCMODE = .RDWR,
             .CREAT = true,
             .EXCL = true,
             .CLOEXEC = true,
             .NOFOLLOW = true,
         }, @as(c_uint, 0o600));
-        if (temp_fd >= 0) break;
+        if (temp_fd >= 0) {
+            temp_named = true;
+            break;
+        }
         if (std.c._errno().* != @intFromEnum(std.c.E.EXIST))
             return systemError();
     }
     if (temp_fd < 0) return systemErrorFrom(@intFromEnum(std.c.E.EXIST));
     const temp_name_z: [*:0]const u8 = @ptrCast(&temp_name);
     defer {
-        _ = std.c.close(temp_fd);
-        _ = std.c.unlinkat(pinned.parent_fd, temp_name_z, 0);
+        if (temp_fd >= 0) _ = std.c.close(temp_fd);
+        if (temp_named) _ = std.c.unlinkat(destination.fd, temp_name_z, 0);
     }
 
     result = if (from_repo)
@@ -1858,25 +1926,113 @@ fn secureDownload(
 
     destination_stat = std.mem.zeroes(Stat);
     if (std.c.statx(
-        pinned.parent_fd,
-        pinned.nameZ(),
+        destination.fd,
+        destination_name,
         at_symlink_nofollow,
-        .{ .TYPE = true },
+        .{ .TYPE = true, .NLINK = true },
         &destination_stat,
     ) == 0) {
-        if (destination_stat.mode & mode_type_mask != mode_regular)
+        if (destination_stat.mode & mode_type_mask != mode_regular or
+            destination_stat.nlink != 1)
+        {
             return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+        }
     } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
         return systemError();
     }
     if (std.c.renameat(
-        pinned.parent_fd,
+        destination.fd,
         temp_name_z,
-        pinned.parent_fd,
-        pinned.nameZ(),
+        destination.fd,
+        destination_name,
     ) != 0) return systemError();
+    temp_named = false;
+    var downloaded_stat = std.mem.zeroes(Stat);
+    var named_stat = std.mem.zeroes(Stat);
+    result = statPinnedRegularFd(temp_fd, &downloaded_stat);
+    if (result != 0) return result;
+    if (std.c.statx(
+        destination.fd,
+        destination_name,
+        at_symlink_nofollow,
+        .{ .TYPE = true, .INO = true, .NLINK = true },
+        &named_stat,
+    ) != 0 or
+        named_stat.mode & mode_type_mask != mode_regular or
+        named_stat.nlink != 1 or
+        !sameFile(downloaded_stat, named_stat))
+    {
+        return errors.ERROR_TDNF_INVALID_REPO_FILE;
+    }
     // The rename is committed; durability failure is reported without rollback.
-    return syncFd(pinned.parent_fd, .destination_directory);
+    result = syncFd(destination.fd, .destination_directory);
+    if (result != 0) return result;
+    output.* = .{
+        .fd = temp_fd,
+        .directory_fd = destination.fd,
+        .name = destination_name,
+    };
+    temp_fd = -1;
+    return 0;
+}
+
+fn secureDownload(
+    handle: *Tdnf,
+    repo: *RepoData,
+    source: [*:0]const u8,
+    destination: [*:0]const u8,
+    progress_text: ?[*:0]const u8,
+    from_repo: bool,
+) u32 {
+    var pinned: PinnedPath = undefined;
+    var result = pinPathForHandle(handle, destination, &pinned);
+    if (result != 0) return result;
+    defer pinned.deinit();
+    const directory = PinnedDirectory{ .fd = pinned.parent_fd };
+    var downloaded = PinnedFile{};
+    result = secureDownloadAt(
+        handle,
+        repo,
+        source,
+        &directory,
+        pinned.nameZ(),
+        progress_text,
+        from_repo,
+        &downloaded,
+    );
+    downloaded.close();
+    return result;
+}
+
+pub export fn TDNFDownloadFilePinned(
+    handle_opt: ?*Tdnf,
+    repo_opt: ?*RepoData,
+    source_opt: ?[*:0]const u8,
+    destination_opt: ?*const PinnedDirectory,
+    destination_name_opt: ?[*:0]const u8,
+    progress_text: ?[*:0]const u8,
+    from_repo: c_int,
+    output_opt: ?*PinnedFile,
+) u32 {
+    const output = output_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    output.* = .{};
+    const handle = handle_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const repo = repo_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const source = source_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const destination = destination_opt orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const destination_name = destination_name_opt orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    return secureDownloadAt(
+        handle,
+        repo,
+        source,
+        destination,
+        destination_name,
+        progress_text,
+        from_repo != 0,
+        output,
+    );
 }
 
 fn downloadRepoMdPart(
@@ -1932,6 +2088,69 @@ fn ensureRepoMdParts(handle: *Tdnf, repo: *RepoData, relative: *RepoMetadata, ou
     }
     output.* = metadata;
     return 0;
+}
+
+fn replacePinnedFileForHandle(
+    handle: ?*Tdnf,
+    source: *const PinnedFile,
+    destination: [*:0]const u8,
+) u32 {
+    const source_name = source.name orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (source.fd < 0 or source.directory_fd < 0 or
+        !safePinnedName(source_name) or destination[0] == 0)
+    {
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    var destination_path: PinnedPath = undefined;
+    const result = pinPathForHandle(handle, destination, &destination_path);
+    if (result != 0) return result;
+    defer destination_path.deinit();
+
+    var source_fd_stat = std.mem.zeroes(Stat);
+    var source_path_stat = std.mem.zeroes(Stat);
+    const source_result = statPinnedRegularFd(source.fd, &source_fd_stat);
+    if (source_result != 0) return source_result;
+    if (std.c.statx(
+        source.directory_fd,
+        source_name,
+        at_symlink_nofollow,
+        .{ .TYPE = true, .INO = true, .NLINK = true },
+        &source_path_stat,
+    ) != 0 or
+        source_path_stat.mode & mode_type_mask != mode_regular or
+        source_path_stat.nlink != 1 or
+        !sameFile(source_fd_stat, source_path_stat))
+    {
+        return errors.ERROR_TDNF_INVALID_REPO_FILE;
+    }
+
+    var destination_stat = std.mem.zeroes(Stat);
+    if (std.c.statx(
+        destination_path.parent_fd,
+        destination_path.nameZ(),
+        at_symlink_nofollow,
+        .{ .TYPE = true },
+        &destination_stat,
+    ) == 0) {
+        if (destination_stat.mode & mode_type_mask != mode_regular)
+            return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+    } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
+        return systemError();
+    }
+    if (std.c.renameat(
+        source.directory_fd,
+        source_name,
+        destination_path.parent_fd,
+        destination_path.nameZ(),
+    ) != 0) return systemError();
+    const source_sync = syncFd(source.directory_fd, .source_directory);
+    const destination_sync = syncFd(
+        destination_path.parent_fd,
+        .destination_directory,
+    );
+    if (source_sync != 0) return source_sync;
+    return destination_sync;
 }
 
 fn replaceFileForHandle(
@@ -2157,7 +2376,19 @@ fn getRepoMD(
     if (repo_data_dir[0] == 0 or handle.pArgs == null or handle.pConf == null)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
 
-    var result = BuiltinPluginsRepoMDDownloadStart(handle, repo.pszId, repo_data_dir);
+    var repo_data_directory = PinnedDirectory{};
+    var result = openPinnedDirectoryForHandle(
+        handle,
+        repo_data_dir,
+        &repo_data_directory,
+    );
+    if (result != 0) return result;
+    defer _ = std.c.close(repo_data_directory.fd);
+    result = BuiltinPluginsRepoMDDownloadStart(
+        handle,
+        repo.pszId,
+        &repo_data_directory,
+    );
     if (result != 0) return result;
 
     var mirror_file: ?[*:0]u8 = null;
@@ -2243,8 +2474,12 @@ fn getRepoMD(
             _ = TDNFRemoveTmpRepodataForRepo(handle, repo);
         freeString(&temp_dir);
     }
-    var temp_repomd: ?[*:0]u8 = null;
-    defer freeString(&temp_repomd);
+    var temp_directory = PinnedDirectory{};
+    defer {
+        if (temp_directory.fd >= 0) _ = std.c.close(temp_directory.fd);
+    }
+    var temp_repomd_file = PinnedFile{};
+    defer temp_repomd_file.close();
     var replace_repomd = false;
     var new_repomd = false;
     if (need_download and handle.pArgs.?.nCacheOnly == 0) {
@@ -2253,30 +2488,39 @@ fn getRepoMD(
         if (result != 0) return result;
         result = TDNFEnsureRepoCacheDir(handle, repo, "tmp");
         if (result != 0) return result;
-        result = joinPath(&temp_repomd, &.{ temp_dir, repomd_file_name });
+        result = openPinnedDirectoryForHandle(
+            handle,
+            temp_dir.?,
+            &temp_directory,
+        );
         if (result != 0) return result;
-        result = secureDownload(
+        result = secureDownloadAt(
             handle,
             repo,
             repomd_file_path,
-            temp_repomd.?,
+            &temp_directory,
+            repomd_file_name,
             repo.pszId,
             true,
+            &temp_repomd_file,
         );
         if (result != 0) return result;
         replace_repomd = true;
         if (old_cookie[0] != 0) {
             var new_cookie = [_]u8{0} ** cookie_len;
-            result = calculateCookieForPath(
-                handle,
-                temp_repomd.?,
+            result = TDNFRepoMdCalculateCookieForFd(
+                temp_repomd_file.fd,
                 &new_cookie,
             );
             if (result != 0) return result;
             replace_repomd = !std.mem.eql(u8, &old_cookie, &new_cookie);
         }
         new_repomd = true;
-        result = BuiltinPluginsRepoMDDownloadEnd(handle, repo.pszId, temp_repomd);
+        result = BuiltinPluginsRepoMDDownloadEnd(
+            handle,
+            repo.pszId,
+            &temp_repomd_file,
+        );
         if (result != 0) return result;
     }
     if (replace_repomd) {
@@ -2286,9 +2530,9 @@ fn getRepoMD(
         if (handle.pConf.?.nKeepCache == 0) _ = TDNFRemoveRpmCache(handle, repo);
         result = TDNFEnsureRepoCacheDir(handle, repo, "repodata");
         if (result != 0) return result;
-        result = replaceFileForHandle(
+        result = replacePinnedFileForHandle(
             handle,
-            temp_repomd.?,
+            &temp_repomd_file,
             repomd_path.?,
         );
         if (result != 0) return result;
@@ -2634,6 +2878,569 @@ test "repositories production: alternate-root mirror stats and snapshots stay pi
     try std.testing.expectEqualStrings(
         "target-package=1-1\n",
         snapshot_buffer[0..@intCast(snapshot_size)],
+    );
+}
+
+fn sha256Hex(bytes: []const u8) [64]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return std.fmt.bytesToHex(digest, .lower);
+}
+
+fn encodeSignatureArmor(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+) ![]u8 {
+    const encoded_len = std.base64.standard.Encoder.calcSize(bytes.len);
+    const encoded = try allocator.alloc(u8, encoded_len);
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, bytes);
+    var crc = std.hash.crc.Crc24Openpgp.init();
+    crc.update(bytes);
+    const value = crc.final();
+    const crc_bytes = [_]u8{
+        @truncate(value >> 16),
+        @truncate(value >> 8),
+        @truncate(value),
+    };
+    var crc_encoded: [4]u8 = undefined;
+    _ = std.base64.standard.Encoder.encode(&crc_encoded, &crc_bytes);
+    return std.fmt.allocPrint(
+        allocator,
+        "-----BEGIN PGP SIGNATURE-----\n\n{s}\n={s}\n" ++
+            "-----END PGP SIGNATURE-----\n",
+        .{ encoded, crc_encoded },
+    );
+}
+
+fn testDownloadPinned(
+    handle_opt: ?*Tdnf,
+    repo_opt: ?*RepoData,
+    source_opt: ?[*:0]const u8,
+    destination_opt: ?*const PinnedDirectory,
+    destination_name_opt: ?[*:0]const u8,
+    progress: ?[*:0]const u8,
+    from_repo: c_int,
+    output_opt: ?*PinnedFile,
+) u32 {
+    const handle = handle_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const repo = repo_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const source = source_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const destination = destination_opt orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const destination_name = destination_name_opt orelse
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const output = output_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    return secureDownloadAt(
+        handle,
+        repo,
+        source,
+        destination,
+        destination_name,
+        progress,
+        from_repo != 0,
+        output,
+    );
+}
+
+test "repositories production: alternate-root metalink validates pinned target metadata" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(io, &base_buffer)];
+    const root = try std.fs.path.join(std.testing.allocator, &.{ base, "root" });
+    defer std.testing.allocator.free(root);
+    const cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "host-cache" },
+    );
+    defer std.testing.allocator.free(cache);
+    const target_cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, cache[1..] },
+    );
+    defer std.testing.allocator.free(target_cache);
+    const host_repodata = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ cache, "repo", "repodata" },
+    );
+    defer std.testing.allocator.free(host_repodata);
+    const target_repodata = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_cache, "repo", "repodata" },
+    );
+    defer std.testing.allocator.free(target_repodata);
+    try cwd.createDirPath(io, host_repodata);
+    try cwd.createDirPath(io, target_repodata);
+
+    const target_bytes = "target repomd bytes";
+    const host_bytes = "conflicting host repomd bytes";
+    const digest = sha256Hex(target_bytes);
+    const target_metalink = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "<metalink xmlns=\"urn:ietf:params:xml:ns:metalink\">" ++
+            "<file name=\"repomd.xml\"><size>{d}</size>" ++
+            "<hash type=\"sha256\">{s}</hash>" ++
+            "<url priority=\"1\">https://target.invalid/repo/repodata/repomd.xml</url>" ++
+            "</file></metalink>",
+        .{ target_bytes.len, &digest },
+    );
+    defer std.testing.allocator.free(target_metalink);
+    const host_metalink = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "<metalink xmlns=\"urn:ietf:params:xml:ns:metalink\">" ++
+            "<file name=\"repomd.xml\"><size>{d}</size>" ++
+            "<hash type=\"sha256\">{s}</hash>" ++
+            "<url priority=\"1\">https://host.invalid/repo/repodata/repomd.xml</url>" ++
+            "</file></metalink>",
+        .{ target_bytes.len, &digest },
+    );
+    defer std.testing.allocator.free(host_metalink);
+    const target_repomd_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_repodata, repomd_file_name },
+    );
+    defer std.testing.allocator.free(target_repomd_path);
+    try cwd.writeFile(io, .{
+        .sub_path = target_repomd_path,
+        .data = target_bytes,
+    });
+    const host_repomd_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ host_repodata, repomd_file_name },
+    );
+    defer std.testing.allocator.free(host_repomd_path);
+    try cwd.writeFile(io, .{ .sub_path = host_repomd_path, .data = host_bytes });
+    const target_metalink_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_repodata, "metalink" },
+    );
+    defer std.testing.allocator.free(target_metalink_path);
+    const host_metalink_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ host_repodata, "metalink" },
+    );
+    defer std.testing.allocator.free(host_metalink_path);
+    const remote_metalink_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "remote-metalink.xml" },
+    );
+    defer std.testing.allocator.free(remote_metalink_path);
+    try cwd.writeFile(io, .{
+        .sub_path = host_metalink_path,
+        .data = host_metalink,
+    });
+    try cwd.writeFile(io, .{
+        .sub_path = remote_metalink_path,
+        .data = target_metalink,
+    });
+
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const cache_z = try std.testing.allocator.dupeZ(u8, cache);
+    defer std.testing.allocator.free(cache_z);
+    const remote_metalink_url = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "file://{s}",
+        .{remote_metalink_path},
+        0,
+    );
+    defer std.testing.allocator.free(remote_metalink_url);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var base_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer base_config.deinit();
+    var config = try base_config.cloneWithPinnedInstallRootDeferredRpmDb(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer config.deinit();
+    const cache_fd = try config.openPinnedDirectory(cache, false);
+    defer _ = std.c.close(cache_fd);
+    try config.repinCacheDir(cache, cache_fd);
+
+    var args = abi.CmdArgs{ .nRefresh = 1 };
+    var conf = Conf{ .pszCacheDir = cache_z.ptr };
+    var repo = RepoData{
+        .pszId = @constCast("repo"),
+        .pszName = @constCast("repo"),
+        .pszCacheName = @constCast("repo"),
+        .pszMetaLink = remote_metalink_url.ptr,
+    };
+    var handle = Tdnf{
+        .pArgs = &args,
+        .pConf = &conf,
+        .pRpmConfig = @ptrCast(&config),
+        .pRepos = &repo,
+    };
+    var plugin_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        builtin_plugins.BuiltinMetalinkCreate(&handle, &plugin_handle),
+    );
+    defer builtin_plugins.BuiltinMetalinkDestroy(plugin_handle);
+    var option = CnfNode{
+        .name = @constCast("metalink"),
+        .value = @constCast("cached"),
+    };
+    var section = CnfNode{
+        .name = @constCast("repo"),
+        .first_child = &option,
+    };
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        builtin_plugins.BuiltinMetalinkRepoConfig(
+            plugin_handle,
+            @ptrCast(&section),
+        ),
+    );
+    var plugin = abi.Plugin{
+        .pszName = @constCast("tdnfmetalink"),
+        .nEnabled = 1,
+        .nKind = 0,
+        .pHandle = plugin_handle,
+    };
+    handle.pPlugins = &plugin;
+    const display_repodata = try std.fs.path.joinZ(
+        std.testing.allocator,
+        &.{ cache, "repo", "repodata" },
+    );
+    defer std.testing.allocator.free(display_repodata);
+    var directory = PinnedDirectory{};
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        openPinnedDirectoryForHandle(
+            &handle,
+            display_repodata.ptr,
+            &directory,
+        ),
+    );
+    defer _ = std.c.close(directory.fd);
+    client_plugins.setTestDownloadPinned(&testDownloadPinned);
+    defer client_plugins.setTestDownloadPinned(null);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        BuiltinPluginsRepoMDDownloadStart(
+            &handle,
+            "repo",
+            &directory,
+        ),
+    );
+    const downloaded_metalink = try cwd.readFileAlloc(
+        io,
+        target_metalink_path,
+        std.testing.allocator,
+        .limited(4096),
+    );
+    defer std.testing.allocator.free(downloaded_metalink);
+    try std.testing.expectEqualStrings(target_metalink, downloaded_metalink);
+    const retained_host_metalink = try cwd.readFileAlloc(
+        io,
+        host_metalink_path,
+        std.testing.allocator,
+        .limited(4096),
+    );
+    defer std.testing.allocator.free(retained_host_metalink);
+    try std.testing.expectEqualStrings(host_metalink, retained_host_metalink);
+    defer TDNFFreeStringArray(repo.ppszBaseUrls);
+    try std.testing.expectEqualStrings(
+        "https://target.invalid/repo/",
+        std.mem.span(repo.ppszBaseUrls.?[0].?),
+    );
+    const repomd_fd = std.c.openat(directory.fd, repomd_file_name, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(repomd_fd >= 0);
+    defer _ = std.c.close(repomd_fd);
+    const pinned_repomd = PinnedFile{
+        .fd = repomd_fd,
+        .directory_fd = directory.fd,
+        .name = repomd_file_name,
+    };
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        BuiltinPluginsRepoMDDownloadEnd(
+            &handle,
+            "repo",
+            &pinned_repomd,
+        ),
+    );
+}
+
+test "repositories production: alternate-root repo GPG validates and removes only pinned target files" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(io, &base_buffer)];
+    const root = try std.fs.path.join(std.testing.allocator, &.{ base, "root" });
+    defer std.testing.allocator.free(root);
+    const cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "host-cache" },
+    );
+    defer std.testing.allocator.free(cache);
+    const target_cache = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, cache[1..] },
+    );
+    defer std.testing.allocator.free(target_cache);
+    const host_tmp = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ cache, "repo", "tmp" },
+    );
+    defer std.testing.allocator.free(host_tmp);
+    const target_tmp = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_cache, "repo", "tmp" },
+    );
+    defer std.testing.allocator.free(target_tmp);
+    const remote = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "remote" },
+    );
+    defer std.testing.allocator.free(remote);
+    const remote_repodata = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ remote, "repodata" },
+    );
+    defer std.testing.allocator.free(remote_repodata);
+    const gnupg_home = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "gnupg" },
+    );
+    defer std.testing.allocator.free(gnupg_home);
+    try cwd.createDirPath(io, host_tmp);
+    try cwd.createDirPath(io, target_tmp);
+    try cwd.createDirPath(io, remote_repodata);
+    try cwd.createDirPath(io, gnupg_home);
+
+    const signed_data = try readTestFile(
+        "rpmzig/pgp/testdata/rsa2048-data.bin",
+    );
+    defer std.testing.allocator.free(signed_data);
+    const signature = try readTestFile(
+        "rpmzig/pgp/testdata/rsa2048-sig.bin",
+    );
+    defer std.testing.allocator.free(signature);
+    const key = try readTestFile(
+        "rpmzig/pgp/testdata/rsa2048-pubkey.bin",
+    );
+    defer std.testing.allocator.free(key);
+    const armored = try encodeSignatureArmor(
+        std.testing.allocator,
+        signature,
+    );
+    defer std.testing.allocator.free(armored);
+
+    const host_repomd = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ host_tmp, repomd_file_name },
+    );
+    defer std.testing.allocator.free(host_repomd);
+    const target_repomd = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_tmp, repomd_file_name },
+    );
+    defer std.testing.allocator.free(target_repomd);
+    const host_signature = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ host_tmp, "repomd.xml.asc" },
+    );
+    defer std.testing.allocator.free(host_signature);
+    const target_signature = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ target_tmp, "repomd.xml.asc" },
+    );
+    defer std.testing.allocator.free(target_signature);
+    const remote_signature = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ remote_repodata, "repomd.xml.asc" },
+    );
+    defer std.testing.allocator.free(remote_signature);
+    const pubring = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ gnupg_home, "pubring.gpg" },
+    );
+    defer std.testing.allocator.free(pubring);
+    try cwd.writeFile(io, .{ .sub_path = host_repomd, .data = signed_data });
+    try cwd.writeFile(io, .{
+        .sub_path = target_repomd,
+        .data = "tampered target repomd",
+    });
+    try cwd.writeFile(io, .{
+        .sub_path = host_signature,
+        .data = armored,
+    });
+    try cwd.writeFile(io, .{
+        .sub_path = remote_signature,
+        .data = armored,
+    });
+    try cwd.writeFile(io, .{ .sub_path = pubring, .data = key });
+
+    const original_home = if (getenv("GNUPGHOME")) |value|
+        try std.testing.allocator.dupeZ(u8, std.mem.span(value))
+    else
+        null;
+    defer {
+        if (original_home) |value| {
+            _ = setenv("GNUPGHOME", value.ptr, 1);
+            std.testing.allocator.free(value);
+        } else {
+            _ = unsetenv("GNUPGHOME");
+        }
+    }
+    const gnupg_home_z = try std.testing.allocator.dupeZ(u8, gnupg_home);
+    defer std.testing.allocator.free(gnupg_home_z);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        setenv("GNUPGHOME", gnupg_home_z.ptr, 1),
+    );
+
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const cache_z = try std.testing.allocator.dupeZ(u8, cache);
+    defer std.testing.allocator.free(cache_z);
+    const remote_url = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "file://{s}",
+        .{remote},
+        0,
+    );
+    defer std.testing.allocator.free(remote_url);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var base_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root,
+    );
+    defer base_config.deinit();
+    var config = try base_config.cloneWithPinnedInstallRootDeferredRpmDb(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer config.deinit();
+    const cache_fd = try config.openPinnedDirectory(cache, false);
+    defer _ = std.c.close(cache_fd);
+    try config.repinCacheDir(cache, cache_fd);
+
+    var args = abi.CmdArgs{};
+    var conf = Conf{ .pszCacheDir = cache_z.ptr };
+    var base_urls = [_]?[*:0]u8{ remote_url.ptr, null };
+    var repo = RepoData{
+        .pszId = @constCast("repo"),
+        .pszName = @constCast("repo"),
+        .pszCacheName = @constCast("repo"),
+        .ppszBaseUrls = &base_urls,
+    };
+    var handle = Tdnf{
+        .pArgs = &args,
+        .pConf = &conf,
+        .pRpmConfig = @ptrCast(&config),
+        .pRepos = &repo,
+    };
+    var plugin_handle: ?*anyopaque = null;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        builtin_plugins.BuiltinRepoGPGCheckCreate(
+            &handle,
+            &plugin_handle,
+        ),
+    );
+    defer builtin_plugins.BuiltinRepoGPGCheckDestroy(plugin_handle);
+    var option = CnfNode{
+        .name = @constCast("repo_gpgcheck"),
+        .value = @constCast("1"),
+    };
+    var section = CnfNode{
+        .name = @constCast("repo"),
+        .first_child = &option,
+    };
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        builtin_plugins.BuiltinRepoGPGCheckRepoConfig(
+            plugin_handle,
+            @ptrCast(&section),
+        ),
+    );
+    var plugin = abi.Plugin{
+        .pszName = @constCast("tdnfrepogpgcheck"),
+        .nEnabled = 1,
+        .nKind = 1,
+        .pHandle = plugin_handle,
+    };
+    handle.pPlugins = &plugin;
+    const display_tmp = try std.fs.path.joinZ(
+        std.testing.allocator,
+        &.{ cache, "repo", "tmp" },
+    );
+    defer std.testing.allocator.free(display_tmp);
+    var directory = PinnedDirectory{};
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        openPinnedDirectoryForHandle(
+            &handle,
+            display_tmp.ptr,
+            &directory,
+        ),
+    );
+    defer _ = std.c.close(directory.fd);
+    const repomd_fd = std.c.openat(directory.fd, repomd_file_name, .{
+        .ACCMODE = .RDONLY,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(repomd_fd >= 0);
+    defer _ = std.c.close(repomd_fd);
+    const pinned_repomd = PinnedFile{
+        .fd = repomd_fd,
+        .directory_fd = directory.fd,
+        .name = repomd_file_name,
+    };
+    client_plugins.setTestDownloadPinned(&testDownloadPinned);
+    defer client_plugins.setTestDownloadPinned(null);
+    try std.testing.expectEqual(
+        @as(u32, 2004),
+        BuiltinPluginsRepoMDDownloadEnd(
+            &handle,
+            "repo",
+            &pinned_repomd,
+        ),
+    );
+    try std.testing.expectError(
+        error.FileNotFound,
+        cwd.access(io, target_signature, .{}),
+    );
+    const host_contents = try cwd.readFileAlloc(
+        io,
+        host_signature,
+        std.testing.allocator,
+        .limited(4096),
+    );
+    defer std.testing.allocator.free(host_contents);
+    try std.testing.expectEqualStrings(
+        armored,
+        host_contents,
     );
 }
 

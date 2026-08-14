@@ -271,6 +271,46 @@ fn tdnfGetDigestForFileRpmzig(
     return 0;
 }
 
+fn tdnfGetDigestForFdRpmzig(
+    fd: c_int,
+    hash_type: c_int,
+    digest: ?[*]u8,
+) u32 {
+    if (fd < 0 or digest == null or !isSupportedHashType(hash_type)) {
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
+    }
+
+    const hash = getHashOp(hash_type);
+    const ctx = tdnf_rpmzig_digest_open(hash_type) orelse {
+        common.log(abi.LOG_ERR, "rpmzig digest open failed for pinned metadata (%s): %s\n", .{ hash.hash_type, rpmzigErrorOrUnknown() });
+        return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
+    };
+    defer tdnf_rpmzig_digest_close(ctx);
+
+    var buffer: [c.BUFSIZ]u8 = undefined;
+    var offset: c.off_t = 0;
+    while (true) {
+        const length = c.pread(fd, &buffer, buffer.len, offset);
+        if (length < 0) {
+            if (getErrno() == c.EINTR) continue;
+            return systemError(getErrno());
+        }
+        if (length == 0) break;
+        const chunk_len: usize = @intCast(length);
+        if (tdnf_rpmzig_digest_update(ctx, &buffer, chunk_len) != 0) {
+            common.log(abi.LOG_ERR, "rpmzig digest update failed for pinned metadata (%s): %s\n", .{ hash.hash_type, rpmzigErrorOrUnknown() });
+            return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
+        }
+        offset += @intCast(chunk_len);
+    }
+
+    if (tdnf_rpmzig_digest_final(ctx, digest, hash.length) != 0) {
+        common.log(abi.LOG_ERR, "rpmzig digest final failed for pinned metadata (%s): %s\n", .{ hash.hash_type, rpmzigErrorOrUnknown() });
+        return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
+    }
+    return 0;
+}
+
 export fn TDNFFileReadAllText(
     pszFileNameOpt: ?[*:0]const u8,
     ppszText: ?*?[*:0]u8,
@@ -1224,6 +1264,38 @@ export fn TDNFCheckHash(
         return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
     }
 
+    return 0;
+}
+
+export fn TDNFCheckHashFd(
+    fd: c_int,
+    digest: ?[*]const u8,
+    hash_type: c_int,
+) u32 {
+    var digest_from_file = [_]u8{0} ** max_digest_len;
+    if (fd < 0 or digest == null or !isSupportedHashType(hash_type)) {
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    if (hash_type == hash_md5 and tdnfIsFipsModeEnabled() != 0) {
+        common.log(abi.LOG_ERR, "Digest Init Failed\n", .{});
+        return abi.ERROR_TDNF_FIPS_MODE_FORBIDDEN;
+    }
+
+    const hash_len: usize = @intCast(getHashOp(hash_type).length);
+    const result = tdnfGetDigestForFdRpmzig(
+        fd,
+        hash_type,
+        digest_from_file[0..].ptr,
+    );
+    if (result != 0) return result;
+    if (!std.mem.eql(
+        u8,
+        digest_from_file[0..hash_len],
+        digest.?[0..hash_len],
+    )) {
+        common.log(abi.LOG_ERR, "Error: Validating pinned checksum FAILED (digest mismatch)\n", .{});
+        return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
+    }
     return 0;
 }
 

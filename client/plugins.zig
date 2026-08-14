@@ -10,12 +10,15 @@ const builtin = @import("builtin");
 const abi = @import("client_abi");
 const errors = @import("tdnf_error");
 const backend = @import("builtin_plugins");
+const plugin_metadata = @import("plugin_metadata");
 const txn_config = @import("rpm_txn_config");
 
 const CnfNode = abi.CnfNode;
 const CmdArgs = abi.CmdArgs;
 const Conf = abi.Conf;
 const Plugin = abi.Plugin;
+const PinnedDirectory = plugin_metadata.PinnedDirectory;
+const PinnedFile = plugin_metadata.PinnedFile;
 const RepoData = abi.RepoData;
 const Tdnf = abi.Tdnf;
 
@@ -39,6 +42,23 @@ const builtins = [_]PluginDesc{
     .{ .name = "tdnfmetalink", .kind = metalink_kind },
     .{ .name = "tdnfrepogpgcheck", .kind = repogpgcheck_kind },
 };
+
+pub const DownloadPinnedFn = *const fn (
+    ?*Tdnf,
+    ?*RepoData,
+    ?[*:0]const u8,
+    ?*const PinnedDirectory,
+    ?[*:0]const u8,
+    ?[*:0]const u8,
+    c_int,
+    ?*PinnedFile,
+) u32;
+
+var test_download_pinned: ?DownloadPinnedFn = null;
+
+pub fn setTestDownloadPinned(callback: ?DownloadPinnedFn) void {
+    if (builtin.is_test) test_download_pinned = callback;
+}
 
 extern fn TDNFAllocateMemory(
     count: usize,
@@ -72,67 +92,74 @@ extern fn fnmatch(
     flags: c_int,
 ) callconv(.c) c_int;
 extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8;
-extern fn unlink(path: [*:0]const u8) callconv(.c) c_int;
 
 const Production = if (builtin.is_test) struct {
-    fn makeDirs(_: ?[*:0]const u8) u32 {
-        return errors.ERROR_TDNF_INVALID_PARAMETER;
-    }
-
     fn findRepo(
-        _: ?*Tdnf,
-        _: ?[*:0]const u8,
+        tdnf_opt: ?*Tdnf,
+        id_opt: ?[*:0]const u8,
         output: *?*RepoData,
     ) u32 {
         output.* = null;
-        return errors.ERROR_TDNF_INVALID_PARAMETER;
+        const tdnf = tdnf_opt orelse
+            return errors.ERROR_TDNF_INVALID_PARAMETER;
+        const id = id_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+        var repo = tdnf.pRepos;
+        while (repo) |current| : (repo = current.pNext) {
+            if (current.pszId) |candidate| {
+                if (std.mem.eql(
+                    u8,
+                    std.mem.span(candidate),
+                    std.mem.span(id),
+                )) {
+                    output.* = current;
+                    return 0;
+                }
+            }
+        }
+        return errors.ERROR_TDNF_REPO_NOT_FOUND;
     }
 
-    fn downloadFile(
-        _: ?*Tdnf,
-        _: ?*RepoData,
-        _: ?[*:0]const u8,
-        _: ?[*:0]const u8,
-        _: ?[*:0]const u8,
+    fn downloadFilePinned(
+        tdnf: ?*Tdnf,
+        repo: ?*RepoData,
+        source: ?[*:0]const u8,
+        destination: ?*const PinnedDirectory,
+        destination_name: ?[*:0]const u8,
+        progress: ?[*:0]const u8,
+        from_repo: c_int,
+        output: ?*PinnedFile,
     ) u32 {
-        return errors.ERROR_TDNF_INVALID_PARAMETER;
-    }
-
-    fn downloadFileFromRepo(
-        _: ?*Tdnf,
-        _: ?*RepoData,
-        _: ?[*:0]const u8,
-        _: ?[*:0]const u8,
-        _: ?[*:0]const u8,
-    ) u32 {
+        if (output) |value| value.* = .{};
+        if (test_download_pinned) |callback| {
+            return callback(
+                tdnf,
+                repo,
+                source,
+                destination,
+                destination_name,
+                progress,
+                from_repo,
+                output,
+            );
+        }
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
 } else struct {
-    extern fn TDNFUtilsMakeDirs(path: ?[*:0]const u8) callconv(.c) u32;
     extern fn TDNFFindRepoById(
         tdnf: ?*Tdnf,
         id: ?[*:0]const u8,
         output: *?*RepoData,
     ) callconv(.c) u32;
-    extern fn TDNFDownloadFile(
+    extern fn TDNFDownloadFilePinned(
         tdnf: ?*Tdnf,
         repo: ?*RepoData,
-        url: ?[*:0]const u8,
-        destination: ?[*:0]const u8,
+        source: ?[*:0]const u8,
+        destination: ?*const PinnedDirectory,
+        destination_name: ?[*:0]const u8,
         progress: ?[*:0]const u8,
-        require_https: c_int,
+        from_repo: c_int,
+        output: ?*PinnedFile,
     ) callconv(.c) u32;
-    extern fn TDNFDownloadFileFromRepo(
-        tdnf: ?*Tdnf,
-        repo: ?*RepoData,
-        location: ?[*:0]const u8,
-        destination: ?[*:0]const u8,
-        progress: ?[*:0]const u8,
-    ) callconv(.c) u32;
-
-    fn makeDirs(path: ?[*:0]const u8) u32 {
-        return TDNFUtilsMakeDirs(path);
-    }
 
     fn findRepo(
         tdnf: ?*Tdnf,
@@ -142,29 +169,25 @@ const Production = if (builtin.is_test) struct {
         return TDNFFindRepoById(tdnf, id, output);
     }
 
-    fn downloadFile(
+    fn downloadFilePinned(
         tdnf: ?*Tdnf,
         repo: ?*RepoData,
-        url: ?[*:0]const u8,
-        destination: ?[*:0]const u8,
+        source: ?[*:0]const u8,
+        destination: ?*const PinnedDirectory,
+        destination_name: ?[*:0]const u8,
         progress: ?[*:0]const u8,
+        from_repo: c_int,
+        output: ?*PinnedFile,
     ) u32 {
-        return TDNFDownloadFile(tdnf, repo, url, destination, progress, 0);
-    }
-
-    fn downloadFileFromRepo(
-        tdnf: ?*Tdnf,
-        repo: ?*RepoData,
-        location: ?[*:0]const u8,
-        destination: ?[*:0]const u8,
-        progress: ?[*:0]const u8,
-    ) u32 {
-        return TDNFDownloadFileFromRepo(
+        return TDNFDownloadFilePinned(
             tdnf,
             repo,
-            location,
+            source,
             destination,
+            destination_name,
             progress,
+            from_repo,
+            output,
         );
     }
 };
@@ -206,13 +229,13 @@ const Ops = struct {
         context: ?*anyopaque,
         handle: ?*anyopaque,
         repo_id: ?[*:0]const u8,
-        repo_data_dir: ?[*:0]const u8,
+        repo_data_dir: ?*const PinnedDirectory,
     ) u32,
     metalink_repo_md_end: *const fn (
         context: ?*anyopaque,
         handle: ?*anyopaque,
         repo_id: ?[*:0]const u8,
-        repomd_file: ?[*:0]const u8,
+        repomd_file: ?*const PinnedFile,
     ) u32,
     create_repogpgcheck: *const fn (
         context: ?*anyopaque,
@@ -232,7 +255,7 @@ const Ops = struct {
         context: ?*anyopaque,
         handle: ?*anyopaque,
         repo_id: ?[*:0]const u8,
-        repomd_file: ?[*:0]const u8,
+        repomd_file: ?*const PinnedFile,
     ) u32,
 };
 
@@ -286,7 +309,7 @@ fn productionMetalinkRepoMDStart(
     _: ?*anyopaque,
     handle: ?*anyopaque,
     repo_id: ?[*:0]const u8,
-    repo_data_dir: ?[*:0]const u8,
+    repo_data_dir: ?*const PinnedDirectory,
 ) u32 {
     return backend.BuiltinMetalinkRepoMDDownloadStart(
         handle,
@@ -299,7 +322,7 @@ fn productionMetalinkRepoMDEnd(
     _: ?*anyopaque,
     handle: ?*anyopaque,
     repo_id: ?[*:0]const u8,
-    repomd_file: ?[*:0]const u8,
+    repomd_file: ?*const PinnedFile,
 ) u32 {
     return backend.BuiltinMetalinkRepoMDDownloadEnd(
         handle,
@@ -332,7 +355,7 @@ fn productionRepoGPGCheckRepoMDEnd(
     _: ?*anyopaque,
     handle: ?*anyopaque,
     repo_id: ?[*:0]const u8,
-    repomd_file: ?[*:0]const u8,
+    repomd_file: ?*const PinnedFile,
 ) u32 {
     return backend.BuiltinRepoGPGCheckRepoMDDownloadEnd(
         handle,
@@ -359,6 +382,16 @@ const production_ops = Ops{
 fn isNullOrEmpty(value: ?[*:0]const u8) bool {
     const ptr = value orelse return true;
     return ptr[0] == 0;
+}
+
+fn validPinnedDirectory(value: ?*const PinnedDirectory) bool {
+    return value != null and value.?.fd >= 0;
+}
+
+fn validPinnedFile(value: ?*const PinnedFile) bool {
+    const file = value orelse return false;
+    return file.fd >= 0 and file.directory_fd >= 0 and
+        !isNullOrEmpty(file.name);
 }
 
 fn systemError() u32 {
@@ -755,11 +788,11 @@ fn pluginsRepoConfig(
 fn pluginsRepoMDDownloadStart(
     tdnf_opt: ?*Tdnf,
     repo_id: ?[*:0]const u8,
-    repo_data_dir: ?[*:0]const u8,
+    repo_data_dir: ?*const PinnedDirectory,
     ops: Ops,
 ) u32 {
     const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (isNullOrEmpty(repo_id) or isNullOrEmpty(repo_data_dir))
+    if (isNullOrEmpty(repo_id) or !validPinnedDirectory(repo_data_dir))
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     var plugin = tdnf.pPlugins;
     while (plugin) |current| : (plugin = current.pNext) {
@@ -781,11 +814,11 @@ fn pluginsRepoMDDownloadStart(
 fn pluginsRepoMDDownloadEnd(
     tdnf_opt: ?*Tdnf,
     repo_id: ?[*:0]const u8,
-    repomd_file: ?[*:0]const u8,
+    repomd_file: ?*const PinnedFile,
     ops: Ops,
 ) u32 {
     const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (isNullOrEmpty(repo_id) or isNullOrEmpty(repomd_file))
+    if (isNullOrEmpty(repo_id) or !validPinnedFile(repomd_file))
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     var plugin = tdnf.pPlugins;
     while (plugin) |current| : (plugin = current.pNext) {
@@ -830,7 +863,7 @@ export fn BuiltinPluginsRepoConfig(
 export fn BuiltinPluginsRepoMDDownloadStart(
     tdnf: ?*Tdnf,
     repo_id: ?[*:0]const u8,
-    repo_data_dir: ?[*:0]const u8,
+    repo_data_dir: ?*const PinnedDirectory,
 ) callconv(.c) u32 {
     return pluginsRepoMDDownloadStart(
         tdnf,
@@ -843,7 +876,7 @@ export fn BuiltinPluginsRepoMDDownloadStart(
 export fn BuiltinPluginsRepoMDDownloadEnd(
     tdnf: ?*Tdnf,
     repo_id: ?[*:0]const u8,
-    repomd_file: ?[*:0]const u8,
+    repomd_file: ?*const PinnedFile,
 ) callconv(.c) u32 {
     return pluginsRepoMDDownloadEnd(
         tdnf,
@@ -865,18 +898,6 @@ export fn BuiltinGetEnv(
     return getenv(name orelse return null);
 }
 
-export fn BuiltinFileExists(path: ?[*:0]const u8) callconv(.c) c_int {
-    return if (path != null and access(path, F_OK) == 0) 1 else 0;
-}
-
-export fn BuiltinUnlink(path: ?[*:0]const u8) callconv(.c) void {
-    if (path) |value| _ = unlink(value);
-}
-
-export fn BuiltinMakeDirs(path: ?[*:0]const u8) callconv(.c) u32 {
-    return Production.makeDirs(path);
-}
-
 export fn BuiltinFindRepo(
     handle: ?*anyopaque,
     repo_id: ?[*:0]const u8,
@@ -896,20 +917,30 @@ export fn BuiltinFindRepo(
 export fn BuiltinDownloadMetalink(
     handle: ?*anyopaque,
     repo_handle: ?*anyopaque,
-    destination: ?[*:0]const u8,
+    destination: ?*const PinnedDirectory,
+    destination_name: ?[*:0]const u8,
+    output: ?*PinnedFile,
 ) callconv(.c) u32 {
+    if (output) |value| value.* = .{};
     const tdnf: *Tdnf = @ptrCast(@alignCast(handle orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER));
     const repo: *RepoData = @ptrCast(@alignCast(repo_handle orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER));
-    if (isNullOrEmpty(repo.pszMetaLink) or isNullOrEmpty(destination))
+    if (isNullOrEmpty(repo.pszMetaLink) or
+        !validPinnedDirectory(destination) or
+        isNullOrEmpty(destination_name) or output == null)
+    {
         return errors.ERROR_TDNF_INVALID_PARAMETER;
-    return Production.downloadFile(
+    }
+    return Production.downloadFilePinned(
         tdnf,
         repo,
         repo.pszMetaLink,
         destination,
+        destination_name,
         repo.pszId,
+        0,
+        output,
     );
 }
 
@@ -917,15 +948,27 @@ export fn BuiltinDownloadRepoFile(
     handle: ?*anyopaque,
     repo_handle: ?*anyopaque,
     location: ?[*:0]const u8,
-    destination: ?[*:0]const u8,
+    destination: ?*const PinnedDirectory,
+    destination_name: ?[*:0]const u8,
     progress: ?[*:0]const u8,
+    output: ?*PinnedFile,
 ) callconv(.c) u32 {
-    return Production.downloadFileFromRepo(
+    if (output) |value| value.* = .{};
+    if (isNullOrEmpty(location) or
+        !validPinnedDirectory(destination) or
+        isNullOrEmpty(destination_name) or output == null)
+    {
+        return errors.ERROR_TDNF_INVALID_PARAMETER;
+    }
+    return Production.downloadFilePinned(
         @ptrCast(@alignCast(handle)),
         @ptrCast(@alignCast(repo_handle)),
         location,
         destination,
+        destination_name,
         progress,
+        1,
+        output,
     );
 }
 
@@ -1087,27 +1130,31 @@ fn testMetalinkRepoMDStart(
     context: ?*anyopaque,
     handle: ?*anyopaque,
     repo_id: ?[*:0]const u8,
-    repo_data_dir: ?[*:0]const u8,
+    repo_data_dir: ?*const PinnedDirectory,
 ) u32 {
-    return testEvent(context, 20, handle, repo_id, repo_data_dir);
+    testing.expect(repo_data_dir != null and repo_data_dir.?.fd >= 0) catch
+        return 999;
+    return testEvent(context, 20, handle, repo_id, "pinned-directory");
 }
 
 fn testMetalinkRepoMDEnd(
     context: ?*anyopaque,
     handle: ?*anyopaque,
     repo_id: ?[*:0]const u8,
-    repomd_file: ?[*:0]const u8,
+    repomd_file: ?*const PinnedFile,
 ) u32 {
-    return testEvent(context, 30, handle, repo_id, repomd_file);
+    testing.expect(validPinnedFile(repomd_file)) catch return 999;
+    return testEvent(context, 30, handle, repo_id, repomd_file.?.name);
 }
 
 fn testRepoGPGCheckRepoMDEnd(
     context: ?*anyopaque,
     handle: ?*anyopaque,
     repo_id: ?[*:0]const u8,
-    repomd_file: ?[*:0]const u8,
+    repomd_file: ?*const PinnedFile,
 ) u32 {
-    return testEvent(context, 31, handle, repo_id, repomd_file);
+    testing.expect(validPinnedFile(repomd_file)) catch return 999;
+    return testEvent(context, 31, handle, repo_id, repomd_file.?.name);
 }
 
 fn testOps(state: *TestState) Ops {
@@ -1301,6 +1348,12 @@ test "plugin events preserve registration, payload, order, and failures" {
     disabled.pNext = &repogpgcheck;
     var tdnf = Tdnf{ .pPlugins = &metalink };
     var section = CnfNode{ .name = @constCast("repo-id") };
+    const directory = PinnedDirectory{ .fd = 10 };
+    const repomd = PinnedFile{
+        .fd = 11,
+        .directory_fd = directory.fd,
+        .name = "repomd.xml",
+    };
 
     try testing.expectEqual(
         @as(u32, 0),
@@ -1308,11 +1361,11 @@ test "plugin events preserve registration, payload, order, and failures" {
     );
     try testing.expectEqual(
         @as(u32, 0),
-        pluginsRepoMDDownloadStart(&tdnf, "repo-id", "repo-dir", ops),
+        pluginsRepoMDDownloadStart(&tdnf, "repo-id", &directory, ops),
     );
     try testing.expectEqual(
         @as(u32, 0),
-        pluginsRepoMDDownloadEnd(&tdnf, "repo-id", "repomd.xml", ops),
+        pluginsRepoMDDownloadEnd(&tdnf, "repo-id", &repomd, ops),
     );
     try testing.expectEqualSlices(
         u8,
@@ -1340,13 +1393,13 @@ test "plugin events preserve registration, payload, order, and failures" {
             .start => pluginsRepoMDDownloadStart(
                 &tdnf,
                 "repo-id",
-                "repo-dir",
+                &directory,
                 ops,
             ),
             .end => pluginsRepoMDDownloadEnd(
                 &tdnf,
                 "repo-id",
-                "repomd.xml",
+                &repomd,
                 ops,
             ),
         };
@@ -1364,6 +1417,7 @@ test "plugin entry points reject invalid payloads and accept empty lists" {
     const ops = testOps(&state);
     var tdnf = Tdnf{};
     var section = CnfNode{};
+    const directory = PinnedDirectory{ .fd = 10 };
 
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,
@@ -1376,7 +1430,7 @@ test "plugin entry points reject invalid payloads and accept empty lists" {
     try testing.expectEqual(@as(u32, 0), pluginsRepoConfig(&tdnf, &section, ops));
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,
-        pluginsRepoMDDownloadStart(&tdnf, "", "dir", ops),
+        pluginsRepoMDDownloadStart(&tdnf, "", &directory, ops),
     );
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,
@@ -1462,8 +1516,6 @@ test "built-in bridge helpers preserve null and ownership behavior" {
     try testing.expectEqual(@as(c_int, 1), BuiltinRefreshRequested(&tdnf));
     try testing.expectEqual(@as(c_int, 0), BuiltinRefreshRequested(null));
     try testing.expect(BuiltinGetEnv(null) == null);
-    try testing.expectEqual(@as(c_int, 0), BuiltinFileExists(null));
-    BuiltinUnlink(null);
 
     var urls: ?[*]?[*:0]u8 = null;
     var raw: ?*anyopaque = null;
@@ -1477,7 +1529,7 @@ test "built-in bridge helpers preserve null and ownership behavior" {
 
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,
-        BuiltinDownloadMetalink(null, null, null),
+        BuiltinDownloadMetalink(null, null, null, null, null),
     );
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,

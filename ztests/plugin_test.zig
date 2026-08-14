@@ -138,6 +138,12 @@ fn setAmbientGpgHome(root: *harness.Root, import_repo_key: bool) !void {
     try root.tmp.dir.createDirPath(io, "gnupg");
     const home = try std.fs.path.join(root.allocator, &.{ root.path, "gnupg" });
     defer root.allocator.free(home);
+    const home_z = try root.allocator.dupeZ(u8, home);
+    defer root.allocator.free(home_z);
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.chmod(home_z.ptr, 0o700),
+    );
     try root.environ.put("GNUPGHOME", home);
 
     if (!import_repo_key) return;
@@ -148,7 +154,15 @@ fn setAmbientGpgHome(root: *harness.Root, import_repo_key: bool) !void {
     );
     defer root.allocator.free(pubkey);
     const imported = try std.process.run(root.allocator, io, .{
-        .argv = &.{ "gpg", "--batch", "--no-tty", "--homedir", home, "--import", pubkey },
+        .argv = &.{
+            "gpg",
+            "--batch",
+            "--no-tty",
+            "--homedir",
+            home,
+            "--import",
+            pubkey,
+        },
         .environ_map = &root.environ,
     });
     defer root.allocator.free(imported.stdout);
@@ -156,6 +170,16 @@ fn setAmbientGpgHome(root: *harness.Root, import_repo_key: bool) !void {
     switch (imported.term) {
         .exited => |code| if (code == 0) return,
         else => {},
+    }
+    const keybox = try std.fs.path.join(
+        root.allocator,
+        &.{ home, "pubring.kbx" },
+    );
+    defer root.allocator.free(keybox);
+    // Public-key import can finish before GnuPG reports an unusable agent
+    // socket, which is irrelevant to the plugin's read-only keybox use.
+    if (std.mem.indexOf(u8, imported.stderr, "imported: 1") != null) {
+        if (std.Io.Dir.cwd().access(io, keybox, .{})) |_| return else |_| {}
     }
     std.debug.print(
         "failed to import repository key into ambient GNUPGHOME\nstdout:\n{s}\nstderr:\n{s}\n",

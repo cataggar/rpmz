@@ -3244,12 +3244,9 @@ pub const TDNF_PKG_DETAIL = c_uint;
 pub const TDNF_ML_FREE_FUNC = ?*const fn (data: ?*anyopaque) callconv(.c) void;
 pub extern fn BuiltinRefreshRequested(pTdnf: ?*anyopaque) c_int;
 pub extern fn BuiltinGetEnv(pszName: [*c]const u8) [*c]const u8;
-pub extern fn BuiltinFileExists(pszPath: [*c]const u8) c_int;
-pub extern fn BuiltinUnlink(pszPath: [*c]const u8) void;
-pub extern fn BuiltinMakeDirs(pszPath: [*c]const u8) u32;
 pub extern fn BuiltinFindRepo(pTdnf: ?*anyopaque, pszRepoId: [*c]const u8, ppRepo: [*c]?*anyopaque) u32;
-pub extern fn BuiltinDownloadMetalink(pTdnf: ?*anyopaque, pRepo: ?*anyopaque, pszDestination: [*c]const u8) u32;
-pub extern fn BuiltinDownloadRepoFile(pTdnf: ?*anyopaque, pRepo: ?*anyopaque, pszLocation: [*c]const u8, pszDestination: [*c]const u8, pszProgress: [*c]const u8) u32;
+pub extern fn BuiltinDownloadMetalink(pTdnf: ?*anyopaque, pRepo: ?*anyopaque, pDestination: ?*const anyopaque, pszName: [*c]const u8, pOutput: ?*anyopaque) u32;
+pub extern fn BuiltinDownloadRepoFile(pTdnf: ?*anyopaque, pRepo: ?*anyopaque, pszLocation: [*c]const u8, pDestination: ?*const anyopaque, pszName: [*c]const u8, pszProgress: [*c]const u8, pOutput: ?*anyopaque) u32;
 pub extern fn BuiltinReplaceBaseUrls(pRepo: ?*anyopaque, ppszBaseUrls: [*c][*c]u8) void;
 pub extern fn rpmzig_verify_detached_armored(pSig: [*c]const u8, nSig: usize, pData: [*c]const u8, nData: usize, ppKeys: [*c]const [*c]const u8, pnKeyLengths: [*c]const usize, nKeyCount: usize) c_int;
 pub extern fn TDNFGetHistoryCtx(pTdnf: PTDNF, ppCtx: [*c]?*struct_history_ctx, nMustExist: c_int) u32;
@@ -4095,8 +4092,8 @@ pub export fn TDNFReportNativeSolverProblems(arg_pHandle: ?*anyopaque, arg_dwSki
 pub extern fn TDNFLoadPlugins(pTdnf: PTDNF) u32;
 pub extern fn TDNFFreePlugins(pPlugins: PTDNF_PLUGIN) void;
 pub extern fn BuiltinPluginsRepoConfig(pTdnf: PTDNF, pSection: [*c]const struct_cnfnode) u32;
-pub extern fn BuiltinPluginsRepoMDDownloadStart(pTdnf: PTDNF, pszRepoId: [*c]const u8, pszRepoDataDir: [*c]const u8) u32;
-pub extern fn BuiltinPluginsRepoMDDownloadEnd(pTdnf: PTDNF, pszRepoId: [*c]const u8, pszRepoMDFile: [*c]const u8) u32;
+pub extern fn BuiltinPluginsRepoMDDownloadStart(pTdnf: PTDNF, pszRepoId: [*c]const u8, pRepoDataDir: ?*const anyopaque) u32;
+pub extern fn BuiltinPluginsRepoMDDownloadEnd(pTdnf: PTDNF, pszRepoId: [*c]const u8, pRepoMDFile: ?*const anyopaque) u32;
 pub extern fn parse_varsdirs(dirs: [*c][*c]u8) [*c]struct_cnfnode;
 pub extern fn replace_vars(cn_vars: [*c]struct_cnfnode, source: [*c]const u8) [*c]u8;
 pub fn TDNFSolvAddPkgLocks(arg_pTdnf: PTDNF, arg_pQueueJobs: PTDNF_ID_LIST, arg_pInstalled: PTDNF_PKG_INFO, arg_dwInstalledCount: u32) callconv(.c) u32 {

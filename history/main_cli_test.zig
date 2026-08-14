@@ -9,6 +9,7 @@ const testing = std.testing;
 
 const IsolatedDb = struct {
     tmp: std.testing.TmpDir,
+    root: []u8,
     path: []u8,
 
     fn init() !IsolatedDb {
@@ -17,16 +18,23 @@ const IsolatedDb = struct {
 
         var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const root_len = try tmp.dir.realPath(testing.io, &path_buffer);
+        const root = try testing.allocator.dupe(
+            u8,
+            path_buffer[0..root_len],
+        );
+        errdefer testing.allocator.free(root);
         return .{
             .tmp = tmp,
+            .root = root,
             .path = try std.fs.path.join(
                 testing.allocator,
-                &.{ path_buffer[0..root_len], "history.db" },
+                &.{ root, "history.db" },
             ),
         };
     }
 
     fn deinit(self: *IsolatedDb) void {
+        testing.allocator.free(self.root);
         testing.allocator.free(self.path);
         self.tmp.cleanup();
     }
@@ -84,7 +92,7 @@ test "missing command preserves usage, diagnostic, and exit code" {
     var db = try IsolatedDb.init();
     defer db.deinit();
 
-    const result = try run(binary, &.{ "-f", db.path });
+    const result = try run(binary, &.{ "-f", db.path, "-r", db.root });
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
 
@@ -102,7 +110,10 @@ test "unknown mark subcommand preserves output and exit code" {
     var db = try IsolatedDb.init();
     defer db.deinit();
 
-    const result = try run(binary, &.{ "-f", db.path, "mark", "invalid" });
+    const result = try run(
+        binary,
+        &.{ "-f", db.path, "-r", db.root, "mark", "invalid" },
+    );
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
 
@@ -121,7 +132,10 @@ test "file option initializes the requested history database" {
     var db = try IsolatedDb.init();
     defer db.deinit();
 
-    const result = try run(binary, &.{ "-f", db.path, "mark", "install" });
+    const result = try run(
+        binary,
+        &.{ "-f", db.path, "-r", db.root, "mark", "install" },
+    );
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
 

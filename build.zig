@@ -666,6 +666,13 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     metalink_xml_mod.addImport("xml", xml_mod);
+    const plugin_metadata_mod = b.createModule(.{
+        .root_source_file = b.path("client/plugin_metadata.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
+    });
     const repository_metadata_mod = b.createModule(.{
         .root_source_file = b.path(
             "repomd/transaction_plan_repository_dependencies.zig",
@@ -1832,6 +1839,7 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     builtin_plugins_mod.addImport("metalink_xml", metalink_xml_mod);
+    builtin_plugins_mod.addImport("plugin_metadata", plugin_metadata_mod);
     builtin_plugins_mod.addIncludePath(b.path("client"));
     builtin_plugins_mod.addIncludePath(b.path("llconf"));
     builtin_plugins_mod.addIncludePath(b.path("rpmzig"));
@@ -1850,6 +1858,7 @@ pub fn build(b: *Build) void {
     client_plugins_mod.addImport("tdnf_common", common_api_mod);
     client_plugins_mod.addImport("tdnf_error", tdnf_error_mod);
     client_plugins_mod.addImport("builtin_plugins", builtin_plugins_mod);
+    client_plugins_mod.addImport("plugin_metadata", plugin_metadata_mod);
     client_plugins_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
 
     const client_history_mod = b.createModule(.{
@@ -1942,6 +1951,7 @@ pub fn build(b: *Build) void {
     client_mod.addImport("repomd_client_exports", repomd_mod);
     client_mod.addImport("builtin_plugins", builtin_plugins_mod);
     client_mod.addImport("client_plugins", client_plugins_mod);
+    client_mod.addImport("plugin_metadata", plugin_metadata_mod);
     client_mod.addImport("client_history", client_history_mod);
     client_mod.addImport("client_abi", client_abi_mod);
     client_mod.addImport("client_download", client_download_mod);
@@ -2325,6 +2335,7 @@ pub fn build(b: *Build) void {
             .target = target,
             .optimize = optimize,
         });
+        test_backend_mod.addImport("plugin_metadata", plugin_metadata_mod);
         const test_mod = b.createModule(.{
             .root_source_file = b.path("client/plugins.zig"),
             .target = target,
@@ -2335,6 +2346,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("tdnf_common", common_api_mod);
         test_mod.addImport("tdnf_error", tdnf_error_mod);
         test_mod.addImport("builtin_plugins", test_backend_mod);
+        test_mod.addImport("plugin_metadata", plugin_metadata_mod);
         test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(llconf_lib);
@@ -2984,6 +2996,7 @@ pub fn build(b: *Build) void {
             .root_source_file = b.path("ztests/root.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         });
         const ztests = b.addTest(.{ .root_module = ztest_mod });
         const run_ztests = b.addRunArtifact(ztests);
@@ -3007,6 +3020,7 @@ pub fn build(b: *Build) void {
             .root_source_file = b.path("ztests/plugin_test.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         });
         const plugin_ztests = b.addTest(.{
             .root_module = plugin_ztest_mod,

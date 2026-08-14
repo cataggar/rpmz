@@ -126,7 +126,8 @@ def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
     configured_cache = os.path.join(
         "/var/cache", "tdnf-configured-{}".format(uuid.uuid4().hex))
     installroot = os.path.join(
-        utils.config["build_dir"], "pinned-root-{}".format(uuid.uuid4().hex))
+        os.path.realpath(utils.config["build_dir"]),
+        "pinned-root-{}".format(uuid.uuid4().hex))
     target_rpm = os.path.join(
         installroot, host_cache.lstrip("/"),
         "photon-test", "rpms", relative)
