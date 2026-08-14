@@ -24,8 +24,15 @@ extern fn TDNFStrIsValidRepoName(str: ?[*:0]const u8) c_int;
 const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
 const LEGACY_VERBOSITY_INFO: c_int = 6;
+const short_options = "46bCc:d:e:hi:qvxy";
 
 var option_state: abi.TDNF_CMD_ARGS = std.mem.zeroes(abi.TDNF_CMD_ARGS);
+
+pub const OptionArity = enum {
+    none,
+    required,
+    optional,
+};
 
 fn optionEntry(
     name: ?[*:0]const u8,
@@ -144,6 +151,51 @@ var pstOptions = [_]getopt.struct_option{
     optionEntry("reverse", getopt.no_argument, null, 0),
     optionEntry(null, 0, null, 0),
 };
+
+fn optionArity(has_arg: c_int) OptionArity {
+    if (has_arg == getopt.required_argument) return .required;
+    if (has_arg == getopt.optional_argument) return .optional;
+    return .none;
+}
+
+pub fn legacyLongOptionArity(name: []const u8) ?OptionArity {
+    var matched: ?OptionArity = null;
+    var ambiguous = false;
+    for (pstOptions) |option| {
+        const option_name = if (option.name) |value|
+            std.mem.span(value)
+        else
+            break;
+        if (std.mem.eql(u8, option_name, name))
+            return optionArity(option.has_arg);
+        if (!std.mem.startsWith(u8, option_name, name)) continue;
+        if (matched != null) {
+            ambiguous = true;
+        } else {
+            matched = optionArity(option.has_arg);
+        }
+    }
+    return if (ambiguous) null else matched;
+}
+
+pub fn legacyShortOptionArity(letter: u8) ?OptionArity {
+    var index: usize = 0;
+    while (index < short_options.len) {
+        const candidate = short_options[index];
+        index += 1;
+        var arity: OptionArity = .none;
+        if (index < short_options.len and short_options[index] == ':') {
+            arity = .required;
+            index += 1;
+            if (index < short_options.len and short_options[index] == ':') {
+                arity = .optional;
+                index += 1;
+            }
+        }
+        if (candidate == letter) return arity;
+    }
+    return null;
+}
 
 fn resetOptionState() void {
     option_state = std.mem.zeroes(abi.TDNF_CMD_ARGS);
@@ -326,7 +378,7 @@ pub export fn TDNFCliParseArgs(
         const nOption = argparse.TDNFCliArgParseLongOnly(
             argc,
             argv,
-            "46bCc:d:e:hi:qvxy",
+            short_options,
             &pstOptions,
             &nOptionIndex,
         );

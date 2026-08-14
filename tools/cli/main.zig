@@ -187,50 +187,6 @@ fn matchNamedOption(arg: []const u8, name: []const u8) ?OptionMatch {
     return null;
 }
 
-fn isLegacyNoArgumentOption(arg: []const u8) bool {
-    const prefix_len: usize = if (std.mem.startsWith(u8, arg, "--"))
-        2
-    else if (std.mem.startsWith(u8, arg, "-"))
-        1
-    else
-        return false;
-    const body = arg[prefix_len..];
-    if (std.mem.indexOfScalar(u8, body, '=') != null) return false;
-    const names = [_][]const u8{
-        "4",               "6",                 "alldeps",
-        "allowerasing",    "assumeno",          "assumeyes",
-        "best",            "builddeps",         "cacheonly",
-        "debugsolver",     "disableexcludes",   "downloadonly",
-        "help",            "json",              "noautoremove",
-        "nodeps",          "nogpgcheck",        "nocligpgcheck",
-        "noplugins",       "quiet",             "refresh",
-        "reboot-required", "security",          "skip-broken",
-        "skipconflicts",   "skipdigest",        "skipobsoletes",
-        "skipsignature",   "source",            "testonly",
-        "urls",            "verbose",           "version",
-        "delete",          "download-metadata", "gpgcheck",
-        "newest-only",     "norepopath",        "available",
-        "extras",          "installed",         "userinstalled",
-        "upgrades",        "changelogs",        "conflicts",
-        "depends",         "duplicates",        "enhances",
-        "list",            "location",          "obsoletes",
-        "provides",        "recommends",        "requires",
-        "requires-pre",    "suggests",          "supplements",
-        "all",             "info",              "summary",
-        "recent",          "updates",           "downgrades",
-        "reverse",
-    };
-    for (names) |name| {
-        if (std.mem.eql(u8, body, name)) return true;
-    }
-    if (prefix_len != 1) return false;
-    for (body) |letter| {
-        if (std.mem.indexOfScalar(u8, "46bChqvxy", letter) == null)
-            return false;
-    }
-    return body.len != 0;
-}
-
 fn replayOptionValue(
     argv: []const [*:0]const u8,
     index: *usize,
@@ -325,46 +281,42 @@ fn parseReplayInvocation(
     } };
 }
 
+fn optionConsumesNext(arg: []const u8) bool {
+    const prefix_len: usize = if (std.mem.startsWith(u8, arg, "--"))
+        2
+    else if (std.mem.startsWith(u8, arg, "-"))
+        1
+    else
+        return false;
+    const body = arg[prefix_len..];
+    if (body.len == 0) return false;
+
+    const equals_index = std.mem.indexOfScalar(u8, body, '=');
+    const name = if (equals_index) |index| body[0..index] else body;
+    if (cli.legacyLongOptionArity(name)) |arity| {
+        return equals_index == null and arity != .none;
+    }
+    if (prefix_len != 1 or equals_index != null) return false;
+
+    for (body, 0..) |letter, index| {
+        const arity = cli.legacyShortOptionArity(letter) orelse return false;
+        if (arity != .none) return index + 1 == body.len;
+    }
+    return false;
+}
+
 fn isReplayInvocation(argv: []const [*:0]const u8) bool {
     var index: usize = 1;
     while (index < argv.len) : (index += 1) {
         const arg = std.mem.span(argv[index]);
-        if (std.mem.eql(u8, arg, "replay")) return true;
         if (std.mem.eql(u8, arg, "--")) {
             return index + 1 < argv.len and
                 std.mem.eql(u8, std.mem.span(argv[index + 1]), "replay");
         }
-        if (arg.len == 0 or arg[0] != '-') return false;
-
-        var takes_value = false;
-        if (matchNamedOption(arg, "installroot")) |matched| {
-            takes_value = matched == .separate;
-        } else if (std.mem.eql(u8, arg, "-i")) {
-            takes_value = true;
-        } else if (arg.len > 2 and std.mem.startsWith(u8, arg, "-i") and
-            !std.mem.startsWith(u8, arg, "-installroot"))
-        {
-            takes_value = false;
-        } else if (matchNamedOption(arg, "rpmdb-path")) |matched| {
-            takes_value = matched == .separate;
-        } else if (matchNamedOption(arg, "forcearch")) |matched| {
-            takes_value = matched == .separate;
-        } else if (!isLegacyNoArgumentOption(arg) and
-            !std.mem.containsAtLeast(u8, arg, 1, "=") and
-            index + 2 < argv.len and
-            !std.mem.eql(u8, std.mem.span(argv[index + 1]), "replay") and
-            std.mem.span(argv[index + 1]).len != 0 and
-            std.mem.span(argv[index + 1])[0] != '-')
-        {
-            // An unsupported option may take one operand. Probe past it so
-            // options-first replay mistakes still use the replay contract.
-            takes_value = true;
-        }
-        if (takes_value and index + 1 < argv.len) {
-            const value = std.mem.span(argv[index + 1]);
-            if (std.mem.eql(u8, value, "replay")) return true;
-            if (value.len == 0 or value[0] != '-') index += 1;
-        }
+        if (arg.len == 0 or arg[0] != '-')
+            return std.mem.eql(u8, arg, "replay");
+        if (optionConsumesNext(arg) and index + 1 < argv.len)
+            index += 1;
     }
     return false;
 }
@@ -393,11 +345,24 @@ const ReplayStdoutGuard = struct {
     active: bool = true,
 
     fn begin() error{RedirectFailed}!ReplayStdoutGuard {
+        const stderr_flags_result = std.posix.system.fcntl(
+            c.STDERR_FILENO,
+            std.posix.F.GETFL,
+            @as(usize, 0),
+        );
+        if (std.posix.errno(stderr_flags_result) != .SUCCESS)
+            return error.RedirectFailed;
+        const stderr_flags: std.posix.O = @bitCast(
+            @as(u32, @intCast(stderr_flags_result)),
+        );
+        if (stderr_flags.ACCMODE == .RDONLY)
+            return error.RedirectFailed;
+
         if (c.fflush(c.stdout) != 0) return error.RedirectFailed;
         const saved = std.c.fcntl(
             c.STDOUT_FILENO,
             std.c.F.DUPFD_CLOEXEC,
-            @as(c_int, 0),
+            @as(c_int, 3),
         );
         if (saved < 0) return error.RedirectFailed;
         if (c.dup2(c.STDERR_FILENO, c.STDOUT_FILENO) < 0) {

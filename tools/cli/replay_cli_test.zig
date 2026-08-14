@@ -378,6 +378,39 @@ fn runCli(binary: []const u8, args: []const []const u8) !std.process.RunResult {
     });
 }
 
+const ClosedStderrResult = struct {
+    term: std.process.Child.Term,
+    stdout: []u8,
+};
+
+fn runCliClosedStderr(
+    binary: []const u8,
+    args: []const []const u8,
+) !ClosedStderrResult {
+    const argv = try allocator.alloc([]const u8, args.len + 1);
+    defer allocator.free(argv);
+    argv[0] = binary;
+    @memcpy(argv[1..], args);
+
+    var child = try std.process.spawn(io, .{
+        .argv = argv,
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .close,
+    });
+    errdefer child.kill(io);
+    var stdout_reader = child.stdout.?.readerStreaming(io, &.{});
+    const stdout = try stdout_reader.interface.allocRemaining(
+        allocator,
+        .limited(1024 * 1024),
+    );
+    errdefer allocator.free(stdout);
+    return .{
+        .term = try child.wait(io),
+        .stdout = stdout,
+    };
+}
+
 fn installHostRuntime(
     fixture: *Fixture,
     root_name: []const u8,
@@ -851,7 +884,74 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         "Usage: tdnf replay",
     ) == null);
 
+    const config_value_replay = try runCli(
+        binary,
+        &.{ "--config", "replay", "--version" },
+    );
+    defer allocator.free(config_value_replay.stdout);
+    defer allocator.free(config_value_replay.stderr);
+    try std.testing.expectEqual(@as(u8, 0), exitCode(config_value_replay));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        config_value_replay.stderr,
+        "Usage: tdnf replay",
+    ) == null);
+
+    const inline_config_value_replay = try runCli(
+        binary,
+        &.{ "--config=replay", "--version" },
+    );
+    defer allocator.free(inline_config_value_replay.stdout);
+    defer allocator.free(inline_config_value_replay.stderr);
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        exitCode(inline_config_value_replay),
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        inline_config_value_replay.stderr,
+        "Usage: tdnf replay",
+    ) == null);
+
+    const short_config_value_replay = try runCli(
+        binary,
+        &.{ "-c", "replay", "--version" },
+    );
+    defer allocator.free(short_config_value_replay.stdout);
+    defer allocator.free(short_config_value_replay.stderr);
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        exitCode(short_config_value_replay),
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        short_config_value_replay.stderr,
+        "Usage: tdnf replay",
+    ) == null);
+
+    const attached_short_config_value_replay = try runCli(
+        binary,
+        &.{ "-creplay", "--version" },
+    );
+    defer allocator.free(attached_short_config_value_replay.stdout);
+    defer allocator.free(attached_short_config_value_replay.stderr);
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        exitCode(attached_short_config_value_replay),
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        attached_short_config_value_replay.stderr,
+        "Usage: tdnf replay",
+    ) == null);
+
     try expectUsage(binary, &.{"replay"});
+    try expectUsage(binary, &.{ "--config", "", "replay" });
+    try expectUsage(binary, &.{ "--config=", "replay" });
+    try expectUsage(binary, &.{ "-c", "", "replay" });
+    try expectUsage(binary, &.{ "-q", "replay" });
+    try expectUsage(binary, &.{ "--", "replay" });
+    try expectUsage(binary, &.{ "--config", "--", "replay" });
     try expectUsage(binary, &.{ "replay", "--installroot" });
     try expectUsage(binary, &.{
         "replay",
@@ -941,7 +1041,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         "x86_64",
         bundle,
     });
-    try expectUsage(binary, &.{
+    const option_like_installroot_value = try runCli(binary, &.{
         "--installroot",
         "--rpmdb-path",
         "/var/lib/rpm",
@@ -950,6 +1050,14 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         "replay",
         bundle,
     });
+    defer allocator.free(option_like_installroot_value.stdout);
+    defer allocator.free(option_like_installroot_value.stderr);
+    try std.testing.expect(exitCode(option_like_installroot_value) != 2);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        option_like_installroot_value.stderr,
+        "Usage: tdnf replay",
+    ) == null);
     try expectUsage(binary, &.{
         "replay",
         "--installroot",
@@ -1026,10 +1134,36 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     ) != null);
 }
 
-test "replay CLI isolates canonical stdout from exec scriptlets and descendants" {
+test "replay CLI fails without stderr before reserving canonical stdout" {
+    var fixture = try Fixture.create(null);
+    defer fixture.deinit();
+    const bundle = try fixture.exportBundle("closed-stderr");
+    const root = try fixture.createDir("closed-stderr-root");
+    const binary = try tdnfPath();
+    defer allocator.free(binary);
+
+    const result = try runCliClosedStderr(binary, &.{
+        "replay",
+        "--installroot",
+        root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        bundle,
+    });
+    defer allocator.free(result.stdout);
+
+    try std.testing.expectEqual(
+        std.process.Child.Term{ .exited = 1 },
+        result.term,
+    );
+    try std.testing.expectEqual(@as(usize, 0), result.stdout.len);
+}
+
+test "replay CLI isolates canonical stdout from scriptlet descendants" {
     var fixture = try Fixture.createWithInterpreter(
         \\print("scriptlet stdout")
-        \\os.execute("printf 'canonical contamination' >&3")
         \\local ok, status, code =
         \\  os.execute("/bin/sleep 2 >/dev/null 2>&1 &")
         \\assert(ok == true and status == "exit" and code == 0)
@@ -1073,11 +1207,6 @@ test "replay CLI isolates canonical stdout from exec scriptlets and descendants"
     try std.testing.expectEqual(@as(u8, 0), exitCode(result));
     var parsed = try parseResult(result.stdout, "succeeded");
     defer parsed.deinit();
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        result.stdout,
-        "canonical contamination",
-    ) == null);
     try std.testing.expect(std.mem.indexOf(
         u8,
         result.stderr,

@@ -25,6 +25,10 @@ const parsereposyncargs = @import("parsereposyncargs.zig");
 const parseupdateinfo = @import("parseupdateinfo.zig");
 const updateinfocmd = @import("updateinfocmd.zig");
 
+pub const OptionArity = parseargs.OptionArity;
+pub const legacyLongOptionArity = parseargs.legacyLongOptionArity;
+pub const legacyShortOptionArity = parseargs.legacyShortOptionArity;
+
 comptime {
     _ = argparse;
     _ = api;

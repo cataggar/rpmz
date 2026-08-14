@@ -181,7 +181,7 @@ pub fn runPreparedScript(
         const duplicate = std.c.fcntl(
             root_fd,
             std.c.F.DUPFD_CLOEXEC,
-            @as(c_int, 0),
+            @as(c_int, 3),
         );
         if (duplicate < 0) return error.SyscallFailed;
         break :blk try install_engine.RootDir.initFromOwnedFd(
@@ -500,15 +500,21 @@ fn prepareChildProcess(
             _ = linux.close(null_fd);
             return false;
         }
-        _ = linux.close(null_fd);
+        if (null_fd != c.STDIN_FILENO) {
+            _ = linux.close(null_fd);
+        }
     }
 
     if (script_fd >= 0) {
-        _ = linux.dup2(script_fd, c.STDERR_FILENO);
+        if (std.posix.errno(linux.dup2(script_fd, c.STDERR_FILENO)) != .SUCCESS) {
+            return false;
+        }
     }
     if (redirect_stdout_to_stderr) {
         const target = if (script_fd >= 0) script_fd else c.STDERR_FILENO;
-        _ = linux.dup2(target, c.STDOUT_FILENO);
+        if (std.posix.errno(linux.dup2(target, c.STDOUT_FILENO)) != .SUCCESS) {
+            return false;
+        }
     }
 
     if (c.setenv("PATH", path_env, 1) != 0) {
@@ -528,7 +534,11 @@ fn prepareChildProcess(
     }
     _ = linux.close(install_root_fd);
 
-    return true;
+    return std.posix.errno(linux.close_range(
+        3,
+        std.math.maxInt(c_int),
+        .{ .UNSHARE = false, .CLOEXEC = false },
+    )) == .SUCCESS;
 }
 
 fn runExecChild(
@@ -987,6 +997,91 @@ test "Lua rpm.input reads trigger stdin" {
         },
     );
     try std.testing.expectEqual(Outcome.ok, result.outcome);
+}
+
+test "exec and fork-only Lua scriptlets close inherited descriptors" {
+    const allocator = std.testing.allocator;
+    const tmp_path = try testTmpPath(allocator);
+    defer allocator.free(tmp_path);
+    try ensureDirPathAbsolute(allocator, tmp_path);
+
+    const marker_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/inherited-fd-{d}",
+        .{ tmp_path, c.getpid() },
+    );
+    defer allocator.free(marker_path);
+    try writeAbsoluteFile(allocator, marker_path, "");
+    const marker_path_z = try allocator.dupeZ(u8, marker_path);
+    defer allocator.free(marker_path_z);
+    defer _ = c.unlink(marker_path_z.ptr);
+
+    const marker_fd_raw = linux.openat(
+        std.posix.AT.FDCWD,
+        marker_path_z.ptr,
+        .{ .ACCMODE = .WRONLY },
+        0,
+    );
+    if (std.posix.errno(marker_fd_raw) != .SUCCESS)
+        return error.SyscallFailed;
+    const marker_fd: c_int = @intCast(marker_fd_raw);
+    defer _ = linux.close(marker_fd);
+    try std.testing.expect(marker_fd >= 3);
+
+    const exec_script = try std.fmt.allocPrint(
+        allocator,
+        \\for fd in /proc/self/fd/*; do
+        \\  [ "$(readlink "$fd" 2>/dev/null)" != "{s}" ] || exit 91
+        \\done
+        \\
+    ,
+        .{marker_path},
+    );
+    defer allocator.free(exec_script);
+    const exec_result = try runPreparedScript(
+        allocator,
+        &.{"/bin/sh"},
+        exec_script,
+        false,
+        .{ .install_root = "/" },
+    );
+    try std.testing.expectEqual(Outcome.ok, exec_result.outcome);
+
+    if (std.c.fcntl(
+        marker_fd,
+        std.c.F.SETFD,
+        @as(c_int, std.c.FD_CLOEXEC),
+    ) < 0) return error.SyscallFailed;
+    const lua_script = try std.fmt.allocPrint(
+        allocator,
+        \\for entry in posix.files("/proc/self/fd") do
+        \\  local fd = tonumber(entry)
+        \\  if fd ~= nil and fd > 2 then
+        \\    local path = "/proc/self/fd/" .. entry
+        \\    if posix.readlink(path) == "{s}" then
+        \\      local canonical = assert(io.open(path, "w"))
+        \\      canonical:write("canonical contamination")
+        \\      canonical:flush()
+        \\      canonical:close()
+        \\    end
+        \\  end
+        \\end
+        \\
+    ,
+        .{marker_path},
+    );
+    defer allocator.free(lua_script);
+    const lua_result = try runPreparedScript(
+        allocator,
+        &.{"<lua>"},
+        lua_script,
+        false,
+        .{ .install_root = "/" },
+    );
+    try std.testing.expectEqual(Outcome.ok, lua_result.outcome);
+    const marker = try readAbsoluteFile(allocator, marker_path);
+    defer allocator.free(marker);
+    try std.testing.expectEqual(@as(usize, 0), marker.len);
 }
 
 test "Lua contract exposes 5.4 arguments libraries and modules" {
