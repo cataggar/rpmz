@@ -34,6 +34,7 @@ pub const DownloadToFdRequest = struct {
     low_speed_limit: u64 = 0,
     low_speed_time_secs: u32 = 0,
     max_recv_speed: u64 = 0,
+    require_https: bool = false,
 };
 
 const OutputDestination = union(enum) {
@@ -1103,7 +1104,7 @@ pub fn client_download_to_fd(
         .low_speed_limit = request.low_speed_limit,
         .low_speed_time_secs = request.low_speed_time_secs,
         .max_recv_speed = request.max_recv_speed,
-        .require_https = false,
+        .require_https = request.require_https,
     });
 }
 
@@ -2765,6 +2766,185 @@ test "fd destination preserves TLS proxy and authentication behavior" {
     const downloaded = try readFileAlloc(std.testing.allocator, io, path);
     defer std.testing.allocator.free(downloaded);
     try std.testing.expectEqualStrings("fd proxy tunnel body\n", downloaded);
+}
+
+test "fd HTTPS-required download follows a same-origin redirect" {
+    const io = std.testing.io;
+    try ensureScratchDir(io);
+
+    const server = try spawnServer(.{
+        .tls_mode = true,
+        .redirect_location = "/redirected/key",
+        .request_count = 2,
+        .body = "redirected signing key\n",
+    });
+    defer server.thread.join();
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://LOCALHOST:{d}/repository-key",
+        .{server.port},
+    );
+    defer std.testing.allocator.free(url);
+    const ca_path = try Io.Dir.cwd().realPathFileAlloc(
+        io,
+        "client/download/fixtures/ca-cert.pem",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(ca_path);
+    const path = try scratchPath(
+        std.testing.allocator,
+        "fd-https-same-origin.txt",
+    );
+    defer std.testing.allocator.free(path);
+    deleteFileIfExists(io, path);
+    defer deleteFileIfExists(io, path);
+
+    var output = try Io.Dir.cwd().createFile(io, path, .{});
+    defer output.close(io);
+    const status = try client_download_to_fd(
+        std.testing.allocator,
+        io,
+        .{
+            .url = url,
+            .ca_cert = ca_path,
+            .connect_timeout_secs = 10,
+            .require_https = true,
+        },
+        output.handle,
+    );
+    try std.testing.expectEqual(@as(u16, 200), status);
+
+    const downloaded = try readFileAlloc(std.testing.allocator, io, path);
+    defer std.testing.allocator.free(downloaded);
+    try std.testing.expectEqualStrings(
+        "redirected signing key\n",
+        downloaded,
+    );
+}
+
+test "fd HTTPS-required download rejects a downgrade redirect" {
+    const io = std.testing.io;
+    try ensureScratchDir(io);
+
+    const server = try spawnServer(.{
+        .tls_mode = true,
+        .redirect_location = "http://127.0.0.1:9/replaced-key",
+    });
+    defer server.thread.join();
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://localhost:{d}/repository-key",
+        .{server.port},
+    );
+    defer std.testing.allocator.free(url);
+    const ca_path = try Io.Dir.cwd().realPathFileAlloc(
+        io,
+        "client/download/fixtures/ca-cert.pem",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(ca_path);
+    const path = try scratchPath(
+        std.testing.allocator,
+        "fd-https-downgrade.txt",
+    );
+    defer std.testing.allocator.free(path);
+    deleteFileIfExists(io, path);
+    defer deleteFileIfExists(io, path);
+
+    var output = try Io.Dir.cwd().createFile(io, path, .{});
+    defer output.close(io);
+    try std.testing.expectError(
+        error.HttpsRequired,
+        client_download_to_fd(
+            std.testing.allocator,
+            io,
+            .{
+                .url = url,
+                .ca_cert = ca_path,
+                .connect_timeout_secs = 10,
+                .require_https = true,
+            },
+            output.handle,
+        ),
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        std.mem.span(TDNFZigDownloadLastError()),
+        "downgrade",
+    ) != null);
+}
+
+test "fd HTTPS-required download rejects a cross-origin redirect before connection" {
+    const io = std.testing.io;
+    try ensureScratchDir(io);
+
+    var target_observed = std.atomic.Value(bool).init(false);
+    const target = try spawnServer(.{
+        .tls_mode = true,
+        .connection_observed = &target_observed,
+    });
+    var target_joined = false;
+    defer if (!target_joined) {
+        wakeServer(io, target.port);
+        target.thread.join();
+    };
+    const redirect = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://localhost:{d}/replaced-key",
+        .{target.port},
+    );
+    defer std.testing.allocator.free(redirect);
+    const origin = try spawnServer(.{
+        .tls_mode = true,
+        .redirect_location = redirect,
+    });
+    defer origin.thread.join();
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "https://localhost:{d}/repository-key",
+        .{origin.port},
+    );
+    defer std.testing.allocator.free(url);
+    const ca_path = try Io.Dir.cwd().realPathFileAlloc(
+        io,
+        "client/download/fixtures/ca-cert.pem",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(ca_path);
+    const path = try scratchPath(
+        std.testing.allocator,
+        "fd-https-cross-origin.txt",
+    );
+    defer std.testing.allocator.free(path);
+    deleteFileIfExists(io, path);
+    defer deleteFileIfExists(io, path);
+
+    var output = try Io.Dir.cwd().createFile(io, path, .{});
+    defer output.close(io);
+    try std.testing.expectError(
+        error.HttpsRequired,
+        client_download_to_fd(
+            std.testing.allocator,
+            io,
+            .{
+                .url = url,
+                .ca_cert = ca_path,
+                .connect_timeout_secs = 10,
+                .require_https = true,
+            },
+            output.handle,
+        ),
+    );
+    try std.testing.expect(!target_observed.load(.acquire));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        std.mem.span(TDNFZigDownloadLastError()),
+        "cross-origin",
+    ) != null);
+
+    wakeServer(io, target.port);
+    target.thread.join();
+    target_joined = true;
 }
 
 test "fd destination validates descriptors and remains caller owned on timeout" {

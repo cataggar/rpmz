@@ -147,6 +147,60 @@ test "production repository loader preserves defaults and full config" {
     }
 }
 
+test "production repository loader rejects negative retries and accepts zero or positive values" {
+    _ = root;
+    const cwd = std.Io.Dir.cwd();
+    const io = std.testing.io;
+    const path = try scratchPath("retries");
+    defer std.testing.allocator.free(path);
+    cwd.deleteTree(io, path) catch {};
+    defer cwd.deleteTree(io, path) catch {};
+    try cwd.createDirPath(io, path);
+    const repo_path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}/sample.repo",
+        .{path},
+    );
+    defer std.testing.allocator.free(repo_path);
+
+    register_ini(null);
+    const setopts = create_cnfnode("(root)") orelse return error.OutOfMemory;
+    defer destroy_cnftree(setopts);
+    var args = abi.CmdArgs{ .cn_setopts = setopts };
+    var conf = abi.Conf{ .pszRepoDir = path.ptr };
+    var handle = abi.Tdnf{ .pArgs = &args, .pConf = &conf };
+
+    const cases = [_]struct {
+        value: c_int,
+        expected_result: u32,
+    }{
+        .{ .value = -1, .expected_result = errors.ERROR_TDNF_INVALID_PARAMETER },
+        .{ .value = 0, .expected_result = 0 },
+        .{ .value = 3, .expected_result = 0 },
+    };
+    for (cases) |case| {
+        const contents = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "[sample]\nbaseurl=https://example.invalid/repo\nretries={d}\n",
+            .{case.value},
+        );
+        defer std.testing.allocator.free(contents);
+        try cwd.writeFile(io, .{ .sub_path = repo_path, .data = contents });
+
+        var repos: ?*RepoData = null;
+        const result = TDNFLoadRepoData(&handle, &repos);
+        defer if (repos != null) TDNFFreeReposInternal(repos);
+        try std.testing.expectEqual(case.expected_result, result);
+        if (result == 0) {
+            const repo = findRepo(repos, "sample") orelse
+                return error.MissingRepo;
+            try std.testing.expectEqual(case.value, repo.nRetries);
+        } else {
+            try std.testing.expectEqual(@as(?*RepoData, null), repos);
+        }
+    }
+}
+
 test "production repository loader rejects duplicate ids and symlink repo files" {
     _ = root;
     const cwd = std.Io.Dir.cwd();

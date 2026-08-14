@@ -417,7 +417,11 @@ fn configureRepo(handle: *Tdnf, repo: *RepoData, top: *CnfNode) u32 {
         } else if (std.mem.eql(u8, name, "password")) {
             const result = replaceString(&repo.pszPass, value);
             if (result != 0) return result;
-        } else if (std.mem.eql(u8, name, "priority")) repo.nPriority = strtoi(value) else if (std.mem.eql(u8, name, "timeout")) repo.nTimeout = strtoi(value) else if (std.mem.eql(u8, name, "retries")) repo.nRetries = strtoi(value) else if (std.mem.eql(u8, name, "minrate")) repo.nMinrate = strtoi(value) else if (std.mem.eql(u8, name, "throttle")) repo.nThrottle = strtoi(value) else if (std.mem.eql(u8, name, "sslverify")) repo.nSSLVerify = isTrue(value) else if (std.mem.eql(u8, name, "sslcacert")) {
+        } else if (std.mem.eql(u8, name, "priority")) repo.nPriority = strtoi(value) else if (std.mem.eql(u8, name, "timeout")) repo.nTimeout = strtoi(value) else if (std.mem.eql(u8, name, "retries")) {
+            const retries = strtoi(value);
+            if (retries < 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
+            repo.nRetries = retries;
+        } else if (std.mem.eql(u8, name, "minrate")) repo.nMinrate = strtoi(value) else if (std.mem.eql(u8, name, "throttle")) repo.nThrottle = strtoi(value) else if (std.mem.eql(u8, name, "sslverify")) repo.nSSLVerify = isTrue(value) else if (std.mem.eql(u8, name, "sslcacert")) {
             const result = replaceString(&repo.pszSSLCaCert, value);
             if (result != 0) return result;
         } else if (std.mem.eql(u8, name, "sslclientcert")) {
@@ -1714,8 +1718,10 @@ fn downloadUrlToFd(
     );
     if (result != 0) return result;
     result = systemErrorFrom(@intFromEnum(std.c.E.NOENT));
+    if (repo.nRetries < 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
 
     var attempt: c_int = 0;
+    var successful_attempt = false;
     var io_state: std.Io.Threaded = .init(std.heap.c_allocator, .{});
     defer io_state.deinit();
     const io = io_state.io();
@@ -1748,12 +1754,14 @@ fn downloadUrlToFd(
         const status: c_long = @intCast(status_value);
         if (status < 400) {
             result = 0;
+            successful_attempt = true;
             break;
         }
         result = errors.ERROR_TDNF_INVALID_PARAMETER;
         common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
         return result;
     }
+    if (!successful_attempt) return result;
     if (!no_output) common.log(LOG_INFO, "\n", .{});
     return result;
 }
@@ -3791,6 +3799,39 @@ test "repositories production: metadata and snapshot downloads reject symlinks a
         .nRetries = 0,
         .nSSLVerify = 1,
     };
+
+    const negative_directory = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}/negative-retries",
+        .{root},
+    );
+    defer std.testing.allocator.free(negative_directory);
+    try cwd.createDirPath(io, negative_directory);
+    const negative_destination = try std.fmt.allocPrintSentinel(
+        std.testing.allocator,
+        "{s}/empty-must-not-publish",
+        .{negative_directory},
+        0,
+    );
+    defer std.testing.allocator.free(negative_destination);
+    repo.nRetries = -1;
+    try std.testing.expectEqual(
+        errors.ERROR_TDNF_INVALID_PARAMETER,
+        secureDownload(
+            &handle,
+            &repo,
+            source_url.ptr,
+            negative_destination.ptr,
+            null,
+            false,
+        ),
+    );
+    try std.testing.expectError(
+        error.FileNotFound,
+        cwd.access(io, negative_destination, .{}),
+    );
+    try expectNoDownloadTemps(negative_directory);
+    repo.nRetries = 0;
 
     const destinations = [_]struct {
         directory: []const u8,

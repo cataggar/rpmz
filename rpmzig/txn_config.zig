@@ -1264,8 +1264,12 @@ pub fn buildDefaultRpmDbSqlitePath(
 
 fn normalizeInstallRootOwned(allocator: std.mem.Allocator, input: []const u8) InitError![]u8 {
     const root = if (input.len == 0) DEFAULT_INSTALL_ROOT else input;
-    if (!isExactAbsolutePath(root)) return error.InvalidInstallRoot;
-    return allocator.dupe(u8, root);
+    var end = root.len;
+    while (end > 1 and root[end - 1] == '/') : (end -= 1) {}
+    if (end == 1 and root.len != 1) return error.InvalidInstallRoot;
+    const normalized = root[0..end];
+    if (!isExactAbsolutePath(normalized)) return error.InvalidInstallRoot;
+    return allocator.dupe(u8, normalized);
 }
 
 fn isExactAbsolutePath(path: []const u8) bool {
@@ -1822,16 +1826,28 @@ test "TxnConfig rejects relative installroots" {
         "relative/root",
         " /root",
         "/root ",
-        "/root/",
         "/root//nested",
         "/root/./nested",
         "/root/../nested",
         "/root\x00hidden",
+        "//",
     }) |invalid| {
         try std.testing.expectError(
             error.InvalidInstallRoot,
             TxnConfig.init(std.testing.allocator, invalid),
         );
+    }
+}
+
+test "TxnConfig normalizes trailing slash installroot aliases" {
+    inline for (.{
+        .{ "/root/", "/root" },
+        .{ "/root///", "/root" },
+        .{ "/", "/" },
+    }) |case| {
+        var config = try TxnConfig.init(std.testing.allocator, case[0]);
+        defer config.deinit();
+        try std.testing.expectEqualStrings(case[1], config.installRoot());
     }
 }
 

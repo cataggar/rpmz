@@ -769,6 +769,9 @@ fn downloadToPinnedParent(
         &no_output,
     );
     if (result != 0) return result;
+    result = errors.ERROR_TDNF_REPO_PERFORM;
+    if (repo.nRetries < 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
+    request.require_https = require_https;
     if (require_https) {
         const uri = std.Uri.parse(request.url) catch
             return errors.ERROR_TDNF_URL_INVALID;
@@ -778,6 +781,7 @@ fn downloadToPinnedParent(
     }
 
     var attempt: c_int = 0;
+    var successful_attempt = false;
     var io_state: std.Io.Threaded = .init(std.heap.c_allocator, .{});
     defer io_state.deinit();
     const io = io_state.io();
@@ -816,7 +820,11 @@ fn downloadToPinnedParent(
             continue;
         };
         const status: c_long = @intCast(status_value);
-        if (status < 400) break;
+        if (status < 400) {
+            result = 0;
+            successful_attempt = true;
+            break;
+        }
 
         const safe_url = uri_sanitize.redactAlloc(allocator, std.mem.span(url)) catch "download URL";
         if (status >= 400) {
@@ -825,6 +833,7 @@ fn downloadToPinnedParent(
         }
     }
 
+    if (!successful_attempt) return result;
     if (!no_output and !builtin.is_test) common.log(LOG_INFO, "\n", .{});
     if (libc.fchmod(temp_fd, 0o644) != 0) return systemError(errnoValue());
     if (libc.fsync(temp_fd) != 0) return systemError(errnoValue());
@@ -1557,7 +1566,7 @@ test "remoterepo: package URL construction preserves absolute URLs and joins rel
     );
 }
 
-test "remoterepo: file downloads replace atomically and preserve the old final on failure" {
+test "remoterepo: file downloads publish only after a successful retry attempt" {
     const root = try resetTestDirectory("atomic-file");
     defer std.testing.allocator.free(root);
     const source = try std.fs.path.join(
@@ -1623,6 +1632,30 @@ test "remoterepo: file downloads replace atomically and preserve the old final o
     const preserved = try readTestFile(final);
     defer std.testing.allocator.free(preserved);
     try std.testing.expectEqualStrings("keep this final", preserved);
+
+    const skipped = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, "negative-retries.rpm" },
+    );
+    defer std.testing.allocator.free(skipped);
+    const skipped_z = try zString(skipped);
+    defer std.testing.allocator.free(skipped_z);
+    fixture.repo.nRetries = -1;
+    try std.testing.expectEqual(
+        errors.ERROR_TDNF_INVALID_PARAMETER,
+        TDNFDownloadFile(
+            &fixture.handle,
+            &fixture.repo,
+            source_url.ptr,
+            skipped_z.ptr,
+            null,
+            0,
+        ),
+    );
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(std.testing.io, skipped, .{}),
+    );
 }
 
 test "remoterepo: package cache uses repository ID path and reuses a nonempty cache hit" {

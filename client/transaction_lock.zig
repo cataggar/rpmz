@@ -948,6 +948,12 @@ test "aliases and database paths share one install-root lock" {
         &.{ base, "root-a", "." },
     );
     defer std.testing.allocator.free(root_dot);
+    const root_trailing = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}/",
+        .{root_a},
+    );
+    defer std.testing.allocator.free(root_trailing);
     const root_link = try std.fs.path.join(
         std.testing.allocator,
         &.{ base, "root-link" },
@@ -973,6 +979,15 @@ test "aliases and database paths share one install-root lock" {
         root_link,
     );
     defer replay_config.deinit();
+    var trailing_config = try txn_config.TxnConfig.init(
+        std.testing.allocator,
+        root_trailing,
+    );
+    defer trailing_config.deinit();
+    try std.testing.expectEqualStrings(
+        normal_config.installRoot(),
+        trailing_config.installRoot(),
+    );
     var distinct_config = try txn_config.TxnConfig.init(
         std.testing.allocator,
         root_b,
@@ -1040,6 +1055,14 @@ test "aliases and database paths share one install-root lock" {
         tryAcquireInDirectory(
             std.testing.allocator,
             &replay_config,
+            lock_directory,
+        ),
+    );
+    try std.testing.expectError(
+        error.WouldBlock,
+        tryAcquireInDirectory(
+            std.testing.allocator,
+            &trailing_config,
             lock_directory,
         ),
     );

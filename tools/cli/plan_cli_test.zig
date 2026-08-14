@@ -90,7 +90,7 @@ fn expectPlanJson(stdout: []const u8) !std.json.Parsed(std.json.Value) {
     return parsed;
 }
 
-test "plan command emits parseable versioned JSON" {
+test "plan command accepts a trailing-slash installroot and emits parseable versioned JSON" {
     const allocator = std.testing.allocator;
     const prefix = std.testing.environ.getAlloc(
         allocator,
@@ -160,6 +160,12 @@ test "plan command emits parseable versioned JSON" {
     defer allocator.free(tdnf);
     const config = try std.fs.path.join(allocator, &.{ root, "tdnf.conf" });
     defer allocator.free(config);
+    const installroot_arg = try std.fmt.allocPrint(
+        allocator,
+        "--installroot={s}/",
+        .{root},
+    );
+    defer allocator.free(installroot_arg);
 
     var environ: std.process.Environ.Map = .init(allocator);
     defer environ.deinit();
@@ -170,8 +176,7 @@ test "plan command emits parseable versioned JSON" {
             tdnf,
             "-c",
             config,
-            "--installroot",
-            root,
+            installroot_arg,
             "--releasever",
             "1",
             "--forcearch",
@@ -352,10 +357,10 @@ test "the plan command and the public resolver agree byte for byte" {
     for ([_][]const u8{ "app", "broken" }) |subject| {
         const cli = try std.process.run(allocator, io, .{
             .argv = &.{
-                tdnf,          "-c",   config,
-                "--installroot", root, "--releasever",
-                "1",           "--forcearch", "x86_64",
-                "plan",        "install",     subject,
+                tdnf,            "-c",          config,
+                "--installroot", root,          "--releasever",
+                "1",             "--forcearch", "x86_64",
+                "plan",          "install",     subject,
             },
             .environ_map = &environ,
         });
