@@ -47,6 +47,12 @@ identity and position, including interleaving and shared priors. Upgrade and
 reinstall priors must be exactly representable by the native replacement item;
 export rejects any order or multi-prior graph it cannot preserve.
 
+If the pinned target has no rpmdb main file, that absence is authoritative.
+After validation and immediately before execution, replay creates and pins the
+new main file exclusively, then initializes SQLite through the confined VFS.
+If another file appeared meanwhile, replay fails with `rpmdb_mismatch` without
+attempting an action or opening that file as a database.
+
 Replay and ordinary tdnf transactions use the same install-root-wide lock. The
 target key is derived only from the opened root directory identity, so aliases
 and different `_dbpath` values under one root contend while distinct roots do

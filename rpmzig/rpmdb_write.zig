@@ -185,7 +185,15 @@ pub const Writer = struct {
         );
     }
 
-    pub fn openConfig(config: *const txn_config.TxnConfig) Error!Writer {
+    pub fn openConfig(config: *txn_config.TxnConfig) Error!Writer {
+        if (config.pinnedRpmDbMainWasAbsent()) {
+            config.createAndPinAbsentRpmDbMain() catch |err| {
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => error.UnsafePath,
+                };
+            };
+        }
         const expanded = config.expandMacroAlloc(
             std.heap.c_allocator,
             .dbpath,
@@ -229,7 +237,7 @@ pub const Writer = struct {
         if (config.pinnedInstallRootFd() != null and
             config.pinnedRpmDbDirFd() == null)
         {
-            @constCast(config).adoptPinnedRpmDbDirFd(dir_fd) catch {
+            config.adoptPinnedRpmDbDirFd(dir_fd) catch {
                 _ = sysc.close(dir_fd);
                 dir_fd = -1;
                 return error.UnsafePath;
@@ -251,7 +259,7 @@ pub const Writer = struct {
                 return error.SyscallFailed;
             };
             errdefer main_pin.deinit();
-            @constCast(config).adoptPinnedRpmDbMainLease(
+            config.adoptPinnedRpmDbMainLease(
                 main_pin.fd,
                 main_pin.database,
                 confined_sqlite.MainFdPin.releaseOpaque,
@@ -1086,6 +1094,91 @@ test "pinned config rejects regular rpmdb substitution across opens" {
     );
     defer allocator.free(replacement);
     try std.testing.expectEqualStrings("replacement", replacement);
+}
+
+test "pinned absent rpmdb is created exclusively before schema initialization" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root_path = try std.fs.path.join(
+        allocator,
+        &.{ base, "root" },
+    );
+    defer allocator.free(root_path);
+    const root_z = try allocator.dupeZ(u8, root_path);
+    defer allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    var config = try txn_config.TxnConfig.init(allocator, root_path);
+    defer config.deinit();
+    var pinned = try config.cloneWithPinnedInstallRoot(
+        allocator,
+        root_path,
+        root_fd,
+    );
+    defer pinned.deinit();
+    try std.testing.expect(pinned.pinnedRpmDbMainWasAbsent());
+
+    try tmp.dir.createDirPath(std.testing.io, "root/var/lib/rpm");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/var/lib/rpm/rpmdb.sqlite",
+        .data = "appeared-after-pin",
+    });
+    try std.testing.expectError(
+        error.UnsafePath,
+        Writer.openConfig(&pinned),
+    );
+    const appeared = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "root/var/lib/rpm/rpmdb.sqlite",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(appeared);
+    try std.testing.expectEqualStrings("appeared-after-pin", appeared);
+    inline for (.{ "-journal", "-wal", "-shm" }) |suffix| {
+        var path_buffer: [128]u8 = undefined;
+        const path = try std.fmt.bufPrint(
+            &path_buffer,
+            "root/var/lib/rpm/rpmdb.sqlite{s}",
+            .{suffix},
+        );
+        try std.testing.expectError(
+            error.FileNotFound,
+            tmp.dir.access(std.testing.io, path, .{}),
+        );
+    }
+
+    try tmp.dir.deleteFile(
+        std.testing.io,
+        "root/var/lib/rpm/rpmdb.sqlite",
+    );
+    var writer = try Writer.openConfig(&pinned);
+    writer.close();
+    try std.testing.expect(!pinned.pinnedRpmDbMainWasAbsent());
+    const database = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "root/var/lib/rpm/rpmdb.sqlite",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(database);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        database,
+        "SQLite format 3\x00",
+    ));
 }
 
 test "rpmdb writer transfers pins only after fallible initialization" {

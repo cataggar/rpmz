@@ -259,7 +259,8 @@ pub const ResolveInput = struct {
     environment: Environment,
     policy: Policy = .{},
     /// Metadata cache location, interpreted inside the install root exactly as
-    /// `cachedir` is. Must be absolute.
+    /// `cachedir` is. Must be absolute. Trailing separators are normalized,
+    /// with `/` remaining `/`.
     cache_dir: []const u8 = "/var/cache/tdnf",
     /// An absolute directory the resolver may create a private, single-use
     /// subdirectory in. The subdirectory holds the generated configuration and
@@ -520,7 +521,7 @@ fn validate(input: ResolveInput) ResolveError!void {
                 return error.InvalidPath;
         },
     }
-    if (!isExactAbsolutePath(input.cache_dir) or
+    if (!isExactAbsolutePath(normalizeDirectoryPath(input.cache_dir)) or
         !isExactAbsolutePath(input.scratch_dir))
         return error.InvalidPath;
 
@@ -570,6 +571,14 @@ fn isExactAbsolutePath(path: []const u8) bool {
         }
     }
     return true;
+}
+
+fn normalizeDirectoryPath(path: []const u8) []const u8 {
+    const trimmed = std.mem.trimEnd(u8, path, "/");
+    return if (trimmed.len == 0 and path.len != 0 and path[0] == '/')
+        path[0..1]
+    else
+        trimmed;
 }
 
 fn validateRepository(repository: Repository) ResolveError!void {
@@ -851,7 +860,7 @@ const Scratch = struct {
             self.name,
         });
         try writer.line(error.InvalidPath, "cachedir={s}", .{
-            input.cache_dir,
+            normalizeDirectoryPath(input.cache_dir),
         });
         try writer.line(error.InvalidPath, "persistdir={s}/{s}/persist", .{
             self.rootPath(),
@@ -1096,6 +1105,10 @@ test "resolver: relative install roots, caches, and scratch directories are reje
     try testing.expectError(error.InvalidPath, validate(input));
     input.cache_dir = "/var/cache/tdnf\nplugins=1";
     try testing.expectError(error.InvalidPath, validate(input));
+    input.cache_dir = "/var/cache/tdnf/";
+    try validate(input);
+    input.cache_dir = "/";
+    try validate(input);
     input.cache_dir = "/var/cache/tdnf";
     input.scratch_dir = "/scratch/work\n[evil]";
     try testing.expectError(error.InvalidPath, validate(input));

@@ -465,16 +465,23 @@ const OpenedMetadata = struct {
 
 fn openCacheMetadataFile(
     root_fd: c_int,
-    cache_prefix: []const u8,
+    raw_cache_prefix: []const u8,
     full_path: []const u8,
 ) !c_int {
-    if (full_path.len <= cache_prefix.len or
-        !std.mem.startsWith(u8, full_path, cache_prefix) or
-        full_path[cache_prefix.len] != '/')
-    {
-        return error.InvalidPath;
-    }
-    const relative = full_path[cache_prefix.len + 1 ..];
+    const cache_prefix = normalizeDirectoryPath(raw_cache_prefix);
+    const relative = if (std.mem.eql(u8, cache_prefix, "/")) blk: {
+        if (full_path.len <= 1 or full_path[0] != '/')
+            return error.InvalidPath;
+        break :blk full_path[1..];
+    } else blk: {
+        if (full_path.len <= cache_prefix.len or
+            !std.mem.startsWith(u8, full_path, cache_prefix) or
+            full_path[cache_prefix.len] != '/')
+        {
+            return error.InvalidPath;
+        }
+        break :blk full_path[cache_prefix.len + 1 ..];
+    };
     var components = std.mem.splitScalar(u8, relative, '/');
     var component = components.next() orelse return error.InvalidPath;
     var current = std.c.fcntl(
@@ -534,6 +541,73 @@ fn openCacheMetadataFile(
         return error.OpenFailed;
     }
     return fd;
+}
+
+fn normalizeDirectoryPath(path: []const u8) []const u8 {
+    const trimmed = std.mem.trimEnd(u8, path, "/");
+    return if (trimmed.len == 0 and path.len != 0 and path[0] == '/')
+        path[0..1]
+    else
+        trimmed;
+}
+
+test "metadata cache boundaries normalize trailing separators and root" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache/repo");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "cache/repo/repomd.xml",
+        .data = "metadata",
+    });
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const root_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    const cache_fd = std.c.openat(root_fd, "cache", .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(cache_fd >= 0);
+    defer _ = std.c.close(cache_fd);
+
+    const trailing = try openCacheMetadataFile(
+        cache_fd,
+        "/var/cache/tdnf/",
+        "/var/cache/tdnf/repo/repomd.xml",
+    );
+    _ = std.c.close(trailing);
+    const root = try openCacheMetadataFile(
+        root_fd,
+        "/",
+        "/cache/repo/repomd.xml",
+    );
+    _ = std.c.close(root);
+    const root_alias = try openCacheMetadataFile(
+        root_fd,
+        "////",
+        "/cache/repo/repomd.xml",
+    );
+    _ = std.c.close(root_alias);
+    try std.testing.expectError(
+        error.InvalidPath,
+        openCacheMetadataFile(
+            cache_fd,
+            "/var/cache/tdnf/",
+            "/var/cache/tdnf-other/repo/repomd.xml",
+        ),
+    );
 }
 
 fn openMetadataPaths(

@@ -279,6 +279,7 @@ pub const TxnConfig = struct {
     pinned_rpmdb_main_release: ?PinnedFdReleaseFn = null,
     pinned_rpmdb_main_release_context: ?*anyopaque = null,
     rpmdb_pin_finalized: bool = false,
+    pinned_rpmdb_main_absent: bool = false,
     target_lock_held: bool = false,
     literal_dbpath: ?[]u8 = null,
     pinned_repo_dir: ?[]u8 = null,
@@ -300,6 +301,7 @@ pub const TxnConfig = struct {
             .pinned_rpmdb_main_release = null,
             .pinned_rpmdb_main_release_context = null,
             .rpmdb_pin_finalized = false,
+            .pinned_rpmdb_main_absent = false,
             .target_lock_held = false,
             .literal_dbpath = null,
             .pinned_repo_dir = null,
@@ -360,6 +362,7 @@ pub const TxnConfig = struct {
         self.pinned_repo_dir = null;
         self.pinned_cache_dir = null;
         self.pinned_plugin_conf_dir = null;
+        self.pinned_rpmdb_main_absent = false;
         self.allocator.free(self.install_root);
         for (self.macros.items) |entry| {
             self.allocator.free(entry.name);
@@ -374,6 +377,7 @@ pub const TxnConfig = struct {
             self.install_root,
             self.pinned_install_root_fd,
             self.rpmdb_pin_finalized,
+            true,
         );
     }
 
@@ -385,7 +389,13 @@ pub const TxnConfig = struct {
         install_root: []const u8,
         root_fd: c_int,
     ) InitError!TxnConfig {
-        return self.cloneWithRoot(allocator, install_root, root_fd, true);
+        return self.cloneWithRoot(
+            allocator,
+            install_root,
+            root_fd,
+            true,
+            false,
+        );
     }
 
     pub fn cloneWithPinnedInstallRootDeferredRpmDb(
@@ -394,7 +404,13 @@ pub const TxnConfig = struct {
         install_root: []const u8,
         root_fd: c_int,
     ) InitError!TxnConfig {
-        return self.cloneWithRoot(allocator, install_root, root_fd, false);
+        return self.cloneWithRoot(
+            allocator,
+            install_root,
+            root_fd,
+            false,
+            false,
+        );
     }
 
     pub fn pinnedInstallRootFd(self: *const TxnConfig) ?c_int {
@@ -407,6 +423,11 @@ pub const TxnConfig = struct {
 
     pub fn pinnedRpmDbMainFd(self: *const TxnConfig) ?c_int {
         return self.pinned_rpmdb_main_fd;
+    }
+
+    pub fn pinnedRpmDbMainWasAbsent(self: *const TxnConfig) bool {
+        return self.rpmdb_pin_finalized and
+            self.pinned_rpmdb_main_absent;
     }
 
     pub fn pinnedCacheDirFd(self: *const TxnConfig) ?c_int {
@@ -487,6 +508,7 @@ pub const TxnConfig = struct {
         self.pinned_rpmdb_main_fd = duplicate;
         self.pinned_rpmdb_main_release = null;
         self.pinned_rpmdb_main_release_context = null;
+        self.pinned_rpmdb_main_absent = false;
     }
 
     pub fn adoptPinnedRpmDbMainLease(
@@ -504,6 +526,7 @@ pub const TxnConfig = struct {
         self.pinned_rpmdb_main_fd = fd;
         self.pinned_rpmdb_main_release = release;
         self.pinned_rpmdb_main_release_context = context;
+        self.pinned_rpmdb_main_absent = false;
     }
 
     fn cloneWithRoot(
@@ -512,6 +535,7 @@ pub const TxnConfig = struct {
         install_root: []const u8,
         pinned_root_fd: ?c_int,
         finalize_rpmdb: bool,
+        preserve_rpmdb_pin: bool,
     ) InitError!TxnConfig {
         const root = try normalizeInstallRootOwned(allocator, install_root);
         const duplicated_fd = if (pinned_root_fd) |fd| blk: {
@@ -532,6 +556,7 @@ pub const TxnConfig = struct {
             .pinned_rpmdb_main_release = null,
             .pinned_rpmdb_main_release_context = null,
             .rpmdb_pin_finalized = false,
+            .pinned_rpmdb_main_absent = false,
             .target_lock_held = false,
             .literal_dbpath = null,
             .pinned_repo_dir = null,
@@ -570,13 +595,76 @@ pub const TxnConfig = struct {
         }
         if (self.pinned_plugin_conf_dir) |path|
             try copy.setPinnedPluginConfDir(path);
-        if (duplicated_fd != null and finalize_rpmdb)
-            try copy.finalizeRpmDbPin();
+        if (duplicated_fd != null and finalize_rpmdb) {
+            if (preserve_rpmdb_pin and self.rpmdb_pin_finalized)
+                try copy.copyRpmDbPin(self)
+            else
+                try copy.finalizeRpmDbPin();
+        }
         return copy;
     }
 
+    fn copyRpmDbPin(
+        self: *TxnConfig,
+        source: *const TxnConfig,
+    ) InitError!void {
+        if (source.pinned_rpmdb_dir_fd) |fd|
+            try self.adoptPinnedRpmDbDirFd(fd);
+        if (source.pinned_rpmdb_main_fd) |fd|
+            try self.adoptPinnedRpmDbMainFd(fd);
+        if (source.pinned_rpmdb_main_absent and
+            source.pinned_rpmdb_main_fd != null)
+        {
+            return error.RpmDbPinFailed;
+        }
+        self.pinned_rpmdb_main_absent =
+            source.pinned_rpmdb_main_absent;
+        self.rpmdb_pin_finalized = true;
+    }
+
     fn pinRpmDb(self: *TxnConfig) InitError!void {
-        const root_fd = self.pinned_install_root_fd orelse return;
+        _ = self.pinned_install_root_fd orelse return;
+        const normalized = try self.rpmDbDirectoryPathAlloc();
+        defer self.allocator.free(normalized);
+        const dir_fd = self.openPinnedDirectory(
+            normalized,
+            false,
+        ) catch |err| return switch (err) {
+            error.NotFound => {
+                self.pinned_rpmdb_main_absent = true;
+                return;
+            },
+            else => error.RpmDbPinFailed,
+        };
+        errdefer _ = std.c.close(dir_fd);
+
+        const main_fd = std.c.openat(
+            dir_fd,
+            DEFAULT_RPMDB_BASENAME,
+            .{
+                .ACCMODE = .RDONLY,
+                .CLOEXEC = true,
+                .NOFOLLOW = true,
+            },
+        );
+        if (main_fd < 0) {
+            if (std.c.errno(main_fd) == .NOENT) {
+                self.pinned_rpmdb_dir_fd = dir_fd;
+                self.pinned_rpmdb_main_absent = true;
+                return;
+            }
+            return error.RpmDbPinFailed;
+        }
+        errdefer _ = std.c.close(main_fd);
+        try self.adoptPinnedRpmDbMainFd(main_fd);
+        _ = std.c.close(main_fd);
+        self.pinned_rpmdb_dir_fd = dir_fd;
+        self.pinned_rpmdb_main_absent = false;
+    }
+
+    fn rpmDbDirectoryPathAlloc(
+        self: *const TxnConfig,
+    ) InitError![]u8 {
         const expanded = self.expandMacroAlloc(
             self.allocator,
             .dbpath,
@@ -606,46 +694,68 @@ pub const TxnConfig = struct {
                 }
             }
         }
-        _ = root_fd;
-        const normalized = if (expanded.len != 0 and expanded[0] == '/')
-            expanded
+        return if (expanded.len != 0 and expanded[0] == '/')
+            self.allocator.dupe(u8, expanded)
         else
             std.fmt.allocPrint(
                 self.allocator,
                 "/{s}",
                 .{expanded},
-            ) catch return error.OutOfMemory;
-        defer if (normalized.ptr != expanded.ptr)
-            self.allocator.free(normalized);
-        const dir_fd = self.openPinnedDirectory(
-            normalized,
-            false,
-        ) catch |err| return switch (err) {
-            error.NotFound => return,
-            else => error.RpmDbPinFailed,
+            );
+    }
+
+    pub fn createAndPinAbsentRpmDbMain(
+        self: *TxnConfig,
+    ) InitError!void {
+        if (!self.pinnedRpmDbMainWasAbsent() or
+            self.pinned_rpmdb_main_fd != null)
+        {
+            return error.RpmDbPinFailed;
+        }
+        const normalized = try self.rpmDbDirectoryPathAlloc();
+        defer self.allocator.free(normalized);
+
+        var owned_dir_fd: ?c_int = null;
+        const dir_fd = if (self.pinned_rpmdb_dir_fd) |pinned|
+            pinned
+        else blk: {
+            const opened = self.openPinnedDirectory(
+                normalized,
+                true,
+            ) catch return error.RpmDbPinFailed;
+            owned_dir_fd = opened;
+            break :blk opened;
         };
-        errdefer _ = std.c.close(dir_fd);
+        errdefer {
+            if (owned_dir_fd) |fd| _ = std.c.close(fd);
+        }
 
         const main_fd = std.c.openat(
             dir_fd,
             DEFAULT_RPMDB_BASENAME,
             .{
                 .ACCMODE = .RDONLY,
+                .CREAT = true,
+                .EXCL = true,
                 .CLOEXEC = true,
                 .NOFOLLOW = true,
             },
+            @as(std.c.mode_t, 0o644),
         );
-        if (main_fd < 0) {
-            if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT)) {
-                self.pinned_rpmdb_dir_fd = dir_fd;
-                return;
-            }
-            return error.RpmDbPinFailed;
-        }
+        if (main_fd < 0) return error.RpmDbPinFailed;
         errdefer _ = std.c.close(main_fd);
-        try self.adoptPinnedRpmDbMainFd(main_fd);
-        _ = std.c.close(main_fd);
-        self.pinned_rpmdb_dir_fd = dir_fd;
+        const stat = fdStat(main_fd) orelse return error.RpmDbPinFailed;
+        if ((stat.mode & mode_type_mask) != mode_regular or stat.nlink != 1)
+            return error.RpmDbPinFailed;
+
+        if (owned_dir_fd) |fd| {
+            self.pinned_rpmdb_dir_fd = fd;
+            owned_dir_fd = null;
+        }
+        self.pinned_rpmdb_main_fd = main_fd;
+        self.pinned_rpmdb_main_release = null;
+        self.pinned_rpmdb_main_release_context = null;
+        self.pinned_rpmdb_main_absent = false;
     }
 
     /// Loads the conventional system and per-user declarative macro files.
@@ -689,7 +799,10 @@ pub const TxnConfig = struct {
         self: *TxnConfig,
         path: []const u8,
     ) std.mem.Allocator.Error!void {
-        try self.replacePinnedPath(&self.pinned_cache_dir, path);
+        try self.replacePinnedPath(
+            &self.pinned_cache_dir,
+            normalizeDirectoryPath(path),
+        );
     }
 
     pub fn setPinnedPluginConfDir(
@@ -711,7 +824,10 @@ pub const TxnConfig = struct {
         path: []const u8,
     ) bool {
         return self.pinned_cache_dir_fd != null and
-            pinnedPathMatches(self.pinned_cache_dir, path);
+            pinnedPathMatches(
+                self.pinned_cache_dir,
+                normalizeDirectoryPath(path),
+            );
     }
 
     pub fn repinCacheDir(
@@ -722,7 +838,10 @@ pub const TxnConfig = struct {
         const stat = fdStat(fd) orelse return error.InstallRootPinFailed;
         if ((stat.mode & mode_type_mask) != mode_directory)
             return error.InstallRootPinFailed;
-        const replacement_path = try self.allocator.dupe(u8, path);
+        const replacement_path = try self.allocator.dupe(
+            u8,
+            normalizeDirectoryPath(path),
+        );
         errdefer self.allocator.free(replacement_path);
         const replacement_fd = duplicateFdCloexec(fd);
         if (replacement_fd < 0) return error.InstallRootPinFailed;
@@ -754,6 +873,14 @@ pub const TxnConfig = struct {
             std.mem.eql(u8, expected, path)
         else
             false;
+    }
+
+    fn normalizeDirectoryPath(path: []const u8) []const u8 {
+        const trimmed = std.mem.trimEnd(u8, path, "/");
+        return if (trimmed.len == 0 and path.len != 0 and path[0] == '/')
+            path[0..1]
+        else
+            trimmed;
     }
 
     pub fn openPinnedDirectory(
@@ -1657,6 +1784,127 @@ test "deferred rpmdb pin uses the final macro and then freezes it" {
         error.InvalidMacroValue,
         pinned.setMacro(.dbpath, "/var/lib/rpm"),
     );
+}
+
+test "authoritative rpmdb absence only permits exclusive materialization" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+
+    var config = try TxnConfig.init(std.testing.allocator, root);
+    defer config.deinit();
+    var pinned = try config.cloneWithPinnedInstallRoot(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer pinned.deinit();
+    try std.testing.expect(pinned.pinnedRpmDbMainWasAbsent());
+    try std.testing.expect(pinned.pinnedRpmDbDirFd() == null);
+    try std.testing.expect(pinned.pinnedRpmDbMainFd() == null);
+
+    var cloned = try pinned.clone(std.testing.allocator);
+    defer cloned.deinit();
+    try std.testing.expect(cloned.pinnedRpmDbMainWasAbsent());
+    try std.testing.expect(cloned.pinnedRpmDbMainFd() == null);
+
+    try tmp.dir.createDirPath(std.testing.io, "root/var/lib/rpm");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "root/var/lib/rpm/rpmdb.sqlite",
+        .data = "appeared-after-pin",
+    });
+    try std.testing.expectError(
+        error.RpmDbPinFailed,
+        pinned.createAndPinAbsentRpmDbMain(),
+    );
+    const appeared = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "root/var/lib/rpm/rpmdb.sqlite",
+        std.testing.allocator,
+        .unlimited,
+    );
+    defer std.testing.allocator.free(appeared);
+    try std.testing.expectEqualStrings("appeared-after-pin", appeared);
+    try std.testing.expect(pinned.pinnedRpmDbMainWasAbsent());
+
+    try tmp.dir.deleteFile(
+        std.testing.io,
+        "root/var/lib/rpm/rpmdb.sqlite",
+    );
+    try pinned.createAndPinAbsentRpmDbMain();
+    try std.testing.expect(!pinned.pinnedRpmDbMainWasAbsent());
+    try std.testing.expect(pinned.pinnedRpmDbDirFd() != null);
+    try std.testing.expect(pinned.pinnedRpmDbMainFd() != null);
+}
+
+test "pinned cachedir comparisons normalize trailing separators" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/cache");
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const root = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ base, "root" },
+    );
+    defer std.testing.allocator.free(root);
+    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    defer std.testing.allocator.free(root_z);
+    const root_fd = std.c.open(root_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(root_fd >= 0);
+    defer _ = std.c.close(root_fd);
+    const cache_fd = std.c.openat(root_fd, "cache", .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+        .NOFOLLOW = true,
+    });
+    try std.testing.expect(cache_fd >= 0);
+    defer _ = std.c.close(cache_fd);
+
+    var config = try TxnConfig.init(std.testing.allocator, root);
+    defer config.deinit();
+    var pinned = try config.cloneWithPinnedInstallRootDeferredRpmDb(
+        std.testing.allocator,
+        root,
+        root_fd,
+    );
+    defer pinned.deinit();
+    try pinned.repinCacheDir("/cache/", cache_fd);
+    try std.testing.expect(pinned.cacheDirUsesPinnedRoot("/cache"));
+    try std.testing.expect(pinned.cacheDirUsesPinnedRoot("/cache///"));
+    try std.testing.expect(!pinned.cacheDirUsesPinnedRoot("/cache-other"));
+
+    try pinned.repinCacheDir("/", root_fd);
+    try std.testing.expect(pinned.cacheDirUsesPinnedRoot("/"));
+    try std.testing.expect(pinned.cacheDirUsesPinnedRoot("////"));
+    try std.testing.expect(!pinned.cacheDirUsesPinnedRoot("/cache"));
 }
 
 test "failed rpmdb finalization never adopts a closed descriptor" {

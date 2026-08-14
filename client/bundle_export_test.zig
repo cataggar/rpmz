@@ -58,6 +58,13 @@ extern fn tdnf_rpmdb_write_install_config(
     file_state_count: usize,
     hnum_out: ?*u32,
 ) i32;
+extern fn tdnf_rpmdb_count_packages(root: ?[*:0]const u8) i64;
+const ReplayBeforeExecutionHook =
+    *const fn (?*anyopaque) callconv(.c) void;
+extern fn TDNFReplaySetBeforeExecutionTestHook(
+    context: ?*anyopaque,
+    hook: ?ReplayBeforeExecutionHook,
+) void;
 
 fn rpmPayload(version: []const u8) ![]u8 {
     return namedRpmPayload("app", version);
@@ -533,6 +540,180 @@ test "an exported bundle validates as a closed set" {
     try std.testing.expect(bundle.findFile("plan.json") != null);
     try std.testing.expectEqual(@as(usize, 1), bundle.model().packages.len);
     try std.testing.expectEqualStrings("app", bundle.model().packages[0].identity.name);
+}
+
+test "replay initializes a clean absent rpmdb before execution" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const input = try fixture.input("clean-empty-root");
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+
+    const database_path = try std.fs.path.join(
+        allocator,
+        &.{
+            input.resolve.installed.install_root,
+            "var/lib/rpm/rpmdb.sqlite",
+        },
+    );
+    defer allocator.free(database_path);
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(io, database_path, .{}),
+    );
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+
+    const database = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        database_path,
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(database);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        database,
+        "SQLite format 3\x00",
+    ));
+    const root_z = try allocator.dupeZ(
+        u8,
+        input.resolve.installed.install_root,
+    );
+    defer allocator.free(root_z);
+    try std.testing.expectEqual(
+        @as(i64, 1),
+        tdnf_rpmdb_count_packages(root_z.ptr),
+    );
+}
+
+test "rpmdb appearing after replay preflight is never adopted" {
+    const Race = struct {
+        root: []const u8,
+        failed: bool = false,
+
+        fn inject(raw: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            var root = std.Io.Dir.cwd().openDir(
+                io,
+                self.root,
+                .{},
+            ) catch {
+                self.failed = true;
+                return;
+            };
+            defer root.close(io);
+            root.createDirPath(io, "var/lib/rpm") catch {
+                self.failed = true;
+                return;
+            };
+            root.writeFile(io, .{
+                .sub_path = "var/lib/rpm/rpmdb.sqlite",
+                .data = "appeared-after-preflight",
+            }) catch {
+                self.failed = true;
+                return;
+            };
+        }
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const input = try fixture.input("rpmdb-race");
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+
+    var race = Race{
+        .root = input.resolve.installed.install_root,
+    };
+    TDNFReplaySetBeforeExecutionTestHook(&race, Race.inject);
+    defer TDNFReplaySetBeforeExecutionTestHook(null, null);
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expect(!race.failed);
+    try std.testing.expectEqual(
+        client.replay.Status.validation_failed,
+        replayed.status,
+    );
+    try std.testing.expectEqual(
+        client.replay.ValidationFailure.rpmdb_mismatch,
+        replayed.validation_failure.?,
+    );
+    for (replayed.actions) |action| {
+        try std.testing.expectEqual(
+            client.replay.ActionStatus.not_attempted,
+            action.status,
+        );
+    }
+
+    var root = try std.Io.Dir.cwd().openDir(
+        io,
+        input.resolve.installed.install_root,
+        .{},
+    );
+    defer root.close(io);
+    const database = try root.readFileAlloc(
+        io,
+        "var/lib/rpm/rpmdb.sqlite",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(database);
+    try std.testing.expectEqualStrings(
+        "appeared-after-preflight",
+        database,
+    );
+    inline for (.{ "-journal", "-wal", "-shm" }) |suffix| {
+        var path_buffer: [128]u8 = undefined;
+        const path = try std.fmt.bufPrint(
+            &path_buffer,
+            "var/lib/rpm/rpmdb.sqlite{s}",
+            .{suffix},
+        );
+        try std.testing.expectError(
+            error.FileNotFound,
+            root.access(io, path, .{}),
+        );
+    }
+}
+
+test "cachedir trailing separator resolves exports and replays" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    var input = try fixture.input("cachedir-trailing");
+    input.resolve.cache_dir = "/var/cache/tdnf/";
+
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+    try std.testing.expectEqual(@as(usize, 1), replayed.final_inventory.?.len);
 }
 
 test "alldeps replay projects actions onto a nonempty target" {

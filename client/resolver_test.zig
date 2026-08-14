@@ -392,6 +392,27 @@ test "public resolver returns an owned plan built only from declared inputs" {
     try std.testing.expectEqualStrings("", work);
 }
 
+test "cachedir trailing separator resolves through the pinned cache" {
+    const allocator = std.testing.allocator;
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    const declared = [_]resolver.Repository{fixture.declared()};
+    var request = fixture.input(&declared);
+    request.cache_dir = "/var/cache/tdnf/";
+
+    const plan = try resolver.resolvePlan(allocator, io, request);
+    defer plan.destroy();
+    try std.testing.expectEqual(
+        transaction_plan.ResolutionStatus.resolved,
+        plan.model().environment.resolution_status,
+    );
+    try fixture.tmp.dir.access(
+        io,
+        "root/var/cache/tdnf",
+        .{},
+    );
+}
+
 test "undeclared host repositories and caches cannot change the plan digest" {
     const allocator = std.testing.allocator;
     var fixture = try Fixture.create();

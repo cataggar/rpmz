@@ -5,6 +5,7 @@
 //! fetch callbacks, and it calls the fixed-order native executor directly.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const abi = @import("client_abi");
 const bundle_reader = @import("bundle_reader");
 const bundle_selection = @import("bundle_selection");
@@ -36,6 +37,29 @@ extern fn tdnf_rpmdb_iter_next_header_blob_hnum(
     length: *usize,
 ) i32;
 extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
+extern fn TDNFRpmDbPrepareWriteConfig(config: *const anyopaque) c_int;
+
+const BeforeExecutionTestHook =
+    *const fn (?*anyopaque) callconv(.c) void;
+var before_execution_test_context: ?*anyopaque = null;
+var before_execution_test_hook: ?BeforeExecutionTestHook = null;
+
+fn setBeforeExecutionTestHook(
+    context: ?*anyopaque,
+    hook: ?BeforeExecutionTestHook,
+) callconv(.c) void {
+    before_execution_test_context = context;
+    before_execution_test_hook = hook;
+}
+
+comptime {
+    if (builtin.is_test) {
+        @export(&setBeforeExecutionTestHook, .{
+            .name = "TDNFReplaySetBeforeExecutionTestHook",
+            .visibility = .hidden,
+        });
+    }
+}
 
 pub const result_schema = "tdnf.replay-result/v1";
 
@@ -420,6 +444,23 @@ fn runValidated(
         plan.model(),
         before.rows,
     )) orelse return error.ActionShapeMismatch;
+
+    if (built.items.len != 0 and
+        locked_config.pinnedRpmDbMainWasAbsent())
+    {
+        if (builtin.is_test) {
+            if (before_execution_test_hook) |hook|
+                hook(before_execution_test_context);
+        }
+        locked_config.createAndPinAbsentRpmDbMain() catch |err| {
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                else => error.RpmdbMismatch,
+            };
+        };
+        if (TDNFRpmDbPrepareWriteConfig(locked_config) != 0)
+            return error.TargetUnreadable;
+    }
 
     const install_root_z = arena.dupeZ(
         u8,

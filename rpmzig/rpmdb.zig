@@ -94,6 +94,14 @@ const PinnedReadDb = struct {
     exists: bool,
 
     fn initConfig(config: *const TxnConfig) !PinnedReadDb {
+        if (config.pinnedRpmDbMainWasAbsent()) {
+            return .{
+                .root = null,
+                .dir_fd = -1,
+                .connection = null,
+                .exists = false,
+            };
+        }
         const expanded = try config.expandMacroAlloc(
             std.heap.c_allocator,
             .dbpath,
@@ -940,7 +948,7 @@ fn writeTransactionPlanFileProvider(config: *const TxnConfig) !void {
         std.heap.c_allocator,
     );
     defer std.heap.c_allocator.free(blob);
-    var writer = try rpmdb_write.Writer.openConfig(config);
+    var writer = try rpmdb_write.Writer.openConfig(@constCast(config));
     defer writer.close();
     try writer.beginTransaction();
     errdefer writer.rollbackTransaction() catch {};
@@ -955,6 +963,22 @@ fn transactionPlanTestWriteFileProvider(
     return 0;
 }
 
+fn prepareRpmDbWriteConfig(
+    config: ?*const TxnConfig,
+) callconv(.c) c_int {
+    clearError();
+    const cfg = config orelse {
+        setError("null rpm config", .{});
+        return -1;
+    };
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
+        setError("rpmdb prepare write failed: {t}", .{err});
+        return -1;
+    };
+    writer.close();
+    return 0;
+}
+
 comptime {
     @export(&transactionPlanSnapshotOpenConfig, .{
         .name = "TDNFTransactionPlanRpmdbSnapshotOpenConfig",
@@ -962,6 +986,10 @@ comptime {
     });
     @export(&transactionPlanTestWriteFileProvider, .{
         .name = "TDNFTransactionPlanTestWriteFileProvider",
+        .visibility = .hidden,
+    });
+    @export(&prepareRpmDbWriteConfig, .{
+        .name = "TDNFRpmDbPrepareWriteConfig",
         .visibility = .hidden,
     });
 }
@@ -1370,7 +1398,7 @@ export fn tdnf_rpmdb_write_install_config(
         return -1;
     };
     defer std.heap.c_allocator.free(path_z);
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -1423,7 +1451,7 @@ export fn tdnf_rpmdb_write_install_file_config(
         setError("null file_states with non-zero count", .{});
         return -1;
     };
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -1527,7 +1555,7 @@ export fn tdnf_rpmdb_write_replace_file_config(
         setError("null file_states with non-zero count", .{});
         return -1;
     };
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -1571,7 +1599,7 @@ export fn tdnf_rpmdb_write_replace_config(
         return -1;
     };
     defer std.heap.c_allocator.free(path_z);
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -1624,7 +1652,7 @@ export fn tdnf_rpmdb_write_erase_hnum_config(config: ?*const TxnConfig, hnum: u3
         setError("null rpm config", .{});
         return -1;
     };
-    var writer = rpmdb_write.Writer.openConfig(cfg) catch |err| {
+    var writer = rpmdb_write.Writer.openConfig(@constCast(cfg)) catch |err| {
         setError("Writer.openConfig: {t}", .{err});
         return -1;
     };
@@ -4551,7 +4579,7 @@ export fn tdnf_rpm_erase_hnum(
     const opts = options orelse &default_opts;
     var writer = blk: {
         if (opts.config) |config| {
-            break :blk rpmdb_write.Writer.openConfig(config) catch |err| {
+            break :blk rpmdb_write.Writer.openConfig(@constCast(config)) catch |err| {
                 setError("Writer.openConfig: {t}", .{err});
                 return -1;
             };
@@ -4680,7 +4708,7 @@ export fn tdnf_rpm_erase_header_blob(
         &custom_bridge
     else blk: {
         writer = if (opts.config) |config|
-            rpmdb_write.Writer.openConfig(config) catch |err| {
+            rpmdb_write.Writer.openConfig(@constCast(config)) catch |err| {
                 setError("Writer.openConfig: {t}", .{err});
                 return -1;
             }

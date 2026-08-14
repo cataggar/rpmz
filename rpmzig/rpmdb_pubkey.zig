@@ -81,7 +81,7 @@ pub fn importConfig(
     defer parsed.deinit();
     return importParsed(
         allocator,
-        try rpmdb_write.Writer.openConfig(config),
+        try rpmdb_write.Writer.openConfig(@constCast(config)),
         &parsed,
         timestamp,
     );
