@@ -52,9 +52,12 @@ const o_rdonly: c_int = 0;
 const o_rdwr: c_int = 2;
 const o_accmode: c_int = 3;
 const o_creat: c_int = 0x40;
+const o_excl: c_int = 0x80;
+const o_nonblock: c_int = 0x800;
 const o_directory: c_int = 0x10000;
 const o_nofollow: c_int = 0x20000;
 const o_cloexec: c_int = 0x80000;
+const o_path: c_int = 0x200000;
 const s_ifmt: u16 = 0o170000;
 const s_ifreg: u16 = 0o100000;
 const s_ifdir: u16 = 0o040000;
@@ -85,6 +88,8 @@ pub const OpenOptions = struct {
     pinned_main_fd: ?c_int = null,
     before_sqlite_open: ?*const fn (?*anyopaque) void = null,
     mutation_context: ?*anyopaque = null,
+    exclusive_create: bool = false,
+    authoritative_sidecars_absent: bool = false,
 };
 
 const Identity = struct {
@@ -121,6 +126,12 @@ const SidecarKind = enum {
     shm,
 };
 
+const SidecarIdentity = union(enum) {
+    untracked,
+    absent,
+    present: Identity,
+};
+
 const Match = struct {
     route: *Route,
     relative: []const u8,
@@ -140,7 +151,11 @@ const DatabaseState = struct {
     route: *Route,
     main_identity: Identity,
     basename: [:0]u8,
-    tracked_sidecars: [3]?Identity = .{ null, null, null },
+    tracked_sidecars: [3]SidecarIdentity = .{
+        .untracked,
+        .untracked,
+        .untracked,
+    },
     refs: usize = 1,
     next: ?*DatabaseState = null,
 };
@@ -290,7 +305,9 @@ pub fn openAt(
     options: OpenOptions,
 ) Error!Connection {
     if (!validBasename(basename) or
-        (options.mode == .read_only and options.create))
+        (options.mode == .read_only and options.create) or
+        (options.exclusive_create and
+            (!options.create or options.pinned_main_fd != null)))
     {
         return error.InvalidPath;
     }
@@ -379,6 +396,35 @@ pub fn openAt(
     return .{ .db = db, .handle = handle };
 }
 
+pub fn createExclusiveMainPinAt(
+    allocator: Allocator,
+    dir_fd: c_int,
+    basename: []const u8,
+) Error!MainFdPin {
+    if (!validBasename(basename)) return error.InvalidPath;
+    _ = try installHooks();
+    const basename_z = allocator.dupeZ(u8, basename) catch
+        return error.OutOfMemory;
+    defer allocator.free(basename_z);
+    const directory = try acquireDirectoryPin(allocator, dir_fd);
+    const database = try acquireDatabaseState(
+        allocator,
+        directory,
+        basename,
+        basename_z.ptr,
+        .{
+            .mode = .read_write,
+            .create = true,
+            .exclusive_create = true,
+            .authoritative_sidecars_absent = true,
+        },
+    );
+    return .{
+        .database = database,
+        .fd = database.route.write_main_fd,
+    };
+}
+
 fn acquireDatabaseState(
     allocator: Allocator,
     directory: *DirectoryPin,
@@ -435,6 +481,7 @@ fn acquireDatabaseState(
         {
             continue;
         }
+        if (options.exclusive_create) return error.PathChanged;
         const path_stat = statRelativeFd(
             existing.directory.fd,
             basename_z,
@@ -461,11 +508,14 @@ fn acquireDatabaseState(
 
     const effective_create = options.create and
         options.pinned_main_fd == null;
+    if (options.authoritative_sidecars_absent)
+        try verifyWalSidecarsAbsent(directory.fd, basename);
     const main_fd = try openVerifiedMainFd(
         directory.fd,
         basename_z,
         options.mode,
         effective_create,
+        options.exclusive_create,
         options.pinned_main_fd,
         pinned_stat,
         null,
@@ -481,6 +531,10 @@ fn acquireDatabaseState(
         .route = route,
         .main_identity = Identity.fromStat(main_stat),
         .basename = owned_basename,
+        .tracked_sidecars = if (options.authoritative_sidecars_absent)
+            .{ .untracked, .absent, .absent }
+        else
+            .{ .untracked, .untracked, .untracked },
     };
     route.* = .{
         .allocator = allocator,
@@ -512,20 +566,61 @@ fn openVerifiedMainFd(
     basename_z: [*:0]const u8,
     mode: Mode,
     create: bool,
+    exclusive_create: bool,
     pinned_main_fd: ?c_int,
     pinned_stat: ?FileStat,
     expected_identity: ?Identity,
 ) Error!c_int {
     const fd = if (pinned_main_fd) |pinned|
         reopenPinnedFd(pinned, mode)
-    else
-        openat(
+    else blk: {
+        const probe = openat(
             directory_fd,
             basename_z,
-            (if (mode == .read_only) o_rdonly else o_rdwr) |
-                o_cloexec | o_nofollow | (if (create) o_creat else 0),
+            o_path | o_cloexec | o_nofollow,
+            0,
+        );
+        if (probe >= 0) {
+            defer _ = std.c.close(probe);
+            if (exclusive_create) return error.PathChanged;
+            _ = try regularSingleLinkStat(probe);
+            break :blk reopenPinnedFd(probe, mode);
+        }
+        const probe_errno = std.c._errno().*;
+        if (probe_errno != @intFromEnum(std.posix.E.NOENT))
+            return if (probe_errno == @intFromEnum(std.posix.E.LOOP))
+                error.UnsafeFile
+            else
+                error.SyscallFailed;
+        if (!create) return error.NotFound;
+        const created = openat(
+            directory_fd,
+            basename_z,
+            o_rdwr | o_creat | o_excl | o_cloexec | o_nofollow,
             0o644,
         );
+        if (created >= 0) break :blk created;
+        if (!exclusive_create and
+            std.c._errno().* == @intFromEnum(std.posix.E.EXIST))
+        {
+            const raced_probe = openat(
+                directory_fd,
+                basename_z,
+                o_path | o_cloexec | o_nofollow,
+                0,
+            );
+            if (raced_probe < 0) return error.PathChanged;
+            defer _ = std.c.close(raced_probe);
+            _ = try regularSingleLinkStat(raced_probe);
+            break :blk reopenPinnedFd(raced_probe, mode);
+        }
+        return if (std.c._errno().* == @intFromEnum(std.posix.E.EXIST))
+            error.PathChanged
+        else if (std.c._errno().* == @intFromEnum(std.posix.E.LOOP))
+            error.UnsafeFile
+        else
+            error.SyscallFailed;
+    };
     if (fd < 0) {
         if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
             return error.NotFound;
@@ -567,6 +662,7 @@ fn ensureSharedMainFdLocked(
         database.directory.fd,
         basename_z,
         mode,
+        false,
         false,
         pinned_main_fd,
         if (pinned_main_fd) |pinned|
@@ -685,6 +781,25 @@ pub export fn tdnf_sqlite_confined_pin_main_fd(
     };
 }
 
+pub export fn tdnf_sqlite_confined_create_exclusive_main_pin(
+    dir_fd: c_int,
+    basename: [*]const u8,
+    basename_len: usize,
+    output: *RawMainFdPin,
+) callconv(.c) c_int {
+    output.* = .{ .fd = -1, .database = null };
+    const pin = createExclusiveMainPinAt(
+        std.heap.c_allocator,
+        dir_fd,
+        basename[0..basename_len],
+    ) catch |err| return bridgeStatus(err);
+    output.* = .{
+        .fd = pin.fd,
+        .database = pin.database,
+    };
+    return 0;
+}
+
 pub export fn tdnf_sqlite_confined_release_main_fd_pin(
     raw_database: ?*anyopaque,
 ) callconv(.c) void {
@@ -692,6 +807,15 @@ pub export fn tdnf_sqlite_confined_release_main_fd_pin(
         raw_database orelse return,
     ));
     releaseDatabaseState(database);
+}
+
+pub export fn tdnf_sqlite_confined_retain_main_fd_pin(
+    raw_database: ?*anyopaque,
+) callconv(.c) void {
+    const database: *DatabaseState = @ptrCast(@alignCast(
+        raw_database orelse return,
+    ));
+    retainDatabaseState(database);
 }
 
 pub export fn tdnf_sqlite_confined_registry_anchor() callconv(.c) usize {
@@ -866,18 +990,42 @@ fn trackExistingWalSidecars(database: *DatabaseState) Error!void {
             .{ database.basename, @tagName(kind) },
         ) catch return error.InvalidPath;
         const slot = &database.tracked_sidecars[sidecarIndex(kind)];
-        const st = statRelativeDatabase(database, name) orelse {
-            if (slot.* != null) return error.PathChanged;
-            continue;
-        };
-        if ((st.mode & s_ifmt) != s_ifreg or st.nlink != 1)
-            return error.UnsafeFile;
-        const identity = Identity.fromStat(st);
-        if (slot.*) |expected| {
-            if (!expected.eql(identity)) return error.PathChanged;
-        } else {
-            slot.* = identity;
+        const stat = try statRelativeDatabaseChecked(database, name);
+        switch (slot.*) {
+            .untracked => {
+                if (stat) |st| {
+                    if ((st.mode & s_ifmt) != s_ifreg or st.nlink != 1)
+                        return error.UnsafeFile;
+                    slot.* = .{ .present = Identity.fromStat(st) };
+                } else {
+                    slot.* = .absent;
+                }
+            },
+            .absent => if (stat != null) return error.PathChanged,
+            .present => |expected| {
+                const st = stat orelse return error.PathChanged;
+                if ((st.mode & s_ifmt) != s_ifreg or st.nlink != 1)
+                    return error.UnsafeFile;
+                if (!expected.eql(Identity.fromStat(st)))
+                    return error.PathChanged;
+            },
         }
+    }
+}
+
+fn verifyWalSidecarsAbsent(
+    directory_fd: c_int,
+    basename: []const u8,
+) Error!void {
+    inline for (.{ SidecarKind.wal, .shm }) |kind| {
+        var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
+        const name = std.fmt.bufPrintZ(
+            &name_buffer,
+            "{s}-{s}",
+            .{ basename, @tagName(kind) },
+        ) catch return error.InvalidPath;
+        if (try statRelativeFdChecked(directory_fd, name.ptr) != null)
+            return error.PathChanged;
     }
 }
 
@@ -1060,7 +1208,10 @@ fn trackedWalSidecar(
 ) bool {
     const sidecar = kind orelse return false;
     if (sidecar != .wal and sidecar != .shm) return false;
-    return route.database.tracked_sidecars[sidecarIndex(sidecar)] != null;
+    return switch (route.database.tracked_sidecars[sidecarIndex(sidecar)]) {
+        .present => true,
+        .untracked, .absent => false,
+    };
 }
 
 fn validBasename(value: []const u8) bool {
@@ -1093,6 +1244,13 @@ fn statRelativeFd(
     dir_fd: c_int,
     name: [*:0]const u8,
 ) ?FileStat {
+    return statRelativeFdChecked(dir_fd, name) catch null;
+}
+
+fn statRelativeFdChecked(
+    dir_fd: c_int,
+    name: [*:0]const u8,
+) Error!?FileStat {
     var st = std.mem.zeroes(linux.Statx);
     if (std.c.statx(
         dir_fd,
@@ -1100,7 +1258,15 @@ fn statRelativeFd(
         linux.AT.SYMLINK_NOFOLLOW,
         linux.STATX.BASIC_STATS,
         &st,
-    ) != 0) return null;
+    ) != 0) {
+        return switch (std.c._errno().*) {
+            @intFromEnum(std.posix.E.NOENT) => null,
+            @intFromEnum(std.posix.E.LOOP),
+            @intFromEnum(std.posix.E.NOTDIR),
+            => error.UnsafeFile,
+            else => error.SyscallFailed,
+        };
+    }
     return fileStat(st);
 }
 
@@ -1125,11 +1291,18 @@ fn statRelativeDatabase(
     database: *const DatabaseState,
     relative: []const u8,
 ) ?FileStat {
+    return statRelativeDatabaseChecked(database, relative) catch null;
+}
+
+fn statRelativeDatabaseChecked(
+    database: *const DatabaseState,
+    relative: []const u8,
+) Error!?FileStat {
     var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
-    if (relative.len >= name_buffer.len) return null;
+    if (relative.len >= name_buffer.len) return error.InvalidPath;
     @memcpy(name_buffer[0..relative.len], relative);
     name_buffer[relative.len] = 0;
-    return statRelativeFd(
+    return statRelativeFdChecked(
         database.directory.fd,
         @ptrCast(&name_buffer),
     );
@@ -1146,20 +1319,34 @@ fn verifyTrackedLocked(handle: *const Handle) bool {
         return false;
     }
     inline for (.{ SidecarKind.journal, .wal, .shm }) |kind| {
-        if (database.tracked_sidecars[sidecarIndex(kind)]) |identity| {
-            var name_buffer: [std.fs.max_name_bytes]u8 = undefined;
-            const name = std.fmt.bufPrint(
-                &name_buffer,
-                "{s}-{s}",
-                .{ database.basename, @tagName(kind) },
-            ) catch return false;
-            const st = statRelative(handle.route, name) orelse return false;
-            if ((st.mode & s_ifmt) != s_ifreg or
-                st.nlink != 1 or
-                !Identity.fromStat(st).eql(identity))
-            {
-                return false;
-            }
+        const state = database.tracked_sidecars[sidecarIndex(kind)];
+        switch (state) {
+            .untracked => {},
+            .absent, .present => {
+                var name_buffer: [std.fs.max_name_bytes]u8 = undefined;
+                const name = std.fmt.bufPrint(
+                    &name_buffer,
+                    "{s}-{s}",
+                    .{ database.basename, @tagName(kind) },
+                ) catch return false;
+                const stat = statRelativeDatabaseChecked(
+                    database,
+                    name,
+                ) catch return false;
+                switch (state) {
+                    .untracked => unreachable,
+                    .absent => if (stat != null) return false,
+                    .present => |identity| {
+                        const st = stat orelse return false;
+                        if ((st.mode & s_ifmt) != s_ifreg or
+                            st.nlink != 1 or
+                            !Identity.fromStat(st).eql(identity))
+                        {
+                            return false;
+                        }
+                    },
+                }
+            },
         }
     }
     return true;
@@ -1289,30 +1476,74 @@ fn confinedOpen(
     }
     @memcpy(name_buffer[0..match.relative.len], match.relative);
     name_buffer[match.relative.len] = 0;
+    const tracked = if (kind) |sidecar|
+        &database.tracked_sidecars[sidecarIndex(sidecar)]
+    else
+        null;
+    var open_flags = (if (read_only_shared_shm)
+        flags & ~o_creat
+    else
+        flags) | o_nonblock | o_cloexec | o_nofollow;
+    if (tracked) |state| {
+        switch (state.*) {
+            .absent => {
+                if ((open_flags & o_creat) == 0) {
+                    setErrno(@intFromEnum(std.posix.E.NOENT));
+                    return -1;
+                }
+                open_flags |= o_excl;
+            },
+            .untracked, .present => {},
+        }
+    }
     const fd = openat(
         database.directory.fd,
         @ptrCast(&name_buffer),
-        (if (read_only_shared_shm) flags & ~o_creat else flags) |
-            o_cloexec | o_nofollow,
+        open_flags,
         @intCast(mode),
     );
-    if (fd < 0) return fd;
+    if (fd < 0) {
+        if (tracked) |state| {
+            switch (state.*) {
+                .absent => if (std.c._errno().* ==
+                    @intFromEnum(std.posix.E.EXIST))
+                {
+                    setErrno(@intFromEnum(std.posix.E.STALE));
+                },
+                .untracked, .present => {},
+            }
+        }
+        return fd;
+    }
     const st = regularSingleLinkStat(fd) catch {
         _ = std.c.close(fd);
         setErrno(@intFromEnum(std.posix.E.LOOP));
         return -1;
     };
-    if (kind) |sidecar| {
+    const status_flags = std.c.fcntl(
+        fd,
+        std.c.F.GETFL,
+    );
+    if (status_flags < 0 or
+        std.c.fcntl(
+            fd,
+            std.c.F.SETFL,
+            status_flags & ~o_nonblock,
+        ) < 0)
+    {
+        _ = std.c.close(fd);
+        return -1;
+    }
+    if (tracked) |slot| {
         const identity = Identity.fromStat(st);
-        const slot = &database.tracked_sidecars[sidecarIndex(sidecar)];
-        if (slot.*) |expected| {
-            if (!expected.eql(identity)) {
+        switch (slot.*) {
+            .untracked, .absent => slot.* = .{ .present = identity },
+            .present => |expected| {
+                if (expected.eql(identity)) return fd;
                 _ = std.c.close(fd);
                 setErrno(@intFromEnum(std.posix.E.STALE));
                 return -1;
-            }
-        } else {
-            slot.* = identity;
+            },
         }
     }
     return fd;
@@ -1420,8 +1651,14 @@ fn confinedUnlink(raw_path: [*:0]const u8) callconv(.c) c_int {
         0,
     );
     if (rc == 0) {
-        if (sidecarKind(match.route, match.relative)) |kind|
-            match.route.database.tracked_sidecars[sidecarIndex(kind)] = null;
+        if (sidecarKind(match.route, match.relative)) |kind| {
+            const slot =
+                &match.route.database.tracked_sidecars[sidecarIndex(kind)];
+            slot.* = if (kind == .wal or kind == .shm)
+                .absent
+            else
+                .untracked;
+        }
     }
     return rc;
 }
@@ -2708,6 +2945,62 @@ test "read-only WAL opens existing sidecars before and after a writer" {
     );
     reader_second.close();
     writer_first.close();
+}
+
+test "exclusive main lease rejects WAL and SHM that appear first" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var base_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const base = base_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &base_buffer,
+    )];
+    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    defer std.testing.allocator.free(base_z);
+    const dir_fd = std.c.open(base_z.ptr, .{
+        .ACCMODE = .RDONLY,
+        .DIRECTORY = true,
+        .CLOEXEC = true,
+    });
+    try std.testing.expect(dir_fd >= 0);
+    defer _ = std.c.close(dir_fd);
+
+    inline for (.{ "wal", "shm" }, 0..) |suffix, index| {
+        var basename_buffer: [64]u8 = undefined;
+        const basename = try std.fmt.bufPrint(
+            &basename_buffer,
+            "exclusive-{d}.sqlite",
+            .{index},
+        );
+        var pin = try createExclusiveMainPinAt(
+            std.testing.allocator,
+            dir_fd,
+            basename,
+        );
+        defer pin.deinit();
+        var sidecar_buffer: [96]u8 = undefined;
+        const sidecar = try std.fmt.bufPrint(
+            &sidecar_buffer,
+            "{s}-{s}",
+            .{ basename, suffix },
+        );
+        try tmp.dir.writeFile(std.testing.io, .{
+            .sub_path = sidecar,
+            .data = "appeared-first",
+        });
+        try std.testing.expectError(
+            error.PathChanged,
+            openAt(
+                std.testing.allocator,
+                dir_fd,
+                basename,
+                .{
+                    .mode = .read_write,
+                    .pinned_main_fd = pin.fd,
+                },
+            ),
+        );
+    }
 }
 
 test "read-only WAL identity-checks existing sidecars" {

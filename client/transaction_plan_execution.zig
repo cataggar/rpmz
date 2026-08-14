@@ -28,6 +28,12 @@ pub fn materialize(
     if (inputs.len == 0 and plan.model().actions.len != 0) {
         return error.InvalidInput;
     }
+    if (inputs.len == 0) {
+        return plan.withExecutionSteps(allocator, &.{}) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.InvalidInput,
+        };
+    }
 
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();

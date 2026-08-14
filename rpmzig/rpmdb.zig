@@ -95,6 +95,8 @@ const PinnedReadDb = struct {
 
     fn initConfig(config: *const TxnConfig) !PinnedReadDb {
         if (config.pinnedRpmDbMainWasAbsent()) {
+            config.revalidatePinnedRpmDbAbsence() catch
+                return error.SqliteOpenFailed;
             return .{
                 .root = null,
                 .dir_fd = -1,
@@ -979,6 +981,54 @@ fn prepareRpmDbWriteConfig(
     return 0;
 }
 
+const PreparedRpmDbWrite = struct {
+    prepared: rpmdb_write.PreparedConfig,
+};
+
+fn beginPreparedRpmDbWrite(
+    config: ?*TxnConfig,
+    output: ?*?*PreparedRpmDbWrite,
+) callconv(.c) c_int {
+    const out = output orelse return 2;
+    out.* = null;
+    const cfg = config orelse return 2;
+    const state = std.heap.c_allocator.create(PreparedRpmDbWrite) catch
+        return 1;
+    state.prepared = rpmdb_write.PreparedConfig.init(cfg) catch |err| {
+        std.heap.c_allocator.destroy(state);
+        return if (err == error.OutOfMemory) 1 else 2;
+    };
+    out.* = state;
+    return 0;
+}
+
+fn materializePreparedRpmDbWrite(
+    state: ?*PreparedRpmDbWrite,
+) callconv(.c) c_int {
+    const prepared = state orelse return 2;
+    prepared.prepared.materializeAbsentMain() catch |err|
+        return if (err == error.OutOfMemory) 1 else 2;
+    return 0;
+}
+
+fn initializePreparedRpmDbWrite(
+    state: ?*PreparedRpmDbWrite,
+) callconv(.c) c_int {
+    const prepared = state orelse return 2;
+    var writer = prepared.prepared.openMaterialized() catch |err|
+        return if (err == error.OutOfMemory) 1 else 2;
+    writer.close();
+    return 0;
+}
+
+fn destroyPreparedRpmDbWrite(
+    state: ?*PreparedRpmDbWrite,
+) callconv(.c) void {
+    const prepared = state orelse return;
+    prepared.prepared.deinit();
+    std.heap.c_allocator.destroy(prepared);
+}
+
 comptime {
     @export(&transactionPlanSnapshotOpenConfig, .{
         .name = "TDNFTransactionPlanRpmdbSnapshotOpenConfig",
@@ -990,6 +1040,22 @@ comptime {
     });
     @export(&prepareRpmDbWriteConfig, .{
         .name = "TDNFRpmDbPrepareWriteConfig",
+        .visibility = .hidden,
+    });
+    @export(&beginPreparedRpmDbWrite, .{
+        .name = "TDNFRpmDbPreparedWriteBegin",
+        .visibility = .hidden,
+    });
+    @export(&materializePreparedRpmDbWrite, .{
+        .name = "TDNFRpmDbPreparedWriteMaterialize",
+        .visibility = .hidden,
+    });
+    @export(&initializePreparedRpmDbWrite, .{
+        .name = "TDNFRpmDbPreparedWriteInitialize",
+        .visibility = .hidden,
+    });
+    @export(&destroyPreparedRpmDbWrite, .{
+        .name = "TDNFRpmDbPreparedWriteDestroy",
         .visibility = .hidden,
     });
 }

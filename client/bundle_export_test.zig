@@ -65,6 +65,13 @@ extern fn TDNFReplaySetBeforeExecutionTestHook(
     context: ?*anyopaque,
     hook: ?ReplayBeforeExecutionHook,
 ) void;
+const ReplayStageHook =
+    *const fn (?*anyopaque, u32) callconv(.c) void;
+extern fn TDNFReplaySetStageTestHook(
+    context: ?*anyopaque,
+    hook: ?ReplayStageHook,
+) void;
+extern fn TDNFReplayTestFailStage(stage: u32) void;
 
 fn rpmPayload(version: []const u8) ![]u8 {
     return namedRpmPayload("app", version);
@@ -693,11 +700,331 @@ test "rpmdb appearing after replay preflight is never adopted" {
     }
 }
 
+test "zero-action replay freshly rejects rpmdb appearance" {
+    const Race = struct {
+        root: []const u8,
+        failed: bool = false,
+
+        fn inject(raw: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            var root = std.Io.Dir.cwd().openDir(io, self.root, .{}) catch {
+                self.failed = true;
+                return;
+            };
+            defer root.close(io);
+            root.createDirPath(io, "var/lib/rpm") catch {
+                self.failed = true;
+                return;
+            };
+            root.writeFile(io, .{
+                .sub_path = "var/lib/rpm/rpmdb.sqlite",
+                .data = "appeared-after-zero-action-preflight",
+            }) catch {
+                self.failed = true;
+                return;
+            };
+        }
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    var input = try fixture.input("zero-action-rpmdb-race");
+    input.resolve.operation = .upgrade_all;
+    input.resolve.subjects = &.{};
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        exported.exported.plan.model().actions.len,
+    );
+
+    var race = Race{ .root = input.resolve.installed.install_root };
+    TDNFReplaySetBeforeExecutionTestHook(&race, Race.inject);
+    defer TDNFReplaySetBeforeExecutionTestHook(null, null);
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expect(!race.failed);
+    try std.testing.expectEqual(
+        client.replay.Status.validation_failed,
+        replayed.status,
+    );
+    try std.testing.expectEqual(
+        client.replay.ValidationFailure.rpmdb_mismatch,
+        replayed.validation_failure.?,
+    );
+    try std.testing.expectEqual(@as(usize, 0), replayed.actions.len);
+}
+
+test "post-create replay faults are transaction failures with truthful inventory" {
+    const cases = [_]struct {
+        stage: u32,
+        inventory_len: ?usize,
+        action_status: client.replay.ActionStatus,
+        failure: client.replay.TransactionFailure,
+    }{
+        .{ .stage = 1, .inventory_len = null, .action_status = .indeterminate, .failure = .final_inventory_unreadable },
+        .{ .stage = 2, .inventory_len = 0, .action_status = .indeterminate, .failure = .execution_failed },
+        .{ .stage = 3, .inventory_len = 1, .action_status = .applied, .failure = .execution_failed },
+        .{ .stage = 4, .inventory_len = null, .action_status = .applied, .failure = .final_inventory_unreadable },
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    for (cases) |case| {
+        var name_buffer: [64]u8 = undefined;
+        const name = try std.fmt.bufPrint(
+            &name_buffer,
+            "post-create-fault-{d}",
+            .{case.stage},
+        );
+        const input = try fixture.input(name);
+        var exported = try bundle_export.exportBundle(allocator, io, input);
+        defer exported.deinit();
+        try std.testing.expect(exported == .exported);
+
+        TDNFReplayTestFailStage(case.stage);
+        const replayed = try client.replay.run(allocator, io, .{
+            .bundle_directory = input.destination,
+            .target = .{
+                .install_root = input.resolve.installed.install_root,
+                .rpmdb_path = "/var/lib/rpm",
+                .architecture = "x86_64",
+            },
+        });
+        TDNFReplayTestFailStage(0);
+        defer replayed.deinit();
+        try std.testing.expectEqual(
+            client.replay.Status.transaction_failed,
+            replayed.status,
+        );
+        try std.testing.expect(replayed.validation_failure == null);
+        try std.testing.expectEqual(
+            case.failure,
+            replayed.transaction_failure.?,
+        );
+        try std.testing.expectEqual(
+            case.action_status,
+            replayed.actions[0].status,
+        );
+        if (case.inventory_len) |length| {
+            try std.testing.expectEqual(
+                length,
+                replayed.final_inventory.?.len,
+            );
+        } else {
+            try std.testing.expect(replayed.final_inventory == null);
+        }
+    }
+}
+
+test "absent rpmdb lease rejects sidecars appearing before initialization" {
+    const Race = struct {
+        root: []const u8,
+        suffix: []const u8,
+        failed: bool = false,
+
+        fn inject(raw: ?*anyopaque, stage: u32) callconv(.c) void {
+            if (stage != 1) return;
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            var root = std.Io.Dir.cwd().openDir(io, self.root, .{}) catch {
+                self.failed = true;
+                return;
+            };
+            defer root.close(io);
+            var path_buffer: [128]u8 = undefined;
+            const path = std.fmt.bufPrint(
+                &path_buffer,
+                "var/lib/rpm/rpmdb.sqlite{s}",
+                .{self.suffix},
+            ) catch {
+                self.failed = true;
+                return;
+            };
+            root.writeFile(io, .{
+                .sub_path = path,
+                .data = "appeared-first",
+            }) catch {
+                self.failed = true;
+                return;
+            };
+        }
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    inline for (.{ "-wal", "-shm" }, 0..) |suffix, index| {
+        var name_buffer: [64]u8 = undefined;
+        const name = try std.fmt.bufPrint(
+            &name_buffer,
+            "sidecar-first-{d}",
+            .{index},
+        );
+        const input = try fixture.input(name);
+        var exported = try bundle_export.exportBundle(allocator, io, input);
+        defer exported.deinit();
+        try std.testing.expect(exported == .exported);
+
+        var race = Race{
+            .root = input.resolve.installed.install_root,
+            .suffix = suffix,
+        };
+        TDNFReplaySetStageTestHook(&race, Race.inject);
+        const replayed = try client.replay.run(allocator, io, .{
+            .bundle_directory = input.destination,
+            .target = .{
+                .install_root = input.resolve.installed.install_root,
+                .rpmdb_path = "/var/lib/rpm",
+                .architecture = "x86_64",
+            },
+        });
+        TDNFReplaySetStageTestHook(null, null);
+        defer replayed.deinit();
+        try std.testing.expect(!race.failed);
+        try std.testing.expectEqual(
+            client.replay.Status.transaction_failed,
+            replayed.status,
+        );
+        try std.testing.expectEqual(
+            client.replay.TransactionFailure.final_inventory_unreadable,
+            replayed.transaction_failure.?,
+        );
+        try std.testing.expect(replayed.final_inventory == null);
+    }
+}
+
+test "absent rpmdb lease retains sidecar identities through execution and capture" {
+    const Race = struct {
+        root: []const u8,
+        suffix: []const u8,
+        wanted_stage: u32,
+        failed: bool = false,
+
+        fn inject(raw: ?*anyopaque, stage: u32) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (stage != self.wanted_stage) return;
+            var root = std.Io.Dir.cwd().openDir(io, self.root, .{}) catch {
+                self.failed = true;
+                return;
+            };
+            defer root.close(io);
+            var path_buffer: [128]u8 = undefined;
+            const path = std.fmt.bufPrint(
+                &path_buffer,
+                "var/lib/rpm/rpmdb.sqlite{s}",
+                .{self.suffix},
+            ) catch {
+                self.failed = true;
+                return;
+            };
+            var saved_buffer: [160]u8 = undefined;
+            const saved = std.fmt.bufPrint(
+                &saved_buffer,
+                "{s}.saved",
+                .{path},
+            ) catch {
+                self.failed = true;
+                return;
+            };
+            root.rename(path, root, saved, io) catch {
+                self.failed = true;
+                return;
+            };
+            root.writeFile(io, .{
+                .sub_path = path,
+                .data = "replacement-sidecar",
+            }) catch {
+                self.failed = true;
+                return;
+            };
+        }
+    };
+    const cases = [_]struct {
+        stage: u32,
+        suffix: []const u8,
+    }{
+        .{ .stage = 2, .suffix = "-wal" },
+        .{ .stage = 3, .suffix = "-shm" },
+    };
+
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    for (cases, 0..) |case, index| {
+        var name_buffer: [64]u8 = undefined;
+        const name = try std.fmt.bufPrint(
+            &name_buffer,
+            "sidecar-retained-{d}",
+            .{index},
+        );
+        const input = try fixture.input(name);
+        var exported = try bundle_export.exportBundle(allocator, io, input);
+        defer exported.deinit();
+        try std.testing.expect(exported == .exported);
+
+        var race = Race{
+            .root = input.resolve.installed.install_root,
+            .suffix = case.suffix,
+            .wanted_stage = case.stage,
+        };
+        TDNFReplaySetStageTestHook(&race, Race.inject);
+        const replayed = try client.replay.run(allocator, io, .{
+            .bundle_directory = input.destination,
+            .target = .{
+                .install_root = input.resolve.installed.install_root,
+                .rpmdb_path = "/var/lib/rpm",
+                .architecture = "x86_64",
+            },
+        });
+        TDNFReplaySetStageTestHook(null, null);
+        defer replayed.deinit();
+        try std.testing.expect(!race.failed);
+        try std.testing.expectEqual(
+            client.replay.Status.transaction_failed,
+            replayed.status,
+        );
+        try std.testing.expectEqual(
+            client.replay.TransactionFailure.final_inventory_unreadable,
+            replayed.transaction_failure.?,
+        );
+        try std.testing.expect(replayed.final_inventory == null);
+    }
+}
+
 test "cachedir trailing separator resolves exports and replays" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     var input = try fixture.input("cachedir-trailing");
     input.resolve.cache_dir = "/var/cache/tdnf/";
+
+    var exported = try bundle_export.exportBundle(allocator, io, input);
+    defer exported.deinit();
+    try std.testing.expect(exported == .exported);
+
+    const replayed = try client.replay.run(allocator, io, .{
+        .bundle_directory = input.destination,
+        .target = .{
+            .install_root = input.resolve.installed.install_root,
+            .rpmdb_path = "/var/lib/rpm",
+            .architecture = "x86_64",
+        },
+    });
+    defer replayed.deinit();
+    try std.testing.expectEqual(client.replay.Status.succeeded, replayed.status);
+    try std.testing.expectEqual(@as(usize, 1), replayed.final_inventory.?.len);
+}
+
+test "root cachedir resolves exports and replays through confinement" {
+    var fixture = try Fixture.create();
+    defer fixture.destroy();
+    var input = try fixture.input("cachedir-root");
+    input.resolve.cache_dir = "/";
 
     var exported = try bundle_export.exportBundle(allocator, io, input);
     defer exported.deinit();

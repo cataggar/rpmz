@@ -37,12 +37,37 @@ extern fn tdnf_rpmdb_iter_next_header_blob_hnum(
     length: *usize,
 ) i32;
 extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
-extern fn TDNFRpmDbPrepareWriteConfig(config: *const anyopaque) c_int;
+const PreparedRpmDbWrite = opaque {};
+extern fn TDNFRpmDbPreparedWriteBegin(
+    config: *txn_config.TxnConfig,
+    output: *?*PreparedRpmDbWrite,
+) c_int;
+extern fn TDNFRpmDbPreparedWriteMaterialize(
+    state: ?*PreparedRpmDbWrite,
+) c_int;
+extern fn TDNFRpmDbPreparedWriteInitialize(
+    state: ?*PreparedRpmDbWrite,
+) c_int;
+extern fn TDNFRpmDbPreparedWriteDestroy(
+    state: ?*PreparedRpmDbWrite,
+) void;
 
 const BeforeExecutionTestHook =
     *const fn (?*anyopaque) callconv(.c) void;
 var before_execution_test_context: ?*anyopaque = null;
 var before_execution_test_hook: ?BeforeExecutionTestHook = null;
+const ReplayStageTestHook =
+    *const fn (?*anyopaque, u32) callconv(.c) void;
+var replay_stage_test_context: ?*anyopaque = null;
+var replay_stage_test_hook: ?ReplayStageTestHook = null;
+var replay_failure_stage: u32 = 0;
+
+const ReplayStage = enum(u32) {
+    after_create = 1,
+    after_initialize = 2,
+    after_execution = 3,
+    final_inventory = 4,
+};
 
 fn setBeforeExecutionTestHook(
     context: ?*anyopaque,
@@ -52,10 +77,30 @@ fn setBeforeExecutionTestHook(
     before_execution_test_hook = hook;
 }
 
+fn setReplayStageTestHook(
+    context: ?*anyopaque,
+    hook: ?ReplayStageTestHook,
+) callconv(.c) void {
+    replay_stage_test_context = context;
+    replay_stage_test_hook = hook;
+}
+
+fn failReplayAtStage(stage: u32) callconv(.c) void {
+    replay_failure_stage = stage;
+}
+
 comptime {
     if (builtin.is_test) {
         @export(&setBeforeExecutionTestHook, .{
             .name = "TDNFReplaySetBeforeExecutionTestHook",
+            .visibility = .hidden,
+        });
+        @export(&setReplayStageTestHook, .{
+            .name = "TDNFReplaySetStageTestHook",
+            .visibility = .hidden,
+        });
+        @export(&failReplayAtStage, .{
+            .name = "TDNFReplayTestFailStage",
             .visibility = .hidden,
         });
     }
@@ -445,23 +490,6 @@ fn runValidated(
         before.rows,
     )) orelse return error.ActionShapeMismatch;
 
-    if (built.items.len != 0 and
-        locked_config.pinnedRpmDbMainWasAbsent())
-    {
-        if (builtin.is_test) {
-            if (before_execution_test_hook) |hook|
-                hook(before_execution_test_context);
-        }
-        locked_config.createAndPinAbsentRpmDbMain() catch |err| {
-            return switch (err) {
-                error.OutOfMemory => error.OutOfMemory,
-                else => error.RpmdbMismatch,
-            };
-        };
-        if (TDNFRpmDbPrepareWriteConfig(locked_config) != 0)
-            return error.TargetUnreadable;
-    }
-
     const install_root_z = arena.dupeZ(
         u8,
         locked_config.installRoot(),
@@ -488,23 +516,122 @@ fn runValidated(
     for (built.item_actions, 0..) |_, input_index|
         progressExpected(&progress, input_index);
 
+    const creating_absent_rpmdb = built.items.len != 0 and
+        locked_config.pinnedRpmDbMainWasAbsent();
+    var prepared_write: ?*PreparedRpmDbWrite = null;
+    defer if (prepared_write != null)
+        TDNFRpmDbPreparedWriteDestroy(prepared_write);
+    if (creating_absent_rpmdb) {
+        const begin_status = TDNFRpmDbPreparedWriteBegin(
+            locked_config,
+            &prepared_write,
+        );
+        if (begin_status != 0)
+            return if (begin_status == 1)
+                error.OutOfMemory
+            else
+                error.TargetUnreadable;
+    }
+
+    if (builtin.is_test) {
+        if (before_execution_test_hook) |hook|
+            hook(before_execution_test_context);
+    }
+
+    if (built.items.len == 0) {
+        if (locked_config.pinnedRpmDbMainWasAbsent()) {
+            locked_config.revalidatePinnedRpmDbAbsence() catch
+                return error.RpmdbMismatch;
+        }
+        const after = captureSnapshot(arena, locked_config) catch |err|
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                else => error.RpmdbMismatch,
+            };
+        try verifyRpmdbIdentity(plan.model(), after);
+        try verifyInstalledRows(plan.model(), after.rows);
+        result.final_inventory = after.inventory;
+        if (!inventoriesEqual(expected_final_inventory, after.inventory))
+            return error.RpmdbMismatch;
+        result.status = .succeeded;
+        result.validation_failure = null;
+        result.transaction_failure = null;
+        result.applied_plan_digest = result.plan_digest;
+        return;
+    }
+
+    if (creating_absent_rpmdb) {
+        locked_config.revalidatePinnedRpmDbAbsence() catch
+            return error.RpmdbMismatch;
+        if (TDNFRpmDbPreparedWriteMaterialize(prepared_write) != 0) {
+            recordTransactionFailure(
+                result,
+                arena,
+                locked_config,
+                .execution_failed,
+            );
+            return;
+        }
+        if (replayStageFailed(.after_create)) {
+            recordTransactionFailure(
+                result,
+                arena,
+                locked_config,
+                .execution_failed,
+            );
+            return;
+        }
+        if (TDNFRpmDbPreparedWriteInitialize(prepared_write) != 0) {
+            recordTransactionFailure(
+                result,
+                arena,
+                locked_config,
+                .execution_failed,
+            );
+            return;
+        }
+        if (replayStageFailed(.after_initialize)) {
+            recordTransactionFailure(
+                result,
+                arena,
+                locked_config,
+                .execution_failed,
+            );
+            return;
+        }
+    }
+
     fixed.executeFixedOrderObserved(
         &handle,
         .{ .items = built.items, .order = built.order },
         .{ .context = &progress, .completedFn = progressCompleted },
     ) catch |err| {
-        markIndeterminate(result.actions);
-        result.status = .transaction_failed;
-        result.validation_failure = null;
-        result.transaction_failure = transactionFailure(err);
-        captureFailedFinalInventory(
+        recordTransactionFailure(
             result,
             arena,
             locked_config,
-            captureSnapshot,
+            transactionFailure(err),
         );
         return;
     };
+
+    if (creating_absent_rpmdb and replayStageFailed(.after_execution)) {
+        recordTransactionFailure(
+            result,
+            arena,
+            locked_config,
+            .execution_failed,
+        );
+        return;
+    }
+    if (creating_absent_rpmdb and replayStageFailed(.final_inventory)) {
+        markIndeterminate(result.actions);
+        result.status = .transaction_failed;
+        result.validation_failure = null;
+        result.transaction_failure = .final_inventory_unreadable;
+        result.final_inventory = null;
+        return;
+    }
 
     const after = captureSnapshot(arena, locked_config) catch {
         markIndeterminate(result.actions);
@@ -527,6 +654,33 @@ fn runValidated(
     result.validation_failure = null;
     result.transaction_failure = null;
     result.applied_plan_digest = result.plan_digest;
+}
+
+fn replayStageFailed(stage: ReplayStage) bool {
+    if (!builtin.is_test) return false;
+    if (replay_stage_test_hook) |hook|
+        hook(replay_stage_test_context, @intFromEnum(stage));
+    if (replay_failure_stage != @intFromEnum(stage)) return false;
+    replay_failure_stage = 0;
+    return true;
+}
+
+fn recordTransactionFailure(
+    result: *Result,
+    allocator: Allocator,
+    config: *const txn_config.TxnConfig,
+    failure: TransactionFailure,
+) void {
+    markIndeterminate(result.actions);
+    result.status = .transaction_failed;
+    result.validation_failure = null;
+    result.transaction_failure = failure;
+    captureFailedFinalInventory(
+        result,
+        allocator,
+        config,
+        captureSnapshot,
+    );
 }
 
 fn captureFailedFinalInventory(

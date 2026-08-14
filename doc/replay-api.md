@@ -48,10 +48,17 @@ reinstall priors must be exactly representable by the native replacement item;
 export rejects any order or multi-prior graph it cannot preserve.
 
 If the pinned target has no rpmdb main file, that absence is authoritative.
-After validation and immediately before execution, replay creates and pins the
-new main file exclusively, then initializes SQLite through the confined VFS.
-If another file appeared meanwhile, replay fails with `rpmdb_mismatch` without
-attempting an action or opening that file as a database.
+Replay completes fallible pure preparation, revalidates the absence, then
+creates the new main file exclusively through the confined SQLite lease. The
+lease retains the main, WAL, and SHM present-or-absent identities through
+initialization, execution, and final inventory capture; a sidecar cannot be
+introduced first and later adopted. If another database or sidecar appeared
+before the mutation boundary, replay fails with `rpmdb_mismatch` without
+opening it as a database. Once replay creates any target inode, every later
+failure is a `transaction_failed` result and reports either the freshly
+captured final inventory or `final_inventory_unreadable`. A zero-action replay
+also revalidates authoritative absence instead of reusing its initial empty
+snapshot.
 
 Replay and ordinary tdnf transactions use the same install-root-wide lock. The
 target key is derived only from the opened root directory identity, so aliases

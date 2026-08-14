@@ -627,7 +627,7 @@ test "allocPrint uses TDNF ownership and preserves null output on errors" {
     try std.testing.expect(stale == null);
 }
 
-test "typed path joining preserves legacy slash normalization and ownership" {
+test "typed path joining canonicalizes separators and preserves ownership" {
     var output: ?[*:0]u8 = null;
     try std.testing.expectEqual(
         @as(u32, 0),
@@ -645,5 +645,5 @@ test "typed path joining preserves legacy slash normalization and ownership" {
         joinPath(&root_only, &.{ "/", "/" }),
     );
     defer TDNFFreeMemory(@ptrCast(root_only.?));
-    try std.testing.expectEqualStrings("//", std.mem.span(root_only.?));
+    try std.testing.expectEqualStrings("/", std.mem.span(root_only.?));
 }

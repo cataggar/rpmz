@@ -55,7 +55,16 @@ extern fn tdnf_sqlite_confined_verify(
 extern fn tdnf_sqlite_confined_pin_main_fd(
     connection: *const RawConnection,
 ) callconv(.c) RawMainFdPin;
+extern fn tdnf_sqlite_confined_create_exclusive_main_pin(
+    dir_fd: c_int,
+    basename: [*]const u8,
+    basename_len: usize,
+    output: *RawMainFdPin,
+) callconv(.c) c_int;
 extern fn tdnf_sqlite_confined_release_main_fd_pin(
+    database: ?*anyopaque,
+) callconv(.c) void;
+extern fn tdnf_sqlite_confined_retain_main_fd_pin(
     database: ?*anyopaque,
 ) callconv(.c) void;
 
@@ -74,6 +83,10 @@ pub const MainFdPin = struct {
 
     pub fn releaseOpaque(database: ?*anyopaque) void {
         tdnf_sqlite_confined_release_main_fd_pin(database);
+    }
+
+    pub fn retainOpaque(database: ?*anyopaque) void {
+        tdnf_sqlite_confined_retain_main_fd_pin(database);
     }
 };
 
@@ -126,6 +139,21 @@ pub fn openAt(
         &raw,
     ));
     return .{ .db = raw.db, .handle = raw.handle };
+}
+
+pub fn createExclusiveMainPinAt(
+    _: std.mem.Allocator,
+    dir_fd: c_int,
+    basename: []const u8,
+) Error!MainFdPin {
+    var raw = RawMainFdPin{ .fd = -1, .database = null };
+    try statusError(tdnf_sqlite_confined_create_exclusive_main_pin(
+        dir_fd,
+        basename.ptr,
+        basename.len,
+        &raw,
+    ));
+    return .{ .fd = raw.fd, .database = raw.database };
 }
 
 fn statusError(status: c_int) Error!void {

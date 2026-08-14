@@ -973,6 +973,8 @@ fn joinPathFromArrayWithOps(
     }
 
     const count: usize = @intCast(nCount);
+    var absolute = false;
+    var component_count: usize = 0;
     while (i < count) : (i += 1) {
         const pszNode = ppszNodes[i] orelse continue;
         const node = std.mem.span(pszNode);
@@ -984,14 +986,15 @@ fn joinPathFromArrayWithOps(
         while (end > start and node[end - 1] == '/') {
             end -= 1;
         }
-        total_len += (end - start);
         if (i == 0 and node.len > 0 and node[0] == '/') {
-            total_len += 1;
+            absolute = true;
         }
-        if (i != count - 1) {
-            total_len += 1;
-        }
+        if (end == start) continue;
+        total_len += end - start;
+        if (component_count != 0) total_len += 1;
+        component_count += 1;
     }
+    if (absolute) total_len += 1;
 
     var raw: ?*anyopaque = null;
     const dwError = ops.allocateFn(ops.ctx, total_len, &raw);
@@ -1003,6 +1006,11 @@ fn joinPathFromArrayWithOps(
 
     const bytes: [*]u8 = @ptrCast(pszResult.?);
     var write_index: usize = 0;
+    if (absolute) {
+        bytes[write_index] = '/';
+        write_index += 1;
+    }
+    component_count = 0;
     i = 0;
     while (i < count) : (i += 1) {
         const pszNode = ppszNodes[i] orelse continue;
@@ -1015,20 +1023,17 @@ fn joinPathFromArrayWithOps(
         while (end > start and node[end - 1] == '/') {
             end -= 1;
         }
-
-        if (i == 0 and node.len > 0 and node[0] == '/') {
+        if (end == start) continue;
+        if (component_count != 0) {
             bytes[write_index] = '/';
             write_index += 1;
         }
-
-        if (end > start) {
-            @memcpy(bytes[write_index .. write_index + (end - start)], node[start..end]);
-            write_index += end - start;
-        }
-        if (i != count - 1) {
-            bytes[write_index] = '/';
-            write_index += 1;
-        }
+        @memcpy(
+            bytes[write_index .. write_index + (end - start)],
+            node[start..end],
+        );
+        write_index += end - start;
+        component_count += 1;
     }
     bytes[write_index] = 0;
 
@@ -1404,6 +1409,21 @@ test "path joining preserves compatibility ABI and clears outputs on errors" {
     );
     defer TDNFFreeMemory(@ptrCast(output.?));
     try std.testing.expectEqualStrings("/var/lib", std.mem.span(output.?));
+
+    var root = [_:0]u8{ '/', 0 };
+    var repository = [_:0]u8{ 'r', 'e', 'p', 'o', 0 };
+    var root_output: ?[*:0]u8 = null;
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        TDNFJoinPath(
+            &root_output,
+            @as(?[*:0]u8, &root),
+            @as(?[*:0]u8, &repository),
+            @as(?[*:0]u8, null),
+        ),
+    );
+    defer TDNFFreeMemory(@ptrCast(root_output.?));
+    try std.testing.expectEqualStrings("/repo", std.mem.span(root_output.?));
 
     var third = [_:0]u8{ 'a', 0 };
     var fourth = [_:0]u8{ 'b', 0 };
