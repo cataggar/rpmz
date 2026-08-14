@@ -81,6 +81,7 @@ var pstOptions = [_]getopt.struct_option{
     optionEntry("repoid", getopt.required_argument, null, 0),
     optionEntry("rpmverbosity", getopt.required_argument, null, 0),
     optionEntry("rpmdefine", getopt.required_argument, null, 0),
+    optionEntry("rpmdb-path", getopt.required_argument, null, 0),
     optionEntry("sec-severity", getopt.required_argument, null, 0),
     optionEntry("security", getopt.no_argument, null, 0),
     optionEntry("setopt", getopt.required_argument, null, 0),
@@ -379,16 +380,6 @@ pub export fn TDNFCliParseArgs(
         }
     }
 
-    if (pCmdArgs.?.pszInstallRoot == null) {
-        dwError = duplicateCString(pszDefaultInstallRoot, &pCmdArgs.?.pszInstallRoot);
-        if (dwError != 0) {
-            return dwError;
-        }
-    } else if (pCmdArgs.?.pszInstallRoot[0] != '/') {
-        common.log(LOG_CRIT, "Install root must be an absolute path.\n", .{});
-        return abi.ERROR_TDNF_INVALID_PARAMETER;
-    }
-
     dwError = TDNFCopyOptions(&option_state, pCmdArgs);
     if (dwError != 0) {
         return dwError;
@@ -421,16 +412,30 @@ pub export fn TDNFCliParseArgs(
         }
     }
 
-    if (pCmdArgs.?.pszDownloadDir != null and pCmdArgs.?.nDownloadOnly == 0) {
-        return abi.ERROR_TDNF_CLI_DOWNLOADDIR_REQUIRES_DOWNLOADONLY;
+    const is_replay = pCmdArgs.?.nCmdCount > 0 and
+        c.strcmp(pCmdArgs.?.ppszCmds[0], "replay") == 0;
+    if (pCmdArgs.?.pszInstallRoot == null) {
+        dwError = duplicateCString(pszDefaultInstallRoot, &pCmdArgs.?.pszInstallRoot);
+        if (dwError != 0) {
+            return dwError;
+        }
+    } else if (pCmdArgs.?.pszInstallRoot[0] != '/' and !is_replay) {
+        common.log(LOG_CRIT, "Install root must be an absolute path.\n", .{});
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    if (pCmdArgs.?.nAllDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
-        return abi.ERROR_TDNF_CLI_ALLDEPS_REQUIRES_DOWNLOADONLY;
-    }
+    if (!is_replay) {
+        if (pCmdArgs.?.pszDownloadDir != null and pCmdArgs.?.nDownloadOnly == 0) {
+            return abi.ERROR_TDNF_CLI_DOWNLOADDIR_REQUIRES_DOWNLOADONLY;
+        }
 
-    if (pCmdArgs.?.nNoDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
-        return abi.ERROR_TDNF_CLI_NODEPS_REQUIRES_DOWNLOADONLY;
+        if (pCmdArgs.?.nAllDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
+            return abi.ERROR_TDNF_CLI_ALLDEPS_REQUIRES_DOWNLOADONLY;
+        }
+
+        if (pCmdArgs.?.nNoDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
+            return abi.ERROR_TDNF_CLI_NODEPS_REQUIRES_DOWNLOADONLY;
+        }
     }
 
     ppCmdArgs.?.* = pCmdArgs;
