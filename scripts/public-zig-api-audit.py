@@ -20,10 +20,14 @@ REQUIRED_PUBLIC_FILES = (
     "build.zig",
     "build.zig.zon",
     "tdnf.zig",
+    "client/root.zig",
+    "client/replay.zig",
     "client/transaction_plan.zig",
     "client/transaction_bundle.zig",
+    "tools/cli/replay_options.zig",
     "doc/transaction-plan-api.md",
     "doc/transaction-bundle.md",
+    "doc/replay-api.md",
 )
 # Every source file a dependency consumer can reach through the public module
 # graph. `build.zig` returns before it registers anything private, so this is
@@ -51,6 +55,14 @@ RETIRED_PUBLIC_C_FILES = (
     "scripts/public-api-audit.py",
     "tools/cli/lib/tdnf-cli-libs.pc.in",
 )
+REQUIRED_PUBLIC_EXPORTS = {
+    "transaction_plan": '@import("transaction_plan")',
+    "transaction_bundle": '@import("transaction_bundle")',
+    "resolver": '@import("client_root").resolver',
+    "bundle_export": '@import("client_root").bundle_export',
+    "bundle_reader": '@import("bundle_reader")',
+    "replay": '@import("client_root").replay',
+}
 
 
 def package_paths(manifest: Path) -> list[str]:
@@ -180,6 +192,53 @@ def registered_public_modules(build_script: Path) -> set[str]:
     return names
 
 
+def check_supported_exports(package_root: Path) -> None:
+    """Require every documented namespace to remain on the installed module."""
+    source = (package_root / "tdnf.zig").read_text(encoding="utf-8")
+    for name, expression in REQUIRED_PUBLIC_EXPORTS.items():
+        pattern = (
+            r"\bpub\s+const\s+"
+            + re.escape(name)
+            + r"\s*=\s*"
+            + re.escape(expression)
+            + r"\s*;"
+        )
+        if re.search(pattern, source) is None:
+            raise RuntimeError(
+                f"public tdnf module is missing supported export: {name}"
+            )
+
+    client_root = (package_root / "client/root.zig").read_text(
+        encoding="utf-8"
+    )
+    if re.search(
+        r'\bpub\s+const\s+replay\s*=\s*@import\("replay\.zig"\)\s*;',
+        client_root,
+    ) is None:
+        raise RuntimeError("client root no longer exposes the replay module")
+
+    build_source = (package_root / "build.zig").read_text(encoding="utf-8")
+    if re.search(
+        r'\bpublic_tdnf_mod\.addImport\(\s*"client_root"\s*,\s*client_mod\s*\)',
+        build_source,
+    ) is None:
+        raise RuntimeError("public tdnf module no longer registers client_root")
+
+
+def forbidden_packaged_surface(packaged_names: set[str]) -> list[str]:
+    """Reject a C or shared-library SDK hidden in the Zig source package."""
+    forbidden = set(RETIRED_PUBLIC_C_FILES) & packaged_names
+    for name in packaged_names:
+        path = Path(name)
+        if path.parts and path.parts[0] == "include":
+            forbidden.add(name)
+        if path.suffix == ".pc" or path.name.startswith("libtdnf"):
+            forbidden.add(name)
+        if re.search(r"\.so(?:\.\d+)*$", path.name):
+            forbidden.add(name)
+    return sorted(forbidden)
+
+
 def check_public_closure(package_root: Path) -> None:
     """Fail if the public module graph reaches beyond its declared surface.
 
@@ -277,10 +336,10 @@ def main() -> None:
             copy_file(source_root / relative, package_root / relative)
 
         packaged_names = {path.as_posix() for path in packaged_files}
-        forbidden = sorted(set(RETIRED_PUBLIC_C_FILES) & packaged_names)
+        forbidden = forbidden_packaged_surface(packaged_names)
         if forbidden:
             raise RuntimeError(
-                "distributable package contains retired public C files: "
+                "distributable package contains a forbidden C/shared surface: "
                 + ", ".join(forbidden)
             )
 
@@ -305,6 +364,7 @@ def main() -> None:
                     f"distributable package contains generated source file: {relative}"
                 )
 
+        check_supported_exports(package_root)
         check_public_closure(package_root)
 
         make_read_only(package_root)

@@ -11,6 +11,8 @@ New exports use `tdnf.transaction-bundle/v2` and reference a
 `tdnf.transaction-plan/v2`. The v1 manifest and plan remain strictly parseable
 for compatibility, but are resolve-only and must not be treated as replayable.
 The module documentation in `client/transaction_bundle.zig` is the reference.
+[`tdnf.replay`](replay-api.md) requires both v2 schemas and rejects v1 rather
+than reconstructing a missing execution order.
 
 ## What a bundle is
 
@@ -107,6 +109,9 @@ for (bundle.model().files) |file| {
 
 `Bundle.findFile` looks an entry up by exact bundle-relative path.
 `Bundle.isReplayable()` is true only for a v2 manifest referencing a v2 plan.
+It is still necessary for replay to validate the plan's materialized execution
+shape, every file, the target architecture, and the exact rpmdb state before
+mutation; `isReplayable` is a schema capability check, not execution.
 
 ## Relationship to the plan
 
@@ -120,6 +125,12 @@ carry no fetch coordinates by construction — they have no `source` and are
 identified by their rpmdb header number — so there is nothing to fetch for the
 prior rows of an upgrade. A plan containing a command-line package, which has
 no `location`, cannot be bundled and is rejected.
+
+The v2 plan's `execution_steps` preserve the exact low-level order returned by
+the native planner after package headers are available. Replay uses those
+steps directly; it does not derive an order from the semantic `actions` array.
+The manifest's one-to-one package binding ensures every install-side step has
+exactly the RPM whose header was used when that order was captured.
 
 ## How bytes are verified before they enter a bundle
 
@@ -254,3 +265,18 @@ something are copied into `keys/`.
 Attestation runs on the staged file, after its checksum matched, so the claim
 in the manifest is a claim about the bytes a consumer will open rather than
 about some earlier copy.
+
+## Replaying a bundle
+
+Pass the published directory to `tdnf.replay.run` or `tdnf replay`. Replay
+opens it as a closed local input set, rechecks canonical manifest and plan
+bytes, metadata and RPM content, signatures, architecture, rpmdb snapshot, and
+prior rows, then executes the v2 steps in their recorded order.
+
+The project-owned replay implementation never follows the manifest's sanitized
+source records to a repository; those records are provenance, not replay
+inputs. RPM payload scriptlets, triggers, interpreters, and their descendants
+are outside that guarantee and can use the network. Callers must enforce an
+OS-level no-network namespace or equivalent isolation for exact offline
+execution. The full API, result, failure, and CLI contract is in [Offline
+transaction replay](replay-api.md).

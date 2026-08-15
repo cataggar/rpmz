@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const tdnf = @import("tdnf");
+const replay_options = @import("replay_options.zig");
 
 const allocator = std.testing.allocator;
 const io = std.testing.io;
@@ -831,6 +832,135 @@ fn expectUsage(binary: []const u8, args: []const []const u8) !void {
     ) != null);
 }
 
+const ValueOptionStyle = enum {
+    double_separate,
+    double_equals,
+    single_separate,
+    single_equals,
+    short_separate,
+    short_attached,
+};
+
+fn appendValueOption(
+    args: *std.array_list.Managed([]const u8),
+    owned: *std.array_list.Managed([]u8),
+    option: replay_options.ValueOption,
+    value: []const u8,
+    style: ValueOptionStyle,
+) !void {
+    switch (style) {
+        .double_separate, .single_separate, .short_separate => {
+            const spelling = switch (style) {
+                .double_separate => try std.fmt.allocPrint(
+                    allocator,
+                    "--{s}",
+                    .{option.name},
+                ),
+                .single_separate => try std.fmt.allocPrint(
+                    allocator,
+                    "-{s}",
+                    .{option.name},
+                ),
+                .short_separate => try allocator.dupe(
+                    u8,
+                    option.short orelse return error.MissingShortOption,
+                ),
+                else => unreachable,
+            };
+            owned.append(spelling) catch |err| {
+                allocator.free(spelling);
+                return err;
+            };
+            try args.append(spelling);
+            try args.append(value);
+        },
+        .double_equals, .single_equals, .short_attached => {
+            const spelling = switch (style) {
+                .double_equals => try std.fmt.allocPrint(
+                    allocator,
+                    "--{s}={s}",
+                    .{ option.name, value },
+                ),
+                .single_equals => try std.fmt.allocPrint(
+                    allocator,
+                    "-{s}={s}",
+                    .{ option.name, value },
+                ),
+                .short_attached => try std.fmt.allocPrint(
+                    allocator,
+                    "{s}{s}",
+                    .{
+                        option.short orelse return error.MissingShortOption,
+                        value,
+                    },
+                ),
+                else => unreachable,
+            };
+            owned.append(spelling) catch |err| {
+                allocator.free(spelling);
+                return err;
+            };
+            try args.append(spelling);
+        },
+    }
+}
+
+fn freeGeneratedArgs(args: []const []u8) void {
+    for (args) |arg| allocator.free(arg);
+}
+
+fn expectValueOptionAccepted(
+    binary: []const u8,
+    selected: replay_options.ValueOption,
+    value: []const u8,
+    style: ValueOptionStyle,
+) !void {
+    var args = std.array_list.Managed([]const u8).init(allocator);
+    defer args.deinit();
+    var owned = std.array_list.Managed([]u8).init(allocator);
+    defer {
+        freeGeneratedArgs(owned.items);
+        owned.deinit();
+    }
+    try args.append("replay");
+    try appendValueOption(&args, &owned, selected, value, style);
+
+    for (replay_options.value_options) |option| {
+        if (std.mem.eql(u8, option.name, selected.name)) continue;
+        try appendValueOption(
+            &args,
+            &owned,
+            option,
+            if (std.mem.eql(
+                u8,
+                option.name,
+                replay_options.install_root.name,
+            ))
+                "/"
+            else if (std.mem.eql(
+                u8,
+                option.name,
+                replay_options.rpmdb_path.name,
+            ))
+                "/var/lib/rpm"
+            else
+                "x86_64",
+            .double_separate,
+        );
+    }
+    try args.append("/replay-option-spelling-does-not-exist");
+
+    const result = try runCli(binary, args.items);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    try std.testing.expectEqual(@as(u8, 3), exitCode(result));
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        result.stderr,
+        "Usage: tdnf replay",
+    ) == null);
+}
+
 fn expectJsonUsage(
     binary: []const u8,
     args: []const []const u8,
@@ -895,6 +1025,83 @@ fn expectJsonUsageArgv0(
         result.stderr,
         "Usage: tdnf replay",
     ) != null);
+}
+
+test "replay CLI accepts every documented option spelling" {
+    const binary = try tdnfPath();
+    defer allocator.free(binary);
+    const ordinary_styles = [_]ValueOptionStyle{
+        .double_separate,
+        .double_equals,
+        .single_separate,
+        .single_equals,
+    };
+    for (replay_options.value_options) |option| {
+        const value = if (std.mem.eql(
+            u8,
+            option.name,
+            replay_options.install_root.name,
+        ))
+            "/"
+        else if (std.mem.eql(
+            u8,
+            option.name,
+            replay_options.rpmdb_path.name,
+        ))
+            "/var/lib/rpm"
+        else
+            "x86_64";
+        for (ordinary_styles) |style|
+            try expectValueOptionAccepted(binary, option, value, style);
+        if (option.short != null) {
+            try expectValueOptionAccepted(
+                binary,
+                option,
+                value,
+                .short_separate,
+            );
+            try expectValueOptionAccepted(
+                binary,
+                option,
+                value,
+                .short_attached,
+            );
+        }
+    }
+
+    var prefix_length: usize = 1;
+    while (prefix_length <= replay_options.json_name.len) : (prefix_length += 1) {
+        const prefix = replay_options.json_name[0..prefix_length];
+        for ([_][]const u8{ "-", "--" }) |dash| {
+            const spelling = try std.fmt.allocPrint(
+                allocator,
+                "{s}{s}",
+                .{ dash, prefix },
+            );
+            defer allocator.free(spelling);
+            try expectJsonUsage(
+                binary,
+                &.{ spelling, "replay" },
+                "missing_bundle",
+            );
+        }
+    }
+
+    for ([_][]const u8{
+        replay_options.help_long,
+        replay_options.help_short,
+    }) |spelling| {
+        const help = try runCli(binary, &.{ "replay", spelling });
+        defer allocator.free(help.stdout);
+        defer allocator.free(help.stderr);
+        try std.testing.expectEqual(@as(u8, 0), exitCode(help));
+        try std.testing.expectEqual(@as(usize, 0), help.stdout.len);
+        try std.testing.expect(std.mem.indexOf(
+            u8,
+            help.stderr,
+            "Usage: tdnf replay",
+        ) != null);
+    }
 }
 
 test "replay-only options preserve legacy JSON and diagnostic channels" {

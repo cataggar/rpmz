@@ -10,6 +10,7 @@ const jsondump = @import("jsondump_abi");
 const common = @import("tdnf_common");
 const client = @import("tdnf_client");
 const cli = @import("tdnf_cli");
+const replay_options = @import("replay_options.zig");
 const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
@@ -35,6 +36,14 @@ const replay_usage =
     \\Replay applies only the exact offline bundle through tdnf.replay.
     \\All three target options are required exactly once. Paths must already
     \\be canonical absolute paths; the rpmdb path is install-root-relative.
+    \\Value options accept --name VALUE, --name=VALUE, -name VALUE, and
+    \\-name=VALUE. Installroot also accepts -i VALUE and -iVALUE.
+    \\JSON accepts -j/--j, -js/--js, -jso/--jso, and -json/--json.
+    \\Help accepts --help and -h.
+    \\A valid invocation writes one canonical replay-result JSON document to
+    \\stdout. Diagnostics, usage, and scriptlet output are written to stderr.
+    \\RPM scriptlets/triggers are untrusted. OS-level no-network isolation is
+    \\required when offline behavior must include payload execution.
     \\Exit status: 0 success, 2 invocation error, 3 validation failure,
     \\4 transaction failure, 1 internal/output failure.
     \\
@@ -231,7 +240,9 @@ fn parseReplayInvocation(
                 end_options = true;
                 continue;
             }
-            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            if (std.mem.eql(u8, arg, replay_options.help_long) or
+                std.mem.eql(u8, arg, replay_options.help_short))
+            {
                 if (help) return error.DuplicateOption;
                 help = true;
                 continue;
@@ -239,14 +250,26 @@ fn parseReplayInvocation(
             if (json_output and isJsonOutputOption(arg))
                 continue;
 
-            if (matchNamedOption(arg, "installroot")) |matched| {
+            if (matchNamedOption(
+                arg,
+                replay_options.install_root.name,
+            )) |matched| {
                 if (install_root != null) return error.DuplicateOption;
                 install_root = try replayOptionValue(argv, &index, matched);
                 continue;
             }
-            if (std.mem.eql(u8, arg, "-i") or
-                (arg.len > 2 and std.mem.startsWith(u8, arg, "-i") and
-                    !std.mem.startsWith(u8, arg, "-installroot")))
+            if (std.mem.eql(u8, arg, replay_options.install_root.short.?) or
+                (arg.len > replay_options.install_root.short.?.len and
+                    std.mem.startsWith(
+                        u8,
+                        arg,
+                        replay_options.install_root.short.?,
+                    ) and
+                    !std.mem.startsWith(
+                        u8,
+                        arg,
+                        replay_options.install_root_single_dash,
+                    )))
             {
                 if (install_root != null) return error.DuplicateOption;
                 const matched: OptionMatch = if (arg.len == 2)
@@ -256,12 +279,18 @@ fn parseReplayInvocation(
                 install_root = try replayOptionValue(argv, &index, matched);
                 continue;
             }
-            if (matchNamedOption(arg, "forcearch")) |matched| {
+            if (matchNamedOption(
+                arg,
+                replay_options.architecture.name,
+            )) |matched| {
                 if (architecture != null) return error.DuplicateOption;
                 architecture = try replayOptionValue(argv, &index, matched);
                 continue;
             }
-            if (matchNamedOption(arg, "rpmdb-path")) |matched| {
+            if (matchNamedOption(
+                arg,
+                replay_options.rpmdb_path.name,
+            )) |matched| {
                 if (rpmdb_path != null) return error.DuplicateOption;
                 rpmdb_path = try replayOptionValue(argv, &index, matched);
                 continue;
@@ -333,7 +362,8 @@ fn jsonOutputRequested(argv: []const [*:0]const u8) bool {
         const equals_index = std.mem.indexOfScalar(u8, body, '=');
         const name = if (equals_index) |offset| body[0..offset] else body;
         if (cli.matchLegacyLongOption(name)) |matched| {
-            if (std.mem.eql(u8, matched.name, "json")) return true;
+            if (std.mem.eql(u8, matched.name, replay_options.json_name))
+                return true;
         }
 
         if (optionConsumesNext(arg) and index + 1 < argv.len)
@@ -353,7 +383,8 @@ fn isJsonOutputOption(arg: []const u8) bool {
     if (body.len == 0 or std.mem.indexOfScalar(u8, body, '=') != null)
         return false;
     const matched = cli.matchLegacyLongOption(body) orelse return false;
-    return matched.arity == .none and std.mem.eql(u8, matched.name, "json");
+    return matched.arity == .none and
+        std.mem.eql(u8, matched.name, replay_options.json_name);
 }
 
 fn isReplayInvocation(argv: []const [*:0]const u8) bool {

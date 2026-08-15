@@ -297,8 +297,9 @@ def elf_errors(prefix):
 
 def installed_surface_errors(prefix):
     errors = []
+    tdnf = prefix / "bin" / "tdnf"
     required = (
-        prefix / "bin" / "tdnf",
+        tdnf,
         prefix / "bin" / "tdnf-config",
         prefix / "libexec" / "tdnf" / "tdnf-history-util",
         prefix / "libexec" / "tdnf" / "tdnf-test-support",
@@ -315,6 +316,25 @@ def installed_surface_errors(prefix):
             errors.append(f"{path}: installed libtdnf artifact is forbidden")
         if path.suffix == ".pc":
             errors.append(f"{path}: installed pkg-config metadata is forbidden")
+        if path.is_file() and re.search(r"\.so(?:\.\d+)*$", path.name):
+            errors.append(f"{path}: installed shared-library surface is forbidden")
+
+    if tdnf.is_file():
+        replay_help = subprocess.run(
+            [str(tdnf), "replay", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if replay_help.returncode != 0:
+            errors.append(
+                f"{tdnf}: installed replay help failed "
+                f"({replay_help.returncode})"
+            )
+        if "Usage: tdnf replay" not in replay_help.stderr:
+            errors.append(f"{tdnf}: installed replay command is missing")
+        if replay_help.stdout:
+            errors.append(f"{tdnf}: replay help unexpectedly wrote stdout")
     return errors
 
 

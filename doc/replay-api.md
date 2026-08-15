@@ -1,8 +1,19 @@
-# Offline replay Zig API
+# Offline transaction replay
 
-`@import("tdnf").replay` is the supported API for applying one exact
-`tdnf.transaction-bundle/v2` transaction without resolving dependencies or
-entering a repository, cache, URL, download, or other network-capable path.
+Replay applies one previously exported transaction exactly as recorded. The
+project-owned replay implementation does not resolve dependencies, select
+alternatives, refresh metadata, enter a cache, or request repository URLs. It
+does execute untrusted RPM payload scriptlets and triggers, which can spawn
+processes or use the network unless the caller isolates them. The supported
+interfaces are the public Zig namespace `@import("tdnf").replay` and the
+`tdnf replay` command.
+
+Replay accepts only a `tdnf.transaction-bundle/v2` whose `plan.json` is a
+canonical `tdnf.transaction-plan/v2` with a materialized native execution
+order. Version 1 bundles and plans remain parseable by their format modules for
+compatibility, but replay rejects them as `non_replayable_bundle`.
+
+## Zig API
 
 ```zig
 const tdnf = @import("tdnf");
@@ -16,81 +27,301 @@ const result = try tdnf.replay.run(allocator, io, .{
     },
 });
 defer result.deinit();
+
+const json = try result.canonicalJsonAlloc(allocator);
+defer allocator.free(json);
 ```
 
-`rpmdb_path` is the absolute install-root-relative `_dbpath` supported by the
-native RPM configuration. Replay treats its bytes literally; RPM macro and
-environment expressions such as `%{getenv:HOME}` are not expanded. The caller
-must provide all three target values; replay does not infer architecture or
-RPM state from the host.
+### Input and ownership
+
+`tdnf.replay.Input` has exactly two members:
+
+- `bundle_directory` is the closed bundle directory to validate and execute.
+- `target` supplies the explicit `install_root`, `rpmdb_path`, and
+  `architecture`.
+
+All input strings are borrowed for the duration of `run`. On every
+non-allocation outcome, `run` returns an owned `*tdnf.replay.Result`; the
+caller must call `Result.deinit`. `RunError` contains only `OutOfMemory`.
+Validation and transaction failures are data, not Zig errors. Bytes returned
+by `canonicalJsonAlloc` belong to the allocator passed to that method.
+
 `bundle_directory`, `install_root`, and `rpmdb_path` must already be exact,
 lexically canonical absolute paths. Replay rejects embedded NUL, surrounding
 whitespace, trailing separators, repeated separators, and `.` or `..`
 components rather than normalizing them before filesystem or C-ABI use.
 
-The returned `tdnf.replay.Result` uses schema `tdnf.replay-result/v1` and has
-canonical JSON serialization through `canonicalJsonAlloc`. Its status is one
-of `validation_failed`, `transaction_failed`, or `succeeded`. Only a successful
-result carries `applied_plan_digest`. Transaction failures retain truthful
-action states in the plan's authoritative execution order and do not claim
-rollback. Final inventory is sorted by package identity and then rpmdb header
-number.
+`rpmdb_path` is the absolute, install-root-relative `_dbpath` understood by the
+native RPM configuration, normally `/var/lib/rpm`. Its bytes are literal:
+RPM macros and environment expressions such as `%{getenv:HOME}` are not
+expanded. The caller must supply all target values. Replay never infers an
+architecture, install root, `_dbpath`, or installed state from the host.
 
-Replay validates the v2 bundle closure, plan binding, metadata and RPM bytes,
-RPM headers, bundled-key signatures, architecture, exact rpmdb snapshot and
-prior rows before mutation. Before any RPM is opened as a package, manifest
-packages must one-to-one exact-match the plan-selected source coordinates,
-identity, repository, checksum, size, and bundle path. Verified RPM handles
-remain pinned through native fixed-order execution. The plan retains the
-native low-level sequence: downgrade and obsolete erases keep their recorded
-identity and position, including interleaving and shared priors. Upgrade and
-reinstall priors must be exactly representable by the native replacement item;
-export rejects any order or multi-prior graph it cannot preserve.
+The target architecture must equal the architecture recorded in the plan
+environment, and every selected package architecture must be compatible with
+it. The target rpmdb must match the plan's recorded snapshot and every exact
+installed prior row, including header number and effective package identity.
+An omitted RPM epoch compares as epoch zero while the canonical plan continues
+to preserve the distinction between omitted epoch and explicit zero.
 
-`tdnf replay` emits the same canonical `tdnf.replay-result/v1` document for a
-successfully invoked replay, including validation and transaction failures,
-whether JSON mode was selected with `--json` or the `tdnfj` alias. Malformed
-replay invocations in JSON mode emit one
-`tdnf.replay-invocation-error/v1` document on stdout with stable `error` and
-human-readable `message` fields; diagnostics and usage remain on stderr.
+### Validation precedes mutation
+
+Replay completes all fallible preflight work before invoking the native
+executor:
+
+1. validate the exact input paths;
+2. open the bundle as a closed, no-follow directory and require canonical v2
+   manifest and plan bytes with matching schema and digests;
+3. reject missing, additional, unsafe, substituted, or mis-sized files;
+4. one-to-one bind every manifest RPM to its plan-selected package identity,
+   repository, source coordinates, checksum, size, and bundle path;
+5. verify bundled repository metadata, RPM bytes and headers, bundled-key
+   signatures, and architecture compatibility;
+6. acquire the install-root-wide transaction lock, pin the explicit rpmdb,
+   and verify its exact snapshot and all prior rows;
+7. build and validate the fixed-order native transaction while keeping every
+   verified RPM handle pinned.
+
+A failure in these stages has status `validation_failed`. Replay does not
+create, remove, or modify a target file for such a failure. The only exception
+to "all fallible work" is work that inherently belongs to execution or final
+inventory capture; failures after the mutation boundary are reported as
+`transaction_failed`, never recast as validation failures.
 
 If the pinned target has no rpmdb main file, that absence is authoritative.
-Replay completes fallible pure preparation, revalidates the absence, then
-creates the new main file exclusively through the confined SQLite lease. The
-lease retains the main, WAL, and SHM present-or-absent identities through
-initialization, execution, and final inventory capture; a sidecar cannot be
-introduced first and later adopted. If another database or sidecar appeared
-before the mutation boundary, replay fails with `rpmdb_mismatch` without
-opening it as a database. Once replay creates any target inode, every later
-failure is a `transaction_failed` result and reports either the freshly
-captured final inventory or `final_inventory_unreadable`. A zero-action replay
-also revalidates authoritative absence instead of reusing its initial empty
-snapshot.
+Replay prepares the confined SQLite write, revalidates the absence immediately
+before mutation, and creates the main file exclusively. The main, WAL, and SHM
+present-or-absent identities remain pinned through initialization, execution,
+and final inventory capture. If another database or sidecar appears first,
+replay returns `rpmdb_mismatch` without adopting it. A zero-action replay also
+revalidates authoritative absence.
 
-Replay and ordinary tdnf transactions use the same install-root-wide lock. The
-target key is derived only from the opened root directory identity, so aliases
-and different `_dbpath` values under one root contend while distinct roots do
-not. The publicly reachable root directory is never the lock object. A
-validated, owner-only runtime lock file keyed by the pinned root's device and
-inode provides serialization, while the root descriptor provides filesystem
-identity. Replay retains both from its initial rpmdb snapshot through final
-inventory capture. Ordinary transactions acquire them before target
-configuration or rpmdb release-version reads. Configuration, os-release,
-repository, variable, plugin, cache, and metadata files are then opened
-descriptor-relatively with no-follow confinement. They finalize literal
-`_dbpath`, pin the rpmdb, and retain the lock through the installed snapshot,
-solve, preparation, native execution, and history completion. Key imports
-reuse it instead of nesting locks. Standalone history and mark mutations use
-the same root lock.
+Replay and ordinary tdnf transactions use the same install-root-wide lock.
+Aliases and different `_dbpath` values under one root contend, while distinct
+roots do not. Replay retains the pinned root and rpmdb state through final
+inventory capture.
 
-RPM identity comparisons use the effective epoch (`epoch orelse 0`). Canonical
-plans still preserve the metadata distinction between an omitted epoch and an
-explicit zero, while replay accepts an RPM or rpmdb header that omits
-`RPMTAG_EPOCH` when plan metadata records epoch zero. When the plan captured
-the installed set, success requires exact semantic equality with its selected
-set. For `include_installed=false`, replay instead projects the expected final
-inventory from the locked initial snapshot plus the plan's exact actions, so
-unmentioned installed packages are retained.
+### Exact execution order
 
-Callers should additionally enforce OS-level network isolation as defense in
-depth. The replay API itself accepts no repository or network input.
+The plan's semantic `actions` are not used to reconstruct an order. Replay
+submits the v2 plan's `execution_steps` to the fixed-order native executor in
+their recorded sequence. Install, erase, reinstall, upgrade, downgrade, and
+obsolete work therefore retains the exported low-level interleaving. Shared
+priors and the recorded identity and position of downgrade or obsolete erases
+are preserved.
+
+Bundle export refuses any transaction order or multi-prior replacement graph
+that the native fixed-order item model cannot represent. Replay independently
+validates the stored shape and refuses a malformed order rather than sorting,
+coalescing, re-solving, or choosing another package.
+
+### Canonical result contract
+
+`Result.canonicalJsonAlloc` emits `schema`
+`tdnf.replay-result/v1` with members in this fixed order:
+
+```json
+{
+  "actions": [
+    {"index": 0, "kind": "install", "status": "applied"}
+  ],
+  "applied_plan_digest": "64 lowercase hex characters or null",
+  "final_inventory": [
+    {
+      "hnum": 1,
+      "identity": {
+        "arch": "x86_64",
+        "epoch": 0,
+        "name": "example",
+        "release": "1",
+        "version": "1"
+      }
+    }
+  ],
+  "plan_digest": "64 lowercase hex characters or null",
+  "schema": "tdnf.replay-result/v1",
+  "status": "succeeded",
+  "transaction_failure": null,
+  "validation_failure": null
+}
+```
+
+The actual serialization is compact canonical UTF-8 JSON. Array order is
+also canonical:
+
+- `actions` orders outcomes by each action's first appearance in
+  `execution_steps`. Any action with no execution step follows in action-index
+  order. Each outcome aggregates all low-level steps belonging to that action;
+  the exact low-level order remains in the v2 plan.
+- `final_inventory` is sorted by package identity and then rpmdb header
+  number.
+
+#### Status values
+
+The `Status` values are `validation_failed`, `transaction_failed`, and
+`succeeded`.
+
+The fields have these invariants:
+
+- `status` is `validation_failed`, `transaction_failed`, or `succeeded`.
+- `validation_failure` is non-null only for `validation_failed`.
+- `transaction_failure` is non-null only for `transaction_failed`.
+- `plan_digest` becomes available after the canonical plan has been read and
+  bound; early validation failures may leave it null.
+- `applied_plan_digest` equals `plan_digest` only on success and is null for
+  every failure.
+- `final_inventory` is the best authoritative inventory available. It may be
+  null before the target snapshot is captured or when final capture fails.
+
+#### Validation failure values
+
+The public `ValidationFailure` values are:
+`invalid_input`, `bundle_unreadable`, `manifest_not_canonical`,
+`missing_bundle_file`, `additional_bundle_file`, `unsafe_bundle_entry`,
+`checksum_mismatch`, `size_mismatch`, `non_replayable_bundle`,
+`plan_mismatch`, `repository_mismatch`, `metadata_mismatch`, `rpm_mismatch`,
+`signature_mismatch`, `architecture_mismatch`, `rpmdb_mismatch`,
+`prior_mismatch`, `action_shape_mismatch`, `lock_failed`, and
+`target_unreadable`.
+
+#### Transaction failure values
+
+The public `TransactionFailure` values are:
+`invalid_context`, `invalid_item`, `malformed_order`, `prior_mismatch`,
+`package_open_failed`, `package_identity_mismatch`, `rpm_check_failed`,
+`transaction_failed`, `execution_failed`, `expected_inventory_mismatch`, and
+`final_inventory_unreadable`.
+
+#### Action status values
+
+The public `ActionStatus` values are `not_attempted`, `applied`, and
+`indeterminate`.
+
+### Transaction failure semantics
+
+Replay makes no rollback claim. Once mutation can have begun, any executor,
+rpmdb initialization, expected-inventory, or final-capture failure is
+`transaction_failed`. Actions whose complete recorded low-level work was
+observed retain `applied`; every other action becomes `indeterminate`.
+`not_attempted` is used only before execution has crossed into an uncertain
+transaction outcome.
+
+Replay attempts to capture and return the actual final inventory after a
+transaction failure. If that capture fails, `final_inventory` is null and the
+failure is `final_inventory_unreadable`. A failed result never carries
+`applied_plan_digest` and must never be represented to a caller as a
+successful replay.
+
+For a plan that captured the installed set, success requires exact semantic
+equality with the plan's selected set. For `include_installed=false`, replay
+projects the expected inventory from the locked initial snapshot plus the
+exact actions, retaining installed packages the plan did not mention.
+
+## Command-line interface
+
+```text
+tdnf replay [--json] --installroot <absolute-path> \
+  --rpmdb-path <absolute-path> --forcearch <arch> <bundle-directory>
+```
+
+The replay command accepts only the following spellings:
+
+| Purpose | Accepted spellings |
+| --- | --- |
+| Install root | `--installroot PATH`, `--installroot=PATH`, `-installroot PATH`, `-installroot=PATH`, `-i PATH`, `-iPATH` |
+| RPM database path | `--rpmdb-path PATH`, `--rpmdb-path=PATH`, `-rpmdb-path PATH`, `-rpmdb-path=PATH` |
+| Architecture | `--forcearch ARCH`, `--forcearch=ARCH`, `-forcearch ARCH`, `-forcearch=ARCH` |
+| JSON invocation errors | `-j`, `--j`, `-js`, `--js`, `-jso`, `--jso`, `-json`, `--json`, or the `tdnfj` alias |
+| Help | `--help`, `-h` |
+
+The JSON abbreviations are the unique non-empty prefixes accepted by tdnf's
+legacy long-option matcher. They do not accept attached values.
+
+The three target options and the one bundle operand are required exactly once.
+Replay rejects other legacy tdnf options instead of allowing configuration,
+repository, plugin, cache, proxy, or download state to enter the operation.
+Options may precede or follow the `replay` word unless `--` ended option
+parsing.
+
+Example:
+
+```sh
+tdnf replay \
+  --installroot /srv/images/root \
+  --rpmdb-path /var/lib/rpm \
+  --forcearch x86_64 \
+  /srv/bundles/update-2026-08
+```
+
+To enforce offline behavior for payload code, run the command inside the
+operating system's network-isolation mechanism, for example a container or
+namespace with no network interface:
+
+```sh
+unshare --net -- \
+  tdnf replay --installroot /srv/images/root \
+  --rpmdb-path /var/lib/rpm --forcearch x86_64 \
+  /srv/bundles/update-2026-08
+```
+
+The trusted replay implementation never follows the bundle's provenance URLs,
+but RPM scriptlets, triggers, interpreters, and their descendants are outside
+that static guarantee and may make network requests or launch processes.
+Callers **must enforce OS-level network isolation**, such as a no-network
+namespace, when exact offline enforcement includes payload code.
+
+### Exit status and output channels
+
+| Status | Meaning |
+| ---: | --- |
+| `0` | Replay succeeded, or `--help` was requested. |
+| `1` | Internal allocation, output-channel, or output-write failure. |
+| `2` | Invocation or option error. |
+| `3` | Replay returned `validation_failed`. |
+| `4` | Replay returned `transaction_failed`. |
+
+A valid invocation writes exactly one canonical
+`tdnf.replay-result/v1` document to stdout for success and for both failure
+statuses. This is true with or without `--json`; replay is always
+machine-readable. During execution, ordinary diagnostics and scriptlet
+descendant output are redirected to stderr so they cannot corrupt the single
+stdout document.
+
+An invocation error writes diagnostics and usage to stderr. In ordinary mode
+stdout is empty. With `--json` or `tdnfj`, stdout additionally contains one
+`tdnf.replay-invocation-error/v1` document with stable `error` and
+human-readable `message` fields. `--help` writes usage to stderr, leaves
+stdout empty, and exits zero.
+
+Callers should select behavior from the exit status and the versioned stdout
+document, not by parsing human-readable stderr.
+
+## Replay entry-point audit and payload isolation
+
+The replay API exposes no URL, repository configuration, proxy, credential,
+cache, mirror, fetch callback, or solver job. Its project-owned metadata
+decompression and checksum verification operate on already-opened local bundle
+bytes.
+
+The replay entry-point audit reads only `client/replay.zig`; it does not
+inspect or prove transitive implementation dependencies. It validates that
+file's direct `@import` literals and allowlist, rejects foreign/dynamic APIs and
+reflection, and denies known network, process, loader, resolver, and
+network-adjacent internal member tokens in that entry-point source. These
+checks are useful regression guards, not a confinement proof for imported
+modules, arbitrary numeric syscalls, generated machine code, or RPM payloads.
+
+RPM payload scriptlets, triggers, embedded interpreters, and descendant
+processes are untrusted execution outside the entry-point audit. They can open
+sockets, resolve names, load code, or spawn other processes. Binary-level
+zero-request tests remain complementary rather than proving payload
+confinement.
+
+OS-level network isolation is required whenever offline behavior must include
+RPM scriptlets, triggers, interpreters, or descendant processes. A no-network
+namespace or equivalent isolation is the enforcement boundary for that
+payload code.
+
+This design is deliberately narrower than `--cacheonly`: cache-only mode still
+performs an ordinary solve over cached repository state, while replay treats
+the canonical v2 plan and closed v2 bundle as the complete authority.

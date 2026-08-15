@@ -112,13 +112,16 @@ Replay Options
                            Example: tdnf replay --installroot /image --rpmdb-path /var/lib/rpm --forcearch x86_64 /bundle
 
 Replay requires exactly one canonical absolute bundle directory and explicit
---installroot, --rpmdb-path, and --forcearch values. It never initializes the
-normal configuration, repository, solver, cache, or download path. Replay does
-not require uid 0, but the caller must have all target permissions; scriptlets
-that require unavailable privilege fail as transaction failures. Exit status
-is 0 for success, 2 for invocation errors, 3 for validation failures, and 4
-for transaction failures. Callers should also enforce OS-level network
-isolation.
+--installroot, --rpmdb-path, and --forcearch values. The project-owned replay
+entry point never initializes the normal configuration, repository, solver,
+cache, or download path. Replay does not require uid 0, but the caller must
+have all target permissions; scriptlets that require unavailable privilege
+fail as transaction failures. Exit status is 0 for success, 2 for invocation
+errors, 3 for validation failures, and 4 for transaction failures.
+
+RPM scriptlets, triggers, interpreters, and descendant processes are untrusted.
+OS-level no-network isolation is required whenever offline behavior must
+include RPM scriptlets, triggers, interpreters, or descendant processes.
 
 Repoquery Select Options
 --available                Show only available packages

@@ -325,6 +325,42 @@ pub fn build(b: *Build) void {
     }
 
     const zig_test_step = b.step("test", "Run Zig unit tests");
+    const replay_docs_audit_step = b.step(
+        "replay-docs-audit",
+        "Verify the published replay contract covers every public result tag",
+    );
+    const run_replay_docs_audit = b.addSystemCommand(
+        &.{ "python3", "scripts/replay-docs-audit.py" },
+    );
+    run_replay_docs_audit.setCwd(b.path("."));
+    const test_replay_docs_audit = b.addSystemCommand(
+        &.{ "python3", "scripts/replay-docs-audit.py", "--self-test" },
+    );
+    test_replay_docs_audit.setCwd(b.path("."));
+    replay_docs_audit_step.dependOn(&run_replay_docs_audit.step);
+    replay_docs_audit_step.dependOn(&test_replay_docs_audit.step);
+    const replay_confinement_audit_step = b.step(
+        "replay-confinement-audit",
+        "Audit replay.zig direct imports and denied API tokens",
+    );
+    const run_replay_confinement_audit = b.addSystemCommand(
+        &.{ "python3", "scripts/replay-confinement-audit.py" },
+    );
+    run_replay_confinement_audit.setCwd(b.path("."));
+    const test_replay_confinement_audit = b.addSystemCommand(
+        &.{
+            "python3",
+            "scripts/replay-confinement-audit.py",
+            "--self-test",
+        },
+    );
+    test_replay_confinement_audit.setCwd(b.path("."));
+    replay_confinement_audit_step.dependOn(
+        &run_replay_confinement_audit.step,
+    );
+    replay_confinement_audit_step.dependOn(
+        &test_replay_confinement_audit.step,
+    );
     const migration_audit_step = b.step(
         "migration-audit",
         "Reject increases in the remaining C-to-Zig migration surface",
@@ -334,6 +370,10 @@ pub fn build(b: *Build) void {
     );
     run_migration_audit.setCwd(b.path("."));
     migration_audit_step.dependOn(&run_migration_audit.step);
+    migration_audit_step.dependOn(&run_replay_docs_audit.step);
+    migration_audit_step.dependOn(&test_replay_docs_audit.step);
+    migration_audit_step.dependOn(&run_replay_confinement_audit.step);
+    migration_audit_step.dependOn(&test_replay_confinement_audit.step);
     const dead_errdefer_audit_step = b.step(
         "dead-errdefer-audit",
         "Reject errdefer in functions that cannot return an error",
