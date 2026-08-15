@@ -311,6 +311,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--zig", required=True)
     parser.add_argument("--optimize", required=True)
+    parser.add_argument("--replay-export-output")
     args = parser.parse_args()
 
     source_root = Path(__file__).resolve().parent.parent
@@ -351,7 +352,12 @@ def main() -> None:
 
         consumer_root = audit_root / "consumer"
         consumer_root.mkdir()
-        for name in ("build.zig", "build.zig.zon", "main.zig"):
+        for name in (
+            "build.zig",
+            "build.zig.zon",
+            "main.zig",
+            "replay_export.zig",
+        ):
             copy_file(
                 source_root / "tests/public-zig-consumer" / name,
                 consumer_root / name,
@@ -402,6 +408,38 @@ def main() -> None:
             env=environment,
             check=True,
         )
+
+        if args.replay_export_output:
+            export_prefix = audit_root / "replay-export"
+            subprocess.run(
+                [
+                    args.zig,
+                    "build",
+                    "replay-export",
+                    f"-Doptimize={args.optimize}",
+                    "--prefix",
+                    str(export_prefix),
+                    "--system",
+                    str(system_packages),
+                    "--summary",
+                    "all",
+                ],
+                cwd=consumer_root,
+                env=environment,
+                check=True,
+            )
+            source = export_prefix / "bin" / "tdnf-replay-export"
+            destination = Path(args.replay_export_output).resolve()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            staging = destination.with_name(
+                f".{destination.name}.{os.getpid()}"
+            )
+            try:
+                shutil.copy2(source, staging)
+                staging.chmod(0o755)
+                staging.replace(destination)
+            finally:
+                staging.unlink(missing_ok=True)
 
         provided = {entry.name for entry in system_packages.iterdir()}
         if provided != provided_packages:

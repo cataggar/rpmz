@@ -291,6 +291,14 @@ class TestUtils(object):
                 test_prefix, 'libexec', 'tdnf', 'tdnf-history-util')
             self.config['test_support_binary'] = os.path.join(
                 test_prefix, 'libexec', 'tdnf', 'tdnf-test-support')
+            self.config['rpmdb_list_binary'] = os.path.join(
+                test_prefix, 'libexec', 'tdnf', 'tdnf-rpmdb-list')
+            self.config['rpmdb_write_binary'] = os.path.join(
+                test_prefix, 'libexec', 'tdnf', 'tdnf-rpmdb-write')
+        replay_export_binary = os.environ.get('TDNF_REPLAY_EXPORT_BINARY')
+        if replay_export_binary:
+            self.config['replay_export_binary'] = os.path.abspath(
+                replay_export_binary)
         self.config['distribution'] = os.environ.get('DIST', 'photon')
         self.config['repo_seed_path'] = self.config['repo_path']
         self.config['repo_path'] = _prepare_session_repo(self.config)

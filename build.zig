@@ -226,6 +226,12 @@ pub fn build(b: *Build) void {
         prefix
     else
         b.pathJoin(&.{ b.build_root.path.?, prefix });
+    const replay_acceptance_export_path = b.pathJoin(&.{
+        b.build_root.path.?,
+        ".zig-cache",
+        "replay-acceptance",
+        "tdnf-replay-export",
+    });
     const full_libdir = b.fmt("{s}/{s}", .{ abs_prefix, libdir });
     const client_config_options = b.addOptions();
     client_config_options.addOption([]const u8, "history_db_dir", history_db_dir);
@@ -313,6 +319,9 @@ pub fn build(b: *Build) void {
             .{ .key = "NATIVE_FILE_ERASE_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-rpm-erase", .{abs_prefix}) },
             .{ .key = "HISTORY_UTIL_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-history-util", .{abs_prefix}) },
             .{ .key = "TEST_SUPPORT_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-test-support", .{abs_prefix}) },
+            .{ .key = "REPLAY_EXPORT_BINARY", .value = replay_acceptance_export_path },
+            .{ .key = "RPMDB_LIST_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-rpmdb-list", .{abs_prefix}) },
+            .{ .key = "RPMDB_WRITE_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-rpmdb-write", .{abs_prefix}) },
             .{ .key = "AUTOMATIC_SCRIPT", .value = b.fmt("{s}/bin/tdnf-automatic", .{abs_prefix}) },
         });
 
@@ -450,6 +459,26 @@ pub fn build(b: *Build) void {
     );
     run_public_zig_api_audit.setCwd(b.path("."));
     public_zig_api_audit_step.dependOn(&run_public_zig_api_audit.step);
+    const replay_acceptance_export_step = b.step(
+        "replay-acceptance-export",
+        "Build the external public-API replay export test driver",
+    );
+    const run_replay_acceptance_export = b.addSystemCommand(
+        &.{
+            "python3",
+            "scripts/public-zig-api-audit.py",
+            "--zig",
+            b.graph.zig_exe,
+            "--optimize",
+            @tagName(optimize),
+            "--replay-export-output",
+            replay_acceptance_export_path,
+        },
+    );
+    run_replay_acceptance_export.setCwd(b.path("."));
+    replay_acceptance_export_step.dependOn(
+        &run_replay_acceptance_export.step,
+    );
     const tdnf_error_mod = b.createModule(.{
         .root_source_file = b.path("abi/error_codes.zig"),
         .target = target,
@@ -2996,6 +3025,7 @@ pub fn build(b: *Build) void {
     run_pytest.setCwd(b.path("pytests"));
     run_pytest.step.dependOn(b.getInstallStep());
     run_pytest.step.dependOn(&install_pytest_support.step);
+    run_pytest.step.dependOn(&run_replay_acceptance_export.step);
     check_step.dependOn(&run_pytest.step);
 
     // The Zig integration suite. It drives the same installed binaries as

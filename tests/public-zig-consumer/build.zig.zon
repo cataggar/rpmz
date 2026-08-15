@@ -10,5 +10,6 @@
         "build.zig",
         "build.zig.zon",
         "main.zig",
+        "replay_export.zig",
     },
 }
