@@ -26,6 +26,7 @@ ALLOWED_IMPORTS = {
     "transaction_lock",
     "transaction_plan",
     "rpm_txn_config",
+    "rpm_package_test",
     "verified_fetch",
 }
 ALLOWED_VERIFIED_FETCH_MEMBERS = {"verifyOpen"}
@@ -254,25 +255,15 @@ def lex_zig(source: str) -> Lexed:
     return Lexed("".join(output), tuple(strings))
 
 
-def production_offset(code: str) -> int:
-    first_test = re.search(r"(?m)^test\s+", code)
-    return len(code) if first_test is None else first_test.start()
-
-
-def production_source(source: str) -> str:
-    return source[:production_offset(lex_zig(source).code)]
-
-
-def import_calls(lexed: Lexed, limit: int) -> list[tuple[int, int, str]]:
+def import_calls(lexed: Lexed) -> list[tuple[int, int, str]]:
     calls = []
-    strings = [token for token in lexed.strings if token.end <= limit]
-    for match in re.finditer(r"@import\s*\(", lexed.code[:limit]):
-        close = lexed.code.find(")", match.end(), limit)
+    for match in re.finditer(r"@import\s*\(", lexed.code):
+        close = lexed.code.find(")", match.end())
         if close < 0:
             continue
         values = [
             token.value
-            for token in strings
+            for token in lexed.strings
             if match.end() <= token.start and token.end <= close
         ]
         if len(values) == 1:
@@ -370,9 +361,27 @@ def dotted_paths(source: str) -> list[str]:
     )
 
 
+def normalize_member_parentheses(source: str) -> str:
+    pattern = re.compile(
+        r"\(\s*("
+        r"[A-Za-z_][A-Za-z0-9_]*"
+        r"(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*"
+        r")\s*\)"
+    )
+    previous = None
+    while previous != source:
+        previous = source
+        source = pattern.sub(
+            lambda match: re.sub(r"\s+", "", match.group(1)),
+            source,
+        )
+    return source
+
+
 def reject_network_paths(lexical: str) -> None:
-    aliases = simple_const_aliases(lexical)
-    for path in dotted_paths(lexical):
+    normalized = normalize_member_parentheses(lexical)
+    aliases = simple_const_aliases(normalized)
+    for path in dotted_paths(normalized):
         resolved = resolve_alias(path, aliases)
         for pattern, description in FORBIDDEN_STD_PATTERNS:
             if pattern.search(resolved):
@@ -381,7 +390,53 @@ def reject_network_paths(lexical: str) -> None:
                 )
 
 
-def reject_foreign_socket_apis(lexical: str) -> None:
+def socket_symbol(name: str) -> bool:
+    return re.fullmatch(
+        SOCKET_SYMBOL_PATTERN,
+        name,
+        flags=re.IGNORECASE,
+    ) is not None
+
+
+def matching_parenthesis(code: str, opening: int) -> int | None:
+    depth = 0
+    for index in range(opening, len(code)):
+        if code[index] == "(":
+            depth += 1
+        elif code[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def reject_builtin_externs(lexed: Lexed) -> None:
+    for match in re.finditer(r"@extern\s*\(", lexed.code):
+        opening = lexed.code.find("(", match.start(), match.end())
+        closing = matching_parenthesis(lexed.code, opening)
+        if closing is None:
+            raise RuntimeError("replay closure contains malformed @extern")
+        body_start = opening + 1
+        body = lexed.code[body_start:closing]
+        for name_match in re.finditer(r"\.\s*name\s*=", body):
+            value_start = body_start + name_match.end()
+            values = [
+                token.value
+                for token in lexed.strings
+                if value_start <= token.start and
+                token.end <= closing and
+                not lexed.code[value_start:token.start].strip()
+            ]
+            if not values:
+                continue
+            name = values[0]
+            if socket_symbol(name):
+                raise RuntimeError(
+                    f"replay closure imports network symbol via @extern: {name}"
+                )
+
+
+def reject_foreign_socket_apis(lexical: str, lexed: Lexed) -> None:
     if re.search(r"@cImport\s*\(", lexical):
         raise RuntimeError("replay closure contains @cImport")
     extern_socket = re.search(
@@ -399,12 +454,12 @@ def reject_foreign_socket_apis(lexical: str) -> None:
                 extern_socket.group(0)
             )
         )
+    reject_builtin_externs(lexed)
 
 
 def audit_source(source: str) -> None:
     lexed = lex_zig(source)
-    limit = production_offset(lexed.code)
-    calls = import_calls(lexed, limit)
+    calls = import_calls(lexed)
     imports = {value for _, _, value in calls}
     if imports != ALLOWED_IMPORTS:
         added = sorted(imports - ALLOWED_IMPORTS)
@@ -413,7 +468,7 @@ def audit_source(source: str) -> None:
             f"replay import boundary changed; added={added}, removed={removed}"
         )
 
-    lexical = expand_std_imports(lexed.code[:limit], calls)
+    lexical = expand_std_imports(lexed.code, calls)
     if struct_fields(lexical, "Input") != ["bundle_directory", "target"]:
         raise RuntimeError("replay Input gained an ambient input")
     if struct_fields(lexical, "Target") != [
@@ -449,12 +504,12 @@ def audit_source(source: str) -> None:
                 f"replay reaches forbidden network dependency: {identifier}"
             )
     reject_network_paths(lexical)
-    reject_foreign_socket_apis(lexical)
+    reject_foreign_socket_apis(lexical, lexed)
 
 
 def expect_rejected(source: str, fixture: str, description: str) -> None:
     try:
-        audit_source(production_source(source) + "\n" + fixture)
+        audit_source(source + "\n" + fixture)
     except RuntimeError:
         return
     raise RuntimeError(f"socket self-test was accepted: {description}")
@@ -462,7 +517,7 @@ def expect_rejected(source: str, fixture: str, description: str) -> None:
 
 def self_test(source: str) -> None:
     audit_source(source)
-    harmless = production_source(source) + (
+    harmless = source + (
         "\n// std.posix.socket is documentation, not a call.\n"
         'const harmless_text = "std.Io.net // @cImport extern fn socket";\n'
         'const escaped_text = "quote: \\" // std.net.connect";\n'
@@ -472,6 +527,11 @@ def self_test(source: str) -> None:
         ";\n"
         'const @"socket" = 1;\n'
         "const fmt_alias = std.fmt;\n"
+        "const safe_foreign = @extern(*const fn () void, .{\n"
+        '    .name = "clock_gettime",\n'
+        "});\n"
+        'const harmless_name = .{ .name = "socket" };\n'
+        'const extern_text = "@extern name = \\"WSASocketW\\"";\n'
     )
     audit_source(harmless)
 
@@ -499,6 +559,19 @@ def self_test(source: str) -> None:
         (
             "parenthesized std.posix alias",
             "const posix = (std.posix);\nconst attempt = posix.socket;",
+        ),
+        (
+            "parenthesized member base",
+            "const attempt = (std.posix).connect;",
+        ),
+        (
+            "parenthesized alias member base",
+            "const posix = std.posix;\nconst attempt = (posix).socket;",
+        ),
+        (
+            "nested parenthesized member base",
+            "const posix = (std.posix);\n"
+            "const attempt = ((((posix)))).getaddrinfo;",
         ),
         (
             "chained std.posix alias",
@@ -598,6 +671,42 @@ def self_test(source: str) -> None:
             "    \\\\std.posix.socket // string content\n"
             ";\n"
             "const attempt = std.posix.connect;",
+        ),
+        (
+            "@extern socket",
+            "const attempt = @extern(*const fn () c_int, .{\n"
+            '    .name = "socket",\n'
+            "});",
+        ),
+        (
+            "@extern escaped connect",
+            "const attempt = @extern(*const fn () c_int, .{\n"
+            '    .name = "conn\\x65ct",\n'
+            "});",
+        ),
+        (
+            "@extern getaddrinfo",
+            "const attempt = @extern(*const fn () c_int, .{\n"
+            '    .name = "getaddrinfo",\n'
+            "});",
+        ),
+        (
+            "@extern WSASocketW",
+            "const attempt = @extern(*const fn () c_int, .{\n"
+            '    .name = "WSASocketW",\n'
+            "});",
+        ),
+        (
+            "@extern WSAConnectA",
+            "const attempt = @extern(*const fn () c_int, .{\n"
+            '    .name = "WSAConnectA",\n'
+            "});",
+        ),
+        (
+            "@extern escaped GetAddrInfoW",
+            "const attempt = @extern(*const fn () c_int, .{\n"
+            '    .name = "GetAddrInfo\\x57",\n'
+            "});",
         ),
     )
     for description, fixture in fixtures:
