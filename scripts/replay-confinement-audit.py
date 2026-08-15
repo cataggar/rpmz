@@ -66,15 +66,18 @@ SOCKET_CALLS = (
     "send",
     "sendto",
     "sendmsg",
+    "sendmmsg",
     "recv",
     "recvfrom",
     "recvmsg",
+    "recvmmsg",
     "shutdown",
     "getsockname",
     "getpeername",
     "getsockopt",
     "setsockopt",
     "getaddrinfo",
+    "freeaddrinfo",
     "getnameinfo",
     "inet_pton",
     "inet_ntop",
@@ -82,6 +85,33 @@ SOCKET_CALLS = (
 SOCKET_CALL_PATTERN = "(?:" + "|".join(SOCKET_CALLS) + ")"
 SOCKET_SYMBOL_PATTERN = (
     "(?:__)?(?:WSA)?" + SOCKET_CALL_PATTERN + "(?:A|W)?"
+)
+WINDOWS_SOCKET_SYMBOLS = {
+    "wsaconnectbynamea",
+    "wsaconnectbynamew",
+    "wsaconnectbylist",
+    "getaddrinfoexa",
+    "getaddrinfoexw",
+    "freeaddrinfoex",
+    "freeaddrinfoexw",
+}
+WINDOWS_SOCKET_VARIANT_TESTS = (
+    "WSASocketA",
+    "WSASocketW",
+    "WSAConnect",
+    "WSAAccept",
+    "WSASend",
+    "WSASendTo",
+    "WSASendMsg",
+    "WSARecv",
+    "WSARecvFrom",
+    "WSARecvMsg",
+    "GetAddrInfoA",
+    "GetAddrInfoW",
+    "FreeAddrInfoA",
+    "FreeAddrInfoW",
+    "GetNameInfoA",
+    "GetNameInfoW",
 )
 FORBIDDEN_NETWORK_TOKENS = {
     "http",
@@ -281,10 +311,14 @@ def reject_token_policy(lexical: str) -> None:
             raise RuntimeError(
                 f"replay closure contains forbidden internal member {token}"
             )
-        if lowered in FORBIDDEN_NETWORK_TOKENS or re.fullmatch(
-            SOCKET_SYMBOL_PATTERN,
-            token,
-            flags=re.IGNORECASE,
+        if (
+            lowered in WINDOWS_SOCKET_SYMBOLS or
+            lowered in FORBIDDEN_NETWORK_TOKENS or
+            re.fullmatch(
+                SOCKET_SYMBOL_PATTERN,
+                token,
+                flags=re.IGNORECASE,
+            )
         ):
             raise RuntimeError(
                 f"replay closure contains known network API token {token}"
@@ -404,8 +438,30 @@ def self_test(source: str) -> None:
         "const download_digest = 2;\n"
         "const fetch_count = 3;\n"
         "const acceptable_result = 4;\n"
+        "const send_message = 5;\n"
+        "const recvmmsg_count = 6;\n"
+        "const freeaddrinfo_cache = 7;\n"
     )
     audit_source(harmless)
+
+    for token in SOCKET_CALLS + ("socketcall",):
+        expect_rejected(
+            source,
+            f"const attempt = std.os.linux.{token};",
+            f"std.os.linux.{token}",
+        )
+    for token in sorted(WINDOWS_SOCKET_SYMBOLS):
+        expect_rejected(
+            source,
+            f"const attempt = std.os.windows.ws2_32.{token};",
+            f"Windows socket symbol {token}",
+        )
+    for token in WINDOWS_SOCKET_VARIANT_TESTS:
+        expect_rejected(
+            source,
+            f"const attempt = std.os.windows.ws2_32.{token};",
+            f"Windows socket variant {token}",
+        )
 
     fixtures = (
         ("std.Io.net", "const attempt = std.Io.net;"),

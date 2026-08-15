@@ -299,8 +299,10 @@ decompression and checksum verification operate only on already-opened local
 bundle bytes. A static confinement audit pins that dependency boundary and
 requires every `@import` to contain exactly one allowlisted literal string. It
 rejects every `@cImport` and `@extern`, dynamic reflection primitives such as
-`@field`, known standard-library network namespace and API identifier tokens,
-and forbidden members of network-adjacent internal modules such as repository
+`@field`, and exact identifier tokens for known standard and platform socket
+namespaces and APIs, including address lookup, connect/listen, socket options,
+send/receive, Linux batched messages, and Winsock variants. It also rejects
+forbidden members of network-adjacent internal modules such as repository
 live-solving or verified fetching. This fail-closed token policy covers
 aliases, blocks, function returns, aggregates, and parenthesized access, but is
 not a proof against arbitrary numeric syscalls or machine code. Binary-level
