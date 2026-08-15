@@ -24,6 +24,7 @@ REQUIRED_PUBLIC_FILES = (
     "client/replay.zig",
     "client/transaction_plan.zig",
     "client/transaction_bundle.zig",
+    "tools/cli/replay_options.zig",
     "doc/transaction-plan-api.md",
     "doc/transaction-bundle.md",
     "doc/replay-api.md",

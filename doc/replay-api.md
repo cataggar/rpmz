@@ -146,11 +146,17 @@ coalescing, re-solving, or choosing another package.
 The actual serialization is compact canonical UTF-8 JSON. Array order is
 also canonical:
 
-- `actions` uses the plan's action index order. Each outcome aggregates the
-  low-level `execution_steps` belonging to that action; the exact low-level
-  order remains in the v2 plan.
+- `actions` orders outcomes by each action's first appearance in
+  `execution_steps`. Any action with no execution step follows in action-index
+  order. Each outcome aggregates all low-level steps belonging to that action;
+  the exact low-level order remains in the v2 plan.
 - `final_inventory` is sorted by package identity and then rpmdb header
   number.
+
+#### Status values
+
+The `Status` values are `validation_failed`, `transaction_failed`, and
+`succeeded`.
 
 The fields have these invariants:
 
@@ -164,6 +170,8 @@ The fields have these invariants:
 - `final_inventory` is the best authoritative inventory available. It may be
   null before the target snapshot is captured or when final capture fails.
 
+#### Validation failure values
+
 The public `ValidationFailure` values are:
 `invalid_input`, `bundle_unreadable`, `manifest_not_canonical`,
 `missing_bundle_file`, `additional_bundle_file`, `unsafe_bundle_entry`,
@@ -173,11 +181,18 @@ The public `ValidationFailure` values are:
 `prior_mismatch`, `action_shape_mismatch`, `lock_failed`, and
 `target_unreadable`.
 
+#### Transaction failure values
+
 The public `TransactionFailure` values are:
 `invalid_context`, `invalid_item`, `malformed_order`, `prior_mismatch`,
 `package_open_failed`, `package_identity_mismatch`, `rpm_check_failed`,
 `transaction_failed`, `execution_failed`, `expected_inventory_mismatch`, and
 `final_inventory_unreadable`.
+
+#### Action status values
+
+The public `ActionStatus` values are `not_attempted`, `applied`, and
+`indeterminate`.
 
 ### Transaction failure semantics
 
@@ -206,13 +221,18 @@ tdnf replay [--json] --installroot <absolute-path> \
   --rpmdb-path <absolute-path> --forcearch <arch> <bundle-directory>
 ```
 
-The replay command accepts only:
+The replay command accepts only the following spellings:
 
-- `--installroot PATH`, `--installroot=PATH`, `-i PATH`, or `-iPATH`;
-- `--rpmdb-path PATH` or `--rpmdb-path=PATH`;
-- `--forcearch ARCH` or `--forcearch=ARCH`;
-- `--json`, or invocation through the `tdnfj` alias;
-- `--help` or `-h`.
+| Purpose | Accepted spellings |
+| --- | --- |
+| Install root | `--installroot PATH`, `--installroot=PATH`, `-installroot PATH`, `-installroot=PATH`, `-i PATH`, `-iPATH` |
+| RPM database path | `--rpmdb-path PATH`, `--rpmdb-path=PATH`, `-rpmdb-path PATH`, `-rpmdb-path=PATH` |
+| Architecture | `--forcearch ARCH`, `--forcearch=ARCH`, `-forcearch ARCH`, `-forcearch=ARCH` |
+| JSON invocation errors | `-j`, `--j`, `-js`, `--js`, `-jso`, `--jso`, `-json`, `--json`, or the `tdnfj` alias |
+| Help | `--help`, `-h` |
+
+The JSON abbreviations are the unique non-empty prefixes accepted by tdnf's
+legacy long-option matcher. They do not accept attached values.
 
 The three target options and the one bundle operand are required exactly once.
 Replay rejects other legacy tdnf options instead of allowing configuration,

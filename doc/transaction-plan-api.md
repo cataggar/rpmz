@@ -206,6 +206,8 @@ represented without loss.
 
 Replay validates that binding, keeps the selected RPMs pinned, and submits the
 steps in their stored order. It never sorts actions into a guessed order,
-coalesces priors, re-solves, or selects a newer package. Result action statuses
-are reported in action-index order and aggregate the recorded low-level steps;
-the v2 `execution_steps` remain the source of truth for exact execution order.
+coalesces priors, re-solves, or selects a newer package. Result outcomes are
+ordered by each action's first appearance in `execution_steps`; actions with no
+step follow in action-index order. Each outcome aggregates the recorded
+low-level steps, while v2 `execution_steps` remain the source of truth for
+exact execution order.
