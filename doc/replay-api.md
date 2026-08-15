@@ -298,10 +298,14 @@ cache, mirror, fetch callback, or solver job. Its bundle metadata
 decompression and checksum verification operate only on already-opened local
 bundle bytes. A static confinement audit pins that dependency boundary and
 requires every `@import` to contain exactly one allowlisted literal string. It
-rejects direct or aliased standard-library networking, every `@cImport` and
-`@extern`, and dynamic reflection primitives such as `@field` that could
-recover a network API indirectly. Binary-level replay tests own the behavioral
-zero-request proof.
+rejects every `@cImport` and `@extern`, dynamic reflection primitives such as
+`@field`, known standard-library network namespace and API identifier tokens,
+and forbidden members of network-adjacent internal modules such as repository
+live-solving or verified fetching. This fail-closed token policy covers
+aliases, blocks, function returns, aggregates, and parenthesized access, but is
+not a proof against arbitrary numeric syscalls or machine code. Binary-level
+zero-request tests remain complementary, and callers should still enforce
+OS-level network isolation.
 
 This design is deliberately narrower than `--cacheonly`: cache-only mode still
 performs an ordinary solve over cached repository state, while replay treats

@@ -34,9 +34,13 @@ ALLOWED_REPOMD_MEMBERS = {
     "available_repository_loader",
     "solver_rules",
 }
-FORBIDDEN_IDENTIFIERS = {
+FORBIDDEN_INTERNAL_MEMBER_TOKENS = {
     "client_download",
     "remoterepo",
+    "solver_live",
+    "download",
+    "fetch",
+    "Fetcher",
     "fetchVerified",
     "fetchToFile",
     "curl",
@@ -79,63 +83,20 @@ SOCKET_CALL_PATTERN = "(?:" + "|".join(SOCKET_CALLS) + ")"
 SOCKET_SYMBOL_PATTERN = (
     "(?:__)?(?:WSA)?" + SOCKET_CALL_PATTERN + "(?:A|W)?"
 )
-FORBIDDEN_STD_PATTERNS = (
-    (
-        re.compile(r"\bstd\s*\.\s*http\b"),
-        "std.http network namespace",
-    ),
-    (
-        re.compile(r"\bstd\s*\.\s*Io\s*\.\s*net\b"),
-        "std.Io.net network namespace",
-    ),
-    (
-        re.compile(r"\bstd\s*\.\s*net\b"),
-        "std.net network namespace",
-    ),
-    (
-        re.compile(
-            "".join((
-                r"\bstd\s*\.\s*posix\s*\.\s*",
-                r"(?:system\s*\.\s*)?",
-                SOCKET_CALL_PATTERN,
-                r"\b",
-            )),
-            re.IGNORECASE,
-        ),
-        "std.posix socket API",
-    ),
-    (
-        re.compile(
-            r"\bstd\s*\.\s*c\s*\.\s*" + SOCKET_CALL_PATTERN + r"\b",
-            re.IGNORECASE,
-        ),
-        "std.c socket API",
-    ),
-    (
-        re.compile(
-            "".join((
-                r"\bstd\s*\.\s*os\s*\.\s*linux\s*\.\s*",
-                SOCKET_CALL_PATTERN,
-                r"\b",
-            )),
-            re.IGNORECASE,
-        ),
-        "std.os.linux socket API",
-    ),
-    (
-        re.compile(
-            "".join((
-                r"\bstd\s*\.\s*os\s*\.\s*windows\s*\.\s*",
-                r"(?:ws2_32\s*\.\s*)?",
-                r"(?:WSA)?",
-                SOCKET_CALL_PATTERN,
-                r"\b",
-            )),
-            re.IGNORECASE,
-        ),
-        "std.os.windows socket API",
-    ),
-)
+FORBIDDEN_NETWORK_TOKENS = {
+    "http",
+    "net",
+    "posix",
+    "socketcall",
+    "syscall",
+    "syscall0",
+    "syscall1",
+    "syscall2",
+    "syscall3",
+    "syscall4",
+    "syscall5",
+    "syscall6",
+}
 
 
 @dataclass(frozen=True)
@@ -309,100 +270,25 @@ def struct_fields(source: str, name: str) -> list[str]:
     return re.findall(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", match.group(1))
 
 
-def unwrap_parentheses(expression: str) -> str:
-    expression = re.sub(r"\s+", "", expression)
-    while expression.startswith("(") and expression.endswith(")"):
-        depth = 0
-        wraps_all = True
-        for index, character in enumerate(expression):
-            if character == "(":
-                depth += 1
-            elif character == ")":
-                depth -= 1
-                if depth == 0 and index != len(expression) - 1:
-                    wraps_all = False
-                    break
-            if depth < 0:
-                wraps_all = False
-                break
-        if not wraps_all or depth != 0:
-            break
-        expression = expression[1:-1]
-    previous = None
-    while previous != expression:
-        previous = expression
-        expression = re.sub(
-            r"\(([A-Za-z_][A-Za-z0-9_]*)\)",
-            r"\1",
-            expression,
-        )
-    return expression
+def identifier_tokens(source: str) -> list[str]:
+    return re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", source)
 
 
-def simple_const_aliases(source: str) -> dict[str, str]:
-    aliases = {}
-    pattern = re.compile(
-        r"(?m)^\s*(?:pub\s+)?const\s+"
-        r"([A-Za-z_][A-Za-z0-9_]*)"
-        r"(?:\s*:\s*[^=;\n]+)?\s*=\s*"
-        r"([^;\n]+)\s*;"
-    )
-    for name, value in pattern.findall(source):
-        value = unwrap_parentheses(value)
-        if re.fullmatch(
-            r"[A-Za-z_][A-Za-z0-9_]*"
-            r"(?:\.[A-Za-z_][A-Za-z0-9_]*)*",
-            value,
+def reject_token_policy(lexical: str) -> None:
+    for token in identifier_tokens(lexical):
+        lowered = token.lower()
+        if token in FORBIDDEN_INTERNAL_MEMBER_TOKENS:
+            raise RuntimeError(
+                f"replay closure contains forbidden internal member {token}"
+            )
+        if lowered in FORBIDDEN_NETWORK_TOKENS or re.fullmatch(
+            SOCKET_SYMBOL_PATTERN,
+            token,
+            flags=re.IGNORECASE,
         ):
-            aliases[name] = value
-    return aliases
-
-
-def resolve_alias(path: str, aliases: dict[str, str]) -> str:
-    parts = re.sub(r"\s+", "", path).split(".")
-    visited = set()
-    while parts and parts[0] in aliases and parts[0] not in visited:
-        name = parts[0]
-        visited.add(name)
-        parts = aliases[name].split(".") + parts[1:]
-    return ".".join(parts)
-
-
-def dotted_paths(source: str) -> list[str]:
-    return re.findall(
-        r"\b[A-Za-z_][A-Za-z0-9_]*"
-        r"(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)+\b",
-        source,
-    )
-
-
-def normalize_member_parentheses(source: str) -> str:
-    pattern = re.compile(
-        r"\(\s*("
-        r"[A-Za-z_][A-Za-z0-9_]*"
-        r"(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*"
-        r")\s*\)"
-    )
-    previous = None
-    while previous != source:
-        previous = source
-        source = pattern.sub(
-            lambda match: re.sub(r"\s+", "", match.group(1)),
-            source,
-        )
-    return source
-
-
-def reject_network_paths(lexical: str) -> None:
-    normalized = normalize_member_parentheses(lexical)
-    aliases = simple_const_aliases(normalized)
-    for path in dotted_paths(normalized):
-        resolved = resolve_alias(path, aliases)
-        for pattern, description in FORBIDDEN_STD_PATTERNS:
-            if pattern.search(resolved):
-                raise RuntimeError(
-                    f"replay reaches forbidden {description} via {path}"
-                )
+            raise RuntimeError(
+                f"replay closure contains known network API token {token}"
+            )
 
 
 def matching_parenthesis(code: str, opening: int) -> int | None:
@@ -482,17 +368,12 @@ def audit_source(source: str) -> None:
             )
         )
 
-    for identifier in sorted(FORBIDDEN_IDENTIFIERS):
-        if re.search(r"\b" + re.escape(identifier) + r"\b", lexical):
-            raise RuntimeError(
-                f"replay reaches forbidden network dependency: {identifier}"
-            )
     for builtin in FORBIDDEN_REFLECTION_BUILTINS:
         if re.search(r"@" + re.escape(builtin) + r"\s*\(", lexical):
             raise RuntimeError(
                 f"replay closure contains dynamic reflection builtin @{builtin}"
             )
-    reject_network_paths(lexical)
+    reject_token_policy(lexical)
     reject_foreign_socket_apis(lexical)
 
 
@@ -514,11 +395,15 @@ def self_test(source: str) -> None:
         "    \\\\std.posix.socket // remains string content\n"
         "    \\\\extern fn @\"connect\" and @cImport\n"
         ";\n"
-        'const @"socket" = 1;\n'
+        'const @"socket_state" = 1;\n'
         "const fmt_alias = std.fmt;\n"
         'const harmless_name = .{ .name = "socket" };\n'
         'const extern_text = "@extern name = \\"WSASocketW\\"";\n'
         'const field_text = "@field(std.posix, \\"socket\\")";\n'
+        "const socket_state = 1;\n"
+        "const download_digest = 2;\n"
+        "const fetch_count = 3;\n"
+        "const acceptable_result = 4;\n"
     )
     audit_source(harmless)
 
@@ -530,6 +415,13 @@ def self_test(source: str) -> None:
         (
             "std.posix.system.socket",
             "const attempt = std.posix.system.socket;",
+        ),
+        (
+            "block-indirected std.posix.socket",
+            "const attempt = block: {\n"
+            "    const namespace = std.posix;\n"
+            "    break :block namespace.socket;\n"
+            "};",
         ),
         ("std.c.socket", "const attempt = std.c.socket;"),
         ("std.c.connect", "const attempt = std.c.connect;"),
@@ -724,6 +616,39 @@ def self_test(source: str) -> None:
             "@hasDecl networking reflection",
             'const attempt = @hasDecl(std.posix, "getaddrinfo");',
         ),
+        (
+            "parenthesized repomd solver_live",
+            "const attempt = (repomd).solver_live;",
+        ),
+        (
+            "aliased repomd solver_live",
+            "const repository_module = repomd;\n"
+            "const attempt = repository_module.solver_live;",
+        ),
+        (
+            "block-indirected repomd solver_live",
+            "const attempt = block: {\n"
+            "    break :block repomd.solver_live;\n"
+            "};",
+        ),
+        (
+            "function-returned repomd solver_live",
+            "fn hiddenRepositoryMember() type {\n"
+            "    return repomd.solver_live;\n"
+            "}",
+        ),
+        (
+            "aggregate-indirected repomd solver_live",
+            "const holder = .{ .value = repomd.solver_live };",
+        ),
+        (
+            "verified_fetch fetch member",
+            "const attempt = verified_fetch.fetch;",
+        ),
+        (
+            "verified_fetch download member",
+            "const attempt = verified_fetch.download;",
+        ),
     )
     for description, fixture in fixtures:
         expect_rejected(source, fixture, description)
@@ -742,7 +667,7 @@ def main() -> int:
             audit_source(source)
             print(
                 "Replay confinement audit passed "
-                "(imports, aliases, foreign APIs, and network namespaces)"
+                "(imports, foreign/reflection APIs, and denied tokens)"
             )
     except (OSError, RuntimeError) as error:
         print(f"replay confinement audit failed: {error}", file=sys.stderr)
