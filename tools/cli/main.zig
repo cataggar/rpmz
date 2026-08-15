@@ -322,10 +322,8 @@ fn jsonOutputRequested(argv: []const [*:0]const u8) bool {
         const body = arg[prefix_len..];
         const equals_index = std.mem.indexOfScalar(u8, body, '=');
         const name = if (equals_index) |offset| body[0..offset] else body;
-        if (equals_index == null) {
-            if (cli.matchLegacyLongOption(name)) |matched| {
-                if (std.mem.eql(u8, matched.name, "json")) return true;
-            }
+        if (cli.matchLegacyLongOption(name)) |matched| {
+            if (std.mem.eql(u8, matched.name, "json")) return true;
         }
 
         if (optionConsumesNext(arg) and index + 1 < argv.len)
@@ -825,7 +823,11 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         }
     }
 
-    dwError = abi.TDNFCliParseArgs(argc, @ptrCast(argv_ptr), &pCmdArgs);
+    dwError = parse: {
+        cli.setParserJsonDiagnostics(requested_json);
+        defer cli.setParserJsonDiagnostics(false);
+        break :parse abi.TDNFCliParseArgs(argc, @ptrCast(argv_ptr), &pCmdArgs);
+    };
     if (dwError == 0) {
         const cmd_args = pCmdArgs.?;
 

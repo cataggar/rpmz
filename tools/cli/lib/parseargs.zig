@@ -488,7 +488,7 @@ pub export fn TDNFCliParseArgs(
             return dwError;
         }
     } else if (pCmdArgs.?.pszInstallRoot[0] != '/' and !is_replay) {
-        common.log(LOG_CRIT, "Install root must be an absolute path.\n", .{});
+        common.log(help.parserDiagnosticLevel(LOG_CRIT), "Install root must be an absolute path.\n", .{});
         return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 

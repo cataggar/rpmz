@@ -514,6 +514,8 @@ fn expectLegacyOptionJson(
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
     try std.testing.expectEqual(expected_code, exitCode(result));
+    try std.testing.expect(result.stdout.len != 0);
+    try std.testing.expect(!std.mem.endsWith(u8, result.stdout, "\n"));
 
     const parsed = try std.json.parseFromSlice(
         std.json.Value,
@@ -535,6 +537,110 @@ fn expectLegacyOptionJson(
         try std.testing.expect(std.mem.indexOf(u8, result.stderr, message) != null);
     } else {
         try std.testing.expectEqual(@as(usize, 0), result.stderr.len);
+    }
+}
+
+test "legacy parser JSON failures keep diagnostics off stdout" {
+    const binary = try tdnfPath();
+    defer allocator.free(binary);
+
+    const cases = [_]struct {
+        args: []const []const u8,
+        exit_code: u8,
+        error_code: i64,
+        message: []const u8,
+        stderr_diagnostic: ?[]const u8,
+    }{
+        .{
+            .args = &.{ "--json", "--unknown" },
+            .exit_code = 140,
+            .error_code = 908,
+            .message = "Command line error: option is invalid.",
+            .stderr_diagnostic = "No such option: --unknown",
+        },
+        .{
+            .args = &.{ "--json", "--installroot", "relative", "list" },
+            .exit_code = 86,
+            .error_code = 1622,
+            .message = "Invalid argument",
+            .stderr_diagnostic = "Install root must be an absolute path.",
+        },
+        .{
+            .args = &.{ "--json", "--config" },
+            .exit_code = 141,
+            .error_code = 909,
+            .message = "Command line error: expected one argument.",
+            .stderr_diagnostic = "Option --config requires an argument",
+        },
+        .{
+            .args = &.{"--json=invalid"},
+            .exit_code = 140,
+            .error_code = 908,
+            .message = "Command line error: option is invalid.",
+            .stderr_diagnostic = "No such option: --json=invalid",
+        },
+        .{
+            .args = &.{ "--json", "--setopt", "invalid", "list" },
+            .exit_code = 143,
+            .error_code = 911,
+            .message = "Missing equal sign in setopt argument. setopt requires an argument of the form key=value.",
+            .stderr_diagnostic = null,
+        },
+        .{
+            .args = &.{ "--json", "--setopt", "bad/repo.option=1", "list" },
+            .exit_code = 14,
+            .error_code = 1038,
+            .message = "repo name is invalid",
+            .stderr_diagnostic = null,
+        },
+        .{
+            .args = &.{ "--json", "--rpmdb-path", "/var/lib/rpm", "list" },
+            .exit_code = 140,
+            .error_code = 908,
+            .message = "Command line error: option is invalid.",
+            .stderr_diagnostic = "--rpmdb-path is only valid with the replay command",
+        },
+    };
+
+    for (cases) |case| {
+        try expectLegacyOptionJson(
+            binary,
+            case.args,
+            case.exit_code,
+            case.error_code,
+            case.message,
+            case.stderr_diagnostic,
+        );
+    }
+}
+
+test "legacy parser diagnostics retain non-JSON channels" {
+    const binary = try tdnfPath();
+    defer allocator.free(binary);
+
+    const cases = [_]struct {
+        args: []const []const u8,
+        stdout_diagnostic: []const u8,
+    }{
+        .{
+            .args = &.{"--unknown"},
+            .stdout_diagnostic = "No such option: --unknown",
+        },
+        .{
+            .args = &.{ "--installroot", "relative", "list" },
+            .stdout_diagnostic = "Install root must be an absolute path.",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try runCli(binary, case.args);
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+        try std.testing.expect(std.mem.indexOf(
+            u8,
+            result.stdout,
+            case.stdout_diagnostic,
+        ) != null);
     }
 }
 
