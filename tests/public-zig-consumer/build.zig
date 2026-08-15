@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const tdnf_dep = b.dependency("tdnf", .{
+    const rpmz_dep = b.dependency("rpmz", .{
         .target = target,
         .optimize = optimize,
     });
@@ -13,10 +13,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    consumer_mod.addImport("tdnf", tdnf_dep.module("tdnf"));
+    consumer_mod.addImport("rpmz", rpmz_dep.module("rpmz"));
 
     const consumer = b.addExecutable(.{
-        .name = "tdnf-public-zig-consumer",
+        .name = "rpmz-public-zig-consumer",
         .root_module = consumer_mod,
     });
     const replay_export_mod = b.createModule(.{
@@ -24,9 +24,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    replay_export_mod.addImport("tdnf", tdnf_dep.module("tdnf"));
+    replay_export_mod.addImport("rpmz", rpmz_dep.module("rpmz"));
     const replay_export = b.addExecutable(.{
-        .name = "tdnf-replay-export",
+        .name = "rpmz-replay-export",
         .root_module = replay_export_mod,
     });
     const install_replay_export = b.addInstallArtifact(

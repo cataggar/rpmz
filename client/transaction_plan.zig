@@ -3348,7 +3348,7 @@ const test_sha_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 const test_sha_c = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
 fn testPolicy() Policy {
-    return .{ .allow_erasing = false, .allow_multilib = true, .all_deps = false, .best = true, .clean_requirements_on_remove = true, .excludes = &.{}, .force_architecture = null, .include_installed = true, .installonly_limit = 3, .installonly_names = &.{ "kernel", "kernel-devel" }, .install_weak_dependencies = true, .keep_orphans = true, .locked_names = &.{}, .min_versions = &.{}, .protected_names = &.{ "systemd", "tdnf" }, .skip_broken = false };
+    return .{ .allow_erasing = false, .allow_multilib = true, .all_deps = false, .best = true, .clean_requirements_on_remove = true, .excludes = &.{}, .force_architecture = null, .include_installed = true, .installonly_limit = 3, .installonly_names = &.{ "kernel", "kernel-devel" }, .install_weak_dependencies = true, .keep_orphans = true, .locked_names = &.{}, .min_versions = &.{}, .protected_names = &.{ "systemd", "rpmz" }, .skip_broken = false };
 }
 
 fn testData() Data {
@@ -3397,7 +3397,7 @@ fn expectJsonContains(json: []const u8, needle: []const u8) !void {
 // schema change or a bug. It is deliberately a literal, not a recomputation.
 test "canonical plan bytes and digest are pinned" {
     const pinned_digest =
-        "d877e827a85ea4f3c5e0895aab0dd9c4943e424e7d5424a75bbc5c624d8eac71";
+        "f5667936a382fc5394a75ae0750b4921ffb2d5958e9e5e62629a38e349c87de8";
     const instance = try Plan.create(std.testing.allocator, testData());
     defer instance.destroy();
     const digest_value = try instance.digest(std.testing.allocator);

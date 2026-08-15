@@ -54,7 +54,7 @@ jobs:
 
       - name: Smoke test (Debug)
         run: |
-          ./out/bin/tdnf --version
+          ./out/bin/rpmz --version
           sudo ./scripts/smoke-rpmzig.sh ./out
 
       - name: Zig unit tests
@@ -76,12 +76,13 @@ jobs:
 
       - name: Smoke test (ReleaseSafe)
         run: |
-          ./out/bin/tdnf --version
+          ./out/bin/rpmz --version
           sudo ./scripts/smoke-rpmzig.sh ./out
 
       - name: Migration audits
         run: |
           zig build migration-audit --prefix ./out
+          zig build rebrand-audit --prefix ./out
           zig build dead-errdefer-audit --prefix ./out
 
       - name: Native dependency and public Zig API audits
@@ -148,6 +149,7 @@ jobs:
       - name: Audit migration, dependencies, and public Zig API
         run: |
           zig build migration-audit --prefix ./out
+          zig build rebrand-audit --prefix ./out
           zig build dead-errdefer-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
           zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out

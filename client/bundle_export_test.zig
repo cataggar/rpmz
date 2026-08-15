@@ -29,16 +29,16 @@ const io = std.testing.io;
 const allocator = std.testing.allocator;
 
 const TxnConfig = opaque {};
-extern fn tdnf_rpm_config_create(
+extern fn rpmz_rpm_config_create(
     root: ?[*:0]const u8,
 ) ?*TxnConfig;
-extern fn tdnf_rpm_config_destroy(config: ?*TxnConfig) void;
-extern fn tdnf_rpm_config_resolve_path(
+extern fn rpmz_rpm_config_destroy(config: ?*TxnConfig) void;
+extern fn rpmz_rpm_config_resolve_path(
     config: ?*const TxnConfig,
     name: ?[*:0]const u8,
 ) ?[*:0]u8;
-extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
-extern fn tdnf_rpmdb_write_install(
+extern fn rpmz_rpmdb_string_free(value: ?[*:0]u8) void;
+extern fn rpmz_rpmdb_write_install(
     root: ?[*:0]const u8,
     rpm_path: ?[*:0]const u8,
     install_tid: u32,
@@ -48,7 +48,7 @@ extern fn tdnf_rpmdb_write_install(
     file_state_count: usize,
     hnum_out: ?*u32,
 ) i32;
-extern fn tdnf_rpmdb_write_install_config(
+extern fn rpmz_rpmdb_write_install_config(
     config: ?*const TxnConfig,
     rpm_path: ?[*:0]const u8,
     install_tid: u32,
@@ -58,7 +58,7 @@ extern fn tdnf_rpmdb_write_install_config(
     file_state_count: usize,
     hnum_out: ?*u32,
 ) i32;
-extern fn tdnf_rpmdb_count_packages(root: ?[*:0]const u8) i64;
+extern fn rpmz_rpmdb_count_packages(root: ?[*:0]const u8) i64;
 const ReplayBeforeExecutionHook =
     *const fn (?*anyopaque) callconv(.c) void;
 extern fn TDNFReplaySetBeforeExecutionTestHook(
@@ -390,7 +390,7 @@ const Fixture = struct {
             request.resolve.installed.install_root,
         );
         var hnum: u32 = 0;
-        if (tdnf_rpmdb_write_install(
+        if (rpmz_rpmdb_write_install(
             root_z.ptr,
             package_path.ptr,
             1,
@@ -402,14 +402,14 @@ const Fixture = struct {
         ) != 0 or hnum == 0) {
             return error.TestUnexpectedResult;
         }
-        const config = tdnf_rpm_config_create(root_z.ptr) orelse
+        const config = rpmz_rpm_config_create(root_z.ptr) orelse
             return error.TestUnexpectedResult;
-        defer tdnf_rpm_config_destroy(config);
-        const configured_dir = tdnf_rpm_config_resolve_path(
+        defer rpmz_rpm_config_destroy(config);
+        const configured_dir = rpmz_rpm_config_resolve_path(
             config,
             "_dbpath",
         ) orelse return error.TestUnexpectedResult;
-        defer tdnf_rpmdb_string_free(configured_dir);
+        defer rpmz_rpmdb_string_free(configured_dir);
         const default_dir = try std.fmt.allocPrint(
             self.arena.allocator(),
             "{s}/var/lib/rpm",
@@ -421,7 +421,7 @@ const Fixture = struct {
             default_dir,
         )) {
             hnum = 0;
-            if (tdnf_rpmdb_write_install_config(
+            if (rpmz_rpmdb_write_install_config(
                 config,
                 package_path.ptr,
                 1,
@@ -599,7 +599,7 @@ test "replay initializes a clean absent rpmdb before execution" {
     defer allocator.free(root_z);
     try std.testing.expectEqual(
         @as(i64, 1),
-        tdnf_rpmdb_count_packages(root_z.ptr),
+        rpmz_rpmdb_count_packages(root_z.ptr),
     );
 }
 
@@ -1001,7 +1001,7 @@ test "cachedir trailing separator resolves exports and replays" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     var input = try fixture.input("cachedir-trailing");
-    input.resolve.cache_dir = "/var/cache/tdnf/";
+    input.resolve.cache_dir = "/var/cache/rpmz/";
 
     var exported = try bundle_export.exportBundle(allocator, io, input);
     defer exported.deinit();

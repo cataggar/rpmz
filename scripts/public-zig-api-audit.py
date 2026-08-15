@@ -19,7 +19,7 @@ GENERATED_SOURCE_FILES = (
 REQUIRED_PUBLIC_FILES = (
     "build.zig",
     "build.zig.zon",
-    "tdnf.zig",
+    "rpmz.zig",
     "client/root.zig",
     "client/replay.zig",
     "client/transaction_plan.zig",
@@ -34,7 +34,7 @@ REQUIRED_PUBLIC_FILES = (
 # the whole supported surface; a file that is not listed here is an
 # implementation detail regardless of whether it happens to be packaged.
 PUBLIC_SOURCE_FILES = (
-    "tdnf.zig",
+    "rpmz.zig",
     "client/canonical_json.zig",
     "client/secret_shape.zig",
     "client/transaction_plan.zig",
@@ -44,16 +44,19 @@ PUBLIC_SOURCE_FILES = (
 # file imports must be registered on the public module in `build.zig`, which
 # the audit reads rather than restates.
 TOOLCHAIN_MODULES = frozenset({"std", "builtin"})
-PUBLIC_MODULE_VARIABLE = "public_tdnf_mod"
+PUBLIC_MODULE_VARIABLE = "public_rpmz_mod"
 RETIRED_PUBLIC_C_FILES = (
     "client/libtdnf.map",
+    "client/librpmz.map",
     "client/tdnf.pc.in",
+    "client/rpmz.pc.in",
     "client/history_abi.inc",
     "client/transaction_plan_capture_abi.inc",
     "scripts/abi-audit.py",
     "scripts/abi-baseline.json",
     "scripts/public-api-audit.py",
     "tools/cli/lib/tdnf-cli-libs.pc.in",
+    "tools/cli/lib/rpmz-cli-libs.pc.in",
 )
 REQUIRED_PUBLIC_EXPORTS = {
     "transaction_plan": '@import("transaction_plan")',
@@ -194,7 +197,7 @@ def registered_public_modules(build_script: Path) -> set[str]:
 
 def check_supported_exports(package_root: Path) -> None:
     """Require every documented namespace to remain on the installed module."""
-    source = (package_root / "tdnf.zig").read_text(encoding="utf-8")
+    source = (package_root / "rpmz.zig").read_text(encoding="utf-8")
     for name, expression in REQUIRED_PUBLIC_EXPORTS.items():
         pattern = (
             r"\bpub\s+const\s+"
@@ -205,7 +208,7 @@ def check_supported_exports(package_root: Path) -> None:
         )
         if re.search(pattern, source) is None:
             raise RuntimeError(
-                f"public tdnf module is missing supported export: {name}"
+                f"public rpmz module is missing supported export: {name}"
             )
 
     client_root = (package_root / "client/root.zig").read_text(
@@ -219,10 +222,10 @@ def check_supported_exports(package_root: Path) -> None:
 
     build_source = (package_root / "build.zig").read_text(encoding="utf-8")
     if re.search(
-        r'\bpublic_tdnf_mod\.addImport\(\s*"client_root"\s*,\s*client_mod\s*\)',
+        r'\bpublic_rpmz_mod\.addImport\(\s*"client_root"\s*,\s*client_mod\s*\)',
         build_source,
     ) is None:
-        raise RuntimeError("public tdnf module no longer registers client_root")
+        raise RuntimeError("public rpmz module no longer registers client_root")
 
 
 def forbidden_packaged_surface(packaged_names: set[str]) -> list[str]:
@@ -232,7 +235,11 @@ def forbidden_packaged_surface(packaged_names: set[str]) -> list[str]:
         path = Path(name)
         if path.parts and path.parts[0] == "include":
             forbidden.add(name)
-        if path.suffix == ".pc" or path.name.startswith("libtdnf"):
+        if (
+            path.suffix == ".pc"
+            or path.name.startswith("librpmz")
+            or path.name.startswith("libtdnf")
+        ):
             forbidden.add(name)
         if re.search(r"\.so(?:\.\d+)*$", path.name):
             forbidden.add(name)
@@ -320,7 +327,7 @@ def main() -> None:
     # supplies collision-safe names and the finally block removes the tree.
     audit_root = Path(
         tempfile.mkdtemp(
-            prefix=".tdnf-public-zig-api-",
+            prefix=".rpmz-public-zig-api-",
             dir=source_root.parent,
         )
     )
@@ -428,7 +435,7 @@ def main() -> None:
                 env=environment,
                 check=True,
             )
-            source = export_prefix / "bin" / "tdnf-replay-export"
+            source = export_prefix / "bin" / "rpmz-replay-export"
             destination = Path(args.replay_export_output).resolve()
             destination.parent.mkdir(parents=True, exist_ok=True)
             staging = destination.with_name(

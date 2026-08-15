@@ -24,16 +24,16 @@ def setup_test(utils):
 
 def teardown_test(utils):
     pkgname = utils.config["mulversion_pkgname"]
-    utils.run(f"tdnf remove -y {pkgname} {PKGNAME_OBSED} {PKGNAME_OBSING}")
+    utils.run(f"rpmz remove -y {pkgname} {PKGNAME_OBSED} {PKGNAME_OBSING}")
 
 
 def test_install_no_arg(utils):
-    ret = utils.run(['tdnf', 'install'])
+    ret = utils.run(['rpmz', 'install'])
     assert ret['retval'] == 1001
 
 
 def test_install_invalid_arg(utils):
-    ret = utils.run(['tdnf', 'install', 'invalid_package'])
+    ret = utils.run(['rpmz', 'install', 'invalid_package'])
     assert ret['retval'] == 1011
 
 
@@ -42,7 +42,7 @@ def test_install_package_with_version_suffix(utils):
     pkgversion = utils.config["mulversion_lower"]
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname + '-' + pkgversion])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname + '-' + pkgversion])
     assert utils.check_package(pkgname)
 
 
@@ -50,7 +50,7 @@ def test_install_package_without_version_suffix(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     assert utils.check_package(pkgname)
 
 
@@ -58,13 +58,13 @@ def test_install_package_without_version_suffix(utils):
 def test_install_package_verbose(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    utils.run(['tdnf', 'install', '-y', '-v', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '-v', '--nogpgcheck', pkgname])
     assert utils.check_package(pkgname)
 
 
 def test_dummy_requires(utils):
     pkg = utils.config["dummy_requires_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', pkg])
+    ret = utils.run(['rpmz', 'install', '-y', pkg])
     assert ' nothing provides ' in ret['stderr'][0]
 
 
@@ -72,7 +72,7 @@ def test_install_testonly(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', '--testonly', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', '--testonly', pkgname])
     assert not utils.check_package(pkgname)
 
 
@@ -102,7 +102,7 @@ def test_install_solver_shapes(utils):
 
     try:
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--skip-broken', pkgname,
         ])
         assert ret['retval'] == 0
@@ -110,7 +110,7 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', '--allowerasing', pkgname,
         ])
         assert ret['retval'] == 0
@@ -118,11 +118,11 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck',
+            'rpmz', 'install', '-y', '--nogpgcheck',
             '{}-{}'.format(pkgname, pkgversion),
         ])
         ret = utils.run([
-            'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'upgrade', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', pkgname,
         ])
         assert ret['retval'] == 0
@@ -131,14 +131,14 @@ def test_install_solver_shapes(utils):
         utils.erase_package(pkgname)
 
         utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck',
+            'rpmz', 'install', '-y', '--nogpgcheck',
             '{}-{}'.format(pkgname, pkgversion),
         ])
         os.makedirs(locks_dir, exist_ok=True)
         with open(os.path.join(locks_dir, 'native-solver.conf'), 'w') as f:
             f.write(pkgname)
         ret = utils.run([
-            'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'upgrade', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove',
         ])
         assert ret['retval'] == 0
@@ -148,7 +148,7 @@ def test_install_solver_shapes(utils):
             f.write(hidden_installed)
         utils.erase_package(pkgname)
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', '--best', pkgname,
         ])
         assert ret['retval'] == 0
@@ -159,7 +159,7 @@ def test_install_solver_shapes(utils):
         with open(os.path.join(locks_dir, 'native-solver.conf'), 'w') as f:
             f.write('{}\nmissing-native-lock'.format(hidden_installed))
         ret = utils.run([
-            'tdnf', 'erase', '-y', '--testonly', '--debugsolver',
+            'rpmz', 'erase', '-y', '--testonly', '--debugsolver',
             '--noautoremove', pkgname,
         ])
         assert ret['retval'] == 0
@@ -172,11 +172,11 @@ def test_install_solver_shapes(utils):
         utils.erase_package(pkgname)
 
         utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck',
+            'rpmz', 'install', '-y', '--nogpgcheck',
             '{}-{}'.format(pkgname, pkgversion),
         ])
         ret = utils.run([
-            'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'upgrade', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove',
         ])
         assert ret['retval'] == 0
@@ -185,11 +185,11 @@ def test_install_solver_shapes(utils):
         utils.erase_package(pkgname)
 
         utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck',
+            'rpmz', 'install', '-y', '--nogpgcheck',
             '{}-{}'.format(pkgname, pkgversion),
         ])
         ret = utils.run([
-            'tdnf', 'distro-sync', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'distro-sync', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove',
         ])
         assert ret['retval'] == 0
@@ -199,7 +199,7 @@ def test_install_solver_shapes(utils):
 
         utils.install_package(pkgname)
         ret = utils.run([
-            'tdnf', 'downgrade', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'downgrade', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', pkgname,
         ])
         assert ret['retval'] == 0
@@ -209,7 +209,7 @@ def test_install_solver_shapes(utils):
 
         utils.install_package(conflict0)
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', '--allowerasing', conflict1,
         ])
         assert ret['retval'] == 0
@@ -218,10 +218,10 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER,
+            'rpmz', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER,
         ])
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', '--allowerasing',
             PKGNAME_OBSING,
         ])
@@ -231,7 +231,7 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', PKGNAME_OBSING,
         ])
         assert ret['retval'] == 0
@@ -240,7 +240,7 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', '--skip-broken',
             pkgname, 'missing',
         ])
@@ -249,7 +249,7 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', '--skip-broken',
             pkgname, 'tdnf-missing-dep',
         ])
@@ -259,7 +259,7 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', '--best', pkgname,
         ])
         assert ret['retval'] == 0
@@ -267,7 +267,7 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove',
             '--exclude={}'.format(hidden_installed), pkgname,
         ])
@@ -277,7 +277,7 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         ret = utils.run([
-            'tdnf', 'reinstall', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'reinstall', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', hidden_installed,
         ])
         assert ret['retval'] == 0
@@ -285,7 +285,7 @@ def test_install_solver_shapes(utils):
         shutil.rmtree('debugdata', ignore_errors=True)
 
         ret = utils.run([
-            'tdnf', 'erase', '-y', '--testonly', '--debugsolver',
+            'rpmz', 'erase', '-y', '--testonly', '--debugsolver',
             '--noautoremove', hidden_installed,
         ])
         assert ret['retval'] == 0
@@ -296,7 +296,7 @@ def test_install_solver_shapes(utils):
         with open(os.path.join(protected_dir, 'native-solver.conf'), 'w') as f:
             f.write(hidden_installed)
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--testonly',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--testonly',
             '--debugsolver', '--noautoremove', pkgname,
         ])
         assert ret['retval'] == 0
@@ -306,7 +306,7 @@ def test_install_solver_shapes(utils):
 
         utils.install_package(alldeps_required)
         ret = utils.run([
-            'tdnf', 'install', '-y', '--nogpgcheck', '--urls',
+            'rpmz', 'install', '-y', '--nogpgcheck', '--urls',
             '--debugsolver', '--noautoremove', '--alldeps', alldeps_pkg,
         ])
         assert ret['retval'] == 0
@@ -333,7 +333,7 @@ def test_install_skip_broken_missing_pkg(utils):
     utils.erase_package(pkgname)
     pkgname_missing = "missing"
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', '--skip-broken', pkgname, pkgname_missing])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', '--skip-broken', pkgname, pkgname_missing])
     assert utils.check_package(pkgname)
 
 
@@ -344,7 +344,7 @@ def test_install_missing_pkg(utils):
     utils.erase_package(pkgname)
     pkgname_missing = "missing"
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname, pkgname_missing])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname, pkgname_missing])
     assert not utils.check_package(pkgname)
 
 
@@ -355,7 +355,7 @@ def test_install_skip_broken_missing_dep(utils):
     utils.erase_package(pkgname)
     pkgname_missing = "tdnf-missing-dep"
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', '--skip-broken', pkgname, pkgname_missing])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', '--skip-broken', pkgname, pkgname_missing])
     assert utils.check_package(pkgname)
 
 
@@ -366,17 +366,17 @@ def test_install_missing_dep(utils):
     utils.erase_package(pkgname)
     pkgname_missing = "tdnf-missing-dep"
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname, pkgname_missing])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname, pkgname_missing])
     assert not utils.check_package(pkgname)
 
 
 # install an obsoleting package, expect the obsoleted package to be removed
 def test_install_obsoleting(utils):
     utils.erase_package(PKGNAME_OBSING)
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER])
     assert utils.check_package(PKGNAME_OBSED)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', PKGNAME_OBSING])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', PKGNAME_OBSING])
     assert not utils.check_package(PKGNAME_OBSED)
 
 
@@ -386,7 +386,7 @@ def test_install_obsoletes(utils):
     utils.erase_package(PKGNAME_OBSED)
     utils.erase_package(PKGNAME_OBSING)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED])
     assert utils.check_package(PKGNAME_OBSING)
 
 
@@ -395,7 +395,7 @@ def test_install_obsoleted_version(utils):
     utils.erase_package(PKGNAME_OBSED_VER)
     utils.erase_package(PKGNAME_OBSING)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER])
     print(ret)
     assert utils.check_package(PKGNAME_OBSED)
 
@@ -403,17 +403,17 @@ def test_install_obsoleted_version(utils):
 # same as test_install_obsoletes, but the obsoleted package already installed
 def test_install_obsoleted_installed(utils):
     # make sure we install the obsoleted one by using version
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER])
     utils.erase_package(PKGNAME_OBSING)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED])
     assert utils.check_package(PKGNAME_OBSING)
 
 
 # install a package with non-existing requirement, expect fail
 def test_install_no_providers(utils):
     pkgname = utils.config['dummy_requires_pkgname']
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     # ERROR_TDNF_SOLV_FAILED - "Solv general runtime error"
     assert ret['retval'] == 1301
     assert "nothing provides" in '\n'.join(ret['stderr'])
@@ -423,5 +423,5 @@ def xxx_test_install_memcheck(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
 
-    utils.run_memcheck(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run_memcheck(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     assert utils.check_package(pkgname)

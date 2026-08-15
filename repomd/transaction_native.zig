@@ -354,7 +354,7 @@ pub export fn TDNFRepoMdNativeTransactionSolveV2(
 pub export fn TDNFRepoMdNativeTransactionSolveConfig(
     raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
     out_problem_lines: ?*[*c][*c]u8,
@@ -376,7 +376,7 @@ pub export fn TDNFRepoMdNativeTransactionSolveConfig(
 pub export fn TDNFRepoMdNativeTransactionSolveConfigV2(
     raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
     out_problem_lines: ?*[*c][*c]u8,
@@ -430,7 +430,7 @@ pub export fn TDNFRepoMdNativeTransactionPlanSolveV2(
 pub export fn TDNFRepoMdNativeTransactionPlanSolveConfig(
     raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     return transactionPlanSolveLegacy(
@@ -446,7 +446,7 @@ pub export fn TDNFRepoMdNativeTransactionPlanSolveConfig(
 pub export fn TDNFRepoMdNativeTransactionPlanSolveConfigV2(
     raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     return transactionPlanSolveV2(
@@ -465,7 +465,7 @@ fn verifiedTransactionSolveConfig(
     raw_header_lengths: ?[*]const usize,
     raw_package_sizes: ?[*]const u64,
     item_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32 {
     clearError();
@@ -514,7 +514,7 @@ fn verifiedTransactionSolveConfig(
 
 comptime {
     @export(&verifiedTransactionSolveConfig, .{
-        .name = "tdnf_repomd_native_verified_transaction_solve_config",
+        .name = "rpmz_repomd_native_verified_transaction_solve_config",
         .visibility = .hidden,
     });
 }
@@ -523,7 +523,7 @@ fn transactionSolveLegacy(
     raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
@@ -548,7 +548,7 @@ fn transactionSolveV2(
     raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
@@ -574,7 +574,7 @@ fn transactionSolveTyped(
     raw_items: ?[*]const Item,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     out_order_lines: ?*[*c][*c]u8,
     out_order_count: ?*u32,
@@ -645,7 +645,7 @@ fn transactionPlanSolveLegacy(
     raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
@@ -664,7 +664,7 @@ fn transactionPlanSolveV2(
     raw_items: ?[*]const abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
@@ -684,7 +684,7 @@ fn transactionPlanSolveTyped(
     raw_items: ?[*]const Item,
     item_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     out_plan: ?*?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
@@ -719,7 +719,7 @@ fn solveTransaction(
     arena: std.mem.Allocator,
     raw_items: RawTransactionItems,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
 ) TransactionError!SolveResult {
     const items = try normalizeTransactionItems(arena, raw_items);
     const source: installed_repository.Source = if (config) |rpm_config|
@@ -772,7 +772,7 @@ fn solveTransaction(
 fn buildOwnedPlan(
     raw_items: RawTransactionItems,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     out_plan: *?*abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) u32 {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
@@ -962,13 +962,13 @@ fn mapTransactionError(err: anyerror) u32 {
         },
         error.RpmDbOpenFailed => blk: {
             if (last_error_len == 0) {
-                setError("failed to open rpmdb: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
+                setError("failed to open rpmdb: {s}", .{std.mem.span(abi.rpmz_rpmdb_last_error())});
             }
             break :blk abi.ERROR_TDNF_RPMTS_OPENDB_FAILED;
         },
         error.RpmDbReadFailed => blk: {
             if (last_error_len == 0) {
-                setError("failed to read rpmdb: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
+                setError("failed to read rpmdb: {s}", .{std.mem.span(abi.rpmz_rpmdb_last_error())});
             }
             break :blk abi.ERROR_TDNF_SOLV_IO;
         },
@@ -1257,7 +1257,7 @@ fn collectNativeProblems(
     final_build: FinalBuildResult,
     installed_index: *const query_index.RepositoryIndex,
     final_index: *const query_index.RepositoryIndex,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
 ) TransactionError!void {
     for (tx.added.items, 0..) |added, added_index| {
         const source_final = final_build.added_to_final[added_index];
@@ -1305,7 +1305,7 @@ fn collectAddedPackageProblems(
     installed_index: *const query_index.RepositoryIndex,
     final_index: *const query_index.RepositoryIndex,
     added_base: usize,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
 ) TransactionError!void {
     for (source.relationEntries(.requires)) |relation| {
         if (shouldSkipFinalRequire(relation)) {
@@ -1473,7 +1473,7 @@ fn collectFileConflictProblems(
     source_final_index: usize,
     final_index: *const query_index.RepositoryIndex,
     added_base: usize,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
 ) TransactionError!void {
     for (source.fileEntries()) |source_file| {
         if (source_file.kind == .dir) {
@@ -1560,13 +1560,13 @@ fn collectFileConflictProblems(
 
 fn canonicalPathForTransaction(
     arena: std.mem.Allocator,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     path: []const u8,
 ) TransactionError![]const u8 {
     const cfg = config orelse return path;
     const path_z = try arena.dupeZ(u8, path);
     var output: [4096]u8 = undefined;
-    if (abi.tdnf_rpm_canonical_path_config(
+    if (abi.rpmz_rpm_canonical_path_config(
         cfg,
         path_z.ptr,
         &output,
@@ -2759,14 +2759,14 @@ test "native transaction detects conflicts across trusted root aliases" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const config = abi.tdnf_rpm_config_create("/") orelse
+    const config = abi.rpmz_rpm_config_create("/") orelse
         return error.TestUnexpectedResult;
-    defer abi.tdnf_rpm_config_destroy(config);
+    defer abi.rpmz_rpm_config_destroy(config);
     // Only hosts that merged /lib into /usr/lib, with both owned by the same
     // uid as /, have the alias this covers. Everywhere else canonicalization
     // refuses the path rather than resolving it somewhere else.
     var canonical_buf: [4096]u8 = undefined;
-    if (abi.tdnf_rpm_canonical_path_config(
+    if (abi.rpmz_rpm_canonical_path_config(
         config,
         "/lib/alias-conflict",
         &canonical_buf,

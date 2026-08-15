@@ -27,7 +27,7 @@ extern fn find_node(cn_list: ?*CnfNode, name: ?[*:0]const u8) ?*CnfNode;
 /// libc bindings are declared here rather than taken from std.c because
 /// std.c.dirent resolves to a translated header struct in this module and
 /// loses its field names. These layouts are the Linux/glibc and musl
-/// definitions tdnf targets.
+/// definitions rpmz targets.
 const DIR = opaque {};
 
 const Dirent = extern struct {
@@ -74,7 +74,7 @@ fn setErrno(value: c_int) void {
 /// and editor backups -- is skipped rather than treated as a variable.
 /// https://dnf.readthedocs.io/en/latest/conf_ref.html#varfiles-label
 ///
-/// The C used isdigit()/islower(); tdnf never calls setlocale(), so those
+/// The C used isdigit()/islower(); rpmz never calls setlocale(), so those
 /// are plain ASCII and this is equivalent.
 fn isVariableName(name: []const u8) bool {
     if (name.len == 0) return false;
@@ -119,7 +119,7 @@ fn readVariableValue(path: [*:0]const u8, out: []u8) ?usize {
 fn collectDirectory(root: *CnfNode, dir_path: [*:0]const u8) bool {
     const dir = opendir(dir_path) orelse {
         // A varsdir that does not exist is not a configuration error;
-        // tdnf ships defaults that are frequently absent.
+        // rpmz ships defaults that are frequently absent.
         return std.c._errno().* == @intFromEnum(std.c.E.NOENT);
     };
     defer _ = closedir(dir);
@@ -409,7 +409,7 @@ const VarsDir = struct {
     path_len: usize = 0,
     files: std.ArrayList([:0]u8) = .empty,
 
-    const template = "/tmp/tdnf-varsdir-XXXXXX";
+    const template = "/tmp/rpmz-varsdir-XXXXXX";
 
     fn init() !VarsDir {
         var self = VarsDir{};

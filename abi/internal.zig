@@ -1,4 +1,4 @@
-//! Private cross-module ABI declarations retained while tdnf's implementation
+//! Private cross-module ABI declarations retained while rpmz's implementation
 //! is split across Zig modules. This module is not part of the public package.
 
 const __root = @This();
@@ -156,8 +156,8 @@ pub const struct__TDNF_CONF = extern struct {
     pszPluginConfPath: [*c]u8 = null,
 };
 pub const PTDNF_CONF = [*c]struct__TDNF_CONF;
-pub const struct_tdnf_rpm_config = opaque {};
-pub const tdnf_rpm_config = struct_tdnf_rpm_config;
+pub const struct_rpmz_rpm_config = opaque {};
+pub const rpmz_rpm_config = struct_rpmz_rpm_config;
 pub const struct_s_Repo = opaque {};
 pub const Repo = struct_s_Repo;
 pub const struct__TDNF_REPO_DATA = extern struct {
@@ -212,7 +212,7 @@ pub const struct__TDNF_ = extern struct {
     pSack: PTDNF_PACKAGE_CONTEXT = null,
     pArgs: PTDNF_CMD_ARGS = null,
     pConf: PTDNF_CONF = null,
-    pRpmConfig: ?*tdnf_rpm_config = null,
+    pRpmConfig: ?*rpmz_rpm_config = null,
     pRepos: PTDNF_REPO_DATA = null,
     pCmdLineRepo: PTDNF_REPOSITORY_CONTEXT = null,
     pPlugins: PTDNF_PLUGIN = null,
@@ -442,9 +442,9 @@ pub const struct__TDNF_ZIG_DOWNLOAD_REQUEST = extern struct {
     nMaxRecvSpeed: c_long = 0,
 };
 pub const TDNF_ZIG_DOWNLOAD_REQUEST = struct__TDNF_ZIG_DOWNLOAD_REQUEST;
-pub extern fn tdnf_rpm_config_create(pszInstallRoot: [*c]const u8) ?*tdnf_rpm_config;
-pub extern fn tdnf_rpm_config_destroy(pConfig: ?*tdnf_rpm_config) void;
-pub extern fn tdnf_rpm_config_apply_define(pConfig: ?*tdnf_rpm_config, pszDefinition: [*c]const u8) c_int;
+pub extern fn rpmz_rpm_config_create(pszInstallRoot: [*c]const u8) ?*rpmz_rpm_config;
+pub extern fn rpmz_rpm_config_destroy(pConfig: ?*rpmz_rpm_config) void;
+pub extern fn rpmz_rpm_config_apply_define(pConfig: ?*rpmz_rpm_config, pszDefinition: [*c]const u8) c_int;
 pub const TDNF_REPOMD_RECORD_KIND_UNKNOWN: c_int = 0;
 pub const TDNF_REPOMD_RECORD_KIND_PRIMARY: c_int = 1;
 pub const TDNF_REPOMD_RECORD_KIND_UPDATEINFO: c_int = 4;
@@ -640,32 +640,32 @@ pub extern fn TDNFRepoMdNativeTransactionLastError() [*c]const u8;
 pub extern fn TDNFRepoMdNativeTransactionSolve(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM, dwItemCount: u32, pszInstallRoot: [*c]const u8, pppszOrderLines: [*c][*c][*c]u8, pdwOrderCount: [*c]u32, pppszProblemLines: [*c][*c][*c]u8, pdwProblemCount: [*c]u32) u32;
 pub extern fn TDNFRepoMdNativeTransactionPlanSolveV2(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2, dwItemCount: u32, pszInstallRoot: [*c]const u8, ppPlan: [*c][*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) u32;
 pub extern fn TDNFRepoMdNativeTransactionPlanFree(pPlan: [*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) void;
-pub const struct_tdnf_rpm_file = opaque {};
-pub const tdnf_rpm_file = struct_tdnf_rpm_file;
-pub extern fn tdnf_rpmdb_last_error() [*c]const u8;
-pub extern fn tdnf_rpm_config_open_root_fd(config: ?*const tdnf_rpm_config) c_int;
-pub const struct_tdnf_rpmdb_iter = opaque {};
-pub const tdnf_rpmdb_iter = struct_tdnf_rpmdb_iter;
-pub extern fn tdnf_rpmdb_iter_open(root: [*c]const u8) ?*tdnf_rpmdb_iter;
-pub extern fn tdnf_rpmdb_iter_open_config(config: ?*const tdnf_rpm_config) ?*tdnf_rpmdb_iter;
-pub extern fn tdnf_rpmdb_iter_close(it: ?*tdnf_rpmdb_iter) void;
-pub extern fn tdnf_rpmdb_iter_next_header_blob_hnum(it: ?*tdnf_rpmdb_iter, hnum_out: [*c]u32, blob_out: [*c][*c]const u8, blob_len_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_write_install_file_config(config: ?*const tdnf_rpm_config, fh: ?*tdnf_rpm_file, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_write_replace_file_config(config: ?*const tdnf_rpm_config, old_hnum: u32, fh: ?*tdnf_rpm_file, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, new_hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_write_erase_hnum_config(config: ?*const tdnf_rpm_config, hnum: u32) c_int;
-pub const struct_tdnf_rpmdb_label_match = extern struct {
+pub const struct_rpmz_rpm_file = opaque {};
+pub const rpmz_rpm_file = struct_rpmz_rpm_file;
+pub extern fn rpmz_rpmdb_last_error() [*c]const u8;
+pub extern fn rpmz_rpm_config_open_root_fd(config: ?*const rpmz_rpm_config) c_int;
+pub const struct_rpmz_rpmdb_iter = opaque {};
+pub const rpmz_rpmdb_iter = struct_rpmz_rpmdb_iter;
+pub extern fn rpmz_rpmdb_iter_open(root: [*c]const u8) ?*rpmz_rpmdb_iter;
+pub extern fn rpmz_rpmdb_iter_open_config(config: ?*const rpmz_rpm_config) ?*rpmz_rpmdb_iter;
+pub extern fn rpmz_rpmdb_iter_close(it: ?*rpmz_rpmdb_iter) void;
+pub extern fn rpmz_rpmdb_iter_next_header_blob_hnum(it: ?*rpmz_rpmdb_iter, hnum_out: [*c]u32, blob_out: [*c][*c]const u8, blob_len_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_write_install_file_config(config: ?*const rpmz_rpm_config, fh: ?*rpmz_rpm_file, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_write_replace_file_config(config: ?*const rpmz_rpm_config, old_hnum: u32, fh: ?*rpmz_rpm_file, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, new_hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_write_erase_hnum_config(config: ?*const rpmz_rpm_config, hnum: u32) c_int;
+pub const struct_rpmz_rpmdb_label_match = extern struct {
     hnum: u32 = 0,
     name: [*c]u8 = null,
     evr: [*c]u8 = null,
     arch: [*c]u8 = null,
 };
-pub const tdnf_rpmdb_label_match = struct_tdnf_rpmdb_label_match;
-pub extern fn tdnf_rpmdb_find_label_matches_config(config: ?*const tdnf_rpm_config, name: [*c]const u8, evr: [*c]const u8, matches_out: [*c][*c]tdnf_rpmdb_label_match, count_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_label_matches_free(matches: [*c]tdnf_rpmdb_label_match, count: usize) void;
-pub extern fn tdnf_rpm_file_open(path: [*c]const u8) ?*tdnf_rpm_file;
-pub extern fn tdnf_rpm_file_open_fd(fd: c_int) ?*tdnf_rpm_file;
-pub extern fn tdnf_rpm_file_close(fh: ?*tdnf_rpm_file) void;
-pub const struct_tdnf_rpm_file_metadata = extern struct {
+pub const rpmz_rpmdb_label_match = struct_rpmz_rpmdb_label_match;
+pub extern fn rpmz_rpmdb_find_label_matches_config(config: ?*const rpmz_rpm_config, name: [*c]const u8, evr: [*c]const u8, matches_out: [*c][*c]rpmz_rpmdb_label_match, count_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_label_matches_free(matches: [*c]rpmz_rpmdb_label_match, count: usize) void;
+pub extern fn rpmz_rpm_file_open(path: [*c]const u8) ?*rpmz_rpm_file;
+pub extern fn rpmz_rpm_file_open_fd(fd: c_int) ?*rpmz_rpm_file;
+pub extern fn rpmz_rpm_file_close(fh: ?*rpmz_rpm_file) void;
+pub const struct_rpmz_rpm_file_metadata = extern struct {
     name: [*c]const u8 = null,
     version: [*c]const u8 = null,
     release: [*c]const u8 = null,
@@ -676,62 +676,62 @@ pub const struct_tdnf_rpm_file_metadata = extern struct {
     main_header_blob: [*c]const u8 = null,
     main_header_blob_len: usize = 0,
 };
-pub const tdnf_rpm_file_metadata = struct_tdnf_rpm_file_metadata;
-pub const struct_tdnf_rpm_header_view = extern struct {
+pub const rpmz_rpm_file_metadata = struct_rpmz_rpm_file_metadata;
+pub const struct_rpmz_rpm_header_view = extern struct {
     blob: [*c]const u8 = null,
     len: usize = 0,
 };
-pub const tdnf_rpm_header_view = struct_tdnf_rpm_header_view;
-pub extern fn tdnf_rpm_header_name_equals(header_blob: [*c]const u8, header_len: usize, name: [*c]const u8) c_int;
-pub extern fn tdnf_rpm_canonical_path_config(config: ?*const tdnf_rpm_config, path: [*c]const u8, output: [*c]u8, output_len: usize) c_int;
-pub extern fn tdnf_rpm_header_owns_path_config(header_blob: [*c]const u8, header_len: usize, path: [*c]const u8, config: ?*const tdnf_rpm_config) c_int;
-pub extern fn tdnf_rpm_file_get_metadata(fh: ?*tdnf_rpm_file, metadata_out: [*c]tdnf_rpm_file_metadata) c_int;
-pub extern fn tdnf_rpm_file_main_header_blob(fh: ?*tdnf_rpm_file, out: [*c][*c]const u8, out_len: [*c]usize) c_int;
-pub extern fn tdnf_rpm_file_bytes(fh: ?*tdnf_rpm_file, out: [*c][*c]const u8, out_len: [*c]usize) c_int;
-pub extern fn tdnf_rpm_file_digest(fh: ?*tdnf_rpm_file, kind: c_int, out_digest: [*c]u8, out_len: usize) c_int;
-pub extern fn tdnf_rpm_file_extract_source_config(fh: ?*tdnf_rpm_file, config: ?*const tdnf_rpm_config, trans_flags: u32) c_int;
+pub const rpmz_rpm_header_view = struct_rpmz_rpm_header_view;
+pub extern fn rpmz_rpm_header_name_equals(header_blob: [*c]const u8, header_len: usize, name: [*c]const u8) c_int;
+pub extern fn rpmz_rpm_canonical_path_config(config: ?*const rpmz_rpm_config, path: [*c]const u8, output: [*c]u8, output_len: usize) c_int;
+pub extern fn rpmz_rpm_header_owns_path_config(header_blob: [*c]const u8, header_len: usize, path: [*c]const u8, config: ?*const rpmz_rpm_config) c_int;
+pub extern fn rpmz_rpm_file_get_metadata(fh: ?*rpmz_rpm_file, metadata_out: [*c]rpmz_rpm_file_metadata) c_int;
+pub extern fn rpmz_rpm_file_main_header_blob(fh: ?*rpmz_rpm_file, out: [*c][*c]const u8, out_len: [*c]usize) c_int;
+pub extern fn rpmz_rpm_file_bytes(fh: ?*rpmz_rpm_file, out: [*c][*c]const u8, out_len: [*c]usize) c_int;
+pub extern fn rpmz_rpm_file_digest(fh: ?*rpmz_rpm_file, kind: c_int, out_digest: [*c]u8, out_len: usize) c_int;
+pub extern fn rpmz_rpm_file_extract_source_config(fh: ?*rpmz_rpm_file, config: ?*const rpmz_rpm_config, trans_flags: u32) c_int;
 pub const TDNF_RPM_INSTALL_KIND_INSTALL: c_int = 0;
 pub const TDNF_RPM_INSTALL_KIND_UPGRADE: c_int = 1;
 pub const TDNF_RPM_INSTALL_KIND_REINSTALL: c_int = 2;
-pub const enum_tdnf_rpm_install_kind = c_uint;
-pub const tdnf_rpm_install_kind = enum_tdnf_rpm_install_kind;
-pub const struct_tdnf_rpm_install_prior_header = extern struct {
+pub const enum_rpmz_rpm_install_kind = c_uint;
+pub const rpmz_rpm_install_kind = enum_rpmz_rpm_install_kind;
+pub const struct_rpmz_rpm_install_prior_header = extern struct {
     blob: [*c]const u8 = null,
     len: usize = 0,
 };
-pub const tdnf_rpm_install_prior_header = struct_tdnf_rpm_install_prior_header;
-pub const tdnf_rpm_install_conflict_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
-pub const tdnf_rpm_changed_path_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
-pub const struct_tdnf_rpm_install_options = extern struct {
+pub const rpmz_rpm_install_prior_header = struct_rpmz_rpm_install_prior_header;
+pub const rpmz_rpm_install_conflict_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
+pub const rpmz_rpm_changed_path_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
+pub const struct_rpmz_rpm_install_options = extern struct {
     install_root: [*c]const u8 = null,
-    config: ?*const tdnf_rpm_config = null,
+    config: ?*const rpmz_rpm_config = null,
     trans_flags: u32 = 0,
-    install_kind: tdnf_rpm_install_kind = @import("std").mem.zeroes(tdnf_rpm_install_kind),
-    prior_headers: [*c]const tdnf_rpm_install_prior_header = null,
+    install_kind: rpmz_rpm_install_kind = @import("std").mem.zeroes(rpmz_rpm_install_kind),
+    prior_headers: [*c]const rpmz_rpm_install_prior_header = null,
     prior_header_count: usize = 0,
-    conflict_fn: tdnf_rpm_install_conflict_fn = null,
+    conflict_fn: rpmz_rpm_install_conflict_fn = null,
     conflict_fn_data: ?*anyopaque = null,
-    changed_path_fn: tdnf_rpm_changed_path_fn = null,
+    changed_path_fn: rpmz_rpm_changed_path_fn = null,
     changed_path_fn_data: ?*anyopaque = null,
 };
-pub const tdnf_rpm_install_options = struct_tdnf_rpm_install_options;
-pub extern fn tdnf_rpm_file_install(fh: ?*tdnf_rpm_file, options: [*c]const tdnf_rpm_install_options) c_int;
+pub const rpmz_rpm_install_options = struct_rpmz_rpm_install_options;
+pub extern fn rpmz_rpm_file_install(fh: ?*rpmz_rpm_file, options: [*c]const rpmz_rpm_install_options) c_int;
 pub const TDNF_RPM_SCRIPTLET_PHASE_PRE: c_int = 0;
 pub const TDNF_RPM_SCRIPTLET_PHASE_POST: c_int = 1;
 pub const TDNF_RPM_SCRIPTLET_PHASE_PREUN: c_int = 2;
 pub const TDNF_RPM_SCRIPTLET_PHASE_POSTUN: c_int = 3;
 pub const TDNF_RPM_SCRIPTLET_PHASE_PRETRANS: c_int = 4;
 pub const TDNF_RPM_SCRIPTLET_PHASE_POSTTRANS: c_int = 5;
-pub const enum_tdnf_rpm_scriptlet_phase = c_uint;
-pub const tdnf_rpm_scriptlet_phase = enum_tdnf_rpm_scriptlet_phase;
+pub const enum_rpmz_rpm_scriptlet_phase = c_uint;
+pub const rpmz_rpm_scriptlet_phase = enum_rpmz_rpm_scriptlet_phase;
 pub const TDNF_RPM_SCRIPTLET_OUTCOME_NOT_RUN: c_int = 0;
 pub const TDNF_RPM_SCRIPTLET_OUTCOME_OK: c_int = 1;
 pub const TDNF_RPM_SCRIPTLET_OUTCOME_SIGNALED: c_int = 3;
-pub const enum_tdnf_rpm_scriptlet_outcome = c_uint;
-pub const tdnf_rpm_scriptlet_outcome = enum_tdnf_rpm_scriptlet_outcome;
-pub const struct_tdnf_rpm_scriptlet_options = extern struct {
+pub const enum_rpmz_rpm_scriptlet_outcome = c_uint;
+pub const rpmz_rpm_scriptlet_outcome = enum_rpmz_rpm_scriptlet_outcome;
+pub const struct_rpmz_rpm_scriptlet_options = extern struct {
     install_root: [*c]const u8 = null,
-    config: ?*const tdnf_rpm_config = null,
+    config: ?*const rpmz_rpm_config = null,
     install_root_fd: c_int = 0,
     trans_flags: u32 = 0,
     rpmdefines: [*c]const [*c]const u8 = null,
@@ -741,25 +741,25 @@ pub const struct_tdnf_rpm_scriptlet_options = extern struct {
     script_fd: c_int = 0,
     redirect_stdout_to_stderr: c_int = 0,
 };
-pub const tdnf_rpm_scriptlet_options = struct_tdnf_rpm_scriptlet_options;
-pub const struct_tdnf_rpm_scriptlet_result = extern struct {
+pub const rpmz_rpm_scriptlet_options = struct_rpmz_rpm_scriptlet_options;
+pub const struct_rpmz_rpm_scriptlet_result = extern struct {
     ran: c_int = 0,
     critical: c_int = 0,
-    outcome: tdnf_rpm_scriptlet_outcome = @import("std").mem.zeroes(tdnf_rpm_scriptlet_outcome),
+    outcome: rpmz_rpm_scriptlet_outcome = @import("std").mem.zeroes(rpmz_rpm_scriptlet_outcome),
     exit_status: c_int = 0,
     signal_number: c_int = 0,
 };
-pub const tdnf_rpm_scriptlet_result = struct_tdnf_rpm_scriptlet_result;
-pub extern fn tdnf_rpm_header_run_scriptlet(header_blob: [*c]const u8, header_len: usize, phase: tdnf_rpm_scriptlet_phase, options: [*c]const tdnf_rpm_scriptlet_options, result_out: [*c]tdnf_rpm_scriptlet_result) c_int;
+pub const rpmz_rpm_scriptlet_result = struct_rpmz_rpm_scriptlet_result;
+pub extern fn rpmz_rpm_header_run_scriptlet(header_blob: [*c]const u8, header_len: usize, phase: rpmz_rpm_scriptlet_phase, options: [*c]const rpmz_rpm_scriptlet_options, result_out: [*c]rpmz_rpm_scriptlet_result) c_int;
 pub const TDNF_RPM_TRIGGER_PHASE_TRIGGERIN: c_int = 0;
 pub const TDNF_RPM_TRIGGER_PHASE_TRIGGERUN: c_int = 1;
 pub const TDNF_RPM_TRIGGER_PHASE_TRIGGERPOSTUN: c_int = 2;
-pub const enum_tdnf_rpm_trigger_phase = c_uint;
-pub const tdnf_rpm_trigger_phase = enum_tdnf_rpm_trigger_phase;
-pub const struct_tdnf_rpm_trigger_options = extern struct {
+pub const enum_rpmz_rpm_trigger_phase = c_uint;
+pub const rpmz_rpm_trigger_phase = enum_rpmz_rpm_trigger_phase;
+pub const struct_rpmz_rpm_trigger_options = extern struct {
     db_root: [*c]const u8 = null,
     install_root: [*c]const u8 = null,
-    config: ?*const tdnf_rpm_config = null,
+    config: ?*const rpmz_rpm_config = null,
     install_root_fd: c_int = 0,
     trans_flags: u32 = 0,
     rpmdefines: [*c]const [*c]const u8 = null,
@@ -768,49 +768,49 @@ pub const struct_tdnf_rpm_trigger_options = extern struct {
     redirect_stdout_to_stderr: c_int = 0,
     arg2_override_present: c_int = 0,
     arg2_override_value: c_int = 0,
-    transaction_headers: [*c]const tdnf_rpm_header_view = null,
+    transaction_headers: [*c]const rpmz_rpm_header_view = null,
     transaction_header_count: usize = 0,
     transaction_view_present: c_int = 0,
-    trigger_owner_headers: [*c]const tdnf_rpm_header_view = null,
+    trigger_owner_headers: [*c]const rpmz_rpm_header_view = null,
     trigger_owner_header_count: usize = 0,
     trigger_owner_view_present: c_int = 0,
 };
-pub const tdnf_rpm_trigger_options = struct_tdnf_rpm_trigger_options;
-pub const struct_tdnf_rpm_trigger_result = extern struct {
+pub const rpmz_rpm_trigger_options = struct_rpmz_rpm_trigger_options;
+pub const struct_rpmz_rpm_trigger_result = extern struct {
     ran: c_int = 0,
     critical: c_int = 0,
-    outcome: tdnf_rpm_scriptlet_outcome = @import("std").mem.zeroes(tdnf_rpm_scriptlet_outcome),
+    outcome: rpmz_rpm_scriptlet_outcome = @import("std").mem.zeroes(rpmz_rpm_scriptlet_outcome),
     exit_status: c_int = 0,
     signal_number: c_int = 0,
 };
-pub const tdnf_rpm_trigger_result = struct_tdnf_rpm_trigger_result;
-pub extern fn tdnf_rpm_header_run_triggers(header_blob: [*c]const u8, header_len: usize, phase: tdnf_rpm_trigger_phase, options: [*c]const tdnf_rpm_trigger_options, result_out: [*c]tdnf_rpm_trigger_result) c_int;
+pub const rpmz_rpm_trigger_result = struct_rpmz_rpm_trigger_result;
+pub extern fn rpmz_rpm_header_run_triggers(header_blob: [*c]const u8, header_len: usize, phase: rpmz_rpm_trigger_phase, options: [*c]const rpmz_rpm_trigger_options, result_out: [*c]rpmz_rpm_trigger_result) c_int;
 pub const TDNF_RPM_FILE_TRIGGER_KIND_PACKAGE: c_int = 0;
 pub const TDNF_RPM_FILE_TRIGGER_KIND_TRANSACTION: c_int = 1;
-pub const enum_tdnf_rpm_file_trigger_kind = c_uint;
-pub const tdnf_rpm_file_trigger_kind = enum_tdnf_rpm_file_trigger_kind;
+pub const enum_rpmz_rpm_file_trigger_kind = c_uint;
+pub const rpmz_rpm_file_trigger_kind = enum_rpmz_rpm_file_trigger_kind;
 pub const TDNF_RPM_TRIGGER_PRIORITY_ALL: c_int = 0;
 pub const TDNF_RPM_TRIGGER_PRIORITY_HIGH: c_int = 1;
 pub const TDNF_RPM_TRIGGER_PRIORITY_LOW: c_int = 2;
-pub const enum_tdnf_rpm_trigger_priority_class = c_uint;
-pub const tdnf_rpm_trigger_priority_class = enum_tdnf_rpm_trigger_priority_class;
-pub const struct_tdnf_rpm_trigger_path = extern struct {
+pub const enum_rpmz_rpm_trigger_priority_class = c_uint;
+pub const rpmz_rpm_trigger_priority_class = enum_rpmz_rpm_trigger_priority_class;
+pub const struct_rpmz_rpm_trigger_path = extern struct {
     path: [*c]const u8 = null,
     source_header_blob: [*c]const u8 = null,
     source_header_len: usize = 0,
 };
-pub const tdnf_rpm_trigger_path = struct_tdnf_rpm_trigger_path;
-pub const struct_tdnf_rpm_file_trigger_owner = extern struct {
+pub const rpmz_rpm_trigger_path = struct_rpmz_rpm_trigger_path;
+pub const struct_rpmz_rpm_file_trigger_owner = extern struct {
     header_blob: [*c]const u8 = null,
     header_len: usize = 0,
-    paths: [*c]const tdnf_rpm_trigger_path = null,
+    paths: [*c]const rpmz_rpm_trigger_path = null,
     path_count: usize = 0,
     order: u64 = 0,
 };
-pub const tdnf_rpm_file_trigger_owner = struct_tdnf_rpm_file_trigger_owner;
-pub const struct_tdnf_rpm_file_trigger_options = extern struct {
+pub const rpmz_rpm_file_trigger_owner = struct_rpmz_rpm_file_trigger_owner;
+pub const struct_rpmz_rpm_file_trigger_options = extern struct {
     install_root: [*c]const u8 = null,
-    config: ?*const tdnf_rpm_config = null,
+    config: ?*const rpmz_rpm_config = null,
     install_root_fd: c_int = 0,
     trans_flags: u32 = 0,
     rpmdefines: [*c]const [*c]const u8 = null,
@@ -819,20 +819,20 @@ pub const struct_tdnf_rpm_file_trigger_options = extern struct {
     redirect_stdout_to_stderr: c_int = 0,
     suppress_stdin: c_int = 0,
 };
-pub const tdnf_rpm_file_trigger_options = struct_tdnf_rpm_file_trigger_options;
-pub extern fn tdnf_rpm_header_validate_trigger_scripts_config(header_blob: [*c]const u8, header_len: usize, config: ?*const tdnf_rpm_config) c_int;
-pub extern fn tdnf_rpm_header_has_file_trigger_metadata(header_blob: [*c]const u8, header_len: usize, kind: tdnf_rpm_file_trigger_kind) c_int;
-pub extern fn tdnf_rpm_header_foreach_trigger_file(header_blob: [*c]const u8, header_len: usize, trans_flags: u32, callback: tdnf_rpm_changed_path_fn, callback_data: ?*anyopaque) c_int;
-pub extern fn tdnf_rpm_run_file_triggers(owners: [*c]const tdnf_rpm_file_trigger_owner, owner_count: usize, phase: tdnf_rpm_trigger_phase, kind: tdnf_rpm_file_trigger_kind, priority_class: tdnf_rpm_trigger_priority_class, options: [*c]const tdnf_rpm_file_trigger_options, result_out: [*c]tdnf_rpm_trigger_result) c_int;
-pub const tdnf_rpm_erase_keep_path_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
-pub const struct_tdnf_rpm_erase_options = extern struct {
-    config: ?*const tdnf_rpm_config = null,
+pub const rpmz_rpm_file_trigger_options = struct_rpmz_rpm_file_trigger_options;
+pub extern fn rpmz_rpm_header_validate_trigger_scripts_config(header_blob: [*c]const u8, header_len: usize, config: ?*const rpmz_rpm_config) c_int;
+pub extern fn rpmz_rpm_header_has_file_trigger_metadata(header_blob: [*c]const u8, header_len: usize, kind: rpmz_rpm_file_trigger_kind) c_int;
+pub extern fn rpmz_rpm_header_foreach_trigger_file(header_blob: [*c]const u8, header_len: usize, trans_flags: u32, callback: rpmz_rpm_changed_path_fn, callback_data: ?*anyopaque) c_int;
+pub extern fn rpmz_rpm_run_file_triggers(owners: [*c]const rpmz_rpm_file_trigger_owner, owner_count: usize, phase: rpmz_rpm_trigger_phase, kind: rpmz_rpm_file_trigger_kind, priority_class: rpmz_rpm_trigger_priority_class, options: [*c]const rpmz_rpm_file_trigger_options, result_out: [*c]rpmz_rpm_trigger_result) c_int;
+pub const rpmz_rpm_erase_keep_path_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
+pub const struct_rpmz_rpm_erase_options = extern struct {
+    config: ?*const rpmz_rpm_config = null,
     trans_flags: u32 = 0,
-    keep_path_fn: tdnf_rpm_erase_keep_path_fn = null,
+    keep_path_fn: rpmz_rpm_erase_keep_path_fn = null,
     keep_path_fn_data: ?*anyopaque = null,
 };
-pub const tdnf_rpm_erase_options = struct_tdnf_rpm_erase_options;
-pub extern fn tdnf_rpm_erase_header_blob(root: [*c]const u8, blob: [*c]const u8, blob_len: usize, options: [*c]const tdnf_rpm_erase_options) c_int;
+pub const rpmz_rpm_erase_options = struct_rpmz_rpm_erase_options;
+pub extern fn rpmz_rpm_erase_header_blob(root: [*c]const u8, blob: [*c]const u8, blob_len: usize, options: [*c]const rpmz_rpm_erase_options) c_int;
 pub const TDNF_PACKAGE_CONTEXT = struct__TDNF_PACKAGE_CONTEXT;
 pub const struct__TDNF_REPO_METADATA = extern struct {
     pszRepoCacheDir: [*c]u8 = null,
@@ -844,7 +844,7 @@ pub const struct__TDNF_REPO_METADATA = extern struct {
     pszOther: [*c]u8 = null,
 };
 pub const TDNF_PLUGIN = struct__TDNF_PLUGIN_;
-pub const TDNF = struct__TDNF_;
+pub const RPMZ = struct__TDNF_;
 pub const struct__TDNF_CACHED_RPM_ENTRY = extern struct {
     pszFilePath: [*c]u8 = null,
     pNext: [*c]struct__TDNF_CACHED_RPM_ENTRY = null,
@@ -860,7 +860,7 @@ pub const PTDNF_CACHED_RPM_LIST = [*c]struct__TDNF_CACHED_RPM_LIST;
 pub const TDNF_RPM_TS_ITEM_TYPE = c_uint;
 pub const struct__TDNF_RPM_TS_ITEM = extern struct {
     nType: TDNF_RPM_TS_ITEM_TYPE = @import("std").mem.zeroes(TDNF_RPM_TS_ITEM_TYPE),
-    pRpmFile: ?*tdnf_rpm_file = null,
+    pRpmFile: ?*rpmz_rpm_file = null,
     dwRpmDbHnum: u32 = 0,
     nPackageKind: c_int = 0,
     pszPath: [*c]u8 = null,

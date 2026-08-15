@@ -17,7 +17,7 @@ ARCH = platform.machine()
 @pytest.fixture(scope='function', autouse=True)
 def setup_test_function(utils):
     pkgname = utils.config["sglversion_pkgname"]
-    utils.run(['tdnf', 'erase', '-y', pkgname])
+    utils.run(['rpmz', 'erase', '-y', pkgname])
     os.mkdir(os.path.join(utils.config['repo_path'], 'dummydir'))
     yield
     teardown_test(utils)
@@ -25,7 +25,7 @@ def setup_test_function(utils):
 
 def teardown_test(utils):
     pkgname = utils.config["sglversion_pkgname"]
-    utils.run(['tdnf', 'erase', '-y', pkgname])
+    utils.run(['rpmz', 'erase', '-y', pkgname])
     os.rmdir(os.path.join(utils.config['repo_path'], 'dummydir'))
 
 
@@ -53,16 +53,16 @@ def get_pkg_remote_url_with_doubledots(utils, pkgname):
     return url
 
 
-# test something like "tdnf install /path/to/pkg.rpm"
+# test something like "rpmz install /path/to/pkg.rpm"
 def test_install_as_file(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', path])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
 
-# test something like "tdnf install ../path/to/pkg.rpm" (relative path)
+# test something like "rpmz install ../path/to/pkg.rpm" (relative path)
 def test_install_as_file_relpath1(utils):
     pkgname = utils.config["sglversion_pkgname"]
     tmpdir = 'rpmtmp'
@@ -75,137 +75,137 @@ def test_install_as_file_relpath1(utils):
     relpath = os.path.join('..', tmpdir, filename)
     cwd = os.getcwd()
     os.chdir(tmpdir)
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', relpath])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', relpath])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
     os.chdir(cwd)
     shutil.rmtree(tmpdir)
 
 
-# test something like "tdnf install /somepath/../path/to/pkg.rpm"
+# test something like "rpmz install /somepath/../path/to/pkg.rpm"
 def test_install_as_file_with_doubledots(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path_with_doubledots(utils, pkgname)
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', path])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
 
-# test something like "tdnf install pkg.rpm"
+# test something like "rpmz install pkg.rpm"
 def test_install_as_file_relpath2(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = os.path.relpath(get_pkg_file_path(utils, pkgname))
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', path])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
 
-# test something like "tdnf install file:///path/to/pkg.rpm"
+# test something like "rpmz install file:///path/to/pkg.rpm"
 def test_install_as_file_uri(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
     uri = 'file://{}'.format(path)
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', uri])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', uri])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
 
-# test something like "tdnf install http://server.com/path/to/pkg.rpm"
+# test something like "rpmz install http://server.com/path/to/pkg.rpm"
 def test_install_remote(utils):
     pkgname = utils.config["sglversion_pkgname"]
     uri = get_pkg_remote_url(utils, pkgname)
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', uri])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', uri])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
 
-# test something like "tdnf install http://server.com/otherpath/../path/to/pkg.rpm"
+# test something like "rpmz install http://server.com/otherpath/../path/to/pkg.rpm"
 def test_install_remote_with_doubledots(utils):
     pkgname = utils.config["sglversion_pkgname"]
     uri = get_pkg_remote_url_with_doubledots(utils, pkgname)
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', uri])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', uri])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
 
-# test something like "tdnf install http://server.com/path/to/pkg.rpm",
+# test something like "rpmz install http://server.com/path/to/pkg.rpm",
 # but file doesn't exist, expect failure
 def test_install_remote_notfound(utils):
     uri = 'http://localhost:8080/doesnotexist.rpm'
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', uri])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', uri])
     assert ret['retval'] == 1622
 
 
-# test something like "tdnf install /path/to/pkg.rpm otherpkg"
+# test something like "rpmz install /path/to/pkg.rpm otherpkg"
 def test_install_as_mixed(utils):
     pkgname = utils.config["sglversion_pkgname"]
     pkgname2 = utils.config["sglversion2_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', path, pkgname2])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', path, pkgname2])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
     assert utils.check_package(pkgname2)
-    ret = utils.run(f"tdnf remove -y {path} {pkgname2}")
+    ret = utils.run(f"rpmz remove -y {path} {pkgname2}")
     assert ret['retval'] == 0
 
 
 # test installing a package that has the same name as a file
-# example: touch foo; tdnf install foo
+# example: touch foo; rpmz install foo
 # (file needs to have "*.rpm" extension to qualify)
 def test_install_same_as_filname(utils):
     pkgname = utils.config["sglversion_pkgname"]
     utils.run(['touch', pkgname])
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
 
-# test "tdnf reinstall /path/to/pkg.rpm". See PR #300.
+# test "rpmz reinstall /path/to/pkg.rpm". See PR #300.
 def test_reinstall_as_file(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
 
     # prepare by installing package
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', path])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
     # actual test
-    ret = utils.run(['tdnf', 'reinstall', '-y', '--nogpgcheck', path])
+    ret = utils.run(['rpmz', 'reinstall', '-y', '--nogpgcheck', path])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
     assert "Nothing to do" not in "\n".join(ret['stderr'])
     assert "Reinstalling" in "\n".join(ret['stdout'])
 
 
-# test something like "tdnf install /path/to/pkg.rpm"
+# test something like "rpmz install /path/to/pkg.rpm"
 # with nocmdlinegpgcheck option
 def test_install_as_file_nocmdlinegpgcheck(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
 
     # make sure we will fail if option isn't set
-    ret = utils.run(['tdnf', 'install', '-y', '--setopt=gpgcheck=1', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--setopt=gpgcheck=1', path])
     assert ret['retval'] != 0
     assert not utils.check_package(pkgname)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--setopt=gpgcheck=1', '--nocligpgcheck', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--setopt=gpgcheck=1', '--nocligpgcheck', path])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
 
-# test something like "tdnf install /path/to/pkg.rpm"
+# test something like "rpmz install /path/to/pkg.rpm"
 # with gpgcheck set to 1, but cligpgcheck set to 0
 def test_install_as_file_nocmdlinegpgcheck_conf(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
 
     # make sure we will fail if option isn't set
-    ret = utils.run(['tdnf', 'install', '-y', '--setopt=gpgcheck=1', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--setopt=gpgcheck=1', path])
     assert ret['retval'] != 0
     assert not utils.check_package(pkgname)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--setopt=gpgcheck=1', '--setopt=cligpgcheck=0', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--setopt=gpgcheck=1', '--setopt=cligpgcheck=0', path])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -236,7 +236,7 @@ MANY_FILE_PKGS = [
 ]
 
 
-# test "tdnf install a.rpm b.rpm ... " with many files in one transaction.
+# test "rpmz install a.rpm b.rpm ... " with many files in one transaction.
 #
 # This began as a regression test for a libsolv ring-buffer bug: the paths came
 # from solvable_get_location(), which returns pool scratch memory
@@ -267,7 +267,7 @@ def test_install_many_files_at_once(utils):
 
     before = utils.list_installed_packages()
     try:
-        ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck'] + paths)
+        ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck'] + paths)
         assert ret['retval'] == 0
         for pkgname in MANY_FILE_PKGS:
             if any(os.path.basename(p).startswith(pkgname + '-') for p in paths):
@@ -275,4 +275,4 @@ def test_install_many_files_at_once(utils):
     finally:
         added = [p for p in utils.list_installed_packages() if p not in before]
         if added:
-            utils.run(['tdnf', 'erase', '-y'] + added)
+            utils.run(['rpmz', 'erase', '-y'] + added)

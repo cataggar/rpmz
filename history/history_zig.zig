@@ -4,8 +4,8 @@ const api = @import("api.zig");
 const history_db = @import("db.zig");
 const history_store = @import("store.zig");
 
-const tdnf_rpmdb_iter = opaque {};
-const tdnf_rpm_config = @import("rpm_txn_config").TxnConfig;
+const rpmz_rpmdb_iter = opaque {};
+const rpmz_rpm_config = @import("rpm_txn_config").TxnConfig;
 
 fn transactionPlanTestWriteHistoryFixture(
     raw_path: ?[*:0]const u8,
@@ -86,49 +86,49 @@ comptime {
     });
 }
 
-extern fn tdnf_rpmdb_cookie(root: ?[*:0]const u8) ?[*:0]u8;
-extern fn tdnf_rpmdb_cookie_config(config: *const tdnf_rpm_config) ?[*:0]u8;
-extern fn tdnf_rpmdb_iter_open(root: ?[*:0]const u8) ?*tdnf_rpmdb_iter;
-extern fn tdnf_rpmdb_iter_open_config(config: *const tdnf_rpm_config) ?*tdnf_rpmdb_iter;
-extern fn tdnf_rpmdb_iter_close(it: ?*tdnf_rpmdb_iter) void;
-extern fn tdnf_rpmdb_iter_next_nevra(it: *tdnf_rpmdb_iter, nevra_out: *?[*:0]u8) c_int;
-extern fn tdnf_rpmdb_string_free(s: ?[*:0]u8) void;
+extern fn rpmz_rpmdb_cookie(root: ?[*:0]const u8) ?[*:0]u8;
+extern fn rpmz_rpmdb_cookie_config(config: *const rpmz_rpm_config) ?[*:0]u8;
+extern fn rpmz_rpmdb_iter_open(root: ?[*:0]const u8) ?*rpmz_rpmdb_iter;
+extern fn rpmz_rpmdb_iter_open_config(config: *const rpmz_rpm_config) ?*rpmz_rpmdb_iter;
+extern fn rpmz_rpmdb_iter_close(it: ?*rpmz_rpmdb_iter) void;
+extern fn rpmz_rpmdb_iter_next_nevra(it: *rpmz_rpmdb_iter, nevra_out: *?[*:0]u8) c_int;
+extern fn rpmz_rpmdb_string_free(s: ?[*:0]u8) void;
 
 const RealRpmdb = struct {
     pub const Source = ?[*:0]const u8;
 
     pub fn cookie(root: ?[*:0]const u8) ![:0]u8 {
-        const raw = tdnf_rpmdb_cookie(root) orelse return error.RpmdbError;
-        defer tdnf_rpmdb_string_free(raw);
+        const raw = rpmz_rpmdb_cookie(root) orelse return error.RpmdbError;
+        defer rpmz_rpmdb_string_free(raw);
         return try std.heap.c_allocator.dupeZ(u8, std.mem.span(raw));
     }
 
     pub fn collectNevras(allocator: std.mem.Allocator, root: ?[*:0]const u8) ![][:0]u8 {
-        const iter = tdnf_rpmdb_iter_open(root) orelse return error.RpmdbError;
-        defer tdnf_rpmdb_iter_close(iter);
+        const iter = rpmz_rpmdb_iter_open(root) orelse return error.RpmdbError;
+        defer rpmz_rpmdb_iter_close(iter);
         return collectNevrasFromIter(allocator, iter);
     }
 };
 
 const ConfigRpmdb = struct {
-    pub const Source = *const tdnf_rpm_config;
+    pub const Source = *const rpmz_rpm_config;
 
     pub fn cookie(config: Source) ![:0]u8 {
-        const raw = tdnf_rpmdb_cookie_config(config) orelse return error.RpmdbError;
-        defer tdnf_rpmdb_string_free(raw);
+        const raw = rpmz_rpmdb_cookie_config(config) orelse return error.RpmdbError;
+        defer rpmz_rpmdb_string_free(raw);
         return try std.heap.c_allocator.dupeZ(u8, std.mem.span(raw));
     }
 
     pub fn collectNevras(allocator: std.mem.Allocator, config: Source) ![][:0]u8 {
-        const iter = tdnf_rpmdb_iter_open_config(config) orelse return error.RpmdbError;
-        defer tdnf_rpmdb_iter_close(iter);
+        const iter = rpmz_rpmdb_iter_open_config(config) orelse return error.RpmdbError;
+        defer rpmz_rpmdb_iter_close(iter);
         return collectNevrasFromIter(allocator, iter);
     }
 };
 
 fn collectNevrasFromIter(
     allocator: std.mem.Allocator,
-    iter: *tdnf_rpmdb_iter,
+    iter: *rpmz_rpmdb_iter,
 ) ![][:0]u8 {
     var nevras: std.ArrayList([:0]u8) = .empty;
     errdefer {
@@ -140,11 +140,11 @@ fn collectNevrasFromIter(
 
     while (true) {
         var raw: ?[*:0]u8 = null;
-        const rc = tdnf_rpmdb_iter_next_nevra(iter, &raw);
+        const rc = rpmz_rpmdb_iter_next_nevra(iter, &raw);
         if (rc == 0) break;
         if (rc < 0 or raw == null) return error.RpmdbError;
 
-        defer tdnf_rpmdb_string_free(raw);
+        defer rpmz_rpmdb_string_free(raw);
         try nevras.append(allocator, try allocator.dupeZ(u8, std.mem.span(raw.?)));
     }
     return try nevras.toOwnedSlice(allocator);
@@ -165,7 +165,7 @@ pub export fn create_history_ctx(db_filename: ?[*:0]const u8) ?*HistoryCtx {
 }
 
 pub export fn history_open_config(
-    config: ?*const tdnf_rpm_config,
+    config: ?*const rpmz_rpm_config,
     persist_dir: ?[*:0]const u8,
     must_exist: c_int,
     output: ?*?*HistoryCtx,
@@ -204,7 +204,7 @@ pub export fn history_sync(ctx: ?*HistoryCtx, root: ?[*:0]const u8) c_int {
 
 pub export fn history_sync_config(
     ctx: ?*HistoryCtx,
-    config: ?*const tdnf_rpm_config,
+    config: ?*const rpmz_rpm_config,
 ) c_int {
     const value = ctx orelse return -1;
     const rpm_config = config orelse return -1;
@@ -276,7 +276,7 @@ pub export fn history_update_state(
 
 pub export fn history_update_state_config(
     ctx: ?*HistoryCtx,
-    config: ?*const tdnf_rpm_config,
+    config: ?*const rpmz_rpm_config,
     cmdline: ?[*:0]const u8,
 ) c_int {
     const value = ctx orelse return -1;

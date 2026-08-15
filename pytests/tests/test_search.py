@@ -20,20 +20,22 @@ def teardown_test(utils):
 
 
 def test_search_no_arg(utils):
-    ret = utils.run(['tdnf', 'search'])
+    ret = utils.run(['rpmz', 'search'])
     assert ret['retval'] == 1599
 
 
 def test_search_invalid_arg(utils):
-    ret = utils.run(['tdnf', 'search', 'invalid_arg'])
+    ret = utils.run(['rpmz', 'search', 'invalid_arg'])
     assert ret['retval'] == 1599
 
 
 def test_search_single(utils):
-    ret = utils.run(['tdnf', 'search', 'tdnf'])
+    ret = utils.run(['rpmz', 'search', 'tdnf'])
     assert ret['retval'] == 0
+    assert 'tdnf-test-one' in '\n'.join(ret['stdout'])
 
 
 def test_search_multiple(utils):
-    ret = utils.run(['tdnf', 'search', 'tdnf', 'wget', 'gzip'])
+    ret = utils.run(['rpmz', 'search', 'tdnf', 'wget', 'gzip'])
     assert ret['retval'] == 0
+    assert 'tdnf-test-one' in '\n'.join(ret['stdout'])

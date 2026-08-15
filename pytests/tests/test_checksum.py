@@ -24,7 +24,7 @@ def setup_test(utils):
 
 
 def teardown_test(utils):
-    utils.run(['tdnf', 'erase', '-y', 'tdnf-test-one'])
+    utils.run(['rpmz', 'erase', '-y', 'tdnf-test-one'])
     if os.path.isdir(BASEDIR):
         shutil.rmtree(BASEDIR)
 
@@ -34,10 +34,10 @@ def enable_and_create_repo(utils):
     os.makedirs(workdir, exist_ok=True)
     reponame = 'photon-test-sha512'
 
-    ret = utils.run(['tdnf', '-v', '--disablerepo=*', '--enablerepo=photon-test-sha512', 'makecache'])
+    ret = utils.run(['rpmz', '-v', '--disablerepo=*', '--enablerepo=photon-test-sha512', 'makecache'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', '--repo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--repo={}'.format(reponame),
                      '--download-metadata',
                      'reposync'],
                     cwd=workdir)
@@ -59,10 +59,10 @@ def copy_rpm(workdir, orig_pkg, copy_pkg):
 
 # install package with SHA512
 def test_install_package_with_sha512_checksum(utils):
-    ret = utils.run(['tdnf', 'erase', '-y', 'tdnf-test-one'])
+    ret = utils.run(['rpmz', 'erase', '-y', 'tdnf-test-one'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck', 'install', '-y', 'tdnf-test-one', '--enablerepo=photon-test-sha512'])
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck', 'install', '-y', 'tdnf-test-one', '--enablerepo=photon-test-sha512'])
     assert ret['retval'] == 0
 
 
@@ -77,15 +77,15 @@ def test_install_package_with_incorrect_sha512_checksum(utils):
     enable_and_create_repo(utils)
     copy_rpm(rpm_dir, 'tdnf-test-one', 'tdnf-test-two')
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--repofrompath=synced-repo,{}'.format(synced_dir),
                      '--repo=synced-repo',
                      'makecache'],
                     cwd=workdir)
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'erase', '-y', 'tdnf-test-one'], cwd=workdir)
+    ret = utils.run(['rpmz', 'erase', '-y', 'tdnf-test-one'], cwd=workdir)
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck', '--repofrompath=synced-repo,{}'.format(synced_dir), '--repo=synced-repo', 'install', '-y', 'tdnf-test-one'], cwd=workdir)
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck', '--repofrompath=synced-repo,{}'.format(synced_dir), '--repo=synced-repo', 'install', '-y', 'tdnf-test-one'], cwd=workdir)
     assert ret['retval'] == 1528

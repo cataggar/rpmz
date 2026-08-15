@@ -84,7 +84,7 @@ test "missing arguments and invalid options preserve CLI contracts" {
     try expectExit(pubkeys_result, 2);
     try testing.expectEqualStrings("", pubkeys_result.stdout);
     try testing.expectEqualStrings(
-        "usage: tdnf-rpmdb-pubkeys [--dump] [root]\n",
+        "usage: rpmz-rpmdb-pubkeys [--dump] [root]\n",
         pubkeys_result.stderr,
     );
 
@@ -260,7 +260,7 @@ test "invalid write input and backend failures do not mutate rpmdb data" {
     try expectExit(backend_result, 1);
     try testing.expectEqualStrings("", backend_result.stdout);
     try testing.expectEqualStrings(
-        "tdnf-rpmdb-write install: Writer.openRoot: UnsupportedBackend\n",
+        "rpmz-rpmdb-write install: Writer.openRoot: UnsupportedBackend\n",
         backend_result.stderr,
     );
     const marker = try root.tmp.dir.readFileAlloc(

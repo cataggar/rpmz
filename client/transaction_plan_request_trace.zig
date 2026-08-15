@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const abi = @import("transaction_plan_capture_abi");
-const error_codes = @import("tdnf_error");
+const error_codes = @import("rpmz_error");
 
 threadlocal var last_trace_error: u32 = 0;
 threadlocal var test_fail_create: bool = false;
@@ -1937,7 +1937,7 @@ test "lock installonly protection cleanup retry and flags are exact" {
         &.{"kernel"},
         &.{"locked"},
         &.{"openssl=3"},
-        &.{"tdnf"},
+        &.{"rpmz"},
         true,
     );
     const queue = [_]i32{

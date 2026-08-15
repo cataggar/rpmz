@@ -7,7 +7,7 @@
 const updateinfo = @import("updateinfo.zig");
 pub const c = updateinfo.c;
 
-extern fn TDNFRefresh(?*c.TDNF) callconv(.c) u32;
+extern fn TDNFRefresh(?*c.RPMZ) callconv(.c) u32;
 extern fn TDNFAllocateMemory(
     usize,
     usize,
@@ -20,7 +20,7 @@ extern fn TDNFAllocateString(
 extern fn TDNFFreeMemory(?*anyopaque) callconv(.c) void;
 extern fn TDNFFreeStringArray([*c][*c]u8) callconv(.c) void;
 extern fn TDNFNativeQueryBuildRepoInputs(
-    ?*c.TDNF,
+    ?*c.RPMZ,
     *c.PTDNF_REPOMD_NATIVE_REPO_INPUT,
     *u32,
 ) callconv(.c) u32;
@@ -31,7 +31,7 @@ extern fn TDNFNativeQueryFreeRepoInputs(
 extern fn TDNFRepoMdNativeUpdateInfoSummaryLinesConfig(
     c.PTDNF_REPOMD_NATIVE_REPO_INPUT,
     u32,
-    ?*const c.tdnf_rpm_config,
+    ?*const c.rpmz_rpm_config,
     [*c][*c]u8,
     u32,
     ?[*:0]const u8,
@@ -47,13 +47,13 @@ extern fn TDNFFreeUpdateInfoSummary(
     c.PTDNF_UPDATEINFO_SUMMARY,
 ) callconv(.c) void;
 extern fn TDNFUpdateInfo(
-    ?*c.TDNF,
+    ?*c.RPMZ,
     [*c][*c]u8,
     *c.PTDNF_UPDATEINFO,
 ) callconv(.c) u32;
 extern fn TDNFFreeUpdateInfo(c.PTDNF_UPDATEINFO) callconv(.c) void;
 
-fn refresh(_: ?*anyopaque, handle: ?*c.TDNF) u32 {
+fn refresh(_: ?*anyopaque, handle: ?*c.RPMZ) u32 {
     return TDNFRefresh(handle);
 }
 
@@ -84,7 +84,7 @@ fn freeStringArray(_: ?*anyopaque, values: [*c][*c]u8) void {
 
 fn buildRepoInputs(
     _: ?*anyopaque,
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     repos_out: *c.PTDNF_REPOMD_NATIVE_REPO_INPUT,
     count_out: *u32,
 ) u32 {
@@ -103,7 +103,7 @@ fn querySummary(
     _: ?*anyopaque,
     repos: c.PTDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const c.rpmz_rpm_config,
     package_specs: [*c][*c]u8,
     security: u32,
     severity: ?[*:0]const u8,
@@ -140,7 +140,7 @@ fn freeSummary(
 
 fn getUpdateInfo(
     _: ?*anyopaque,
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     package_specs: [*c][*c]u8,
     info_out: *c.PTDNF_UPDATEINFO,
 ) u32 {
@@ -167,7 +167,7 @@ const production_ops = updateinfo.Ops{
 };
 
 pub export fn TDNFUpdateInfoSummary(
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     package_specs: [*c][*c]u8,
     summary_out: [*c]c.PTDNF_UPDATEINFO_SUMMARY,
 ) callconv(.c) u32 {
@@ -180,7 +180,7 @@ pub export fn TDNFUpdateInfoSummary(
 }
 
 pub export fn TDNFGetSecuritySeverityOption(
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     security_out: [*c]u32,
     severity_out: [*c][*c]u8,
 ) callconv(.c) u32 {
@@ -193,7 +193,7 @@ pub export fn TDNFGetSecuritySeverityOption(
 }
 
 pub export fn TDNFGetUpdatePkgs(
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     packages_out: [*c][*c][*c]u8,
     count_out: [*c]u32,
 ) callconv(.c) u32 {
@@ -206,7 +206,7 @@ pub export fn TDNFGetUpdatePkgs(
 }
 
 pub export fn TDNFGetRebootRequiredOption(
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     reboot_out: [*c]u32,
 ) callconv(.c) u32 {
     return updateinfo.rebootRequiredOption(handle, reboot_out);

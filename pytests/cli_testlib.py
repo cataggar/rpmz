@@ -12,7 +12,7 @@ import shutil
 import subprocess
 
 ERROR_RETVAL_RE = re.compile(r'^Error\((\d+)\) :', re.MULTILINE)
-TDNF_BINARIES = {'tdnf', 'tdnf-config'}
+RPMZ_BINARIES = {'rpmz', 'rpmz-config'}
 
 
 def split_output_lines(text):
@@ -49,17 +49,17 @@ def build_command_env(_config):
     return os.environ.copy()
 
 
-def decorate_tdnf_cmd_for_test(cmd, config, noconfig=False):
+def decorate_rpmz_cmd_for_test(cmd, config, noconfig=False):
     decorated = list(cmd)
     executable = None
 
-    if decorated[0] in TDNF_BINARIES:
+    if decorated[0] in RPMZ_BINARIES:
         executable = os.path.join(resolve_bindir(config), decorated[0])
         if ('-c' not in decorated and '--config' not in decorated and
                 not noconfig):
             decorated[1:1] = [
                 '-c',
-                os.path.join(config['repo_path'], 'tdnf.conf'),
+                os.path.join(config['repo_path'], 'rpmz.conf'),
             ]
 
     return decorated, executable
@@ -71,7 +71,7 @@ def run_command(cmd, config, cwd=None, noconfig=False):
     executable = None
 
     if isinstance(cmd, list):
-        decorated, executable = decorate_tdnf_cmd_for_test(
+        decorated, executable = decorate_rpmz_cmd_for_test(
             cmd,
             config,
             noconfig=noconfig,
@@ -113,7 +113,7 @@ class MinimalCliRuntime(object):
         self.cleanup()
         os.makedirs(self._repodir(), exist_ok=True)
         os.makedirs(self._cachedir(), exist_ok=True)
-        self._write_tdnf_config()
+        self._write_rpmz_config()
 
     def capture(self, argv, cwd=None, noconfig=False):
         self.reset()
@@ -122,10 +122,10 @@ class MinimalCliRuntime(object):
 
     def prepare_case(self, argv):
         self.remove_repo_file()
-        if not argv or argv[0] != 'tdnf-config':
+        if not argv or argv[0] != 'rpmz-config':
             return
 
-        action = _get_tdnf_config_action(argv)
+        action = _get_rpmz_config_action(argv)
         if action == 'edit':
             self.seed_repo_file({
                 'name': 'Foo',
@@ -177,8 +177,8 @@ class MinimalCliRuntime(object):
     def _repo_file(self, repo_name='foo'):
         return os.path.join(self._repodir(), repo_name + '.repo')
 
-    def _write_tdnf_config(self):
-        config_path = os.path.join(self.config['repo_path'], 'tdnf.conf')
+    def _write_rpmz_config(self):
+        config_path = os.path.join(self.config['repo_path'], 'rpmz.conf')
         with open(config_path, 'w') as handle:
             handle.write('[main]\n')
             handle.write('gpgcheck=0\n')
@@ -188,7 +188,7 @@ class MinimalCliRuntime(object):
             handle.write('cachedir={}\n'.format(self._cachedir()))
 
 
-def _get_tdnf_config_action(argv):
+def _get_rpmz_config_action(argv):
     index = 1
     while index < len(argv):
         token = argv[index]

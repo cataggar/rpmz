@@ -1,6 +1,6 @@
 # The transaction-plan API
 
-tdnf can answer the question *"what would this transaction do?"* without doing
+rpmz can answer the question *"what would this transaction do?"* without doing
 any of it. The answer is a **transaction plan**: a versioned, canonically
 serialized document that names every package the transaction would touch, why,
 and the exact inputs the answer was derived from.
@@ -39,14 +39,14 @@ obsoleting package, and `prior_package_ids` names the rows it replaces.
 
 `resolvePlan` is the only supported way to obtain a plan without the private
 handle API. It is reachable from outside the repository: depend on this package
-and import `tdnf`, whose `resolver` and `transaction_plan` namespaces are the
+and import `rpmz`, whose `resolver` and `transaction_plan` namespaces are the
 entire supported surface. Nothing else under the component directories is
 public, and `public-zig-api-audit` fails the build if a public file reaches
 outside that surface.
 
 ```zig
-const tdnf = @import("tdnf");
-const resolver = tdnf.resolver;
+const rpmz = @import("rpmz");
+const resolver = rpmz.resolver;
 
 const plan = try resolver.resolvePlan(allocator, io, .{
     .operation = .install,
@@ -73,7 +73,7 @@ const digest = try plan.digest(allocator);
 ## Explicit inputs only
 
 Every fact a plan depends on is declared by the caller. The resolver reads no
-host `.repo` file, no host `tdnf.conf`, no host cache directory, and no host
+host `.repo` file, no host `rpmz.conf`, no host cache directory, and no host
 repository-enablement decision. It materializes a private, single-use
 configuration from the input alone.
 
@@ -82,7 +82,7 @@ architecture is never taken from the running kernel, distro and release version
 are never read from `os-release`, and policy is never inherited.
 
 This is enforced, not merely intended: a test plants a `.repo` drop-in, a
-`tdnf.conf`, and a stale metadata cache for a repository offering a newer
+`rpmz.conf`, and a stale metadata cache for a repository offering a newer
 package inside the declared root, and asserts the plan digest does not move.
 
 ## Ownership
@@ -118,7 +118,7 @@ over exactly those bytes.
 - Changing the request, repository metadata, installed rpmdb state,
   architecture, distro, release version, or policy does change it.
 
-`tdnf plan <verb>` prints exactly these bytes. The CLI is a thin adapter over
+`rpmz plan <verb>` prints exactly these bytes. The CLI is a thin adapter over
 the same entry point, and a test asserts the two agree byte for byte, so a
 plan captured from the command line and one produced through the API are the
 same document.
@@ -144,7 +144,7 @@ the declared scratch and metadata-cache directories, and the scratch tree is
 removed before the call returns. A test takes a full inventory of the declared
 root before and after and requires it to be unchanged.
 
-When the process runs as root the call takes tdnf's process-wide instance lock
+When the process runs as root the call takes rpmz's process-wide instance lock
 for its duration, exactly as the CLI does.
 
 ## Scope
@@ -152,8 +152,8 @@ for its duration, exactly as the CLI does.
 This layer resolves. It does not download packages and it does not execute.
 
 - Downloading the resolved RPMs and atomically exporting a self-contained
-  bundle is [#187](https://github.com/cataggar/tdnf/issues/187).
-- [`tdnf.replay`](replay-api.md) executes only a closed v2 bundle. It does not
+  bundle is [#187](https://github.com/cataggar/rpmz/issues/187).
+- [`rpmz.replay`](replay-api.md) executes only a closed v2 bundle. It does not
   resolve again; the v2 plan's materialized `execution_steps` are the
   authority.
 

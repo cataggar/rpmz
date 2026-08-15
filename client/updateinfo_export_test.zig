@@ -1,24 +1,24 @@
 const std = @import("std");
 const client = @import("client_root");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const c = client.updateinfo.c;
 
 extern fn TDNFGetSecuritySeverityOption(
-    ?*c.TDNF,
+    ?*c.RPMZ,
     [*c]u32,
     [*c][*c]u8,
 ) callconv(.c) u32;
 extern fn TDNFGetRebootRequiredOption(
-    ?*c.TDNF,
+    ?*c.RPMZ,
     [*c]u32,
 ) callconv(.c) u32;
 extern fn TDNFGetUpdatePkgs(
-    ?*c.TDNF,
+    ?*c.RPMZ,
     [*c][*c][*c]u8,
     [*c]u32,
 ) callconv(.c) u32;
 extern fn TDNFUpdateInfoSummary(
-    ?*c.TDNF,
+    ?*c.RPMZ,
     [*c][*c]u8,
     [*c]c.PTDNF_UPDATEINFO_SUMMARY,
 ) callconv(.c) u32;
@@ -71,7 +71,7 @@ test "production setopt exports use real allocation and last severity" {
     root.first_child = &security_node;
     var args = std.mem.zeroes(c.TDNF_CMD_ARGS);
     args.cn_setopts = &root;
-    var handle = std.mem.zeroes(c.TDNF);
+    var handle = std.mem.zeroes(c.RPMZ);
     handle.pArgs = &args;
 
     var security: u32 = 0;

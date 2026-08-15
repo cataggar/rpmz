@@ -24,26 +24,26 @@ def teardown_test(utils):
     pkgs.append(utils.config["sglversion_pkgname"])
     pkgs.append(utils.config["sglversion2_pkgname"])
 
-    utils.run("tdnf remove -y " + " ".join(pkgs))
+    utils.run("rpmz remove -y " + " ".join(pkgs))
 
 
 def run_hist_util_cmd(utils, cmd):
     hist_db_util = utils.config.get(
         'history_util_binary',
-        '/usr/libexec/tdnf/tdnf-history-util',
+        '/usr/libexec/rpmz/rpmz-history-util',
     )
 
     return utils._run(f"{hist_db_util} {cmd}")
 
 
-def test_tdnf_history_util_help(utils):
+def test_rpmz_history_util_help(utils):
     ret = run_hist_util_cmd(utils, "")
     assert ret['retval']
     assert "Usage:" in "\n".join(ret['stdout'])
     assert "Commands:" in "\n".join(ret['stdout'])
 
 
-def test_tdnf_history_util_init(utils):
+def test_rpmz_history_util_init(utils):
     for path in HIST_DB_DIRS:
         file = f"{path}/history.db"
         if os.path.exists(file):
@@ -58,30 +58,30 @@ def test_history_list(utils):
 
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     assert utils.check_package(pkgname)
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     # 'install' must be in history output
     assert 'install' in '\n'.join(ret['stdout'])
 
-    ret = utils.run(['tdnf', 'history', '--info'])
+    ret = utils.run(['rpmz', 'history', '--info'])
     assert ret['retval'] == 0
     # pkgname must be in history info output
     assert pkgname in '\n'.join(ret['stdout'])
 
     utils.erase_package(pkgname)
     assert not utils.check_package(pkgname)
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     # 'erase' must be in history output
     assert 'erase' in '\n'.join(ret['stdout'])
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     last = ret['stdout'][-1].split()[0]
 
-    ret = utils.run(['tdnf', 'history', '--reverse'])
+    ret = utils.run(['rpmz', 'history', '--reverse'])
     assert ret['retval'] == 0
     rev_last = ret['stdout'][-1].split()[0]
     rev_first = ret['stdout'][1].split()[0]
@@ -94,15 +94,15 @@ def test_history_rollback(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     baseline = ret['stdout'][-1].split()[0]
 
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
-    ret = utils.run(['tdnf', 'history', '-y', 'rollback', '--to', baseline])
+    ret = utils.run(['rpmz', 'history', '-y', 'rollback', '--to', baseline])
     assert ret['retval'] == 0
 
 
@@ -111,20 +111,20 @@ def test_history_undo(utils):
     pkgs.append(utils.config["sglversion_pkgname"])
     pkgs.append(utils.config["sglversion2_pkgname"])
 
-    ret = utils.run("tdnf remove -y " + " ".join(pkgs))
+    ret = utils.run("rpmz remove -y " + " ".join(pkgs))
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     baseline = ret['stdout'][-1].split()[0]
 
     for pkg in pkgs:
-        ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkg])
+        ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkg])
         assert ret['retval'] == 0
         assert utils.check_package(pkg)
 
     # should undo install of pkgs[1]
-    ret = utils.run(['tdnf', 'history', '-y', 'undo', '--from', str(int(baseline) + 2)])
+    ret = utils.run(['rpmz', 'history', '-y', 'undo', '--from', str(int(baseline) + 2)])
     assert ret['retval'] == 0
     assert not utils.check_package(pkgs[1])
 
@@ -134,20 +134,20 @@ def test_history_undo_remove(utils):
 
     utils.erase_package(pkgname)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
-    ret = utils.run(['tdnf', 'remove', '-y', pkgname])
+    ret = utils.run(['rpmz', 'remove', '-y', pkgname])
     assert ret['retval'] == 0
     assert not utils.check_package(pkgname)
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     baseline = ret['stdout'][-1].split()[0]
 
     # should undo remove of pkgname
-    ret = utils.run(['tdnf', 'history', '-y', '--nogpgcheck', 'undo', '--from', str(int(baseline))])
+    ret = utils.run(['rpmz', 'history', '-y', '--nogpgcheck', 'undo', '--from', str(int(baseline))])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -157,24 +157,24 @@ def test_history_undo_downloadonly(utils):
 
     utils.erase_package(pkgname)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
-    ret = utils.run(['tdnf', 'remove', '-y', pkgname])
+    ret = utils.run(['rpmz', 'remove', '-y', pkgname])
     assert ret['retval'] == 0
     assert not utils.check_package(pkgname)
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     baseline = ret['stdout'][-1].split()[0]
 
     # would undo remove of pkgname
-    ret = utils.run(['tdnf', 'history', '-y', '--downloadonly', '--nogpgcheck', 'undo', '--from', str(int(baseline))])
+    ret = utils.run(['rpmz', 'history', '-y', '--downloadonly', '--nogpgcheck', 'undo', '--from', str(int(baseline))])
     assert ret['retval'] == 0
     assert not utils.check_package(pkgname)
 
     # verify that there is no record of it either
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert baseline == ret['stdout'][-1].split()[0]
 
 
@@ -183,22 +183,22 @@ def test_history_undo_testonly(utils):
 
     utils.erase_package(pkgname)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     assert utils.check_package(pkgname)
 
-    ret = utils.run(['tdnf', 'remove', '-y', pkgname])
+    ret = utils.run(['rpmz', 'remove', '-y', pkgname])
     assert not utils.check_package(pkgname)
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     baseline = ret['stdout'][-1].split()[0]
 
     # would undo remove of pkgname
-    ret = utils.run(['tdnf', 'history', '-y', '--testonly', '--nogpgcheck', 'undo', '--from', str(int(baseline))])
+    ret = utils.run(['rpmz', 'history', '-y', '--testonly', '--nogpgcheck', 'undo', '--from', str(int(baseline))])
     assert ret['retval'] == 0
     assert not utils.check_package(pkgname)
 
     # verify that there is no record of it either
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert baseline == ret['stdout'][-1].split()[0]
 
 
@@ -207,18 +207,18 @@ def test_history_undo_multiple(utils):
     pkgs.append(utils.config["sglversion_pkgname"])
     pkgs.append(utils.config["sglversion2_pkgname"])
 
-    ret = utils.run("tdnf remove -y " + " ".join(pkgs))
+    ret = utils.run("rpmz remove -y " + " ".join(pkgs))
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     baseline = ret['stdout'][-1].split()[0]
 
     for pkg in pkgs:
-        ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkg])
+        ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkg])
         assert ret['retval'] == 0
         assert utils.check_package(pkg)
 
-    ret = utils.run(['tdnf', 'history', '-y', 'undo', '--from', str(int(baseline) + 1), '--to', str(int(baseline) + 3)])
+    ret = utils.run(['rpmz', 'history', '-y', 'undo', '--from', str(int(baseline) + 1), '--to', str(int(baseline) + 3)])
     assert ret['retval'] == 0
     assert not utils.check_package(pkgs[0])
     assert not utils.check_package(pkgs[1])
@@ -230,22 +230,22 @@ def test_history_redo(utils):
     pkgs.append(utils.config["sglversion_pkgname"])
     pkgs.append(utils.config["sglversion2_pkgname"])
 
-    ret = utils.run("tdnf remove -y " + " ".join(pkgs))
+    ret = utils.run("rpmz remove -y " + " ".join(pkgs))
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     baseline = ret['stdout'][-1].split()[0]
 
     for pkg in pkgs:
-        utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkg])
+        utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkg])
         assert utils.check_package(pkg)
 
     utils.erase_package(pkgs[1])
     assert not utils.check_package(pkgs[1])
 
     # should redo install of pkgs[1]
-    utils.run(['tdnf', 'history', '-y', 'redo', '--from', str(int(baseline) + 2)])
+    utils.run(['rpmz', 'history', '-y', 'redo', '--from', str(int(baseline) + 2)])
     assert ret['retval'] == 0
     assert utils.check_package(pkgs[1])
 
@@ -254,17 +254,17 @@ def test_history_mark(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.install_package(pkgname)
 
-    ret = utils.run(['tdnf', 'mark', 'remove', pkgname])
+    ret = utils.run(['rpmz', 'mark', 'remove', pkgname])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     trans_id = ret['stdout'][-1].split()[0]
 
-    ret = utils.run(['tdnf', 'history', '-y', 'undo', trans_id])
+    ret = utils.run(['rpmz', 'history', '-y', 'undo', trans_id])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'repoquery', '--userinstalled', pkgname])
+    ret = utils.run(['rpmz', 'repoquery', '--userinstalled', pkgname])
     assert pkgname in "\n".join(ret['stdout'])
 
 
@@ -278,16 +278,16 @@ def test_history_redo_and_autoinstall(utils):
     utils.install_package(pkgname_req)
     utils.install_package(pkgname)
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     trans_id = ret['stdout'][-1].split()[0]
 
     utils.erase_package(pkgname)
     utils.erase_package(pkgname_req)
 
-    ret = utils.run(['tdnf', 'history', '-y', 'redo', trans_id])
+    ret = utils.run(['rpmz', 'history', '-y', 'redo', trans_id])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'repoquery', '--userinstalled', pkgname_req])
+    ret = utils.run(['rpmz', 'repoquery', '--userinstalled', pkgname_req])
     assert pkgname_req not in "\n".join(ret['stdout'])
 
 
@@ -296,14 +296,14 @@ def test_history_id(utils):
     utils.erase_package(pkgname)
 
     # record id before install
-    ret = utils.run(['tdnf', 'history', 'id'])
+    ret = utils.run(['rpmz', 'history', 'id'])
     assert ret['retval'] == 0
     id_before = int(ret['stdout'][0].strip())
 
     utils.install_package(pkgname)
 
     # id must have increased by exactly 1 after a single install transaction
-    ret = utils.run(['tdnf', 'history', 'id'])
+    ret = utils.run(['rpmz', 'history', 'id'])
     assert ret['retval'] == 0
     id_after = int(ret['stdout'][0].strip())
     assert id_after == id_before + 1
@@ -312,7 +312,7 @@ def test_history_id(utils):
 def test_history_id_json(utils):
     import json
 
-    ret = utils.run(['tdnf', '-j', 'history', 'id'])
+    ret = utils.run(['rpmz', '-j', 'history', 'id'])
     assert ret['retval'] == 0
     data = json.loads(ret['stdout'][0])
     assert 'Id' in data
@@ -321,10 +321,10 @@ def test_history_id_json(utils):
 
 
 def test_history_memcheck(utils):
-    ret = utils.run_memcheck(['tdnf', 'history'])
+    ret = utils.run_memcheck(['rpmz', 'history'])
     assert ret['retval'] == 0
 
-    ret = utils.run_memcheck(['tdnf', 'history', '--info'])
+    ret = utils.run_memcheck(['rpmz', 'history', '--info'])
     assert ret['retval'] == 0
 
 
@@ -346,13 +346,13 @@ def test_history_pubkey_removed(utils):
     ret = utils.run(['rpm', '--import', keypath])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'history', 'update'])
+    ret = utils.run(['rpmz', 'history', 'update'])
     assert ret['retval'] == 0
 
     new_gpg_key = get_host_gpg_keys(utils)
     new_gpg_key = list(set(new_gpg_key) - set(host_gpg_keys))
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     baseline = ret['stdout'][-1].split()[0]
 
@@ -360,10 +360,10 @@ def test_history_pubkey_removed(utils):
         ret = utils.run(['rpm', '-ev', key])
         assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'history', 'update'])
+    ret = utils.run(['rpmz', 'history', 'update'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'history', '-y', 'rollback', '--to', baseline])
+    ret = utils.run(['rpmz', 'history', '-y', 'rollback', '--to', baseline])
     assert ret['retval'] == 0
 
     for key in new_gpg_key:
@@ -374,7 +374,7 @@ def test_history_pubkey_removed(utils):
 def test_history_pubkey_added(utils):
     host_gpg_keys = get_host_gpg_keys(utils)
 
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     assert ret['retval'] == 0
     baseline = ret['stdout'][-1].split()[0]
 
@@ -382,10 +382,10 @@ def test_history_pubkey_added(utils):
     ret = utils.run(['rpm', '--import', keypath])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'history', 'update'])
+    ret = utils.run(['rpmz', 'history', 'update'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'history', '-y', 'rollback', '--to', baseline])
+    ret = utils.run(['rpmz', 'history', '-y', 'rollback', '--to', baseline])
     assert ret['retval'] == 0
 
     new_gpg_key = get_host_gpg_keys(utils)

@@ -5,7 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const getopt = @import("getopt_c.zig").c;
 const abi = @import("tdnf_internal_abi");
 const c = @cImport({
@@ -379,7 +379,7 @@ pub export fn TDNFCliParseArgs(
 
     if (argv[0]) |arg0| {
         const arg0_slice = std.mem.span(arg0);
-        if (arg0_slice.len >= 5 and std.mem.eql(u8, arg0_slice[arg0_slice.len - 5 ..], "tdnfj")) {
+        if (arg0_slice.len >= 5 and std.mem.eql(u8, arg0_slice[arg0_slice.len - 5 ..], "rpmzj")) {
             option_state.nJsonOutput = 1;
             option_state.nAssumeYes = 1;
         }

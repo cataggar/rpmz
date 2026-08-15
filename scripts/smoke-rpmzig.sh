@@ -8,12 +8,12 @@ if [[ "${PREFIX}" != /* ]]; then
     PREFIX="${ROOT_DIR}/${PREFIX#./}"
 fi
 
-LIBEXEC="${PREFIX}/libexec/tdnf"
+LIBEXEC="${PREFIX}/libexec/rpmz"
 WORK_DIR="${PREFIX}/.rpmzig-smoke.$$"
 TOP_DIR="${WORK_DIR}/rpmbuild"
 DB_ROOT="${WORK_DIR}/root"
 KEY_ROOT="${WORK_DIR}/key-root"
-GNUPG_ROOT="${TDNF_SMOKE_GNUPGHOME:-${WORK_DIR}/gnupg}"
+GNUPG_ROOT="${RPMZ_SMOKE_GNUPGHOME:-${WORK_DIR}/gnupg}"
 RPM_TMP="${WORK_DIR}/rpm-tmp"
 
 cleanup() {
@@ -40,18 +40,18 @@ chmod 0700 "${GNUPG_ROOT}"
 export TMPDIR="${RPM_TMP}"
 
 for binary in \
-    tdnf-rpmdb-count \
-    tdnf-rpmdb-list \
-    tdnf-rpmdb-pubkeys \
-    tdnf-rpmdb-import-pubkeys \
-    tdnf-rpmdb-write \
-    tdnf-rpm-info \
-    tdnf-rpm-files \
-    tdnf-rpm-verify \
-    tdnf-rpm-install \
-    tdnf-rpm-erase \
-    tdnf-rpm-trigger \
-    tdnf-rpm-scriptlet
+    rpmz-rpmdb-count \
+    rpmz-rpmdb-list \
+    rpmz-rpmdb-pubkeys \
+    rpmz-rpmdb-import-pubkeys \
+    rpmz-rpmdb-write \
+    rpmz-rpm-info \
+    rpmz-rpm-files \
+    rpmz-rpm-verify \
+    rpmz-rpm-install \
+    rpmz-rpm-erase \
+    rpmz-rpm-trigger \
+    rpmz-rpm-scriptlet
 do
     test -x "${LIBEXEC}/${binary}"
 done
@@ -75,13 +75,13 @@ expect_cli_error() {
 }
 
 expect_cli_error 2 'unsupported --tsflag value: invalid' \
-    "${LIBEXEC}/tdnf-rpm-install" --tsflag invalid
+    "${LIBEXEC}/rpmz-rpm-install" --tsflag invalid
 expect_cli_error 2 'invalid hnum: invalid' \
-    "${LIBEXEC}/tdnf-rpm-erase" --root "${DB_ROOT}" invalid
+    "${LIBEXEC}/rpmz-rpm-erase" --root "${DB_ROOT}" invalid
 expect_cli_error 2 'invalid --arg1 value: invalid' \
-    "${LIBEXEC}/tdnf-rpm-scriptlet" --arg1 invalid
+    "${LIBEXEC}/rpmz-rpm-scriptlet" --arg1 invalid
 expect_cli_error 2 'unsupported --phase value: invalid' \
-    "${LIBEXEC}/tdnf-rpm-trigger" --phase invalid
+    "${LIBEXEC}/rpmz-rpm-trigger" --phase invalid
 
 rpmbuild \
     --define "_topdir ${TOP_DIR}" \
@@ -110,7 +110,7 @@ TARGET_RPM="${target_matches[0]}"
 export GNUPGHOME="${GNUPG_ROOT}"
 gpg --batch --pinentry-mode loopback --passphrase '' \
     --quick-generate-key \
-    'tdnf rpmzig smoke <rpmzig-smoke@tdnf.invalid>' rsa2048 sign 0
+    'rpmz rpmzig smoke <rpmzig-smoke@tdnf.invalid>' rsa2048 sign 0
 KEY_FINGERPRINT="$(
     gpg --batch --with-colons --list-keys \
         'rpmzig-smoke@tdnf.invalid' |
@@ -127,15 +127,15 @@ rpmsign \
     --define "_tmppath ${RPM_TMP}" \
     --addsign "${OWNER_RPM}"
 
-INFO_OUTPUT="$("${LIBEXEC}/tdnf-rpm-info" "${OWNER_RPM}")"
+INFO_OUTPUT="$("${LIBEXEC}/rpmz-rpm-info" "${OWNER_RPM}")"
 grep -Fq 'NEVRA:       tdnf-rpmzig-smoke-1.0.0-1.noarch' \
     <<< "${INFO_OUTPUT}"
-FILES_OUTPUT="$("${LIBEXEC}/tdnf-rpm-files" "${OWNER_RPM}")"
+FILES_OUTPUT="$("${LIBEXEC}/rpmz-rpm-files" "${OWNER_RPM}")"
 grep -Fq './var/lib/tdnf-rpmzig-smoke/payload' <<< "${FILES_OUTPUT}"
 
 set +e
 MALFORMED_OUTPUT="$(
-    "${LIBEXEC}/tdnf-rpm-verify" "${OWNER_RPM}" --key 2>&1
+    "${LIBEXEC}/rpmz-rpm-verify" "${OWNER_RPM}" --key 2>&1
 )"
 MALFORMED_STATUS=$?
 set -e
@@ -143,28 +143,28 @@ set -e
 [[ "${MALFORMED_OUTPUT}" == "unknown arg: --key" ]]
 
 set +e
-NO_KEY_OUTPUT="$("${LIBEXEC}/tdnf-rpm-verify" "${OWNER_RPM}")"
+NO_KEY_OUTPUT="$("${LIBEXEC}/rpmz-rpm-verify" "${OWNER_RPM}")"
 NO_KEY_STATUS=$?
 set -e
 [[ "${NO_KEY_STATUS}" -eq 2 ]]
 grep -Fq 'Result:    signature present, NO matching key' \
     <<< "${NO_KEY_OUTPUT}"
 
-"${LIBEXEC}/tdnf-rpm-verify" \
+"${LIBEXEC}/rpmz-rpm-verify" \
     "${OWNER_RPM}" --key "${PUBLIC_KEY}" |
     grep -Fq 'Result:    OK'
 
 IMPORTED="$(
-    "${LIBEXEC}/tdnf-rpmdb-import-pubkeys" \
+    "${LIBEXEC}/rpmz-rpmdb-import-pubkeys" \
         "${KEY_ROOT}" "${PUBLIC_KEY}"
 )"
 [[ "${IMPORTED}" == "1" ]]
 PUBKEY_OUTPUT="$(
-    "${LIBEXEC}/tdnf-rpmdb-pubkeys" "${KEY_ROOT}"
+    "${LIBEXEC}/rpmz-rpmdb-pubkeys" "${KEY_ROOT}"
 )"
 grep -Eiq '^[[:xdigit:]]+[[:space:]]+[1-9][0-9]*$' \
     <<< "${PUBKEY_OUTPUT}"
-"${LIBEXEC}/tdnf-rpm-verify" \
+"${LIBEXEC}/rpmz-rpm-verify" \
     "${OWNER_RPM}" --rpmdb "${KEY_ROOT}" |
     grep -Fq 'Result:    OK'
 
@@ -176,25 +176,25 @@ run_as_root() {
     fi
 }
 
-run_as_root "${LIBEXEC}/tdnf-rpm-install" \
+run_as_root "${LIBEXEC}/rpmz-rpm-install" \
     --root "${DB_ROOT}" --tsflag justdb "${OWNER_RPM}"
 test ! -e "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/payload"
 
-run_as_root "${LIBEXEC}/tdnf-rpm-install" \
+run_as_root "${LIBEXEC}/rpmz-rpm-install" \
     --root "${DB_ROOT}" "${OWNER_RPM}"
 grep -Fxq 'payload' \
     "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/payload"
 
 HNUM="$(
-    "${LIBEXEC}/tdnf-rpmdb-write" \
+    "${LIBEXEC}/rpmz-rpmdb-write" \
         install "${DB_ROOT}" "${OWNER_RPM}" 1 1 3
 )"
 [[ "${HNUM}" =~ ^[1-9][0-9]*$ ]]
-[[ "$("${LIBEXEC}/tdnf-rpmdb-count" "${DB_ROOT}")" == "1" ]]
-LIST_OUTPUT="$("${LIBEXEC}/tdnf-rpmdb-list" "${DB_ROOT}")"
+[[ "$("${LIBEXEC}/rpmz-rpmdb-count" "${DB_ROOT}")" == "1" ]]
+LIST_OUTPUT="$("${LIBEXEC}/rpmz-rpmdb-list" "${DB_ROOT}")"
 grep -Fxq 'tdnf-rpmzig-smoke-1.0.0-1.noarch' <<< "${LIST_OUTPUT}"
 
-run_as_root "${LIBEXEC}/tdnf-rpm-scriptlet" \
+run_as_root "${LIBEXEC}/rpmz-rpm-scriptlet" \
     --root "${DB_ROOT}" \
     --phase pre \
     --tsflag nopre \
@@ -203,7 +203,7 @@ run_as_root "${LIBEXEC}/tdnf-rpm-scriptlet" \
     "${OWNER_RPM}"
 test ! -e "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/scriptlet"
 
-run_as_root "${LIBEXEC}/tdnf-rpm-scriptlet" \
+run_as_root "${LIBEXEC}/rpmz-rpm-scriptlet" \
     --root "${DB_ROOT}" \
     --phase pre \
     --arg1 1 \
@@ -212,7 +212,7 @@ run_as_root "${LIBEXEC}/tdnf-rpm-scriptlet" \
 grep -Fxq 'pre:1' \
     "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/scriptlet"
 
-run_as_root "${LIBEXEC}/tdnf-rpm-trigger" \
+run_as_root "${LIBEXEC}/rpmz-rpm-trigger" \
     --root "${DB_ROOT}" \
     --phase in \
     --tsflag notriggerin \
@@ -221,7 +221,7 @@ run_as_root "${LIBEXEC}/tdnf-rpm-trigger" \
     "${TARGET_RPM}"
 test ! -e "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/trigger"
 
-run_as_root "${LIBEXEC}/tdnf-rpm-trigger" \
+run_as_root "${LIBEXEC}/rpmz-rpm-trigger" \
     --db-root "${DB_ROOT}" \
     --install-root "${DB_ROOT}" \
     --phase triggerin \
@@ -231,9 +231,9 @@ run_as_root "${LIBEXEC}/tdnf-rpm-trigger" \
 grep -Fxq 'triggerin' \
     "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/trigger"
 
-run_as_root "${LIBEXEC}/tdnf-rpm-erase" \
+run_as_root "${LIBEXEC}/rpmz-rpm-erase" \
     --root "${DB_ROOT}" "${HNUM}"
-[[ "$("${LIBEXEC}/tdnf-rpmdb-count" "${DB_ROOT}")" == "0" ]]
+[[ "$("${LIBEXEC}/rpmz-rpmdb-count" "${DB_ROOT}")" == "0" ]]
 test ! -e "${DB_ROOT}/var/lib/tdnf-rpmzig-smoke/payload"
 
 echo "All rpmzig smoke binaries passed"

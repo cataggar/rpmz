@@ -8,12 +8,12 @@ import sys
 
 
 SYMBOLS = (
-    "tdnf_sqlite_confined_registry_anchor",
-    "tdnf_sqlite_confined_open_at",
-    "tdnf_sqlite_confined_close",
-    "tdnf_sqlite_confined_verify",
-    "tdnf_sqlite_confined_pin_main_fd",
-    "tdnf_sqlite_confined_release_main_fd_pin",
+    "rpmz_sqlite_confined_registry_anchor",
+    "rpmz_sqlite_confined_open_at",
+    "rpmz_sqlite_confined_close",
+    "rpmz_sqlite_confined_verify",
+    "rpmz_sqlite_confined_pin_main_fd",
+    "rpmz_sqlite_confined_release_main_fd_pin",
 )
 
 
@@ -39,7 +39,7 @@ def main() -> int:
         return 1
 
     audited = 0
-    tdnf_seen = False
+    rpmz_seen = False
     for path in sorted(args.prefix.rglob("*")):
         if not path.is_file():
             continue
@@ -54,8 +54,8 @@ def main() -> int:
         if not any(counts.values()):
             continue
         audited += 1
-        if path == args.prefix / "bin" / "tdnf":
-            tdnf_seen = True
+        if path == args.prefix / "bin" / "rpmz":
+            rpmz_seen = True
         for symbol, count in counts.items():
             if count != 1:
                 print(
@@ -64,9 +64,9 @@ def main() -> int:
                 )
                 return 1
 
-    if not tdnf_seen:
+    if not rpmz_seen:
         print(
-            "error: installed tdnf does not contain the confined SQLite singleton",
+            "error: installed rpmz does not contain the confined SQLite singleton",
             file=sys.stderr,
         )
         return 1

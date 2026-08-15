@@ -91,7 +91,7 @@ test "verifier preserves missing key diagnostic" {
     try testing.expectEqualStrings("", result.stdout);
     const expected = try std.fmt.allocPrint(
         testing.allocator,
-        "tdnf-rpm-verify: open key {s}: No such file or directory\n",
+        "rpmz-rpm-verify: open key {s}: No such file or directory\n",
         .{missing},
     );
     defer testing.allocator.free(expected);

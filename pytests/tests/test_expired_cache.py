@@ -47,9 +47,9 @@ def test_cached_expired(utils):
     repoconf = os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME)
     generate_repofile_expire(utils, repoconf, REPOID, expire)
 
-    utils.run(['tdnf', '--repoid={}'.format(REPOID), 'makecache'])
+    utils.run(['rpmz', '--repoid={}'.format(REPOID), 'makecache'])
     time.sleep(expire + 2)
-    ret = utils.run(['tdnf', '--repoid={}'.format(REPOID), 'list'])
+    ret = utils.run(['rpmz', '--repoid={}'.format(REPOID), 'list'])
     assert "Refreshing metadata" in "\n".join(ret['stdout'])
 
 
@@ -58,9 +58,9 @@ def test_cached_not_expired(utils):
     repoconf = os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME)
     generate_repofile_expire(utils, repoconf, REPOID, expire)
 
-    utils.run(['tdnf', '--repoid={}'.format(REPOID), 'makecache'])
+    utils.run(['rpmz', '--repoid={}'.format(REPOID), 'makecache'])
     time.sleep(5)
-    ret = utils.run(['tdnf', '--repoid={}'.format(REPOID), 'list'])
+    ret = utils.run(['rpmz', '--repoid={}'.format(REPOID), 'list'])
     assert "Refreshing metadata" not in "\n".join(ret['stdout'])
 
 
@@ -69,9 +69,9 @@ def test_cached_never_expired(utils):
     repoconf = os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME)
     generate_repofile_expire(utils, repoconf, REPOID, expire)
 
-    utils.run(['tdnf', '--repoid={}'.format(REPOID), 'makecache'])
+    utils.run(['rpmz', '--repoid={}'.format(REPOID), 'makecache'])
     time.sleep(5)
-    ret = utils.run(['tdnf', '--repoid={}'.format(REPOID), 'list'])
+    ret = utils.run(['rpmz', '--repoid={}'.format(REPOID), 'list'])
     assert "Refreshing metadata" not in "\n".join(ret['stdout'])
 
 
@@ -80,9 +80,9 @@ def test_cached_expired_cacheonly(utils):
     repoconf = os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME)
     generate_repofile_expire(utils, repoconf, REPOID, expire)
 
-    utils.run(['tdnf', '--repoid={}'.format(REPOID), 'makecache'])
+    utils.run(['rpmz', '--repoid={}'.format(REPOID), 'makecache'])
     time.sleep(expire + 2)
-    ret = utils.run(['tdnf', '--repoid={}'.format(REPOID), '-C', 'list'])
+    ret = utils.run(['rpmz', '--repoid={}'.format(REPOID), '-C', 'list'])
     assert "Refreshing metadata" not in "\n".join(ret['stdout'])
 
 
@@ -92,9 +92,9 @@ def test_cached_expired_no_reset(utils):
     repoconf = os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME)
     generate_repofile_expire(utils, repoconf, REPOID, expire)
 
-    utils.run(['tdnf', '--repoid={}'.format(REPOID), 'makecache'])
+    utils.run(['rpmz', '--repoid={}'.format(REPOID), 'makecache'])
     time.sleep(expire / 2)
-    ret = utils.run(['tdnf', '--repoid={}'.format(REPOID), 'list'])
+    ret = utils.run(['rpmz', '--repoid={}'.format(REPOID), 'list'])
     time.sleep(expire / 2 + 2)
-    ret = utils.run(['tdnf', '--repoid={}'.format(REPOID), 'list'])
+    ret = utils.run(['rpmz', '--repoid={}'.format(REPOID), 'list'])
     assert "Refreshing metadata" in "\n".join(ret['stdout'])

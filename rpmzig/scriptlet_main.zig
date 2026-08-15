@@ -127,7 +127,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             }
             i += 1;
             rpmdefines.append(std.heap.c_allocator, std.mem.span(argv[i])) catch {
-                std.debug.print("tdnf-rpm-scriptlet: out of memory\n", .{});
+                std.debug.print("rpmz-rpm-scriptlet: out of memory\n", .{});
                 return 1;
             };
         } else if (arg.len != 0 and arg[0] == '-') {
@@ -146,7 +146,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const path = rpm_path orelse return usage(argv[0]);
     var rpm = common.openRpm(path) catch |err| {
         std.debug.print(
-            "tdnf-rpm-scriptlet: open: rpm_file_open({s}): {t}\n",
+            "rpmz-rpm-scriptlet: open: rpm_file_open({s}): {t}\n",
             .{ std.mem.span(path), err },
         );
         return 1;
@@ -163,7 +163,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         .redirect_stdout_to_stderr = redirect_stdout_to_stderr,
     }) catch |err| {
         std.debug.print(
-            "tdnf-rpm-scriptlet: run: header_run_scriptlet: {t}\n",
+            "rpmz-rpm-scriptlet: run: header_run_scriptlet: {t}\n",
             .{err},
         );
         return 1;

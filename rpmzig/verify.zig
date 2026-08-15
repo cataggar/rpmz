@@ -1,6 +1,6 @@
-//! Typed verifier used only by the standalone `tdnf-rpm-verify` helper.
+//! Typed verifier used only by the standalone `rpmz-rpm-verify` helper.
 //!
-//! tdnf verifies packages through `rpmdb.zig`'s configured integrity
+//! rpmz verifies packages through `rpmdb.zig`'s configured integrity
 //! path, which evaluates every signature candidate.  This module preserves
 //! the standalone helper's historical single detached-signature policy.
 

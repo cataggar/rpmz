@@ -5,20 +5,20 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 
 pub const c = @import("client_abi").C;
 
 pub const Ops = struct {
     context: ?*anyopaque = null,
-    refresh: *const fn (?*anyopaque, ?*c.TDNF) u32,
+    refresh: *const fn (?*anyopaque, ?*c.RPMZ) u32,
     allocateMemory: *const fn (?*anyopaque, usize, usize, *?*anyopaque) u32,
     allocateString: *const fn (?*anyopaque, ?[*:0]const u8, [*c][*c]u8) u32,
     freeMemory: *const fn (?*anyopaque, ?*anyopaque) void,
     freeStringArray: *const fn (?*anyopaque, [*c][*c]u8) void,
     buildRepoInputs: *const fn (
         ?*anyopaque,
-        ?*c.TDNF,
+        ?*c.RPMZ,
         *c.PTDNF_REPOMD_NATIVE_REPO_INPUT,
         *u32,
     ) u32,
@@ -31,7 +31,7 @@ pub const Ops = struct {
         ?*anyopaque,
         c.PTDNF_REPOMD_NATIVE_REPO_INPUT,
         u32,
-        ?*const c.tdnf_rpm_config,
+        ?*const c.rpmz_rpm_config,
         [*c][*c]u8,
         u32,
         ?[*:0]const u8,
@@ -47,7 +47,7 @@ pub const Ops = struct {
     freeSummary: *const fn (?*anyopaque, c.PTDNF_UPDATEINFO_SUMMARY) void,
     updateInfo: *const fn (
         ?*anyopaque,
-        ?*c.TDNF,
+        ?*c.RPMZ,
         [*c][*c]u8,
         *c.PTDNF_UPDATEINFO,
     ) u32,
@@ -73,22 +73,22 @@ fn clearSecuritySeverity(
 }
 
 pub fn securitySeverityOptionWithOps(
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     security_out: [*c]u32,
     severity_out: [*c][*c]u8,
     ops: Ops,
 ) u32 {
     clearSecuritySeverity(security_out, severity_out);
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (security_out == null or severity_out == null or
-        tdnf.pArgs == null or tdnf.pArgs[0].cn_setopts == null)
+        rpmz.pArgs == null or rpmz.pArgs[0].cn_setopts == null)
     {
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
 
     var security: u32 = 0;
     var severity: [*c]u8 = null;
-    var node = tdnf.pArgs[0].cn_setopts[0].first_child;
+    var node = rpmz.pArgs[0].cn_setopts[0].first_child;
     while (node != null) : (node = node[0].next) {
         const is_severity = optionNameEquals(node[0].name, "sec-severity") orelse {
             ops.freeMemory(ops.context, @ptrCast(severity));
@@ -122,18 +122,18 @@ pub fn securitySeverityOptionWithOps(
 }
 
 pub fn rebootRequiredOption(
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     reboot_out: [*c]u32,
 ) u32 {
     if (reboot_out != null) reboot_out[0] = 0;
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (reboot_out == null or tdnf.pArgs == null or
-        tdnf.pArgs[0].cn_setopts == null)
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (reboot_out == null or rpmz.pArgs == null or
+        rpmz.pArgs[0].cn_setopts == null)
     {
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    var node = tdnf.pArgs[0].cn_setopts[0].first_child;
+    var node = rpmz.pArgs[0].cn_setopts[0].first_child;
     while (node != null) : (node = node[0].next) {
         const matches = optionNameEquals(node[0].name, "reboot-required") orelse
             return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -146,14 +146,14 @@ pub fn rebootRequiredOption(
 }
 
 pub fn updateInfoSummaryWithOps(
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     package_specs: [*c][*c]u8,
     summary_out: [*c]c.PTDNF_UPDATEINFO_SUMMARY,
     ops: Ops,
 ) u32 {
     if (summary_out != null) summary_out[0] = null;
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (summary_out == null or tdnf.pSack == null) {
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (summary_out == null or rpmz.pSack == null) {
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
 
@@ -171,30 +171,30 @@ pub fn updateInfoSummaryWithOps(
         if (result != 0) ops.freeSummary(ops.context, summary);
     }
 
-    result = ops.refresh(ops.context, tdnf);
+    result = ops.refresh(ops.context, rpmz);
     if (result != 0) return result;
-    if (tdnf.pSack == null) {
+    if (rpmz.pSack == null) {
         result = errors.ERROR_TDNF_INVALID_PARAMETER;
         return result;
     }
 
     var security: u32 = 0;
     result = securitySeverityOptionWithOps(
-        tdnf,
+        rpmz,
         &security,
         &severity,
         ops,
     );
     if (result != 0) return result;
 
-    result = ops.buildRepoInputs(ops.context, tdnf, &repos, &repo_count);
+    result = ops.buildRepoInputs(ops.context, rpmz, &repos, &repo_count);
     if (result != 0) return result;
 
     result = ops.querySummary(
         ops.context,
         repos,
         repo_count,
-        if (tdnf.pRpmConfig == null) null else @ptrCast(tdnf.pRpmConfig),
+        if (rpmz.pRpmConfig == null) null else @ptrCast(rpmz.pRpmConfig),
         package_specs,
         security,
         cString(severity),
@@ -228,14 +228,14 @@ fn countUpdatePackages(info_head: c.PTDNF_UPDATEINFO) usize {
 }
 
 pub fn getUpdatePkgsWithOps(
-    handle: ?*c.TDNF,
+    handle: ?*c.RPMZ,
     packages_out: [*c][*c][*c]u8,
     count_out: [*c]u32,
     ops: Ops,
 ) u32 {
     if (packages_out != null) packages_out[0] = null;
     if (count_out != null) count_out[0] = 0;
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (packages_out == null or count_out == null) {
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
@@ -244,7 +244,7 @@ pub fn getUpdatePkgsWithOps(
     var update_info: c.PTDNF_UPDATEINFO = null;
     var result = ops.updateInfo(
         ops.context,
-        tdnf,
+        rpmz,
         @ptrCast(&empty_specs),
         &update_info,
     );
@@ -314,7 +314,7 @@ const Fixture = struct {
     observed_severity: [32]u8 = undefined,
     observed_severity_len: usize = 0,
     observed_specs: [*c][*c]u8 = null,
-    observed_config: ?*const c.tdnf_rpm_config = null,
+    observed_config: ?*const c.rpmz_rpm_config = null,
     update_info: c.PTDNF_UPDATEINFO = null,
     line_storage: [2][*c]u8 = .{
         @constCast(@as([*:0]const u8, "1\x1f0")),
@@ -326,7 +326,7 @@ fn fixture(context: ?*anyopaque) *Fixture {
     return @ptrCast(@alignCast(context.?));
 }
 
-fn testRefresh(context: ?*anyopaque, handle: ?*c.TDNF) u32 {
+fn testRefresh(context: ?*anyopaque, handle: ?*c.RPMZ) u32 {
     const state = fixture(context);
     state.refresh_calls += 1;
     if (state.clear_sack_on_refresh and handle != null) {
@@ -394,7 +394,7 @@ fn testFreeStringArray(context: ?*anyopaque, values: [*c][*c]u8) void {
 
 fn testBuildRepoInputs(
     context: ?*anyopaque,
-    _: ?*c.TDNF,
+    _: ?*c.RPMZ,
     repos_out: *c.PTDNF_REPOMD_NATIVE_REPO_INPUT,
     count_out: *u32,
 ) u32 {
@@ -416,7 +416,7 @@ fn testQuerySummary(
     context: ?*anyopaque,
     _: c.PTDNF_REPOMD_NATIVE_REPO_INPUT,
     _: u32,
-    config: ?*const c.tdnf_rpm_config,
+    config: ?*const c.rpmz_rpm_config,
     specs: [*c][*c]u8,
     security: u32,
     severity: ?[*:0]const u8,
@@ -469,7 +469,7 @@ fn testFreeSummary(
 
 fn testUpdateInfo(
     context: ?*anyopaque,
-    _: ?*c.TDNF,
+    _: ?*c.RPMZ,
     _: [*c][*c]u8,
     info_out: *c.PTDNF_UPDATEINFO,
 ) u32 {
@@ -510,8 +510,8 @@ fn setoptNode(name: [*:0]const u8, value: ?[*:0]const u8) c.cnfnode {
     return node;
 }
 
-fn testHandle(args: *c.TDNF_CMD_ARGS) c.TDNF {
-    var handle = std.mem.zeroes(c.TDNF);
+fn testHandle(args: *c.TDNF_CMD_ARGS) c.RPMZ {
+    var handle = std.mem.zeroes(c.RPMZ);
     handle.pSack = @ptrFromInt(8);
     handle.pArgs = args;
     handle.pRpmConfig = @ptrFromInt(16);
@@ -671,7 +671,7 @@ test "summary rejects a native package context lost during refresh" {
 test "no update packages returns a null zero result" {
     var state = Fixture{};
     const ops = testOps(&state);
-    var handle = std.mem.zeroes(c.TDNF);
+    var handle = std.mem.zeroes(c.RPMZ);
     var packages: [*c][*c]u8 = @ptrFromInt(40);
     var count: u32 = 99;
 
@@ -698,7 +698,7 @@ test "update package collection counts multiple advisories and terminates" {
     info2.pPackages = &pkg3;
     var state = Fixture{ .update_info = &info1 };
     const ops = testOps(&state);
-    var handle = std.mem.zeroes(c.TDNF);
+    var handle = std.mem.zeroes(c.RPMZ);
     var packages: [*c][*c]u8 = null;
     var count: u32 = 0;
 
@@ -728,7 +728,7 @@ test "partial package string allocation failure cleans and resets outputs" {
         .update_info = &info,
     };
     const ops = testOps(&state);
-    var handle = std.mem.zeroes(c.TDNF);
+    var handle = std.mem.zeroes(c.RPMZ);
     var packages: [*c][*c]u8 = @ptrFromInt(40);
     var count: u32 = 99;
 

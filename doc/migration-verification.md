@@ -19,7 +19,7 @@ Three real production bugs passed both gates cleanly:
 | Bug | PR | Why the gate missed it |
 |---|---|---|
 | `provides` matched on substrings | #252 | assertion was satisfied by unrelated stdout |
-| `tdnf count` off by one | #252 | no test compared `count` to `list --all` |
+| `rpmz count` off by one | #252 | no test compared `count` to `list --all` |
 | repository priority not normalized | #251 | oracle does not inspect plan fields |
 
 **Therefore every port must include an explicit before/after behavioural
@@ -45,8 +45,8 @@ cd <branch>/out/repo && python3 -m http.server 8080 &
 # both binaries: same config file, same served repo, separate FRESH cachedirs
 for pair in "<main>/out /tmp/c_main" "<branch>/out /tmp/c_branch"; do
   set -- $pair
-  sudo -E $1/bin/tdnf \
-      -c <branch>/out/repo/tdnf.conf --releasever=1.0 \
+  sudo -E $1/bin/rpmz \
+      -c <branch>/out/repo/rpmz.conf --releasever=1.0 \
       --setopt=cachedir=$2 list tdnf-test-one
 done
 ```

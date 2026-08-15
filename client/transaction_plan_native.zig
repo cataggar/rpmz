@@ -1,6 +1,6 @@
 //! Produces the transaction-plan capture from a native solver result.
 //!
-//! Since the native solver is the authority for what tdnf actually installs,
+//! Since the native solver is the authority for what rpmz actually installs,
 //! the plan has to describe *that* transaction, so this module reads the
 //! native result directly.
 //!
@@ -17,7 +17,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const abi = @import("transaction_plan_capture_abi");
-const error_codes = @import("tdnf_error");
+const error_codes = @import("rpmz_error");
 const repomd = @import("repomd");
 
 const metadata = repomd.metadata_model;
@@ -42,7 +42,7 @@ pub const Input = struct {
     /// Parallel to `jobs`: the libsolv job-queue pair each native job was
     /// built from, which is how a job is tied back to the request that
     /// produced it. `null` marks a job the request layer never queued, such
-    /// as the policy jobs tdnf synthesises from `tdnf.conf`.
+    /// as the policy jobs rpmz synthesises from `rpmz.conf`.
     job_origins: []const ?u32,
     trace: *const abi.RequestTraceView,
     /// Problems were reported and the caller chose to continue anyway.
@@ -596,7 +596,7 @@ const BuildState = struct {
 
     /// The published plan numbers jobs by libsolv job-queue pair, and the
     /// trace binds each pair to the request job that queued it. The native
-    /// job list is deliberately shaped differently -- tdnf lifts locks,
+    /// job list is deliberately shaped differently -- rpmz lifts locks,
     /// install-only marks and user-installed marks out into policy jobs,
     /// folds `update-all` into a single global job, and orders installs
     /// ahead of erases -- so keying on the queue keeps the plan describing
@@ -968,7 +968,7 @@ const BuildState = struct {
     }
 
     /// Translates a native job id into the queue pair the published plan
-    /// numbers jobs by. A policy job tdnf synthesised was never queued, so it
+    /// numbers jobs by. A policy job rpmz synthesised was never queued, so it
     /// has no published number.
     fn queuePairRef(
         self: *BuildState,
@@ -2559,7 +2559,7 @@ test "a policy job the request layer never queued is absent from the plan" {
     };
     const selected = [_]solver_model.PackageId{wanted};
     const trace = oneInstallTrace();
-    // The lock comes from tdnf.conf, so the request layer never queued it.
+    // The lock comes from rpmz.conf, so the request layer never queued it.
     const origins = [_]?u32{ 0, null };
 
     const owner = try create(testing.allocator, .{
@@ -2809,7 +2809,7 @@ test "a command line package publishes a checksum but no location" {
     );
 }
 
-test "repository priorities use tdnf semantics by repository kind" {
+test "repository priorities use rpmz semantics by repository kind" {
     var installed = [_]metadata.Package{
         testPackage("old", "1", "x86_64"),
     };

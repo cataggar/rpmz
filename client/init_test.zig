@@ -21,7 +21,7 @@ extern fn dup2(c_int, c_int) c_int;
 extern fn close(c_int) c_int;
 extern fn read(c_int, ?*anyopaque, usize) isize;
 extern fn TDNFBuildRefreshInput(
-    ?*c.TDNF,
+    ?*c.RPMZ,
     ?*c.TDNF_PACKAGE_CONTEXT,
     ?*abi.RepositoryRefreshInput,
 ) u32;
@@ -29,7 +29,7 @@ extern fn TDNFPackageContextCreate(
     ?[*:0]const u8,
     ?[*:0]const u8,
     ?[*:0]const u8,
-    ?*const c.tdnf_rpm_config,
+    ?*const c.rpmz_rpm_config,
     c_int,
     ?*?*c.TDNF_PACKAGE_CONTEXT,
 ) u32;
@@ -58,7 +58,7 @@ extern fn TDNFRepoMdCalculateCookieForFile(
 const Fixture = struct {
     args: c.TDNF_CMD_ARGS = std.mem.zeroes(c.TDNF_CMD_ARGS),
     conf: c.TDNF_CONF = std.mem.zeroes(c.TDNF_CONF),
-    handle: c.TDNF = std.mem.zeroes(c.TDNF),
+    handle: c.RPMZ = std.mem.zeroes(c.RPMZ),
     context: ?*c.TDNF_PACKAGE_CONTEXT = null,
 
     fn init(self: *Fixture) !void {
@@ -155,7 +155,7 @@ test "build refresh input wires every field and live pointer slot" {
     const command_line_repository: *c.Repo = @ptrCast(&command_line_repository_storage);
     const state: *c.TDNF_TRANSACTION_PLAN_STATE = @ptrCast(&state_storage);
     const scratch: *c.TDNF_PACKAGE_CONTEXT = @ptrFromInt(0x1000);
-    const rpm_config: *c.tdnf_rpm_config = @ptrFromInt(0x2000);
+    const rpm_config: *c.rpmz_rpm_config = @ptrFromInt(0x2000);
 
     fixture.args.nRefresh = 7;
     fixture.args.nCacheOnly = -3;
@@ -176,7 +176,7 @@ test "build refresh input wires every field and live pointer slot" {
         TDNFBuildRefreshInput(&fixture.handle, scratch, &input),
     );
 
-    try std.testing.expectEqual(pointerAddress(&fixture.handle), pointerAddress(input.tdnf_handle.?));
+    try std.testing.expectEqual(pointerAddress(&fixture.handle), pointerAddress(input.rpmz_handle.?));
     try std.testing.expectEqual(pointerAddress(scratch), pointerAddress(input.sack.?));
     try std.testing.expectEqual(pointerAddress(fixture.context.?), pointerAddress(input.live_sack.?));
     try std.testing.expectEqual(pointerAddress(&first_repo), pointerAddress(input.repository_head.?));
@@ -226,7 +226,7 @@ test "build refresh input accepts optional null values and clears stale fields" 
     try std.testing.expect(input.architecture == null);
     try std.testing.expect(input.rpm_config == null);
     var expected = std.mem.zeroes(abi.RepositoryRefreshInput);
-    expected.tdnf_handle = @ptrCast(&fixture.handle);
+    expected.rpmz_handle = @ptrCast(&fixture.handle);
     expected.live_sack = @ptrCast(fixture.context);
     expected.command_line_repository_slot = @ptrCast(&fixture.handle.pCmdLineRepo);
     expected.state_slot = @ptrCast(&fixture.handle.pTransactionPlanState);

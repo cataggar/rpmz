@@ -1,4 +1,4 @@
-//! `tdnf plan` acceptance against the real fixture repository.
+//! `rpmz plan` acceptance against the real fixture repository.
 //!
 //! `tools/cli/plan_cli_test.zig` already covers the verb, but it serves a
 //! synthetic two-package repository it builds itself. That repository has no
@@ -325,7 +325,7 @@ test "planning a downgrade classifies a downgrade named and for the whole root" 
     try std.testing.expect(everything.hasAction("downgrade", multiversion));
 
     // A distro-sync under `clean_requirements_on_remove` is a native-solver
-    // gap that predates the plan API and stops every `tdnf distro-sync`, not
+    // gap that predates the plan API and stops every `rpmz distro-sync`, not
     // just the planned one, so turn the policy off for both forms.
     try root.setMainOption("clean_requirements_on_remove", "0");
     var synced_named = try plan(&root, &.{ "distro-sync", multiversion });
@@ -409,7 +409,7 @@ test "an unresolvable request becomes a structured problem plan" {
     // layer fails it first, so there is no plan to publish. The boundary is
     // asserted here so a later move of that check into a `no_candidate`
     // problem plan is a visible change.
-    var absent = try root.run(&.{ "plan", "install", "tdnf-no-such-package" });
+    var absent = try root.run(&.{ "plan", "install", "rpmz-no-such-package" });
     defer absent.deinit();
     try absent.expectCode(no_match_code);
 
@@ -507,7 +507,7 @@ test "the plan verb rejects a missing or unsupported transaction" {
     var root = try h.root();
     defer root.deinit();
 
-    // The diagnostics go where every other `pr_err` in tdnf goes; what
+    // The diagnostics go where every other `pr_err` in rpmz goes; what
     // matters here is that a rejected verb publishes no plan.
     var missing = try root.run(&.{"plan"});
     defer missing.deinit();

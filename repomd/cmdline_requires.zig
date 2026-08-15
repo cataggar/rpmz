@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const cmdline_repository = @import("cmdline_repository.zig");
-const error_codes = @import("tdnf_error");
+const error_codes = @import("rpmz_error");
 const model = @import("model.zig");
 const pkgquery = @import("pkgquery.zig");
 const rpmpkg = @import("rpmpkg.zig");

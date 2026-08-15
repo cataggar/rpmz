@@ -2,11 +2,11 @@
 //!
 //! `resolvePlan` is the only supported way to obtain a
 //! `transaction_plan.Plan` without going through the private handle API. It
-//! runs the same `resolve_service` pipeline `tdnf plan` uses, so the canonical
+//! runs the same `resolve_service` pipeline `rpmz plan` uses, so the canonical
 //! bytes and digest produced here are the bytes and digest the CLI prints.
 //!
 //! Every fact the resolve depends on is declared by the caller. The resolver
-//! never reads a host `.repo` file, a host `tdnf.conf`, a host cache
+//! never reads a host `.repo` file, a host `rpmz.conf`, a host cache
 //! directory, or a host repository-enablement decision: it materializes a
 //! private, single-use configuration from `ResolveInput` alone and points the
 //! resolve at that. Values it cannot discover -- architecture, distro, release
@@ -14,7 +14,7 @@
 //!
 //! Nothing here executes a transaction. The resolve reads the declared rpmdb
 //! and writes only into the declared scratch and metadata-cache directories.
-//! When the process runs as root it takes tdnf's process-wide instance lock for
+//! When the process runs as root it takes rpmz's process-wide instance lock for
 //! the duration of the call, exactly as the CLI does.
 //!
 //! Ownership contract:
@@ -32,8 +32,8 @@
 
 const std = @import("std");
 const abi = @import("client_abi");
-const common = @import("tdnf_common");
-const errors = @import("tdnf_error");
+const common = @import("rpmz_common");
+const errors = @import("rpmz_error");
 const integration = @import("transaction_plan_integration");
 const resolve_service = @import("resolve_service.zig");
 
@@ -89,7 +89,7 @@ pub const Operation = enum {
         };
     }
 
-    /// The `tdnf` verb this operation resolves as. The verb occupies slot 0 of
+    /// The `rpmz` verb this operation resolves as. The verb occupies slot 0 of
     /// the resolver's command vector exactly as it does on the command line,
     /// so the request identity recorded in the plan matches the CLI's.
     fn verb(self: Operation) [:0]const u8 {
@@ -123,12 +123,12 @@ pub const Operation = enum {
     }
 
     /// The single mapping from a user-facing transaction verb to a typed
-    /// operation. `tdnf plan` and `resolvePlan` both resolve their verbs here,
+    /// operation. `rpmz plan` and `resolvePlan` both resolve their verbs here,
     /// so no caller can disagree with another about what an alias means.
     ///
     /// A verb whose bare form means "act on everything installed" is promoted
     /// to its singleton operation when no subject was given, which is the rule
-    /// `tdnf upgrade`, `tdnf downgrade`, and `tdnf autoremove` have always
+    /// `rpmz upgrade`, `rpmz downgrade`, and `rpmz autoremove` have always
     /// followed. Returns null for a verb this resolver does not plan.
     pub fn fromVerb(name: []const u8, subject_count: usize) ?Operation {
         const bare = subject_count == 0;
@@ -397,7 +397,7 @@ pub fn resolvePlan(
 
     // A solver contradiction publishes a structured problem plan and still
     // reports a resolve error. The published plan is the answer in that case,
-    // exactly as it is for `tdnf plan`.
+    // exactly as it is for `rpmz plan`.
     if (state.takePublished()) |plan| return plan;
     if (resolve_result == 0) return error.ResolveFailed;
     return mapError(resolve_result);
@@ -415,7 +415,7 @@ extern fn TDNFTransactionPlanGetCanonicalJson(
 /// Plans `ppszCmds[0]` over `ppszCmds[1..]` on an already configured handle and
 /// renders the canonical plan bytes.
 ///
-/// This is the whole of `tdnf plan`. The command owns nothing but its argument
+/// This is the whole of `rpmz plan`. The command owns nothing but its argument
 /// vector and stdout: the verb mapping, the capture lifecycle, the
 /// problem-plan policy, and the canonical writer all live here, so the CLI
 /// cannot disagree with `resolvePlan` about any of them.
@@ -691,7 +691,7 @@ fn replaceOwned(slot: *?[*:0]u8, value: []const u8) ResolveError!void {
 /// The private, single-use configuration tree the resolve reads.
 ///
 /// It exists so the resolve can be driven entirely by `ResolveInput`: the
-/// generated `tdnf.conf` names a repository directory, a locks/protected/
+/// generated `rpmz.conf` names a repository directory, a locks/protected/
 /// minversions tree, and a persist directory that all live inside this
 /// directory, so no host configuration is reachable.
 const Scratch = struct {
@@ -710,7 +710,7 @@ const Scratch = struct {
         io.random(&suffix);
         const name = std.fmt.allocPrint(
             allocator,
-            "tdnf-resolve-{x}",
+            "rpmz-resolve-{x}",
             .{&suffix},
         ) catch return error.OutOfMemory;
         errdefer allocator.free(name);
@@ -724,7 +724,7 @@ const Scratch = struct {
 
         const config = std.fmt.allocPrintSentinel(
             allocator,
-            "{s}/{s}/tdnf.conf",
+            "{s}/{s}/rpmz.conf",
             .{ input.scratch_dir, name },
             0,
         ) catch return error.OutOfMemory;
@@ -777,7 +777,7 @@ const Scratch = struct {
         var body: std.ArrayList(u8) = .empty;
         defer body.deinit(self.allocator);
         try self.renderConfig(&body, input);
-        try self.write("tdnf.conf", body.items);
+        try self.write("rpmz.conf", body.items);
 
         try self.writeNameList("locks.d/policy.conf", input.policy.locked_names);
         try self.writeNameList(
@@ -881,7 +881,7 @@ const Scratch = struct {
     }
 
     fn rootPath(self: *const Scratch) []const u8 {
-        // `config` is "<scratch_dir>/<name>/tdnf.conf".
+        // `config` is "<scratch_dir>/<name>/rpmz.conf".
         const without_file = std.fs.path.dirname(self.config) orelse ".";
         return std.fs.path.dirname(without_file) orelse ".";
     }
@@ -1324,7 +1324,7 @@ test "resolver: aligned overlong config cannot inject repodir plugins or repos" 
     defer testing.allocator.free(scratch_root);
     const config = try std.fmt.allocPrintSentinel(
         testing.allocator,
-        "{s}/tdnf-resolve-test/tdnf.conf",
+        "{s}/rpmz-resolve-test/rpmz.conf",
         .{scratch_root},
         0,
     );
@@ -1333,7 +1333,7 @@ test "resolver: aligned overlong config cannot inject repodir plugins or repos" 
         .allocator = testing.allocator,
         .io = undefined,
         .parent = undefined,
-        .name = @constCast("tdnf-resolve-test"),
+        .name = @constCast("rpmz-resolve-test"),
         .config = config,
     };
     var body: std.ArrayList(u8) = .empty;
@@ -1362,7 +1362,7 @@ test "resolver: aligned overlong config cannot inject repodir plugins or repos" 
     defer testing.allocator.free(cache);
     const normal_config = try testing.allocator.dupeZ(
         u8,
-        "/scratch/tdnf-resolve-test/tdnf.conf",
+        "/scratch/rpmz-resolve-test/rpmz.conf",
     );
     defer testing.allocator.free(normal_config);
     scratch.config = normal_config;
@@ -1422,7 +1422,7 @@ test "resolver: local snapshot file URI preserves exact path bytes" {
         .io = undefined,
         .parent = undefined,
         .name = @constCast("unused"),
-        .config = @constCast("/unused/tdnf.conf"),
+        .config = @constCast("/unused/rpmz.conf"),
     };
     try scratch.renderRepository(&body, .{
         .id = "local",
@@ -1453,8 +1453,8 @@ test "resolver: every transaction verb maps to exactly one operation" {
         bare: Operation,
         with_subject: Operation,
     };
-    // Every alias `tdnf` accepts for a planned transaction, and what it means
-    // with and without a subject. This table is the contract `tdnf plan` and
+    // Every alias `rpmz` accepts for a planned transaction, and what it means
+    // with and without a subject. This table is the contract `rpmz plan` and
     // `resolvePlan` share.
     const cases = [_]Case{
         .{ .verb = "install", .bare = .install, .with_subject = .install },

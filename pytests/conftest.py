@@ -29,7 +29,7 @@ from multiprocessing import Process
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 from cli_testlib import (
     build_command_env,
-    decorate_tdnf_cmd_for_test,
+    decorate_rpmz_cmd_for_test,
     normalize_command_result,
     split_output_lines,
 )
@@ -45,8 +45,8 @@ def _cleanup_session_repo(path):
 
 def _rewrite_session_repo_paths(repo_path):
     for config_path in [
-            os.path.join(repo_path, 'tdnf.conf'),
-            os.path.join(repo_path, '.baseline', 'tdnf.conf')]:
+            os.path.join(repo_path, 'rpmz.conf'),
+            os.path.join(repo_path, '.baseline', 'rpmz.conf')]:
         config = configparser.ConfigParser()
         config.read(config_path)
         config['main']['repodir'] = os.path.join(
@@ -56,7 +56,7 @@ def _rewrite_session_repo_paths(repo_path):
         config['main']['cachedir'] = os.path.join(
             repo_path,
             'cache',
-            'tdnf',
+            'rpmz',
         )
         with open(config_path, 'w') as stream:
             config.write(stream, space_around_delimiters=False)
@@ -193,7 +193,7 @@ def write_self_signed_https_material(certfile, keyfile):
     cert.get_subject().O = 'VMware'  # noqa: E741
     cert.get_subject().OU = 'Photon OS'
     cert.get_subject().CN = '127.0.0.1'
-    cert.get_subject().emailAddress = 'tdnf-devel@vmware.com'
+    cert.get_subject().emailAddress = 'rpmz-devel@vmware.com'
     cert.set_serial_number(int(time.time()))
     cert.gmtime_adj_notBefore(0)
     cert.gmtime_adj_notAfter(365 * 24 * 60 * 60)
@@ -279,51 +279,51 @@ class TestUtils(object):
         self.config = JsonWrapper(config_file).read()
         if cli_args:
             self.config.update(cli_args)
-        test_prefix = os.environ.get('TDNF_TEST_PREFIX')
+        test_prefix = os.environ.get('RPMZ_TEST_PREFIX')
         if test_prefix:
             test_prefix = os.path.abspath(test_prefix)
             self.config['build_dir'] = test_prefix
             self.config['bin_dir'] = os.path.join(test_prefix, 'bin')
             self.config['plugin_path'] = os.path.join(
-                test_prefix, 'lib', 'tdnf-plugins')
+                test_prefix, 'lib', 'rpmz-plugins')
             self.config['repo_path'] = os.path.join(test_prefix, 'repo')
             self.config['history_util_binary'] = os.path.join(
-                test_prefix, 'libexec', 'tdnf', 'tdnf-history-util')
+                test_prefix, 'libexec', 'rpmz', 'rpmz-history-util')
             self.config['test_support_binary'] = os.path.join(
-                test_prefix, 'libexec', 'tdnf', 'tdnf-test-support')
+                test_prefix, 'libexec', 'rpmz', 'rpmz-test-support')
             self.config['rpmdb_list_binary'] = os.path.join(
-                test_prefix, 'libexec', 'tdnf', 'tdnf-rpmdb-list')
+                test_prefix, 'libexec', 'rpmz', 'rpmz-rpmdb-list')
             self.config['rpmdb_write_binary'] = os.path.join(
-                test_prefix, 'libexec', 'tdnf', 'tdnf-rpmdb-write')
-        replay_export_binary = os.environ.get('TDNF_REPLAY_EXPORT_BINARY')
+                test_prefix, 'libexec', 'rpmz', 'rpmz-rpmdb-write')
+        replay_export_binary = os.environ.get('RPMZ_REPLAY_EXPORT_BINARY')
         if replay_export_binary:
             self.config['replay_export_binary'] = os.path.abspath(
                 replay_export_binary)
         self.config['distribution'] = os.environ.get('DIST', 'photon')
         self.config['repo_seed_path'] = self.config['repo_path']
         self.config['repo_path'] = _prepare_session_repo(self.config)
-        self.tdnf_config = configparser.ConfigParser()
-        self.tdnf_config.read(os.path.join(self.config['repo_path'],
-                                           'tdnf.conf'))
+        self.rpmz_config = configparser.ConfigParser()
+        self.rpmz_config.read(os.path.join(self.config['repo_path'],
+                                           'rpmz.conf'))
 
         # check execution environment and enable valgrind if suitable
         self.check_valgrind()
 
-    # Change tdnf config file, repo or any ini style file
+    # Change rpmz config file, repo or any ini style file
     # Takes a dictionary as input and sets the keys to the values. If the
     # value is None, the entry will be removed.
-    # By default, the tdnf.conf file will be edited
+    # By default, the rpmz.conf file will be edited
     # To edit a repo, set repo
-    # By default, the section name is 'main' for tdnf.conf and the repo
+    # By default, the section name is 'main' for rpmz.conf and the repo
     # name if repo is set, unless filename is set
-    # By default, the filename is the path to tdnf.conf, or the repo file if set.
+    # By default, the filename is the path to rpmz.conf, or the repo file if set.
     # If filename is set, the section needs to be set as well
     def edit_config(self, changes, repo=None, section=None, filename=None):
         config = None
         if filename is None:
             if repo is None:
-                filename = os.path.join(self.config['repo_path'], 'tdnf.conf')
-                config = self.tdnf_config
+                filename = os.path.join(self.config['repo_path'], 'rpmz.conf')
+                config = self.rpmz_config
                 if section is None:
                     section = 'main'
             else:
@@ -361,10 +361,10 @@ class TestUtils(object):
                 "Failed to restore test repository configuration:\n{}"
                 .format("\n".join(ret['stderr']))
             )
-        self.tdnf_config.clear()
-        self.tdnf_config.read(os.path.join(
+        self.rpmz_config.clear()
+        self.rpmz_config.read(os.path.join(
             self.config['repo_path'],
-            'tdnf.conf',
+            'rpmz.conf',
         ))
 
     def version_str_to_int(self, version):
@@ -420,9 +420,9 @@ class TestUtils(object):
 
     def check_package(self, package, version=None):
         ''' Check if a package exists '''
-        ret = self.run(["tdnf", "--disablerepo=*", "list", "-j", "--installed", package])
+        ret = self.run(["rpmz", "--disablerepo=*", "list", "-j", "--installed", package])
         pkglist = json.loads('\n'.join(ret['stdout']))
-        assert type(pkglist) is list, f"unexpected json type from 'tdnf list': pkglist={pkglist}"
+        assert type(pkglist) is list, f"unexpected json type from 'rpmz list': pkglist={pkglist}"
         for p in pkglist:
             if p['Name'] == package and (version is None or p['Evr'] == version):
                 return True
@@ -438,7 +438,7 @@ class TestUtils(object):
             pkg = pkgname + '-' + pkgversion
         else:
             pkg = pkgname
-        self.run(['tdnf', 'erase', '-y', pkg])
+        self.run(['rpmz', 'erase', '-y', pkg])
         assert not self.check_package(pkgname)
 
     def install_package(self, pkgname, pkgversion=None):
@@ -446,7 +446,7 @@ class TestUtils(object):
             pkg = pkgname + '-' + pkgversion
         else:
             pkg = pkgname
-        self.run(['tdnf', 'install', '-y', '--nogpgcheck', pkg])
+        self.run(['rpmz', 'install', '-y', '--nogpgcheck', pkg])
         assert self.check_package(pkgname)
 
     def _requests_get(self, url, verify):
@@ -491,8 +491,8 @@ class TestUtils(object):
             shutil.copyfileobj(r.raw, f)
         return True, None
 
-    def _decorate_tdnf_cmd_for_test(self, cmd, noconfig=False):
-        decorated, executable = decorate_tdnf_cmd_for_test(
+    def _decorate_rpmz_cmd_for_test(self, cmd, noconfig=False):
+        decorated, executable = decorate_rpmz_cmd_for_test(
             cmd,
             self.config,
             noconfig=noconfig,
@@ -506,7 +506,7 @@ class TestUtils(object):
 
     def run_memcheck(self, cmd):
         self._skip_if_valgrind_disabled()
-        executable = self._decorate_tdnf_cmd_for_test(cmd)
+        executable = self._decorate_rpmz_cmd_for_test(cmd)
         if executable:
             cmd[0] = executable
         memcheck_cmd = ['valgrind',
@@ -518,7 +518,7 @@ class TestUtils(object):
     def run(self, cmd, cwd=None, noconfig=False):
         if isinstance(cmd, str):
             cmd = cmd.split()
-        executable = self._decorate_tdnf_cmd_for_test(cmd, noconfig)
+        executable = self._decorate_rpmz_cmd_for_test(cmd, noconfig)
         return self._run(cmd, cwd=cwd, executable=executable)
 
     def _run(self, cmd, retvalonly=False, cwd=None, executable=None):

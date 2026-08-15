@@ -5,11 +5,11 @@
 // are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
 const download = @import("client_download");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const repoutils = @import("repoutils.zig");
 const txn_config = @import("rpm_txn_config");
 const uri_sanitize = @import("uri_sanitize");
@@ -743,7 +743,7 @@ fn downloadToPinnedParent(
     const sequence = temp_counter.fetchAdd(1, .monotonic);
     const temp_name = std.fmt.allocPrintSentinel(
         allocator,
-        ".tdnf-{d}-{d}.tmp",
+        ".rpmz-{d}-{d}.tmp",
         .{ std.c.getpid(), sequence },
         0,
     ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
@@ -828,7 +828,7 @@ fn downloadToPinnedParent(
 
         const safe_url = uri_sanitize.redactAlloc(allocator, std.mem.span(url)) catch "download URL";
         if (status >= 400) {
-            if (!builtin.is_test) common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
+            if (!builtin.is_test) common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'rpmz makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
             return errors.ERROR_TDNF_REPO_PERFORM;
         }
     }
@@ -1412,7 +1412,7 @@ fn downloadPackageToDirectory(
     return 0;
 }
 
-const TestScratchDir = ".zig-cache/tdnf-remoterepo-tests";
+const TestScratchDir = ".zig-cache/rpmz-remoterepo-tests";
 
 const TestFixture = struct {
     args: CmdArgs = .{},

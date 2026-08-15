@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const abi = @import("transaction_plan_capture_abi");
-const error_codes = @import("tdnf_error");
+const error_codes = @import("rpmz_error");
 const transaction_plan = @import("transaction_plan");
 const request_trace = @import("transaction_plan_request_trace");
 
@@ -1201,7 +1201,7 @@ const TestFixture = struct {
         };
         self.protected_names = .{
             testBytes("systemd"),
-            testBytes("tdnf"),
+            testBytes("rpmz"),
         };
 
         self.metadata_records = .{

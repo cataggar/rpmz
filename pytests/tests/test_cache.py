@@ -23,7 +23,7 @@ def setup_test(utils):
 
 
 def teardown_test(utils):
-    run_cmd = ['tdnf', 'erase', '-y']
+    run_cmd = ['rpmz', 'erase', '-y']
     pkg_list = [
         utils.config["mulversion_pkgname"],
         utils.config["sglversion_pkgname"],
@@ -37,7 +37,7 @@ def teardown_test(utils):
 
 
 def clean_cache(utils):
-    utils.run(['rm', '-rf', utils.tdnf_config.get('main', 'cachedir')])
+    utils.run(['rm', '-rf', utils.rpmz_config.get('main', 'cachedir')])
 
 
 def enable_cache(utils):
@@ -66,7 +66,7 @@ def try_mount_small_cache():
 
 
 def check_package_in_cache(utils, pkgname):
-    cache_dir = utils.tdnf_config.get('main', 'cachedir')
+    cache_dir = utils.rpmz_config.get('main', 'cachedir')
     ret = utils.run(['find', cache_dir, '-name', pkgname + '*.rpm'])
     if ret['stdout']:
         return True
@@ -74,7 +74,7 @@ def check_package_in_cache(utils, pkgname):
 
 
 def find_cache_dir(utils, reponame):
-    cache_dir = utils.tdnf_config.get('main', 'cachedir')
+    cache_dir = utils.rpmz_config.get('main', 'cachedir')
     for f in os.listdir(cache_dir):
         if fnmatch.fnmatch(f, '{}-*'.format(reponame)):
             return os.path.join(cache_dir, f)
@@ -89,7 +89,7 @@ def test_install_without_cache(utils):
     if utils.check_package(pkgname):
         utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
 
     assert not check_package_in_cache(utils, pkgname)
 
@@ -102,7 +102,7 @@ def test_install_with_cache(utils):
     if utils.check_package(pkgname):
         utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
 
     assert check_package_in_cache(utils, pkgname)
 
@@ -115,7 +115,7 @@ def test_install_with_cache_setopt(utils):
     if utils.check_package(pkgname):
         utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', '--setopt=keepcache=1', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', '--setopt=keepcache=1', pkgname])
 
     assert check_package_in_cache(utils, pkgname)
 
@@ -128,7 +128,7 @@ def test_install_with_keepcache_false(utils):
     if utils.check_package(pkgname):
         utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
 
     assert not check_package_in_cache(utils, pkgname)
 
@@ -141,7 +141,7 @@ def test_install_with_keepcache_false_setopt(utils):
     if utils.check_package(pkgname):
         utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', '--setopt=keepcache=0', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', '--setopt=keepcache=0', pkgname])
 
     assert not check_package_in_cache(utils, pkgname)
 
@@ -151,7 +151,7 @@ def test_disable_repo_make_cache(utils):
     assert cache_dir is not None
     lastrefresh = os.path.join(cache_dir, 'lastrefresh')
     before = os.path.getmtime(lastrefresh)
-    utils.run(['tdnf', '--disablerepo=*', 'makecache'])
+    utils.run(['rpmz', '--disablerepo=*', 'makecache'])
     after = os.path.getmtime(lastrefresh)
     assert before == after
 
@@ -161,7 +161,7 @@ def test_enable_repo_make_cache(utils):
     assert cache_dir is not None
     lastrefresh = os.path.join(cache_dir, 'lastrefresh')
     before = os.path.getmtime(lastrefresh)
-    utils.run(['tdnf', '--disablerepo=*', '--enablerepo=photon-test', 'makecache'])
+    utils.run(['rpmz', '--disablerepo=*', '--enablerepo=photon-test', 'makecache'])
     after = os.path.getmtime(lastrefresh)
     assert before < after
 
@@ -172,7 +172,7 @@ def test_enable_repo_make_cache_verbose(utils):
     assert cache_dir is not None
     lastrefresh = os.path.join(cache_dir, 'lastrefresh')
     before = os.path.getmtime(lastrefresh)
-    utils.run(['tdnf', '-v', '--disablerepo=*', '--enablerepo=photon-test', 'makecache'])
+    utils.run(['rpmz', '-v', '--disablerepo=*', '--enablerepo=photon-test', 'makecache'])
     after = os.path.getmtime(lastrefresh)
     assert before < after
 
@@ -181,10 +181,10 @@ def test_download_vs_cache_size_single_package(utils):
     clean_cache(utils)
     enable_cache(utils)
 
-    cache_dir = utils.tdnf_config.get('main', 'cachedir')
+    cache_dir = utils.rpmz_config.get('main', 'cachedir')
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
 
     down_bytes = utils.download_size_to_bytes(ret['stdout'])
     cached_rpm_bytes = sum(utils.get_cached_package_sizes(cache_dir).values())
@@ -196,8 +196,8 @@ def test_download_vs_cache_size_multiple_packages(utils):
     clean_cache(utils)
     enable_cache(utils)
 
-    cache_dir = utils.tdnf_config.get('main', 'cachedir')
-    run_args = ['tdnf', 'install', '-y', '--nogpgcheck']
+    cache_dir = utils.rpmz_config.get('main', 'cachedir')
+    run_args = ['rpmz', 'install', '-y', '--nogpgcheck']
     pkg_list = [
         utils.config["mulversion_pkgname"],
         utils.config["sglversion_pkgname"],
@@ -220,13 +220,13 @@ def test_cache_directory_out_of_disk_space(utils):
         return
 
     small_cache_path = utils.config['small_cache_path']
-    orig_cache_path = utils.tdnf_config.get('main', 'cachedir')
+    orig_cache_path = utils.rpmz_config.get('main', 'cachedir')
     switch_cache_path(utils, small_cache_path)
     enable_cache(utils)
     # can't rm the dir because it's a mount point
     utils.clear_directory(small_cache_path)
 
-    run_args = 'tdnf install -y --nogpgcheck'.split()
+    run_args = 'rpmz install -y --nogpgcheck'.split()
     pkg_list = [utils.config["toolarge_pkgname"]]
     for pkgname in pkg_list:
         utils.erase_package(pkgname)
@@ -241,19 +241,19 @@ def test_cache_directory_out_of_disk_space(utils):
 
 
 # see https://github.com/vmware/tdnf/pull/454
-# tdnf should not fail if cache dir does not exist
+# rpmz should not fail if cache dir does not exist
 def test_cachedir_removed(utils):
     pkgname = utils.config["sglversion_pkgname"]
     utils.install_package(pkgname)
 
-    cache_dir = utils.tdnf_config.get('main', 'cachedir')
+    cache_dir = utils.rpmz_config.get('main', 'cachedir')
     shutil.rmtree(cache_dir)
-    ret = utils.run(["tdnf", "-y", "--disablerepo=*", "remove", pkgname])
+    ret = utils.run(["rpmz", "-y", "--disablerepo=*", "remove", pkgname])
     assert ret['retval'] == 0
 
 
 def test_makecache_setopt_cachedir(utils):
-    ret = utils.run(['tdnf', 'makecache',
+    ret = utils.run(['rpmz', 'makecache',
                      '-y', '--nogpgcheck',
                      f"--setopt=cachedir={CACHEDIR}"])
     assert ret['retval'] == 0
@@ -269,7 +269,7 @@ def test_makecache_setopt_cachedir(utils):
 
 def test_makecache_setopt_cachedir_installroot(utils):
     os.makedirs(INSTALLROOT, exist_ok=True)
-    ret = utils.run(['tdnf', 'makecache',
+    ret = utils.run(['rpmz', 'makecache',
                      '-y', '--nogpgcheck',
                      "--releasever=5.0",
                      f"--setopt=cachedir={CACHEDIR}",

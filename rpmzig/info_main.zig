@@ -14,17 +14,17 @@ pub fn main(init: std.process.Init) u8 {
 
     const path = std.mem.span(argv[1]);
     var rpm = pkgfile.RpmFile.open(std.heap.c_allocator, path) catch |err| {
-        std.debug.print("tdnf-rpm-info: rpm_file_open({s}): {t}\n", .{ path, err });
+        std.debug.print("rpmz-rpm-info: rpm_file_open({s}): {t}\n", .{ path, err });
         return 1;
     };
     defer rpm.close(std.heap.c_allocator);
 
     const nevra = rpm.allocNevra(std.heap.c_allocator) catch {
-        std.debug.print("tdnf-rpm-info: nevra: out of memory\n", .{});
+        std.debug.print("rpmz-rpm-info: nevra: out of memory\n", .{});
         return 1;
     } orelse {
         std.debug.print(
-            "tdnf-rpm-info: nevra: file header missing required tag for NEVRA\n",
+            "rpmz-rpm-info: nevra: file header missing required tag for NEVRA\n",
             .{},
         );
         return 1;

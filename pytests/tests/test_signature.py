@@ -57,7 +57,7 @@ def setup_test_function(utils):
         assert ret['retval'] == 0
 
     pkgname = utils.config["sglversion_pkgname"]
-    utils.run(['tdnf', 'erase', '-y', pkgname])
+    utils.run(['rpmz', 'erase', '-y', pkgname])
     yield
     teardown_test(utils)
 
@@ -72,7 +72,7 @@ def teardown_test(utils):
         assert ret['retval'] == 0
 
     pkgname = utils.config["sglversion_pkgname"]
-    utils.run(['tdnf', 'erase', '-y', pkgname])
+    utils.run(['rpmz', 'erase', '-y', pkgname])
 
 
 def set_gpgcheck(utils, enabled, repo='photon-test'):
@@ -244,7 +244,7 @@ def test_install_unsigned(utils):
     set_gpgcheck(utils, True, repo='photon-test-unsigned')
     set_repo_key(utils, DEFAULT_KEY)
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', '--repoid', 'photon-test-unsigned', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', '--repoid', 'photon-test-unsigned', 'install', '-y', pkgname])
     assert ret['retval'] == 1531
     assert not utils.check_package(pkgname)
 
@@ -256,7 +256,7 @@ def test_install_unsigned_global_gpgcheck(utils):
     set_gpgcheck(utils, None, repo='photon-test-unsigned')
     set_repo_key(utils, DEFAULT_KEY)
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', '--repoid', 'photon-test-unsigned', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', '--repoid', 'photon-test-unsigned', 'install', '-y', pkgname])
     assert ret['retval'] == 1531
     assert not utils.check_package(pkgname)
 
@@ -268,7 +268,7 @@ def test_install_unsigned_nogpgcheck(utils):
     set_gpgcheck(utils, True, repo='photon-test-unsigned')
     set_repo_key(utils, DEFAULT_KEY)
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', '--nogpgcheck', '--repoid', 'photon-test-unsigned', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', '--nogpgcheck', '--repoid', 'photon-test-unsigned', 'install', '-y', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -280,7 +280,7 @@ def test_install_unsigned_skipsignature(utils):
     set_gpgcheck(utils, True, repo='photon-test-unsigned')
     set_repo_key(utils, DEFAULT_KEY)
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', '--skipsignature', '--repoid', 'photon-test-unsigned', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', '--skipsignature', '--repoid', 'photon-test-unsigned', 'install', '-y', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -290,7 +290,7 @@ def test_install_skipsignature(utils):
     set_gpgcheck(utils, True)
     set_repo_key(utils, DEFAULT_KEY)
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', '--skipsignature', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--skipsignature', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -301,7 +301,7 @@ def test_install_skipdigest(utils):
     utils.run(['rpm', '--import', keypath])
     set_repo_key(utils, DEFAULT_KEY)
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', '--skipdigest', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--skipdigest', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -313,7 +313,7 @@ def test_install_with_key(utils):
     set_repo_key(utils, DEFAULT_KEY)
     utils.run(['rpm', '--import', keypath])
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -325,7 +325,7 @@ def test_install_local_key(utils):
     set_repo_key(utils, 'file://{}'.format(keypath))
     host_gpg_keys = get_host_gpg_keys(utils)
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
     assert get_new_gpg_keys(get_host_gpg_keys(utils), host_gpg_keys)
@@ -340,7 +340,7 @@ def test_install_imports_all_configured_keys_before_verifying(utils):
     host_gpg_keys = get_host_gpg_keys(utils)
     pkgname = utils.config["sglversion_pkgname"]
 
-    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
     assert len(get_new_gpg_keys(get_host_gpg_keys(utils), host_gpg_keys)) >= 2
@@ -356,7 +356,7 @@ def test_install_rejects_malformed_repo_keyring(utils):
     try:
         set_repo_key(utils, 'file://{}'.format(keypath))
         pkgname = utils.config["sglversion_pkgname"]
-        ret = utils.run(['tdnf', 'install', '-y', pkgname])
+        ret = utils.run(['rpmz', 'install', '-y', pkgname])
         assert ret['retval'] == 1505
         assert not utils.check_package(pkgname)
     finally:
@@ -370,7 +370,7 @@ def test_install_remote_key(utils):
     with https_key_server(utils) as origin:
         set_repo_key(utils, f'{origin}/photon-test/keys/pubkey.asc')
         pkgname = utils.config["sglversion_pkgname"]
-        ret = utils.run(['tdnf', 'install', '-y', pkgname])
+        ret = utils.run(['rpmz', 'install', '-y', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -381,7 +381,7 @@ def test_install_http_key_rejected_before_prompt_fetch_or_import(utils):
     host_gpg_keys = get_host_gpg_keys(utils)
     pkgname = utils.config["sglversion_pkgname"]
 
-    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', pkgname])
 
     assert ret['retval'] == 1507
     output = '\n'.join(ret['stdout'] + ret['stderr'])
@@ -401,7 +401,7 @@ def test_install_cross_origin_key_redirect_rejected_before_prompt_or_import(
             origin_requests,
             target_requests):
         set_repo_key(utils, f'{origin}/repository-key.asc')
-        ret = utils.run(['tdnf', 'install', '-y', pkgname])
+        ret = utils.run(['rpmz', 'install', '-y', pkgname])
 
         assert origin_requests.value == 1
         assert target_requests.value == 0
@@ -419,7 +419,7 @@ def test_install_remote_key_verbose(utils):
     with https_key_server(utils) as origin:
         set_repo_key(utils, f'{origin}/photon-test/keys/pubkey.asc')
         pkgname = utils.config["sglversion_pkgname"]
-        ret = utils.run(['tdnf', 'install', '-v', '-y', pkgname])
+        ret = utils.run(['rpmz', 'install', '-v', '-y', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -430,7 +430,7 @@ def test_install_remote_key_no_traversal(utils):
     with https_key_server(utils) as origin:
         set_repo_key(utils, f'{origin}/../photon-test/keys/pubkey.asc')
         pkgname = utils.config["sglversion_pkgname"]
-        ret = utils.run(['tdnf', 'install', '-y', pkgname])
+        ret = utils.run(['rpmz', 'install', '-y', pkgname])
     assert ret['retval'] != 0
 
 
@@ -443,7 +443,7 @@ def test_install_remote_key_no_traversal2(utils):
             f'{origin}/photon-test/keys/../../../pubkey.asc',
         )
         pkgname = utils.config["sglversion_pkgname"]
-        ret = utils.run(['tdnf', 'install', '-y', pkgname])
+        ret = utils.run(['rpmz', 'install', '-y', pkgname])
     assert ret['retval'] != 0
 
 
@@ -452,7 +452,7 @@ def test_install_nokey(utils):
     set_gpgcheck(utils, True)
     set_repo_key(utils, None)
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', pkgname])
     assert ret['retval'] == 1523
     assert not utils.check_package(pkgname)
 
@@ -464,6 +464,6 @@ def test_install_nokey1(utils):
     set_repo_key(utils, f"file://{keypath}")
     pkgname = utils.config["sglversion_pkgname"]
     utils.run(['rpm', '--import', keypath])
-    ret = utils.run(['tdnf', 'install', '-y', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', pkgname])
     assert ret['retval'] == 1514
     assert not utils.check_package(pkgname)

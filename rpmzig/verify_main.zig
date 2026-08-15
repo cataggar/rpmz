@@ -70,7 +70,7 @@ pub fn main(init: std.process.Init) u8 {
                     .{ .allow_directory = true },
                 ) catch |err| {
                     std.debug.print(
-                        "tdnf-rpm-verify: open key {s}: {s}\n",
+                        "rpmz-rpm-verify: open key {s}: {s}\n",
                         .{ path, keyOpenError(err) },
                     );
                     return 4;
@@ -103,7 +103,7 @@ pub fn main(init: std.process.Init) u8 {
     const path = std.mem.span(argv[1]);
     var rpm = pkgfile.RpmFile.open(allocator, path) catch |err| {
         std.debug.print(
-            "tdnf-rpm-verify: open: rpm_file_open({s}): {t}\n",
+            "rpmz-rpm-verify: open: rpm_file_open({s}): {t}\n",
             .{ path, err },
         );
         return 4;
@@ -122,7 +122,7 @@ pub fn main(init: std.process.Init) u8 {
             std.mem.span(rpmdb_root),
         ) catch {
             std.debug.print(
-                "tdnf-rpm-verify: rpmdb open {s}: {s}\n",
+                "rpmz-rpm-verify: rpmdb open {s}: {s}\n",
                 .{ std.mem.span(rpmdb_root), rpmdb.lastErrorMessage() },
             );
             return 4;
@@ -131,7 +131,7 @@ pub fn main(init: std.process.Init) u8 {
         while (true) {
             var key = rpmdb.nextPubkey(allocator, source) catch {
                 std.debug.print(
-                    "tdnf-rpm-verify: rpmdb walk: {s}\n",
+                    "rpmz-rpm-verify: rpmdb walk: {s}\n",
                     .{rpmdb.lastErrorMessage()},
                 );
                 return 4;

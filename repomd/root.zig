@@ -111,7 +111,7 @@ pub export fn TDNFRepoMdNativeSolverLiveSolve(
     raw_user_installed_queue_pairs: ?[*]const u32,
     raw_cmdline_rpm_paths: ?[*]const ?[*:0]const u8,
     reinstall: c_int,
-    rpm_config: ?*const abi.tdnf_rpm_config,
+    rpm_config: ?*const abi.rpmz_rpm_config,
     raw_native_arch: ?[*:0]const u8,
     prepare_only: c_int,
     refute_unsat: c_int,
@@ -186,7 +186,7 @@ pub const RetainedSolve = union(enum) {
 };
 
 /// Where the reporting filter looks for an available package, which is what
-/// `check_for_providers` in `solv/tdnfpackage.c` did with the sack.
+/// `check_for_providers` in `solv/rpmzpackage.c` did with the sack.
 pub const AvailableLookup = enum {
     /// Query the retained universe. The goal path solved the same set the
     /// sack held, so the two answers agree.
@@ -337,7 +337,7 @@ const skipproblem_obsoletes: u32 = 0x02;
 const skipproblem_disabled: u32 = 0x04;
 const skipproblem_broken: u32 = 0x08;
 
-/// Reproduce solv/tdnfpackage.c's SkipBasedOnType over a rendered problem's
+/// Reproduce solv/rpmzpackage.c's SkipBasedOnType over a rendered problem's
 /// skip class. --skipconflicts drops conflicts, --skipobsoletes drops
 /// obsoletes, --skip-broken drops every package rule (every rendered class),
 /// and --skipdisabled drops a not-installable problem whose solvable libsolv
@@ -548,7 +548,7 @@ fn checkLocalPrepareError(
     }
 }
 
-/// Run `tdnf check-local <dir>` natively: build a universe holding only the
+/// Run `rpmz check-local <dir>` natively: build a universe holding only the
 /// `.rpm` files under `raw_directory`, request every one of them, and either
 /// report a clean check or retain the solver's diagnostics.
 ///
@@ -693,7 +693,7 @@ fn nativeSolverLiveSolve(
     skip_broken: bool,
     allow_erasing: bool,
     raw_protected_names: ?[*:null]const ?[*:0]const u8,
-    rpm_config: ?*const abi.tdnf_rpm_config,
+    rpm_config: ?*const abi.rpmz_rpm_config,
     raw_native_arch: ?[*:0]const u8,
     update_all: bool,
     dist_sync_all: bool,
@@ -1067,7 +1067,7 @@ fn nativeSolverLiveSolve(
         return abi.ERROR_TDNF_INVALID_PARAMETER;
     };
     var solve = solver_live.produce(allocator, solver_input) catch |err| switch (err) {
-        // Outcomes tdnf models with error codes of its own rather than solver
+        // Outcomes rpmz models with error codes of its own rather than solver
         // failures. `clearError` at the top of this function has already left
         // the diagnostic empty, which is what tells `TDNFGoalSolveNative` not
         // to print a `native-solver:` line for them: the caller renders each

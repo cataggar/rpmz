@@ -22,12 +22,12 @@ def teardown_test(utils):
 def test_version(utils):
     expected_version_string = utils.config['project_name'] + ': ' + \
         utils.config['project_version']
-    ret = utils.run(['tdnf', '--version'])
+    ret = utils.run(['rpmz', '--version'])
     assert ret['retval'] == 0
     assert ret['stdout'][0] == expected_version_string
 
 
 # memcheck
 def test_version_memcheck(utils):
-    ret = utils.run_memcheck(['tdnf', '--version'])
+    ret = utils.run_memcheck(['rpmz', '--version'])
     assert ret['retval'] == 0

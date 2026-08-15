@@ -27,8 +27,8 @@ def setup_test(utils):
 
 def teardown_test(utils):
     os.remove(os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME))
-    utils.run(['tdnf', 'erase', '-y', pkg0])
-    utils.run(['tdnf', 'erase', '-y', pkg1])
+    utils.run(['rpmz', 'erase', '-y', pkg0])
+    utils.run(['rpmz', 'erase', '-y', pkg1])
 
 
 def generate_repofile_skip_md(utils, newconfig, repoid, mdpart, value):
@@ -52,7 +52,7 @@ def generate_repofile_skip_md(utils, newconfig, repoid, mdpart, value):
 
 
 def get_cache_dir(utils):
-    return utils.tdnf_config.get('main', 'cachedir')
+    return utils.rpmz_config.get('main', 'cachedir')
 
 
 def find_cache_dir(utils, reponame):
@@ -67,8 +67,8 @@ def find_cache_dir(utils, reponame):
 def check_skip_md_part(utils, mdpart, skipped):
     repoconf = os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME)
     generate_repofile_skip_md(utils, repoconf, REPOID, mdpart, skipped)
-    utils.run(['tdnf', '--repoid={}'.format(REPOID), 'clean', 'all'])
-    utils.run(['tdnf', '--repoid={}'.format(REPOID), 'makecache'])
+    utils.run(['rpmz', '--repoid={}'.format(REPOID), 'clean', 'all'])
+    utils.run(['rpmz', '--repoid={}'.format(REPOID), 'makecache'])
 
     md_dir = os.path.join(find_cache_dir(utils, REPOID), 'repodata')
     assert (len(glob.glob('{}/*{}*'.format(md_dir, mdpart))) == 0) == skipped
@@ -88,11 +88,11 @@ def test_install_conflict_file(utils):
     repoconf = os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME)
     generate_repofile_skip_md(utils, repoconf, REPOID, 'filelists', True)
 
-    ret = utils.run(['tdnf', '--repoid={}'.format(REPOID), 'install', '-y', '--nogpgcheck', pkg0])
+    ret = utils.run(['rpmz', '--repoid={}'.format(REPOID), 'install', '-y', '--nogpgcheck', pkg0])
     print(ret)
     assert utils.check_package(pkg0)
 
-    ret = utils.run(['tdnf', '--repoid={}'.format(REPOID), 'install', '-y', '--nogpgcheck', pkg1])
+    ret = utils.run(['rpmz', '--repoid={}'.format(REPOID), 'install', '-y', '--nogpgcheck', pkg1])
     print(ret)
     assert ret['retval'] == 1525
     assert not utils.check_package(pkg1)
@@ -102,7 +102,7 @@ def test_install_conflict_file_atonce(utils):
     repoconf = os.path.join(utils.config['repo_path'], "yum.repos.d", REPOFILENAME)
     generate_repofile_skip_md(utils, repoconf, REPOID, 'filelists', True)
 
-    ret = utils.run(['tdnf', '--repoid={}'.format(REPOID), 'install', '-y', '--nogpgcheck', pkg0, pkg1])
+    ret = utils.run(['rpmz', '--repoid={}'.format(REPOID), 'install', '-y', '--nogpgcheck', pkg0, pkg1])
     print(ret)
     assert ret['retval'] == 1525
     assert not utils.check_package(pkg0)

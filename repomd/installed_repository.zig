@@ -10,14 +10,14 @@ const sqlite = if (builtin.is_test) @import("sqlite") else struct {};
 
 const RpmDbIter = opaque {};
 
-extern fn tdnf_rpmdb_iter_open(
+extern fn rpmz_rpmdb_iter_open(
     root: ?[*:0]const u8,
 ) ?*RpmDbIter;
-extern fn tdnf_rpmdb_iter_open_config(
+extern fn rpmz_rpmdb_iter_open_config(
     config: *const anyopaque,
 ) ?*RpmDbIter;
-extern fn tdnf_rpmdb_iter_close(iter: ?*RpmDbIter) void;
-extern fn tdnf_rpmdb_iter_next_header_blob_hnum(
+extern fn rpmz_rpmdb_iter_close(iter: ?*RpmDbIter) void;
+extern fn rpmz_rpmdb_iter_next_header_blob_hnum(
     iter: ?*RpmDbIter,
     hnum_out: ?*u32,
     blob_out: ?*?[*]const u8,
@@ -91,16 +91,16 @@ pub fn loadModel(
     defer installed_states.deinit();
 
     const iter = switch (source) {
-        .root_dir => |root_dir| tdnf_rpmdb_iter_open(root_dir),
-        .config => |config| tdnf_rpmdb_iter_open_config(config),
+        .root_dir => |root_dir| rpmz_rpmdb_iter_open(root_dir),
+        .config => |config| rpmz_rpmdb_iter_open_config(config),
     } orelse return error.RpmDbOpenFailed;
-    defer tdnf_rpmdb_iter_close(iter);
+    defer rpmz_rpmdb_iter_close(iter);
 
     while (true) {
         var blob_ptr: ?[*]const u8 = null;
         var blob_len: usize = 0;
         var hnum: u32 = 0;
-        const rc = tdnf_rpmdb_iter_next_header_blob_hnum(
+        const rc = rpmz_rpmdb_iter_next_header_blob_hnum(
             iter,
             &hnum,
             &blob_ptr,

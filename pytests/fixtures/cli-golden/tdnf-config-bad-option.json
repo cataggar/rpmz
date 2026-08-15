@@ -1,9 +1,0 @@
-{
-  "argv": [
-    "tdnf-config",
-    "--bad-option"
-  ],
-  "stdout": "",
-  "stderr": "tdnf-config: unrecognized option '--bad-option'",
-  "retval": 1
-}

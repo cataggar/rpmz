@@ -43,7 +43,7 @@ METRIC_LABELS = {
     "build_pkg_config_literals": "build.zig pkg-config command literals",
     "build_dynamic_library_declarations": "build.zig dynamic libraries",
     "build_install_header_calls": "build.zig header install declarations",
-    "public_zig_module_declarations": "Public tdnf Zig modules",
+    "public_zig_module_declarations": "Public rpmz Zig modules",
     "public_zig_api_audit_steps": "Public Zig API audit steps",
     "replay_docs_audit_steps": "Replay documentation audit steps",
     "replay_confinement_audit_steps": "Replay entry-point audit steps",
@@ -67,13 +67,16 @@ EXACT_METRICS = {
 
 RETIRED_PUBLIC_C_FILES = {
     "client/libtdnf.map",
+    "client/librpmz.map",
     "client/tdnf.pc.in",
+    "client/rpmz.pc.in",
     "client/history_abi.inc",
     "client/transaction_plan_capture_abi.inc",
     "scripts/abi-audit.py",
     "scripts/abi-baseline.json",
     "scripts/public-api-audit.py",
     "tools/cli/lib/tdnf-cli-libs.pc.in",
+    "tools/cli/lib/rpmz-cli-libs.pc.in",
 }
 
 ALLOWED_PRIVATE_HEADERS = {
@@ -176,7 +179,7 @@ def collect_metrics():
             )
         ),
         "public_zig_module_declarations": len(
-            re.findall(r'\baddModule\s*\(\s*"tdnf"', build_source)
+            re.findall(r'\baddModule\s*\(\s*"rpmz"', build_source)
         ),
         "public_zig_api_audit_steps": build_source.count(
             '"public-zig-api-audit"'

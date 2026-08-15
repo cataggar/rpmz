@@ -16,9 +16,9 @@ PKGNAME_VERBOSE_SCRIPTS = "tdnf-verbose-scripts"
 
 @pytest.fixture(scope='function', autouse=True)
 def setup_test(utils):
-    tdnfj = os.path.join(utils.config['bin_dir'], 'tdnfj')
-    if not os.path.lexists(tdnfj):
-        os.symlink('tdnf', tdnfj)
+    rpmzj = os.path.join(utils.config['bin_dir'], 'rpmzj')
+    if not os.path.lexists(rpmzj):
+        os.symlink('rpmz', rpmzj)
     yield
     teardown_test(utils)
 
@@ -29,7 +29,7 @@ def teardown_test(utils):
 
 
 def test_list(utils):
-    ret = utils.run(['tdnf', '-j', 'list'])
+    ret = utils.run(['rpmz', '-j', 'list'])
     infolist = json.loads("\n".join(ret['stdout']))
 
     glibc_found = False
@@ -40,9 +40,9 @@ def test_list(utils):
     assert glibc_found
 
 
-def test_list_tdnfj(utils):
-    tdnfj = os.path.join(utils.config['bin_dir'], 'tdnfj')
-    ret = utils.run([tdnfj, '-c', os.path.join(utils.config['repo_path'], 'tdnf.conf'), 'list'])
+def test_list_rpmzj(utils):
+    rpmzj = os.path.join(utils.config['bin_dir'], 'rpmzj')
+    ret = utils.run([rpmzj, '-c', os.path.join(utils.config['repo_path'], 'rpmz.conf'), 'list'])
     infolist = json.loads("\n".join(ret['stdout']))
 
     glibc_found = False
@@ -54,7 +54,7 @@ def test_list_tdnfj(utils):
 
 
 def test_info(utils):
-    ret = utils.run(['tdnf', '-j', 'info'])
+    ret = utils.run(['rpmz', '-j', 'info'])
     infolist = json.loads("\n".join(ret['stdout']))
 
     glibc_found = False
@@ -68,7 +68,7 @@ def test_info(utils):
 def test_install(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-j', '-y', '--nogpgcheck',
                      'install', pkgname])
     assert utils.check_package(pkgname)
@@ -86,7 +86,7 @@ def test_install(utils):
 def test_erase(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.install_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-j', '-y', '--nogpgcheck',
                      'erase', pkgname])
     assert not utils.check_package(pkgname)
@@ -105,7 +105,7 @@ def test_erase(utils):
 def test_install_verbose(utils):
     pkgname = PKGNAME_VERBOSE_SCRIPTS
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-j', '-y', '--nogpgcheck',
                      'install', pkgname])
     assert utils.check_package(pkgname)
@@ -123,7 +123,7 @@ def test_install_verbose(utils):
 def test_erase_verbose(utils):
     pkgname = PKGNAME_VERBOSE_SCRIPTS
     utils.install_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-j', '-y', '--nogpgcheck',
                      'erase', pkgname])
     assert not utils.check_package(pkgname)
@@ -139,13 +139,13 @@ def test_erase_verbose(utils):
 
 
 def test_check_update(utils):
-    ret = utils.run(['tdnf', '-j', 'check-update'])
+    ret = utils.run(['rpmz', '-j', 'check-update'])
     d = json.loads("\n".join(ret['stdout']))
     assert type(d) is list
 
 
 def test_repolist(utils):
-    ret = utils.run(['tdnf', '-j', 'repolist'])
+    ret = utils.run(['rpmz', '-j', 'repolist'])
     repolist = json.loads("\n".join(ret['stdout']))
 
     repo_found = False
@@ -158,25 +158,25 @@ def test_repolist(utils):
 
 
 def test_repoquery(utils):
-    ret = utils.run(['tdnf', '-j', 'repoquery'])
+    ret = utils.run(['rpmz', '-j', 'repoquery'])
     d = json.loads("\n".join(ret['stdout']))
     assert type(d) is list
 
 
 def test_updateinfo(utils):
-    ret = utils.run(['tdnf', '-j', 'updateinfo'])
+    ret = utils.run(['rpmz', '-j', 'updateinfo'])
     d = json.loads("\n".join(ret['stdout']))
     assert type(d) is dict
 
 
 def test_updateinfo_info(utils):
-    ret = utils.run(['tdnf', '-j', 'updateinfo', '--info'])
+    ret = utils.run(['rpmz', '-j', 'updateinfo', '--info'])
     d = json.loads("\n".join(ret['stdout']))
     assert type(d) is list
 
 
 def test_history_info(utils):
-    ret = utils.run(['tdnf', '-j', 'history', '--info'])
+    ret = utils.run(['rpmz', '-j', 'history', '--info'])
     d = json.loads("\n".join(ret['stdout']))
     assert type(d) is list
 

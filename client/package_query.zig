@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const repomd = @import("repomd_client_exports");
 
 const c = abi.C;
@@ -73,8 +73,8 @@ extern fn history_get_auto_flag(
     ?[*:0]const u8,
     *c_int,
 ) callconv(.c) c_int;
-extern fn tdnf_rpm_config_create(?[*:0]const u8) callconv(.c) ?*RpmConfig;
-extern fn tdnf_rpm_config_destroy(?*RpmConfig) callconv(.c) void;
+extern fn rpmz_rpm_config_create(?[*:0]const u8) callconv(.c) ?*RpmConfig;
+extern fn rpmz_rpm_config_destroy(?*RpmConfig) callconv(.c) void;
 
 extern fn TDNFRepoMdNativePackageRefLinesConfig(
     ?[*]const c.TDNF_REPOMD_NATIVE_REPO_INPUT,
@@ -220,9 +220,9 @@ pub export fn TDNFNativeQueryOpenRepoCacheFd(
     handle: ?*abi.Tdnf,
     repo: ?*abi.RepoData,
 ) c_int {
-    const tdnf = handle orelse return -1;
+    const rpmz = handle orelse return -1;
     const context: *package_context.Context = @ptrCast(@alignCast(
-        tdnf.pSack orelse return -1,
+        rpmz.pSack orelse return -1,
     ));
     const value = repo orelse return -1;
     const fd = openRepositoryCacheFd(context, value);
@@ -238,13 +238,13 @@ pub export fn TDNFNativeQueryBuildRepoInputs(
 ) u32 {
     if (output) |slot| slot.* = null;
     if (count_output) |slot| slot.* = 0;
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out_count = count_output orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER;
 
     var count: usize = 0;
-    var current = tdnf.pRepos;
+    var current = rpmz.pRepos;
     while (current) |repo| : (current = repo.pNext) {
         if (repositoryQueryable(repo)) count += 1;
     }
@@ -255,7 +255,7 @@ pub export fn TDNFNativeQueryBuildRepoInputs(
     if (rc != 0) return rc;
     var populated: u32 = 0;
 
-    current = tdnf.pRepos;
+    current = rpmz.pRepos;
     while (current) |repo| : (current = repo.pNext) {
         if (!repositoryQueryable(repo)) continue;
         const item = &repos.?[populated];
@@ -265,13 +265,13 @@ pub export fn TDNFNativeQueryBuildRepoInputs(
         item.pszDirectory = repositoryDirectory(repo);
         if (item.pszDirectory == null) {
             var cache: ?[*:0]u8 = null;
-            rc = TDNFGetCachePath(tdnf, repo, null, null, &cache);
+            rc = TDNFGetCachePath(rpmz, repo, null, null, &cache);
             if (rc != 0) {
                 freeRepoInputs(repos, populated + 1);
                 return rc;
             }
             item.pszCacheDir = cache;
-            if (tdnf.pSack) |raw_context| {
+            if (rpmz.pSack) |raw_context| {
                 const context: *const package_context.Context =
                     @ptrCast(@alignCast(raw_context));
                 item.nCacheDirFd = openRepositoryCacheFd(context, repo);
@@ -286,7 +286,7 @@ pub export fn TDNFNativeQueryBuildRepoInputs(
         item.pszId = repo.pszId;
         item.pszSnapshotFile = repo.pszSnapshotFile;
         if (item.pszSnapshotFile != null) {
-            if (tdnf.pSack) |raw_context| {
+            if (rpmz.pSack) |raw_context| {
                 item.nSnapshotFd = duplicateRepositorySnapshotFd(
                     @ptrCast(@alignCast(raw_context)),
                     repo,
@@ -296,7 +296,7 @@ pub export fn TDNFNativeQueryBuildRepoInputs(
                     return errors.ERROR_TDNF_INVALID_PARAMETER;
                 }
             } else {
-                item.nSnapshotFd = TDNFOpenSnapshotFd(tdnf, repo);
+                item.nSnapshotFd = TDNFOpenSnapshotFd(rpmz, repo);
             }
             if (item.nSnapshotFd < 0) {
                 freeRepoInputs(repos, populated + 1);
@@ -315,26 +315,26 @@ pub export fn TDNFNativeQueryBuildSingleRepoInput(
     repo: ?*abi.RepoData,
     output: ?*c.TDNF_REPOMD_NATIVE_REPO_INPUT,
 ) u32 {
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const value = repo orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     out.* = std.mem.zeroes(c.TDNF_REPOMD_NATIVE_REPO_INPUT);
     out.nCacheDirFd = -1;
     out.nSnapshotFd = -1;
     var cache: ?[*:0]u8 = null;
-    const rc = TDNFGetCachePath(tdnf, value, null, null, &cache);
+    const rc = TDNFGetCachePath(rpmz, value, null, null, &cache);
     if (rc != 0) return rc;
     out.pszCacheDir = cache;
     out.pszId = value.pszId;
     out.pszSnapshotFile = value.pszSnapshotFile;
     if (out.pszSnapshotFile != null) {
-        if (tdnf.pSack) |raw_context| {
+        if (rpmz.pSack) |raw_context| {
             out.nSnapshotFd = duplicateRepositorySnapshotFd(
                 @ptrCast(@alignCast(raw_context)),
                 value,
             );
         } else {
-            out.nSnapshotFd = TDNFOpenSnapshotFd(tdnf, value);
+            out.nSnapshotFd = TDNFOpenSnapshotFd(rpmz, value);
         }
         if (out.nSnapshotFd < 0) {
             free(out.pszCacheDir);
@@ -366,13 +366,13 @@ pub export fn TDNFNativeQueryFilterUserInstalled(
     infos: c.PTDNF_PKG_INFO,
     count_output: ?*u32,
 ) u32 {
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (infos == null) return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out_count = count_output orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER;
 
     var history: ?*HistoryCtx = null;
-    const rc = TDNFGetHistoryCtx(tdnf, &history, 0);
+    const rc = TDNFGetHistoryCtx(rpmz, &history, 0);
     if (rc != 0) return rc;
     defer destroy_history_ctx(history);
 
@@ -417,14 +417,14 @@ pub export fn TDNFNativeQueryApplyLocationUrls(
     infos: c.PTDNF_PKG_INFO,
     count: u32,
 ) u32 {
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (infos == null) return errors.ERROR_TDNF_INVALID_PARAMETER;
     for (infos[0..count]) |*info| {
         const repo_name = info.pszRepoName orelse continue;
         if (std.mem.eql(u8, std.mem.span(repo_name), system_repo) or
             info.pszLocation == null) continue;
         var repo: ?*abi.RepoData = null;
-        var rc = TDNFFindRepoById(tdnf, repo_name, &repo);
+        var rc = TDNFFindRepoById(rpmz, repo_name, &repo);
         if (rc != 0) return rc;
         const prior = info.pszLocation;
         info.pszLocation = null;
@@ -818,11 +818,11 @@ pub export fn TDNFNativeQuerySerializeAutoInstalledRefs(
 ) u32 {
     if (output) |slot| slot.* = null;
     if (count_output) |slot| slot.* = 0;
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf.pRpmConfig == null or history == null)
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (rpmz.pRpmConfig == null or history == null)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     const context: *package_context.Context = @ptrCast(@alignCast(
-        tdnf.pSack orelse return errors.ERROR_TDNF_INVALID_PARAMETER,
+        rpmz.pSack orelse return errors.ERROR_TDNF_INVALID_PARAMETER,
     ));
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out_count = count_output orelse
@@ -1114,7 +1114,7 @@ fn createRpmConfig(
 ) u32 {
     output.* = null;
     const root = package_context.rootDir(context) orelse "/";
-    const config = tdnf_rpm_config_create(root) orelse
+    const config = rpmz_rpm_config_create(root) orelse
         return errors.ERROR_TDNF_OUT_OF_MEMORY;
     output.* = config;
     return 0;
@@ -1137,7 +1137,7 @@ fn findPackageRefs(
     var config: ?*RpmConfig = null;
     rc = createRpmConfig(context, &config);
     if (rc != 0) return rc;
-    defer tdnf_rpm_config_destroy(config);
+    defer rpmz_rpm_config_destroy(config);
     return TDNFRepoMdNativePackageRefLinesConfig(
         repos,
         repo_count,
@@ -1166,7 +1166,7 @@ fn bestPackageRef(
     var config: ?*RpmConfig = null;
     rc = createRpmConfig(context, &config);
     if (rc != 0) return rc;
-    defer tdnf_rpm_config_destroy(config);
+    defer rpmz_rpm_config_destroy(config);
     return TDNFRepoMdNativeBestPackageRefConfig(
         repos,
         repo_count,
@@ -1667,7 +1667,7 @@ pub export fn TDNFAddPackagesForDowngrade(
     queue: ?*abi.IdList,
     raw_name: ?[*:0]const u8,
 ) u32 {
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const ctx = context orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out = queue orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const name_spec = raw_name orelse
@@ -1705,7 +1705,7 @@ pub export fn TDNFAddPackagesForDowngrade(
     rc = resolveRef(ctx, installed_ref.?, true, &installed_id);
     if (rc != 0) return rc;
     var downgrade_id: i32 = 0;
-    rc = downgradePackage(tdnf, ctx, installed_id, &downgrade_id);
+    rc = downgradePackage(rpmz, ctx, installed_id, &downgrade_id);
     if (rc != 0) return rc;
     return TDNFIdListPush(out, downgrade_id);
 }
@@ -1737,9 +1737,9 @@ pub export fn TDNFGetAvailableCacheBytesHandle(
     output: ?*u64,
 ) u32 {
     if (output) |slot| slot.* = 0;
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf.pSack) |raw_context| {
+    if (rpmz.pSack) |raw_context| {
         const context: *const package_context.Context =
             @ptrCast(@alignCast(raw_context));
         if (package_context.cacheDirFd(context)) |fd| {
@@ -1753,7 +1753,7 @@ pub export fn TDNFGetAvailableCacheBytesHandle(
             return 0;
         }
     }
-    return TDNFGetAvailableCacheBytes(tdnf.pConf, out);
+    return TDNFGetAvailableCacheBytes(rpmz.pConf, out);
 }
 
 fn addDownloadSizes(head: c.PTDNF_PKG_INFO, total: *u64, available: u64) bool {

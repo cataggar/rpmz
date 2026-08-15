@@ -379,7 +379,7 @@ test "public resolver returns an owned plan built only from declared inputs" {
         "\"schema\":\"tdnf.transaction-plan/v1\"",
     ) != null);
     // No scratch or fixture path may leak into the canonical document.
-    try std.testing.expect(std.mem.indexOf(u8, json, "tdnf-resolve-") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "rpmz-resolve-") == null);
 
     // Planning is read-only outside the declared metadata cache, and the
     // scratch tree is removed before the call returns.
@@ -398,7 +398,7 @@ test "cachedir trailing separator resolves through the pinned cache" {
     defer fixture.destroy();
     const declared = [_]resolver.Repository{fixture.declared()};
     var request = fixture.input(&declared);
-    request.cache_dir = "/var/cache/tdnf/";
+    request.cache_dir = "/var/cache/rpmz/";
 
     const plan = try resolver.resolvePlan(allocator, io, request);
     defer plan.destroy();
@@ -408,7 +408,7 @@ test "cachedir trailing separator resolves through the pinned cache" {
     );
     try fixture.tmp.dir.access(
         io,
-        "root/var/cache/tdnf",
+        "root/var/cache/rpmz",
         .{},
     );
 }
@@ -430,7 +430,7 @@ test "undeclared host repositories and caches cannot change the plan digest" {
     // Plant exactly the state an implicitly discovering resolver would pick
     // up: a system config, a `.repo` drop-in, and a stale metadata cache for a
     // repository that offers a newer `app`.
-    try fixture.tmp.dir.createDirPath(io, "root/etc/tdnf");
+    try fixture.tmp.dir.createDirPath(io, "root/etc/rpmz");
     try fixture.tmp.dir.createDirPath(io, "root/etc/yum.repos.d");
     const poisoned_repo = try std.fmt.allocPrint(allocator,
         \\[undeclared]
@@ -447,7 +447,7 @@ test "undeclared host repositories and caches cannot change the plan digest" {
         .data = poisoned_repo,
     });
     try fixture.tmp.dir.writeFile(io, .{
-        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .sub_path = "root/etc/rpmz/rpmz.conf",
         .data =
         \\[main]
         \\gpgcheck=1

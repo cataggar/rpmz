@@ -45,7 +45,7 @@ def set_plugin_config_enabled_flag(utils, flag):
 
 def test_plugin_conf(utils):
     enable_plugins(utils)
-    ret = utils.run(['tdnf', 'repolist'])
+    ret = utils.run(['rpmz', 'repolist'])
     # should attempt a plugin load
     assert ret['stderr'][0].startswith('Error loading plugin')  # nosec
     # plugin load failure should not affect command result
@@ -56,7 +56,7 @@ def test_plugin_conf(utils):
 # in command line should deactivate all plugins
 def test_plugin_conf_override_no_plugins(utils):
     set_plugin_flag_in_conf(utils, '1')
-    ret = utils.run(['tdnf', 'repolist', '--noplugins'])
+    ret = utils.run(['rpmz', 'repolist', '--noplugins'])
     # expect no standard error lines - this corresponds to plugin load
     assert len(ret['stderr']) == 0  # nosec
     # command should pass
@@ -66,7 +66,7 @@ def test_plugin_conf_override_no_plugins(utils):
 # if plugins=0 in config, no plugins should be loaded.
 def test_plugin_conf_disable_plugins_in_conf(utils):
     set_plugin_flag_in_conf(utils, '0')
-    ret = utils.run(['tdnf', 'repolist'])
+    ret = utils.run(['rpmz', 'repolist'])
     # expect no standard error lines
     assert len(ret['stderr']) == 0  # nosec
     # command should pass
@@ -77,7 +77,7 @@ def test_plugin_conf_disable_plugins_in_conf(utils):
 # no plugin load should be attempted even if config is set
 def test_plugin_command_line_disable_with_glob(utils):
     set_plugin_flag_in_conf(utils, '1')
-    ret = utils.run(['tdnf', 'repolist', '--disableplugin=*'])
+    ret = utils.run(['rpmz', 'repolist', '--disableplugin=*'])
     # expect no standard error lines - this corresponds to plugin load
     assert len(ret['stderr']) == 0  # nosec
     # command should pass
@@ -88,7 +88,7 @@ def test_plugin_command_line_disable_with_glob(utils):
 # overrides plugins setting in config
 def test_plugin_command_line_enable_with_glob(utils):
     set_plugin_flag_in_conf(utils, '1')
-    ret = utils.run(['tdnf', 'repolist', '--enableplugin=*'])
+    ret = utils.run(['rpmz', 'repolist', '--enableplugin=*'])
     # stderr should have an attempted load
     assert ret['stderr'][0].startswith('Error loading plugin')  # nosec
     # command should pass
@@ -99,7 +99,7 @@ def test_plugin_command_line_enable_with_glob(utils):
 # overrides plugins setting in config
 def test_plugin_command_line_enable_single(utils):
     set_plugin_flag_in_conf(utils, '1')
-    ret = utils.run(['tdnf', 'repolist', '--disableplugin=*', '--enableplugin=test_plugin'])
+    ret = utils.run(['rpmz', 'repolist', '--disableplugin=*', '--enableplugin=test_plugin'])
     # stderr should have an attempted load
     assert ret['stderr'][0].startswith('Error loading plugin')  # nosec
     # command should pass
@@ -111,7 +111,7 @@ def test_plugin_command_line_enable_single(utils):
 def test_plugin_disable_via_plugin_config(utils):
     set_plugin_flag_in_conf(utils, '1')
     set_plugin_config_enabled_flag(utils, '0')
-    ret = utils.run(['tdnf', 'repolist'])
+    ret = utils.run(['rpmz', 'repolist'])
     # stderr should not have an attempted load
     assert len(ret['stderr']) == 0  # nosec
     # command should pass
@@ -123,7 +123,7 @@ def test_plugin_disable_via_plugin_config(utils):
 def test_plugin_enable_disabled_plugin_via_cmdline_override(utils):
     set_plugin_flag_in_conf(utils, '1')
     set_plugin_config_enabled_flag(utils, '0')
-    ret = utils.run(['tdnf', 'repolist', '--enableplugin=test_plugin'])
+    ret = utils.run(['rpmz', 'repolist', '--enableplugin=test_plugin'])
     # stderr should have an attempted load
     assert ret['stderr'][0].startswith('Error loading plugin')  # nosec
     # command should pass

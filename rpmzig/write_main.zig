@@ -91,7 +91,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             std.mem.span(argv[2]),
         ) catch |err| {
             std.debug.print(
-                "tdnf-rpmdb-write install: Writer.openRoot: {t}\n",
+                "rpmz-rpmdb-write install: Writer.openRoot: {t}\n",
                 .{err},
             );
             return 1;
@@ -105,7 +105,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             .install_color = color,
         }) catch |err| {
             std.debug.print(
-                "tdnf-rpmdb-write install: Writer.installRpmPath({s}): {t}\n",
+                "rpmz-rpmdb-write install: Writer.installRpmPath({s}): {t}\n",
                 .{ rpm_path, err },
             );
             return 1;
@@ -162,7 +162,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             std.mem.span(argv[2]),
         ) catch |err| {
             std.debug.print(
-                "tdnf-rpmdb-write replace: Writer.openRoot: {t}\n",
+                "rpmz-rpmdb-write replace: Writer.openRoot: {t}\n",
                 .{err},
             );
             return 1;
@@ -174,7 +174,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             argv[4][0..rpm_path.len :0],
         ) catch |err| {
             std.debug.print(
-                "tdnf-rpmdb-write replace: RpmFile.open({s}): {t}\n",
+                "rpmz-rpmdb-write replace: RpmFile.open({s}): {t}\n",
                 .{ rpm_path, err },
             );
             return 1;
@@ -186,7 +186,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             .install_color = color,
         }) catch |err| {
             std.debug.print(
-                "tdnf-rpmdb-write replace: Writer.replaceRpm({s}): {t}\n",
+                "rpmz-rpmdb-write replace: Writer.replaceRpm({s}): {t}\n",
                 .{ rpm_path, err },
             );
             return 1;
@@ -211,7 +211,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             std.mem.span(argv[2]),
         ) catch |err| {
             std.debug.print(
-                "tdnf-rpmdb-write erase-hnum: Writer.openRoot: {t}\n",
+                "rpmz-rpmdb-write erase-hnum: Writer.openRoot: {t}\n",
                 .{err},
             );
             return 1;
@@ -219,7 +219,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         defer writer.close();
         writer.eraseHnum(hnum) catch |err| {
             std.debug.print(
-                "tdnf-rpmdb-write erase-hnum: Writer.eraseHnum({d}): {t}\n",
+                "rpmz-rpmdb-write erase-hnum: Writer.eraseHnum({d}): {t}\n",
                 .{ hnum, err },
             );
             return 1;
@@ -236,7 +236,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             std.mem.span(argv[2]),
         ) catch |err| {
             std.debug.print(
-                "tdnf-rpmdb-write find-hnum: Writer.openRoot: {t}\n",
+                "rpmz-rpmdb-write find-hnum: Writer.openRoot: {t}\n",
                 .{err},
             );
             return 1;
@@ -247,7 +247,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             std.mem.span(argv[3]),
         ) catch |err| {
             std.debug.print(
-                "tdnf-rpmdb-write find-hnum: Writer.findHnumByNevra: {t}\n",
+                "rpmz-rpmdb-write find-hnum: Writer.findHnumByNevra: {t}\n",
                 .{err},
             );
             return 1;

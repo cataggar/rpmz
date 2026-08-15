@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License. The terms
 // of the License are located in the COPYING file of this distribution.
 
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const abi = @import("tdnf_internal_abi");
 const jsondump = @import("jsondump_abi");
 const c = @cImport({

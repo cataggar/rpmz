@@ -444,7 +444,7 @@ comptime {
         "pHandle",
         "pNext",
     });
-    assertLayout(Tdnf, C.TDNF, .{
+    assertLayout(Tdnf, C.RPMZ, .{
         "pSack",
         "pArgs",
         "pConf",

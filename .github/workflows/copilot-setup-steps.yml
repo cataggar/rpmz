@@ -69,7 +69,7 @@ jobs:
       - name: Smoke test
         continue-on-error: true
         run: |
-          ./out/bin/tdnf --version
+          ./out/bin/rpmz --version
 
       - name: Lint smoke test
         continue-on-error: true

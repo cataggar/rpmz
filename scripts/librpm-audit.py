@@ -258,7 +258,7 @@ def elf_errors(prefix):
         r"^(?:rpm|rpmlog|header[A-Z_]|pgp[A-Z_]|F[A-Z])"
     )
     needed_pattern = re.compile(
-        r"\blib(?:tdnf(?:cli)?|rpm(?:io)?|sqlite3|solv(?:ext)?|"
+        r"\blib(?:rpmz(?:cli)?|rpm(?:io)?|sqlite3|solv(?:ext)?|"
         r"lua[0-9.]*)\.so(?:\.|])"
     )
     runtime_load_pattern = re.compile(
@@ -297,12 +297,12 @@ def elf_errors(prefix):
 
 def installed_surface_errors(prefix):
     errors = []
-    tdnf = prefix / "bin" / "tdnf"
+    rpmz = prefix / "bin" / "rpmz"
     required = (
-        tdnf,
-        prefix / "bin" / "tdnf-config",
-        prefix / "libexec" / "tdnf" / "tdnf-history-util",
-        prefix / "libexec" / "tdnf" / "tdnf-test-support",
+        rpmz,
+        prefix / "bin" / "rpmz-config",
+        prefix / "libexec" / "rpmz" / "rpmz-history-util",
+        prefix / "libexec" / "rpmz" / "rpmz-test-support",
     )
     for path in required:
         if not path.is_file():
@@ -312,29 +312,29 @@ def installed_surface_errors(prefix):
         relative = path.relative_to(prefix)
         if relative.parts and relative.parts[0] == "include":
             errors.append(f"{path}: installed C header surface is forbidden")
-        if path.name.startswith("libtdnf"):
-            errors.append(f"{path}: installed libtdnf artifact is forbidden")
+        if path.name.startswith(("librpmz", "libtdnf")):
+            errors.append(f"{path}: installed product library is forbidden")
         if path.suffix == ".pc":
             errors.append(f"{path}: installed pkg-config metadata is forbidden")
         if path.is_file() and re.search(r"\.so(?:\.\d+)*$", path.name):
             errors.append(f"{path}: installed shared-library surface is forbidden")
 
-    if tdnf.is_file():
+    if rpmz.is_file():
         replay_help = subprocess.run(
-            [str(tdnf), "replay", "--help"],
+            [str(rpmz), "replay", "--help"],
             check=False,
             capture_output=True,
             text=True,
         )
         if replay_help.returncode != 0:
             errors.append(
-                f"{tdnf}: installed replay help failed "
+                f"{rpmz}: installed replay help failed "
                 f"({replay_help.returncode})"
             )
-        if "Usage: tdnf replay" not in replay_help.stderr:
-            errors.append(f"{tdnf}: installed replay command is missing")
+        if "Usage: rpmz replay" not in replay_help.stderr:
+            errors.append(f"{rpmz}: installed replay command is missing")
         if replay_help.stdout:
-            errors.append(f"{tdnf}: replay help unexpectedly wrote stdout")
+            errors.append(f"{rpmz}: replay help unexpectedly wrote stdout")
     return errors
 
 

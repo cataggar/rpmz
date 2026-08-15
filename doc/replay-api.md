@@ -5,8 +5,8 @@ project-owned replay implementation does not resolve dependencies, select
 alternatives, refresh metadata, enter a cache, or request repository URLs. It
 does execute untrusted RPM payload scriptlets and triggers, which can spawn
 processes or use the network unless the caller isolates them. The supported
-interfaces are the public Zig namespace `@import("tdnf").replay` and the
-`tdnf replay` command.
+interfaces are the public Zig namespace `@import("rpmz").replay` and the
+`rpmz replay` command.
 
 Replay accepts only a `tdnf.transaction-bundle/v2` whose `plan.json` is a
 canonical `tdnf.transaction-plan/v2` with a materialized native execution
@@ -16,9 +16,9 @@ compatibility, but replay rejects them as `non_replayable_bundle`.
 ## Zig API
 
 ```zig
-const tdnf = @import("tdnf");
+const rpmz = @import("rpmz");
 
-const result = try tdnf.replay.run(allocator, io, .{
+const result = try rpmz.replay.run(allocator, io, .{
     .bundle_directory = "/inputs/transaction-bundle",
     .target = .{
         .install_root = "/image-root",
@@ -34,14 +34,14 @@ defer allocator.free(json);
 
 ### Input and ownership
 
-`tdnf.replay.Input` has exactly two members:
+`rpmz.replay.Input` has exactly two members:
 
 - `bundle_directory` is the closed bundle directory to validate and execute.
 - `target` supplies the explicit `install_root`, `rpmdb_path`, and
   `architecture`.
 
 All input strings are borrowed for the duration of `run`. On every
-non-allocation outcome, `run` returns an owned `*tdnf.replay.Result`; the
+non-allocation outcome, `run` returns an owned `*rpmz.replay.Result`; the
 caller must call `Result.deinit`. `RunError` contains only `OutOfMemory`.
 Validation and transaction failures are data, not Zig errors. Bytes returned
 by `canonicalJsonAlloc` belong to the allocator passed to that method.
@@ -96,7 +96,7 @@ and final inventory capture. If another database or sidecar appears first,
 replay returns `rpmdb_mismatch` without adopting it. A zero-action replay also
 revalidates authoritative absence.
 
-Replay and ordinary tdnf transactions use the same install-root-wide lock.
+Replay and ordinary rpmz transactions use the same install-root-wide lock.
 Aliases and different `_dbpath` values under one root contend, while distinct
 roots do not. Replay retains the pinned root and rpmdb state through final
 inventory capture.
@@ -220,7 +220,7 @@ exact actions, retaining installed packages the plan did not mention.
 ## Command-line interface
 
 ```text
-tdnf replay [--json] --installroot <absolute-path> \
+rpmz replay [--json] --installroot <absolute-path> \
   --rpmdb-path <absolute-path> --forcearch <arch> <bundle-directory>
 ```
 
@@ -231,14 +231,14 @@ The replay command accepts only the following spellings:
 | Install root | `--installroot PATH`, `--installroot=PATH`, `-installroot PATH`, `-installroot=PATH`, `-i PATH`, `-iPATH` |
 | RPM database path | `--rpmdb-path PATH`, `--rpmdb-path=PATH`, `-rpmdb-path PATH`, `-rpmdb-path=PATH` |
 | Architecture | `--forcearch ARCH`, `--forcearch=ARCH`, `-forcearch ARCH`, `-forcearch=ARCH` |
-| JSON invocation errors | `-j`, `--j`, `-js`, `--js`, `-jso`, `--jso`, `-json`, `--json`, or the `tdnfj` alias |
+| JSON invocation errors | `-j`, `--j`, `-js`, `--js`, `-jso`, `--jso`, `-json`, `--json`, or the `rpmzj` alias |
 | Help | `--help`, `-h` |
 
-The JSON abbreviations are the unique non-empty prefixes accepted by tdnf's
+The JSON abbreviations are the unique non-empty prefixes accepted by rpmz's
 legacy long-option matcher. They do not accept attached values.
 
 The three target options and the one bundle operand are required exactly once.
-Replay rejects other legacy tdnf options instead of allowing configuration,
+Replay rejects other legacy rpmz options instead of allowing configuration,
 repository, plugin, cache, proxy, or download state to enter the operation.
 Options may precede or follow the `replay` word unless `--` ended option
 parsing.
@@ -246,7 +246,7 @@ parsing.
 Example:
 
 ```sh
-tdnf replay \
+rpmz replay \
   --installroot /srv/images/root \
   --rpmdb-path /var/lib/rpm \
   --forcearch x86_64 \
@@ -259,7 +259,7 @@ namespace with no network interface:
 
 ```sh
 unshare --net -- \
-  tdnf replay --installroot /srv/images/root \
+  rpmz replay --installroot /srv/images/root \
   --rpmdb-path /var/lib/rpm --forcearch x86_64 \
   /srv/bundles/update-2026-08
 ```
@@ -288,7 +288,7 @@ descendant output are redirected to stderr so they cannot corrupt the single
 stdout document.
 
 An invocation error writes diagnostics and usage to stderr. In ordinary mode
-stdout is empty. With `--json` or `tdnfj`, stdout additionally contains one
+stdout is empty. With `--json` or `rpmzj`, stdout additionally contains one
 `tdnf.replay-invocation-error/v1` document with stable `error` and
 human-readable `message` fields. `--help` writes usage to stderr, leaves
 stdout empty, and exits zero.

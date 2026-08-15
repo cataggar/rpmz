@@ -332,7 +332,7 @@ pub fn openAt(
     const vfs_id = allocateVfsId();
     const vfs_name = std.fmt.allocPrintSentinel(
         allocator,
-        "tdnf-confined-{x}",
+        "rpmz-confined-{x}",
         .{vfs_id},
         0,
     ) catch return error.OutOfMemory;
@@ -704,7 +704,7 @@ fn bridgeStatus(err: Error) c_int {
     };
 }
 
-pub export fn tdnf_sqlite_confined_open_at(
+pub export fn rpmz_sqlite_confined_open_at(
     dir_fd: c_int,
     basename: [*]const u8,
     basename_len: usize,
@@ -738,7 +738,7 @@ pub export fn tdnf_sqlite_confined_open_at(
     return 0;
 }
 
-pub export fn tdnf_sqlite_confined_close(
+pub export fn rpmz_sqlite_confined_close(
     raw: *RawConnection,
 ) callconv(.c) c_int {
     const handle = raw.handle orelse return c.SQLITE_OK;
@@ -751,7 +751,7 @@ pub export fn tdnf_sqlite_confined_close(
     return c.SQLITE_OK;
 }
 
-pub export fn tdnf_sqlite_confined_verify(
+pub export fn rpmz_sqlite_confined_verify(
     raw: *const RawConnection,
 ) callconv(.c) c_int {
     const handle = raw.handle orelse return 1;
@@ -763,7 +763,7 @@ pub export fn tdnf_sqlite_confined_verify(
     return 0;
 }
 
-pub export fn tdnf_sqlite_confined_pin_main_fd(
+pub export fn rpmz_sqlite_confined_pin_main_fd(
     raw: *const RawConnection,
 ) callconv(.c) RawMainFdPin {
     const handle = raw.handle orelse return .{
@@ -781,7 +781,7 @@ pub export fn tdnf_sqlite_confined_pin_main_fd(
     };
 }
 
-pub export fn tdnf_sqlite_confined_create_exclusive_main_pin(
+pub export fn rpmz_sqlite_confined_create_exclusive_main_pin(
     dir_fd: c_int,
     basename: [*]const u8,
     basename_len: usize,
@@ -800,7 +800,7 @@ pub export fn tdnf_sqlite_confined_create_exclusive_main_pin(
     return 0;
 }
 
-pub export fn tdnf_sqlite_confined_release_main_fd_pin(
+pub export fn rpmz_sqlite_confined_release_main_fd_pin(
     raw_database: ?*anyopaque,
 ) callconv(.c) void {
     const database: *DatabaseState = @ptrCast(@alignCast(
@@ -809,7 +809,7 @@ pub export fn tdnf_sqlite_confined_release_main_fd_pin(
     releaseDatabaseState(database);
 }
 
-pub export fn tdnf_sqlite_confined_retain_main_fd_pin(
+pub export fn rpmz_sqlite_confined_retain_main_fd_pin(
     raw_database: ?*anyopaque,
 ) callconv(.c) void {
     const database: *DatabaseState = @ptrCast(@alignCast(
@@ -818,7 +818,7 @@ pub export fn tdnf_sqlite_confined_retain_main_fd_pin(
     retainDatabaseState(database);
 }
 
-pub export fn tdnf_sqlite_confined_registry_anchor() callconv(.c) usize {
+pub export fn rpmz_sqlite_confined_registry_anchor() callconv(.c) usize {
     return @intFromPtr(&registry_head);
 }
 

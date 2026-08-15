@@ -99,7 +99,7 @@ def test_install_srpm(utils):
     utils.erase_package(pkgname)
 
     ret = utils.run(
-        ['tdnf', 'install', '--repoid=photon-test-src', '-y',
+        ['rpmz', 'install', '--repoid=photon-test-src', '-y',
          '--source', '--nogpgcheck'] + source_options() + [pkgname])
     assert ret['retval'] == 0, '\n'.join(ret['stderr'])
     assert not utils.check_package(pkgname)  # source RPMs are never really installed
@@ -112,7 +112,7 @@ def test_install_srpm_file_with_source_option(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_srcpkg_file_path(utils, pkgname)
     ret = utils.run(
-        ['tdnf', 'install', '-y', '--source', '--nogpgcheck'] +
+        ['rpmz', 'install', '-y', '--source', '--nogpgcheck'] +
         source_options() + [path])
     assert ret['retval'] == 0, ret
 
@@ -125,10 +125,10 @@ def test_install_srpm_binary_isinstalled(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     assert ret['retval'] == 0
     ret = utils.run(
-        ['tdnf', 'install', '--repoid=photon-test-src', '-y',
+        ['rpmz', 'install', '--repoid=photon-test-src', '-y',
          '--source', '--nogpgcheck'] + source_options() + [pkgname])
     assert ret['retval'] == 0
 
@@ -140,7 +140,7 @@ def test_install_srpm_binary_isinstalled(utils):
 def test_install_rpm_file_with_source_option(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
-    ret = utils.run(['tdnf', 'install', '-y', '--source', '--nogpgcheck', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--source', '--nogpgcheck', path])
     assert ret['retval'] != 0
     utils.erase_package(pkgname)
 
@@ -149,7 +149,7 @@ def test_install_rpm_file_with_source_option(utils):
 def test_install_srpm_file_without_source_option(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_srcpkg_file_path(utils, pkgname)
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', path])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', path])
     assert ret['retval'] != 0
     utils.erase_package(pkgname)
 
@@ -161,7 +161,7 @@ def test_native_src_and_nosrc_extraction(utils, nosrc):
     target = os.path.join(RPMBUILD_DIR, name)
 
     ret = utils.run(
-        ['tdnf', 'install', '-y', '--source', '--nogpgcheck'] +
+        ['rpmz', 'install', '-y', '--source', '--nogpgcheck'] +
         source_options(target) + [path])
     assert ret['retval'] == 0, '\n'.join(ret['stderr'])
     specs = glob.glob(os.path.join(target, 'SPECS', '*.spec'))
@@ -191,7 +191,7 @@ def test_source_package_macro_scope_and_explicit_directories(utils):
     ]
 
     ret = utils.run(
-        ['tdnf', 'install', '-y', '--source', '--nogpgcheck'] +
+        ['rpmz', 'install', '-y', '--source', '--nogpgcheck'] +
         options + [path])
     assert ret['retval'] == 0
     expanded = os.path.join(base, name, '1.2', '3', '7')
@@ -208,7 +208,7 @@ def test_source_extraction_honors_installroot(utils):
     os.makedirs(installroot)
 
     ret = utils.run([
-        'tdnf', 'install', '-y', '--source', '--nogpgcheck',
+        'rpmz', 'install', '-y', '--source', '--nogpgcheck',
         '--installroot', installroot,
         '--releasever=4.0',
         '--rpmdefine', '_topdir /phase6-build',
@@ -227,7 +227,7 @@ def test_source_justdb_suppresses_extraction(utils):
     target = os.path.join(RPMBUILD_DIR, 'justdb')
 
     ret = utils.run(
-        ['tdnf', 'install', '-y', '--source', '--nogpgcheck',
+        ['rpmz', 'install', '-y', '--source', '--nogpgcheck',
          '--setopt=tsflags=justdb'] + source_options(target) + [path])
     assert ret['retval'] == 0
     assert not os.path.exists(target)
@@ -250,7 +250,7 @@ def test_source_only_zero_binary_transaction_succeeds(
     os.makedirs(installroot)
     target = '/phase7-source'
     command = [
-        'tdnf', 'install', '-y', '--source', '--nogpgcheck',
+        'rpmz', 'install', '-y', '--source', '--nogpgcheck',
         '--installroot', installroot, '--releasever=4.0',
     ]
     if tsflags:

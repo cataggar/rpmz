@@ -16,38 +16,38 @@ def setup_test(utils):
 
 
 def teardown_test(utils):
-    utils.run("tdnf remove -y tdnf*pretrans*")
+    utils.run("rpmz remove -y tdnf*pretrans*")
 
 
 def install_dummy_pretrans_dependency(utils):
-    utils.run(['tdnf', 'install', '-y', 'tdnf-dummy-pretrans'])
+    utils.run(['rpmz', 'install', '-y', 'tdnf-dummy-pretrans'])
 
 
 def remove_dummy_pretrans_dependency(utils):
-    utils.run(['tdnf', 'remove', '-y', 'tdnf-dummy-pretrans'])
+    utils.run(['rpmz', 'remove', '-y', 'tdnf-dummy-pretrans'])
 
 
 def test_install_pretrans_lessthan_fail(utils):
     remove_dummy_pretrans_dependency(utils)
-    ret = utils.run(['tdnf', 'install', '-y', 'tdnf-test-pretrans-one'])
+    ret = utils.run(['rpmz', 'install', '-y', 'tdnf-test-pretrans-one'])
     assert 'Detected rpm pre-transaction dependency' in "\n".join(ret['stderr'])
     assert ret['retval'] == 1515
 
 
 def test_install_pretrans_greaterthan_fail(utils):
     remove_dummy_pretrans_dependency(utils)
-    ret = utils.run(['tdnf', 'install', '-y', 'tdnf-test-pretrans-two'])
+    ret = utils.run(['rpmz', 'install', '-y', 'tdnf-test-pretrans-two'])
     assert 'Detected rpm pre-transaction dependency' in "\n".join(ret['stderr'])
     assert ret['retval'] == 1515
 
 
 def test_install_pretrans_lessthan_success(utils):
     install_dummy_pretrans_dependency(utils)
-    ret = utils.run(['tdnf', 'install', '-y', 'tdnf-test-pretrans-one'])
+    ret = utils.run(['rpmz', 'install', '-y', 'tdnf-test-pretrans-one'])
     assert ret['retval'] == 0
 
 
 def test_install_pretrans_greaterthan_success(utils):
     install_dummy_pretrans_dependency(utils)
-    ret = utils.run(['tdnf', 'install', '-y', 'tdnf-test-pretrans-two'])
+    ret = utils.run(['rpmz', 'install', '-y', 'tdnf-test-pretrans-two'])
     assert ret['retval'] == 0

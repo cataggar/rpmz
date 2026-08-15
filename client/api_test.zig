@@ -1,7 +1,7 @@
 const std = @import("std");
 const client = @import("client_root");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 
 const c = abi.C;
 
@@ -9,7 +9,7 @@ test "API lifecycle and identity exports preserve transitional behavior" {
     try std.testing.expectEqual(@as(u32, 0), client.api.TDNFInit());
     client.api.TDNFUninit();
     try std.testing.expectEqualStrings(
-        "tdnf",
+        "rpmz",
         std.mem.span(client.api.TDNFGetPackageName()),
     );
     try std.testing.expect(

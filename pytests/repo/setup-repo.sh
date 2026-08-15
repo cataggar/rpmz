@@ -53,14 +53,14 @@ function save_mutable_baseline() {
   local baseline=${TEST_REPO_DIR}/.baseline
   rm -rf "${baseline}"
   mkdir -p "${baseline}"
-  cp "${TEST_REPO_DIR}/tdnf.conf" "${baseline}/tdnf.conf"
+  cp "${TEST_REPO_DIR}/rpmz.conf" "${baseline}/rpmz.conf"
   cp -a "${TEST_REPO_DIR}/yum.repos.d" "${baseline}/yum.repos.d"
   cp "${TEST_REPO_DIR}/photon-test/metalink" "${baseline}/metalink"
 }
 
 function restore_mutable_baseline() {
   local baseline=${TEST_REPO_DIR}/.baseline
-  cp "${baseline}/tdnf.conf" "${TEST_REPO_DIR}/tdnf.conf"
+  cp "${baseline}/rpmz.conf" "${TEST_REPO_DIR}/rpmz.conf"
   rm -rf "${TEST_REPO_DIR}/yum.repos.d"
   cp -a "${baseline}/yum.repos.d" "${TEST_REPO_DIR}/yum.repos.d"
   cp "${baseline}/metalink" "${TEST_REPO_DIR}/photon-test/metalink"
@@ -125,9 +125,9 @@ cat << EOF > ${TEST_REPO_DIR}/gpgkeydata
 %no-protection
 Key-Type: RSA
 Subkey-Type: RSA
-Name-Real: tdnf test
-Name-Comment: tdnf test key
-Name-Email: tdnftest@tdnf.test
+Name-Real: rpmz test
+Name-Comment: rpmz test key
+Name-Email: rpmztest@rpmz.test
 Expire-Date: 0
 %commit
 %echo done
@@ -153,7 +153,7 @@ for spec in ${REPO_SRC_DIR}/*.spec ${BUILD_PATH}/SOURCES/*.spec ; do
 done
 cp -r ${BUILD_PATH}/RPMS ${PUBLISH_UNSIGNED_PATH}
 rpmsign \
-  --define "_gpg_name tdnftest@tdnf.test" \
+  --define "_gpg_name rpmztest@rpmz.test" \
   --define "__gpg /usr/bin/gpg" \
   --define "__transaction_unshare %{nil}" \
   --addsign ${BUILD_PATH}/RPMS/*/*.rpm
@@ -164,19 +164,19 @@ cp -r ${BUILD_PATH}/RPMS ${PUBLISH_SHA512_PATH}
 
 # save key to later be imported:
 mkdir -p ${PUBLISH_PATH}/keys
-gpg --armor --export tdnftest@tdnf.test > ${PUBLISH_PATH}/keys/pubkey.asc
+gpg --armor --export rpmztest@rpmz.test > ${PUBLISH_PATH}/keys/pubkey.asc
 
 gpg --batch --generate-key <<EOF
 Key-Type: RSA
 Key-Length: 4096
-Name-Real: tdnf test wrong
-Name-Email: tdnftest@tdnf.wrong
+Name-Real: rpmz test wrong
+Name-Email: rpmztest@rpmz.wrong
 Expire-Date: 0
 %no-protection
 %commit
 EOF
 
-WRONG_FPR=$(gpg --list-keys --with-colons tdnftest@tdnf.wrong | awk -F: '/^fpr:/ {print $10; exit}')
+WRONG_FPR=$(gpg --list-keys --with-colons rpmztest@rpmz.wrong | awk -F: '/^fpr:/ {print $10; exit}')
 gpg --armor --export "${WRONG_FPR}" > ${PUBLISH_PATH}/keys/pubkey.wrong.asc
 
 createrepo ${PUBLISH_PATH}
@@ -243,13 +243,13 @@ gpgcheck=0
 enabled=0
 EOF
 
-cat << EOF > ${TEST_REPO_DIR}/tdnf.conf
+cat << EOF > ${TEST_REPO_DIR}/rpmz.conf
 [main]
 gpgcheck=0
 installonly_limit=3
 clean_requirements_on_remove=true
 repodir=${TEST_REPO_DIR}/yum.repos.d
-cachedir=${TEST_REPO_DIR}/cache/tdnf
+cachedir=${TEST_REPO_DIR}/cache/rpmz
 EOF
 
 cat "${METALINK_FIXTURE}" > "${PUBLISH_PATH}/metalink"

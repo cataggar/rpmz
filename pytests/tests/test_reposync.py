@@ -65,7 +65,7 @@ def test_reposync(utils):
     workdir = WORKDIR
     os.makedirs(workdir, exist_ok=True)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'reposync'],
                     cwd=workdir)
@@ -85,7 +85,7 @@ def test_reposync_download_path(utils):
     os.makedirs(downloaddir, exist_ok=True)
     assert os.path.isdir(downloaddir)
 
-    ret = utils.run(['tdnf', '--disablerepo=*', '--enablerepo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--download-path={}'.format(downloaddir),
                      'reposync'])
     assert ret['retval'] == 0
@@ -102,7 +102,7 @@ def test_reposync_download_path_slash(utils):
     os.makedirs(downloaddir, exist_ok=True)
     assert os.path.isdir(downloaddir)
 
-    ret = utils.run(['tdnf', '--disablerepo=*', '--enablerepo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--download-path={}'.format(downloaddir),
                      'reposync'])
     assert ret['retval'] == 0
@@ -116,7 +116,7 @@ def test_reposync_download_path_root(utils):
     reponame = TESTREPO
     downloaddir = '/'
 
-    ret = utils.run(['tdnf', '--disablerepo=*', '--enablerepo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--download-path={}'.format(downloaddir),
                      'reposync'])
     assert ret['retval'] == 0
@@ -130,7 +130,7 @@ def test_reposync_workdir_root(utils):
     reponame = TESTREPO
     workdir = '/'
 
-    ret = utils.run(['tdnf', '--disablerepo=*', '--enablerepo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'reposync'],
                     cwd=workdir)
     assert ret['retval'] == 0
@@ -143,7 +143,7 @@ def test_reposync_workdir_root(utils):
 def test_reposync_download_path_norepopath(utils):
     reponame = TESTREPO
     downloaddir = DOWNLOADDIR
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--download-path={}'.format(downloaddir),
                      '--norepopath',
@@ -158,7 +158,7 @@ def test_reposync_download_path_norepopath(utils):
 def test_reposync_download_path_norepopath_delete(utils):
     reponame = TESTREPO
     downloaddir = DOWNLOADDIR
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--download-path={}'.format(downloaddir),
                      '--norepopath',
@@ -170,7 +170,7 @@ def test_reposync_download_path_norepopath_delete(utils):
 # reposync excluding the repo name and multiple repos is incompatible
 def xxxtest_reposync_download_path_norepopath_multiple_repos(utils):
     downloaddir = DOWNLOADDIR
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--download-path={}'.format(downloaddir),
                      '--norepopath',
                      'reposync'])
@@ -183,7 +183,7 @@ def test_reposync_metadata(utils):
     workdir = WORKDIR
     os.makedirs(workdir, exist_ok=True)
 
-    ret = utils.run(['tdnf', '--disablerepo=*', '--enablerepo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--download-metadata',
                      'reposync'],
                     cwd=workdir)
@@ -206,7 +206,7 @@ def test_reposync_metadata_path(utils):
     mdatadir = METADATADIR
     os.makedirs(mdatadir, exist_ok=True)
 
-    ret = utils.run(['tdnf', '--disablerepo=*', '--enablerepo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--download-metadata',
                      '--metadata-path={}'.format(mdatadir),
                      'reposync'],
@@ -236,7 +236,7 @@ def test_reposync_delete(utils):
 
     assert os.path.isfile(faked_rpm)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--delete',
                      'reposync'],
@@ -267,7 +267,7 @@ def test_reposync_no_delete(utils):
 
     assert os.path.isfile(faked_rpm)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'reposync'],
                     cwd=workdir)
@@ -293,7 +293,7 @@ def test_reposync_gpgcheck(utils):
     utils.edit_config({'gpgkey': 'file://{}'.format(keypath)}, repo=reponame)
 
     try:
-        ret = utils.run(['tdnf', '-y',
+        ret = utils.run(['rpmz', '-y',
                          '--disablerepo=*', '--enablerepo={}'.format(reponame),
                          '--gpgcheck',
                          'reposync'],
@@ -315,7 +315,7 @@ def test_reposync_gpgcheck(utils):
 def test_reposync_gpgcheck_rejection_does_not_create_keep_marker(utils):
     reponame = 'photon-test-unsigned'
 
-    ret = utils.run(['tdnf', '-y',
+    ret = utils.run(['rpmz', '-y',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--gpgcheck', '--delete',
                      'reposync'],
@@ -335,7 +335,7 @@ def test_reposync_urls(utils):
     workdir = WORKDIR
     os.makedirs(workdir, exist_ok=True)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--urls',
                      'reposync'],
@@ -351,7 +351,7 @@ def test_reposync_create_repo(utils):
     workdir = WORKDIR
     os.makedirs(workdir, exist_ok=True)
 
-    ret = utils.run(['tdnf', '--disablerepo=*', '--enablerepo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--download-metadata',
                      'reposync'],
                     cwd=workdir)
@@ -368,7 +368,7 @@ def test_reposync_create_repo(utils):
 
     utils.create_repoconf(filename, baseurl, "synced-repo")
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo=synced-repo',
                      'makecache'],
                     cwd=workdir)
@@ -376,7 +376,7 @@ def test_reposync_create_repo(utils):
 
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-y', '--nogpgcheck',
                      '--disablerepo=*', '--enablerepo=synced-repo',
                      'install', pkgname],
@@ -394,7 +394,7 @@ def test_reposync_arch(utils):
     if os.path.isdir(synced_dir):
         shutil.rmtree(synced_dir)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--arch', ARCH,
                      'reposync'],
@@ -418,7 +418,7 @@ def test_reposync_arch_others(utils):
     if os.path.isdir(synced_dir):
         shutil.rmtree(synced_dir)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--arch', 'classic',
                      '--arch', 'baroque',
@@ -441,7 +441,7 @@ def test_reposync_newest(utils):
     workdir = WORKDIR
     os.makedirs(workdir, exist_ok=True)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      '--newest-only',
                      'reposync'],
@@ -467,7 +467,7 @@ def test_reposync_newest_multiplerepos(utils):
     workdir = WORKDIR
     os.makedirs(workdir, exist_ok=True)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--enablerepo={}'.format(reponame),
                      '--newest-only',
                      '--urls',

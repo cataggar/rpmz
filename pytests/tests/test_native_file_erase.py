@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
 CASE_ROOT = os.path.join(CONFIG['build_dir'], 'native-file-erase-crosscheck')
 INSTALL_TOOL = CONFIG['native_file_install_binary']
 ERASE_TOOL = CONFIG['native_file_erase_binary']
-WRITE_TOOL = os.path.join(CONFIG['build_dir'], 'libexec', 'tdnf', 'tdnf-rpmdb-write')
+WRITE_TOOL = os.path.join(CONFIG['build_dir'], 'libexec', 'rpmz', 'rpmz-rpmdb-write')
 
 PKGNAME = 'tdnf-test-native-install'
 SHARED_A = 'tdnf-test-native-erase-shared-a'

@@ -36,19 +36,19 @@ extern fn fgets(s: [*c]u8, n: c_int, stream: ?*c.FILE) [*c]u8;
 extern fn realpath(name: [*c]const u8, resolved: [*c]u8) [*c]u8;
 
 const DigestContext = opaque {};
-extern fn tdnf_rpmzig_digest_open(kind: c_int) ?*DigestContext;
-extern fn tdnf_rpmzig_digest_update(
+extern fn rpmz_rpmzig_digest_open(kind: c_int) ?*DigestContext;
+extern fn rpmz_rpmzig_digest_update(
     ctx: ?*DigestContext,
     buf: [*c]const u8,
     len: usize,
 ) c_int;
-extern fn tdnf_rpmzig_digest_final(
+extern fn rpmz_rpmzig_digest_final(
     ctx: ?*DigestContext,
     out_digest: [*c]u8,
     out_len: usize,
 ) c_int;
-extern fn tdnf_rpmzig_digest_close(ctx: ?*DigestContext) void;
-extern fn tdnf_rpmzig_checksum_last_error() [*c]const u8;
+extern fn rpmz_rpmzig_digest_close(ctx: ?*DigestContext) void;
+extern fn rpmz_rpmzig_checksum_last_error() [*c]const u8;
 
 const hash_md5: c_int = 0;
 const hash_sha1: c_int = 1;
@@ -155,7 +155,7 @@ fn copyCString(pszSrc: [*:0]const u8, ppszDst: ?*?[*:0]u8) u32 {
     return TDNFAllocateString(@ptrCast(pszSrc), ppszDst);
 }
 
-fn tdnfFreeUpdateInfoReferences(pRef: abi.PTDNF_UPDATEINFO_REF) void {
+fn rpmzFreeUpdateInfoReferences(pRef: abi.PTDNF_UPDATEINFO_REF) void {
     if (pRef == null) {
         return;
     }
@@ -194,11 +194,11 @@ fn getHashOp(hash_type: c_int) *const HashOp {
 }
 
 fn rpmzigErrorOrUnknown() [*:0]const u8 {
-    const pszError = tdnf_rpmzig_checksum_last_error();
+    const pszError = rpmz_rpmzig_checksum_last_error();
     return if (pszError[0] == 0) "unknown error" else pszError;
 }
 
-fn tdnfIsFipsModeEnabled() c_int {
+fn rpmzIsFipsModeEnabled() c_int {
     var pszFipsMode: ?[*:0]u8 = null;
     defer freeCString(pszFipsMode);
 
@@ -214,7 +214,7 @@ fn tdnfIsFipsModeEnabled() c_int {
     return 0;
 }
 
-fn tdnfGetDigestForFileRpmzig(
+fn rpmzGetDigestForFileRpmzig(
     filenameOpt: ?[*:0]const u8,
     hash_type: c_int,
     digest: ?[*]u8,
@@ -237,17 +237,17 @@ fn tdnfGetDigestForFileRpmzig(
     }
     defer _ = c.fclose(fp);
 
-    ctx = tdnf_rpmzig_digest_open(hash_type);
+    ctx = rpmz_rpmzig_digest_open(hash_type);
     if (ctx == null) {
         common.log(abi.LOG_ERR, "rpmzig digest open failed for %s (%s): %s\n", .{ filename, hash.hash_type, rpmzigErrorOrUnknown() });
         return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
     }
-    defer tdnf_rpmzig_digest_close(ctx);
+    defer rpmz_rpmzig_digest_close(ctx);
     while (true) {
         const length = c.fread(@ptrCast(&buf[0]), 1, c.BUFSIZ - 1, fp);
         if (length > 0) {
             const chunk_len: usize = length;
-            if (tdnf_rpmzig_digest_update(ctx, &buf[0], chunk_len) != 0) {
+            if (rpmz_rpmzig_digest_update(ctx, &buf[0], chunk_len) != 0) {
                 common.log(abi.LOG_ERR, "rpmzig digest update failed for %s (%s): %s\n", .{ filename, hash.hash_type, rpmzigErrorOrUnknown() });
                 return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
             }
@@ -263,7 +263,7 @@ fn tdnfGetDigestForFileRpmzig(
         break;
     }
 
-    if (tdnf_rpmzig_digest_final(ctx, digest, hash.length) != 0) {
+    if (rpmz_rpmzig_digest_final(ctx, digest, hash.length) != 0) {
         common.log(abi.LOG_ERR, "rpmzig digest final failed for %s (%s): %s\n", .{ filename, hash.hash_type, rpmzigErrorOrUnknown() });
         return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
     }
@@ -271,7 +271,7 @@ fn tdnfGetDigestForFileRpmzig(
     return 0;
 }
 
-fn tdnfGetDigestForFdRpmzig(
+fn rpmzGetDigestForFdRpmzig(
     fd: c_int,
     hash_type: c_int,
     digest: ?[*]u8,
@@ -281,11 +281,11 @@ fn tdnfGetDigestForFdRpmzig(
     }
 
     const hash = getHashOp(hash_type);
-    const ctx = tdnf_rpmzig_digest_open(hash_type) orelse {
+    const ctx = rpmz_rpmzig_digest_open(hash_type) orelse {
         common.log(abi.LOG_ERR, "rpmzig digest open failed for pinned metadata (%s): %s\n", .{ hash.hash_type, rpmzigErrorOrUnknown() });
         return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
     };
-    defer tdnf_rpmzig_digest_close(ctx);
+    defer rpmz_rpmzig_digest_close(ctx);
 
     var buffer: [c.BUFSIZ]u8 = undefined;
     var offset: c.off_t = 0;
@@ -297,14 +297,14 @@ fn tdnfGetDigestForFdRpmzig(
         }
         if (length == 0) break;
         const chunk_len: usize = @intCast(length);
-        if (tdnf_rpmzig_digest_update(ctx, &buffer, chunk_len) != 0) {
+        if (rpmz_rpmzig_digest_update(ctx, &buffer, chunk_len) != 0) {
             common.log(abi.LOG_ERR, "rpmzig digest update failed for pinned metadata (%s): %s\n", .{ hash.hash_type, rpmzigErrorOrUnknown() });
             return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
         }
         offset += @intCast(chunk_len);
     }
 
-    if (tdnf_rpmzig_digest_final(ctx, digest, hash.length) != 0) {
+    if (rpmz_rpmzig_digest_final(ctx, digest, hash.length) != 0) {
         common.log(abi.LOG_ERR, "rpmzig digest final failed for pinned metadata (%s): %s\n", .{ hash.hash_type, rpmzigErrorOrUnknown() });
         return abi.ERROR_TDNF_CHECKSUM_VALIDATION_FAILED;
     }
@@ -602,7 +602,7 @@ export fn TDNFFreeUpdateInfo(pUpdateInfo: abi.PTDNF_UPDATEINFO) void {
     freeCString(pUpdateInfo[0].pszDate);
     freeCString(pUpdateInfo[0].pszDescription);
 
-    tdnfFreeUpdateInfoReferences(pUpdateInfo[0].pReferences);
+    rpmzFreeUpdateInfoReferences(pUpdateInfo[0].pReferences);
     TDNFFreeUpdateInfoPackages(pUpdateInfo[0].pPackages);
     TDNFFreeMemory(pUpdateInfo);
 }
@@ -1236,12 +1236,12 @@ export fn TDNFGetDigestForFile(
         return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    if (hash_type == hash_md5 and tdnfIsFipsModeEnabled() != 0) {
+    if (hash_type == hash_md5 and rpmzIsFipsModeEnabled() != 0) {
         common.log(abi.LOG_ERR, "Digest Init Failed\n", .{});
         return abi.ERROR_TDNF_FIPS_MODE_FORBIDDEN;
     }
 
-    return tdnfGetDigestForFileRpmzig(filenameOpt, hash_type, digest);
+    return rpmzGetDigestForFileRpmzig(filenameOpt, hash_type, digest);
 }
 
 export fn TDNFCheckHash(
@@ -1281,13 +1281,13 @@ export fn TDNFCheckHashFd(
     if (fd < 0 or digest == null or !isSupportedHashType(hash_type)) {
         return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
-    if (hash_type == hash_md5 and tdnfIsFipsModeEnabled() != 0) {
+    if (hash_type == hash_md5 and rpmzIsFipsModeEnabled() != 0) {
         common.log(abi.LOG_ERR, "Digest Init Failed\n", .{});
         return abi.ERROR_TDNF_FIPS_MODE_FORBIDDEN;
     }
 
     const hash_len: usize = @intCast(getHashOp(hash_type).length);
-    const result = tdnfGetDigestForFdRpmzig(
+    const result = rpmzGetDigestForFdRpmzig(
         fd,
         hash_type,
         digest_from_file[0..].ptr,
@@ -1531,7 +1531,7 @@ test "TDNFGetDigestForFile and TDNFCheckHash use the checksum ABI" {
             "454d4423643ce80e2a9ac94fa54ca49f",
     );
 
-    if (tdnfIsFipsModeEnabled() != 0) {
+    if (rpmzIsFipsModeEnabled() != 0) {
         var digest = [_]u8{0} ** max_digest_len;
         try std.testing.expectEqual(
             @as(u32, abi.ERROR_TDNF_FIPS_MODE_FORBIDDEN),

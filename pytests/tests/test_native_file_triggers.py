@@ -19,8 +19,8 @@ import pytest
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..'))
 OUT_DIR = os.path.join(REPO_ROOT, 'out')
-TDNF_BIN = os.path.join(OUT_DIR, 'bin', 'tdnf')
-TDNF_CONF = os.path.join(OUT_DIR, 'repo', 'tdnf.conf')
+RPMZ_BIN = os.path.join(OUT_DIR, 'bin', 'rpmz')
+RPMZ_CONF = os.path.join(OUT_DIR, 'repo', 'rpmz.conf')
 CASE_ROOT = os.path.join(OUT_DIR, 'native-file-trigger-tests')
 
 OWNER = 'tdnf-phase7-filetrigger-owner'
@@ -47,8 +47,8 @@ def check_packages_consistency():
 
 @pytest.fixture(scope='module', autouse=True)
 def isolated_environment(utils):
-    if not os.path.exists(TDNF_BIN):
-        pytest.skip('tdnf binary is not built')
+    if not os.path.exists(RPMZ_BIN):
+        pytest.skip('rpmz binary is not built')
     if not shutil.which('unshare'):
         pytest.skip('unshare is unavailable')
     probe = subprocess.run(
@@ -110,11 +110,11 @@ def _provision_shell(root):
             shutil.copy2(token, library, follow_symlinks=True)
 
 
-def _run_tdnf(root, args, check=True):
+def _run_rpmz(root, args, check=True):
     result = subprocess.run(
         _unshare_wrapper() + [
-            TDNF_BIN,
-            '-c', TDNF_CONF,
+            RPMZ_BIN,
+            '-c', RPMZ_CONF,
             '-y',
             '--installroot', root,
             '--releasever=4.0',
@@ -128,7 +128,7 @@ def _run_tdnf(root, args, check=True):
     )
     if check:
         assert result.returncode == 0, (
-            'tdnf {} failed rc={}\nstdout:\n{}\nstderr:\n{}'
+            'rpmz {} failed rc={}\nstdout:\n{}\nstderr:\n{}'
             .format(' '.join(args), result.returncode,
                     result.stdout, result.stderr)
         )
@@ -179,7 +179,7 @@ def _paths(lines, prefix):
 
 
 def _seed_owner(root):
-    _run_tdnf(root, ['install', OWNER])
+    _run_rpmz(root, ['install', OWNER])
     _clear_log(root)
 
 
@@ -204,7 +204,7 @@ def test_installed_owner_install_priorities_stdin_and_transaction_scope():
     root = _fresh_root('installed-owner-install')
     _seed_owner(root)
 
-    _run_tdnf(root, ['install', TARGET_V1, EXTRA])
+    _run_rpmz(root, ['install', TARGET_V1, EXTRA])
     lines = _read_lines(root)
     expected = [
         TARGET_ROOT + '/extra',
@@ -229,7 +229,7 @@ def test_installed_owner_install_priorities_stdin_and_transaction_scope():
 def test_same_transaction_trigger_owner_sees_target_overlay():
     root = _fresh_root('same-transaction-owner')
 
-    _run_tdnf(root, ['install', OWNER, TARGET_V1])
+    _run_rpmz(root, ['install', OWNER, TARGET_V1])
     lines = _read_lines(root)
     assert lines.count('file-in-p200000:1:0:unset') == 1
     assert _paths(lines, 'file-in-p200000') == [
@@ -248,10 +248,10 @@ def test_same_transaction_trigger_owner_sees_target_overlay():
 def test_erase_file_and_transaction_trigger_phases():
     root = _fresh_root('erase')
     _seed_owner(root)
-    _run_tdnf(root, ['install', TARGET_V1])
+    _run_rpmz(root, ['install', TARGET_V1])
     _clear_log(root)
 
-    _run_tdnf(root, ['erase', TARGET])
+    _run_rpmz(root, ['erase', TARGET])
     lines = _read_lines(root)
     removed = [
         TARGET_ROOT + '/common',
@@ -285,10 +285,10 @@ def test_erase_file_and_transaction_trigger_phases():
 def test_upgrade_and_reinstall_changed_path_semantics():
     root = _fresh_root('upgrade-reinstall')
     _seed_owner(root)
-    _run_tdnf(root, ['install', TARGET_V1])
+    _run_rpmz(root, ['install', TARGET_V1])
     _clear_log(root)
 
-    _run_tdnf(root, ['upgrade', TARGET])
+    _run_rpmz(root, ['upgrade', TARGET])
     lines = _read_lines(root)
     assert _paths(lines, 'file-in-p200000') == [
         TARGET_ROOT + '/common',
@@ -315,7 +315,7 @@ def test_upgrade_and_reinstall_changed_path_semantics():
     ]
 
     _clear_log(root)
-    _run_tdnf(root, ['reinstall', TARGET])
+    _run_rpmz(root, ['reinstall', TARGET])
     lines = _read_lines(root)
     assert _paths(lines, 'file-in-p200000') == [
         TARGET_ROOT + '/common',
@@ -339,7 +339,7 @@ def test_script_suppression_modes(mode):
         args.insert(0, '--testonly')
     else:
         args.insert(0, '--setopt=tsflags=' + mode)
-    _run_tdnf(root, args)
+    _run_rpmz(root, args)
 
     assert _read_lines(root) == []
     if mode == 'noscripts':
@@ -357,7 +357,7 @@ def test_dedicated_trigger_flags_suppress_only_their_phase():
     root = _fresh_root('phase-flags')
     _seed_owner(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=notriggerin', 'install', TARGET_V1],
     )
@@ -365,7 +365,7 @@ def test_dedicated_trigger_flags_suppress_only_their_phase():
                    for line in _read_lines(root))
 
     _clear_log(root)
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=notriggerun', 'erase', TARGET],
     )
@@ -377,9 +377,9 @@ def test_dedicated_trigger_flags_suppress_only_their_phase():
 
     post_root = _fresh_root('postun-phase-flag')
     _seed_owner(post_root)
-    _run_tdnf(post_root, ['install', TARGET_V1])
+    _run_rpmz(post_root, ['install', TARGET_V1])
     _clear_log(post_root)
-    _run_tdnf(
+    _run_rpmz(
         post_root,
         ['--setopt=tsflags=notriggerpostun', 'erase', TARGET],
     )
@@ -394,7 +394,7 @@ def test_notriggers_suppresses_file_triggers_but_not_scriptlets():
     root = _fresh_root('notriggers')
     _seed_owner(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=notriggers', 'install', TARGET_V1],
     )
@@ -407,7 +407,7 @@ def test_notriggers_suppresses_file_triggers_but_not_scriptlets():
 def test_nodb_separates_filesystem_paths_from_rpmdb_trigger_rows():
     install_root = _fresh_root('nodb-install')
     _seed_owner(install_root)
-    _run_tdnf(
+    _run_rpmz(
         install_root,
         ['--setopt=tsflags=nodb', 'install', TARGET_V1],
     )
@@ -425,9 +425,9 @@ def test_nodb_separates_filesystem_paths_from_rpmdb_trigger_rows():
 
     erase_root = _fresh_root('nodb-erase')
     _seed_owner(erase_root)
-    _run_tdnf(erase_root, ['install', TARGET_V1])
+    _run_rpmz(erase_root, ['install', TARGET_V1])
     _clear_log(erase_root)
-    _run_tdnf(
+    _run_rpmz(
         erase_root,
         ['--setopt=tsflags=nodb', 'erase', TARGET],
     )
@@ -444,7 +444,7 @@ def test_nodb_separates_filesystem_paths_from_rpmdb_trigger_rows():
 def test_nodb_new_owner_is_not_discovered_by_later_package():
     root = _fresh_root('nodb-new-owner')
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=nodb', 'install', OWNER, TARGET_V1],
     )
@@ -456,10 +456,10 @@ def test_nodb_new_owner_is_not_discovered_by_later_package():
 
 def test_nodb_owner_runs_only_its_immediate_rpmdb_matches():
     root = _fresh_root('nodb-owner-immediate')
-    _run_tdnf(root, ['install', TARGET_V1])
+    _run_rpmz(root, ['install', TARGET_V1])
     _clear_log(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=nodb', 'install', OWNER],
     )
@@ -472,10 +472,10 @@ def test_nodb_owner_runs_only_its_immediate_rpmdb_matches():
 
 def test_added_owner_is_visible_to_later_filetriggerun():
     root = _fresh_root('added-owner-un')
-    _run_tdnf(root, ['install', TARGET_V1])
+    _run_rpmz(root, ['install', TARGET_V1])
     _clear_log(root)
 
-    _run_tdnf(root, ['install', ADDED_OWNER])
+    _run_rpmz(root, ['install', ADDED_OWNER])
 
     lines = _read_lines(root)
     assert not _installed(root, TARGET)
@@ -488,10 +488,10 @@ def test_added_owner_is_visible_to_later_filetriggerun():
 
 def test_removed_owner_remains_visible_to_earlier_filetriggerin():
     root = _fresh_root('removed-owner-in')
-    _run_tdnf(root, ['install', REMOVED_OWNER])
+    _run_rpmz(root, ['install', REMOVED_OWNER])
     _clear_log(root)
 
-    _run_tdnf(root, ['install', REPLACEMENT_TARGET])
+    _run_rpmz(root, ['install', REPLACEMENT_TARGET])
 
     lines = _read_lines(root)
     assert not _installed(root, REMOVED_OWNER)
@@ -507,9 +507,9 @@ def test_file_trigger_script_flags_and_lua_arguments_match_host_rpm():
     target_rpm = _repo_rpm(TARGET, '1.0.0')
     flags_rpm = _repo_rpm(FLAGS_OWNER, '1.0.0')
 
-    _run_tdnf(native_root, ['install', TARGET_V1])
+    _run_rpmz(native_root, ['install', TARGET_V1])
     _clear_log(native_root)
-    _run_tdnf(native_root, ['install', FLAGS_OWNER])
+    _run_rpmz(native_root, ['install', FLAGS_OWNER])
 
     host_result = _run_rpm(
         host_root,
@@ -547,7 +547,7 @@ def test_query_format_modifiers_iterators_and_conditionals_match_host_rpm():
     target_rpm = _repo_rpm(TARGET, '1.0.0')
     flags_rpm = _repo_rpm(FLAGS_OWNER, '1.0.0')
 
-    _run_tdnf(native_root, ['install', FLAGS_OWNER])
+    _run_rpmz(native_root, ['install', FLAGS_OWNER])
     host_result = _run_rpm(
         host_root,
         ['-ivh', '--nodeps', '--nosignature', flags_rpm],
@@ -558,7 +558,7 @@ def test_query_format_modifiers_iterators_and_conditionals_match_host_rpm():
     _clear_log(native_root)
     _clear_log(host_root)
 
-    _run_tdnf(native_root, ['install', TARGET_V1])
+    _run_rpmz(native_root, ['install', TARGET_V1])
     host_result = _run_rpm(
         host_root,
         ['-ivh', '--nodeps', '--nosignature', target_rpm],
@@ -599,10 +599,10 @@ def test_query_format_modifiers_iterators_and_conditionals_match_host_rpm():
 
 def test_immediate_transfile_priorities_are_scoped_to_each_owner():
     root = _fresh_root('immediate-owner-order')
-    _run_tdnf(root, ['install', TARGET_V1])
+    _run_rpmz(root, ['install', TARGET_V1])
     _clear_log(root)
 
-    _run_tdnf(root, ['install', OWNER, OWNER_SECOND])
+    _run_rpmz(root, ['install', OWNER, OWNER_SECOND])
     lines = _read_lines(root)
     post_order = [
         line.split(':', 1)[0]
@@ -635,10 +635,10 @@ def test_immediate_transfile_priorities_are_scoped_to_each_owner():
 
 def test_stable_transfile_triggers_keep_global_rpm_priority_order():
     root = _fresh_root('stable-owner-order')
-    _run_tdnf(root, ['install', OWNER, OWNER_SECOND])
+    _run_rpmz(root, ['install', OWNER, OWNER_SECOND])
     _clear_log(root)
 
-    _run_tdnf(root, ['install', TARGET_V1])
+    _run_rpmz(root, ['install', TARGET_V1])
     actual = [
         line.split(':', 1)[0]
         for line in _read_lines(root)
@@ -655,10 +655,10 @@ def test_stable_transfile_triggers_keep_global_rpm_priority_order():
 
 def test_removed_immediate_transfile_priorities_are_per_owner():
     root = _fresh_root('removed-owner-order')
-    _run_tdnf(root, ['install', TARGET_V1, OWNER, OWNER_SECOND])
+    _run_rpmz(root, ['install', TARGET_V1, OWNER, OWNER_SECOND])
     _clear_log(root)
 
-    _run_tdnf(root, ['erase', OWNER, OWNER_SECOND])
+    _run_rpmz(root, ['erase', OWNER, OWNER_SECOND])
     lines = _read_lines(root)
     erase_order = [
         line.split(':', 1)[0]
@@ -722,11 +722,11 @@ def _set_first_file_state(root, package, state):
 
 def test_netshared_file_state_remains_trigger_visible():
     root = _fresh_root('netshared-state')
-    _run_tdnf(root, ['install', TARGET_V1])
+    _run_rpmz(root, ['install', TARGET_V1])
     _set_first_file_state(root, TARGET, 3)
     _clear_log(root)
 
-    _run_tdnf(root, ['install', OWNER])
+    _run_rpmz(root, ['install', OWNER])
 
     paths = _paths(_read_lines(root), 'file-in-p200000')
     assert TARGET_ROOT + '/common' in paths
@@ -807,7 +807,7 @@ def test_malformed_installed_trigger_metadata_fails_before_side_effects():
         root, 'var', 'lib', 'rpm', 'rpmdb.sqlite')
     database_before = _database_digest(database_path)
 
-    result = _run_tdnf(root, ['install', TARGET_V1], check=False)
+    result = _run_rpmz(root, ['install', TARGET_V1], check=False)
 
     assert result.returncode != 0
     assert not _installed(root, TARGET)
@@ -824,7 +824,7 @@ def test_missing_trigger_program_fails_before_side_effects():
         root, 'var', 'lib', 'rpm', 'rpmdb.sqlite')
     database_before = _database_digest(database_path)
 
-    result = _run_tdnf(root, ['install', TARGET_V1], check=False)
+    result = _run_rpmz(root, ['install', TARGET_V1], check=False)
 
     assert result.returncode != 0
     assert not _installed(root, TARGET)
@@ -839,7 +839,7 @@ def test_unsupported_trigger_query_format_fails_before_side_effects():
         root, 'var', 'lib', 'rpm', 'rpmdb.sqlite')
     database_before = _database_digest(database_path)
 
-    result = _run_tdnf(
+    result = _run_rpmz(
         root,
         ['install', BAD_QUERY_OWNER],
         check=False,
@@ -878,9 +878,9 @@ def test_file_trigger_paths_and_transaction_scope_match_host_rpm():
     target_rpm = _repo_rpm(TARGET, '1.0.0')
     extra_rpm = _repo_rpm(EXTRA, '1.0.0')
 
-    _run_tdnf(native_root, ['install', OWNER])
+    _run_rpmz(native_root, ['install', OWNER])
     _clear_log(native_root)
-    _run_tdnf(native_root, ['install', TARGET_V1, EXTRA])
+    _run_rpmz(native_root, ['install', TARGET_V1, EXTRA])
     host_result = _run_rpm(
         host_root,
         ['-ivh', '--nodeps', '--nosignature', owner_rpm],
@@ -935,7 +935,7 @@ def test_installed_shared_paths_match_host_rpm_multiplicity():
         _repo_rpm(SHARED_B, '1.0.0'),
     ]
 
-    _run_tdnf(native_root, ['install', SHARED_A, SHARED_B])
+    _run_rpmz(native_root, ['install', SHARED_A, SHARED_B])
     host_result = _run_rpm(
         host_root,
         ['-ivh', '--nodeps', '--nosignature'] + shared_rpms,
@@ -946,7 +946,7 @@ def test_installed_shared_paths_match_host_rpm_multiplicity():
     _clear_log(native_root)
     _clear_log(host_root)
 
-    _run_tdnf(native_root, ['install', OWNER])
+    _run_rpmz(native_root, ['install', OWNER])
     host_result = _run_rpm(
         host_root,
         ['-ivh', '--nodeps', '--nosignature', owner_rpm],
@@ -970,7 +970,7 @@ def test_same_transaction_shared_paths_match_host_rpm_multiplicity():
         _repo_rpm(SHARED_B, '1.0.0'),
     ]
 
-    _run_tdnf(native_root, ['install', OWNER, SHARED_A, SHARED_B])
+    _run_rpmz(native_root, ['install', OWNER, SHARED_A, SHARED_B])
     host_result = _run_rpm(
         host_root,
         ['-ivh', '--nodeps', '--nosignature', owner_rpm] + shared_rpms,

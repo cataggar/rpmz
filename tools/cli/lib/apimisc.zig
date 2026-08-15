@@ -7,7 +7,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const jsondump = @import("jsondump_abi");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
@@ -214,7 +214,7 @@ fn allocateCString(bytes: []const u8, ppszOut: *?[*:0]u8) u32 {
     return 0;
 }
 
-fn tdnfRefreshHandle(hTdnf: ?*anyopaque) u32 {
+fn rpmzRefreshHandle(hTdnf: ?*anyopaque) u32 {
     if (builtin.is_test) {
         return 0;
     }
@@ -762,9 +762,9 @@ pub export fn TDNFCliMakeCacheCommand(
 pub export fn TDNFCliRefresh(pContext: ?*abi.TDNF_CLI_CONTEXT) u32 {
     const context = pContext orelse return abi.ERROR_TDNF_CLI_INVALID_ARGUMENT;
 
-    const dwError = tdnfRefreshHandle(context.hTdnf);
+    const dwError = rpmzRefreshHandle(context.hTdnf);
     if (dwError == abi.ERROR_TDNF_SYSTEM_BASE + abi.EACCES and c.geteuid() != 0) {
-        common.log(LOG_ERR, "\ntdnf repo cache needs to be refreshed but you have insufficient permissions\n" ++
+        common.log(LOG_ERR, "\nrpmz repo cache needs to be refreshed but you have insufficient permissions\n" ++
             "You can use one of the below methods to workaround this\n" ++
             "1. Login as root and refresh cache\n" ++
             "2. Use -c (--config) with a configuration file that has 'cachedir' set to a directory where you have access\n" ++

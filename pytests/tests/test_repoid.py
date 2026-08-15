@@ -37,7 +37,7 @@ def test_repoid(utils):
     utils.create_repoconf(os.path.join(REPODIR, REPOFILENAME),
                           "http://foo.bar.com/packages",
                           REPONAME)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--setopt=reposdir={}'.format(REPODIR),
                      '--repoid={}'.format(REPONAME),
                      'repolist'])
@@ -50,7 +50,7 @@ def test_repo(utils):
     utils.create_repoconf(os.path.join(REPODIR, REPOFILENAME),
                           "http://foo.bar.com/packages",
                           REPONAME)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--setopt=reposdir={}'.format(REPODIR),
                      '--repo={}'.format(REPONAME),
                      'repolist'])
@@ -64,7 +64,7 @@ def test_repoid_created_repo(utils):
     workdir = WORKDIR
     os.makedirs(workdir, exist_ok=True)
 
-    ret = utils.run(['tdnf', '--repo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--repo={}'.format(reponame),
                      '--download-metadata',
                      'reposync'],
                     cwd=workdir)
@@ -79,7 +79,7 @@ def test_repoid_created_repo(utils):
 
     utils.create_repoconf(filename, baseurl, "synced-repo")
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--repo=synced-repo',
                      'makecache'],
                     cwd=workdir)
@@ -87,7 +87,7 @@ def test_repoid_created_repo(utils):
 
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-y', '--nogpgcheck',
                      '--repo=synced-repo',
                      'install', pkgname],
@@ -127,7 +127,7 @@ def test_repoid_comma_separated(utils):
                           REPONAME3)
 
     # Test with comma-separated repoid - should only enable the specified repos
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--setopt=reposdir={}'.format(REPODIR),
                      '--repoid={},{}'.format(REPONAME1, REPONAME2),
                      'repolist', '-j'])
@@ -165,7 +165,7 @@ def test_repo_comma_separated(utils):
                           REPONAME3)
 
     # Test with comma-separated repo - should only enable the specified repos
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--setopt=reposdir={}'.format(REPODIR),
                      '--repo={},{}'.format(REPONAME1, REPONAME2),
                      'repolist', '-j'])

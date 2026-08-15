@@ -9,7 +9,7 @@
 //! `--repofromdir` had two different walks. `repomd/directory_repository.zig`
 //! sorted the collected paths on the solve and query paths, while the
 //! transaction-plan path loads the same directory through libsolv's
-//! `readRpmsFromDir` (`solv/tdnfrepo.c`), which takes them in readdir order.
+//! `readRpmsFromDir` (`solv/rpmzrepo.c`), which takes them in readdir order.
 //! Two orders for one repository is two answers for one question (#266).
 //!
 //! Readdir order is now authoritative on every path, matching libsolv and

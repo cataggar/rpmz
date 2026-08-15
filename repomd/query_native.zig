@@ -266,7 +266,7 @@ const NativeContext = struct {
         raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
         repo_count: u32,
         root_dir: ?[*:0]const u8,
-        config: ?*const abi.tdnf_rpm_config,
+        config: ?*const abi.rpmz_rpm_config,
         load_installed: bool,
         available_options: AvailableLoadOptions,
         installed_options: InstalledLoadOptions,
@@ -343,7 +343,7 @@ pub export fn TDNFRepoMdNativeList(
 pub export fn TDNFRepoMdNativeListConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     scope_int: c_int,
     specs: [*c][*c]u8,
     detail_int: c_int,
@@ -369,7 +369,7 @@ pub export fn TDNFRepoMdNativeSearch(
 pub export fn TDNFRepoMdNativeSearchConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     search_strings: [*c][*c]u8,
     start_index: c_int,
     end_index: c_int,
@@ -392,7 +392,7 @@ pub export fn TDNFRepoMdNativeProvides(
 pub export fn TDNFRepoMdNativeProvidesConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     raw_spec: ?[*:0]const u8,
     out_pkg_info: ?*abi.PTDNF_PKG_INFO,
 ) u32 {
@@ -413,7 +413,7 @@ pub export fn TDNFRepoMdNativeRepoQuery(
 pub export fn TDNFRepoMdNativeRepoQueryConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     repoquery_args: ?*const abi.TDNF_REPOQUERY_ARGS,
     out_pkg_info: ?*abi.PTDNF_PKG_INFO,
     out_count: ?*u32,
@@ -436,7 +436,7 @@ pub export fn TDNFRepoMdNativeFindNevraMatches(
 pub export fn TDNFRepoMdNativeFindNevraMatchesConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     raw_nevra: ?[*:0]const u8,
     installed_only: c_int,
     out_matches: ?*[*c][*c]u8,
@@ -448,7 +448,7 @@ pub export fn TDNFRepoMdNativeFindNevraMatchesConfig(
 pub export fn TDNFRepoMdNativePackageRefLinesConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     scope_int: c_int,
     raw_spec: ?[*:0]const u8,
     out_lines: ?*[*c][*c]u8,
@@ -492,7 +492,7 @@ pub export fn TDNFRepoMdNativePackageRefLinesConfig(
 pub export fn TDNFRepoMdNativeBestPackageRefConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     scope_int: c_int,
     raw_spec: ?[*:0]const u8,
     source_only: c_int,
@@ -652,7 +652,7 @@ pub export fn TDNFRepoMdNativeUpdateInfoSummaryLines(
 pub export fn TDNFRepoMdNativeUpdateInfoSummaryLinesConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     package_specs: [*c][*c]u8,
     security_only: u32,
     raw_severity: ?[*:0]const u8,
@@ -679,7 +679,7 @@ pub export fn TDNFRepoMdNativeUpdateInfoLines(
 pub export fn TDNFRepoMdNativeUpdateInfoLinesConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     package_specs: [*c][*c]u8,
     security_only: u32,
     raw_severity: ?[*:0]const u8,
@@ -704,7 +704,7 @@ pub export fn TDNFRepoMdNativeMinVersionExcludeLines(
 pub export fn TDNFRepoMdNativeMinVersionExcludeLinesConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     raw_minversions: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
     out_count: ?*u32,
@@ -726,7 +726,7 @@ pub export fn TDNFRepoMdNativeRequiresForPackageRefs(
 pub export fn TDNFRepoMdNativeRequiresForPackageRefsConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     raw_package_refs: [*c][*c]u8,
     out_deps: ?*[*c][*c]u8,
     out_count: ?*u32,
@@ -753,7 +753,7 @@ pub export fn TDNFRepoMdNativePackageInfoForRefs(
 pub export fn TDNFRepoMdNativePackageInfoForRefsConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     raw_package_refs: [*c][*c]u8,
     detail_int: c_int,
     queryformat: c_int,
@@ -799,7 +799,7 @@ pub export fn TDNFRepoMdNativeAutoInstalledOrphanLines(
 }
 
 pub export fn TDNFRepoMdNativeAutoInstalledOrphanLinesConfig(
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     raw_auto_installed_refs: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
     out_count: ?*u32,
@@ -811,7 +811,7 @@ fn nativeList(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     scope_int: c_int,
     specs: [*c][*c]u8,
@@ -869,7 +869,7 @@ fn nativeSearch(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     search_strings: [*c][*c]u8,
     start_index: c_int,
@@ -930,7 +930,7 @@ fn nativeProvides(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     raw_spec: ?[*:0]const u8,
     out_pkg_info: ?*abi.PTDNF_PKG_INFO,
@@ -981,7 +981,7 @@ fn nativeRepoQuery(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     repoquery_args: ?*const abi.TDNF_REPOQUERY_ARGS,
     out_pkg_info: ?*abi.PTDNF_PKG_INFO,
@@ -1089,7 +1089,7 @@ fn nativeFindNevraMatches(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     raw_nevra: ?[*:0]const u8,
     installed_only: c_int,
@@ -1190,7 +1190,7 @@ fn nativeUpdateInfoSummaryLines(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     package_specs: [*c][*c]u8,
     security_only: u32,
@@ -1240,7 +1240,7 @@ fn nativeUpdateInfoLines(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     package_specs: [*c][*c]u8,
     security_only: u32,
@@ -1290,7 +1290,7 @@ fn nativeUpdateInfoLines(
 pub export fn TDNFRepoMdNativeExcludeLinesConfig(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     raw_excludes: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
     out_count: ?*u32,
@@ -1351,7 +1351,7 @@ fn nativeMinVersionExcludeLines(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     raw_minversions: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
@@ -1452,7 +1452,7 @@ fn nativeRequiresForPackageRefs(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     raw_package_refs: [*c][*c]u8,
     out_deps: ?*[*c][*c]u8,
@@ -1500,7 +1500,7 @@ fn nativeRequiresForPackageRefs(
 
 fn nativeAutoInstalledOrphanLines(
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     raw_auto_installed_refs: [*c][*c]u8,
     out_lines: ?*[*c][*c]u8,
@@ -1553,7 +1553,7 @@ fn nativePackageInfoForRefs(
     raw_repos: ?[*]const abi.TDNF_REPOMD_NATIVE_REPO_INPUT,
     repo_count: u32,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     config_required: bool,
     raw_package_refs: [*c][*c]u8,
     detail_int: c_int,
@@ -1766,11 +1766,11 @@ fn mapQueryError(err: anyerror) u32 {
             break :blk abi.ERROR_TDNF_FILESYS_IO;
         },
         error.RpmDbOpenFailed => blk: {
-            setErrorDefault("failed to open rpmdb: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
+            setErrorDefault("failed to open rpmdb: {s}", .{std.mem.span(abi.rpmz_rpmdb_last_error())});
             break :blk abi.ERROR_TDNF_RPMTS_OPENDB_FAILED;
         },
         error.RpmDbReadFailed => blk: {
-            setErrorDefault("failed to read rpmdb: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
+            setErrorDefault("failed to read rpmdb: {s}", .{std.mem.span(abi.rpmz_rpmdb_last_error())});
             break :blk abi.ERROR_TDNF_SOLV_IO;
         },
         else => blk: {
@@ -1969,7 +1969,7 @@ fn loadDirectoryDataset(
     };
 }
 
-fn loadInstalledDataset(root_dir: ?[*:0]const u8, config: ?*const abi.tdnf_rpm_config, options: InstalledLoadOptions) !LoadedDataset {
+fn loadInstalledDataset(root_dir: ?[*:0]const u8, config: ?*const abi.rpmz_rpm_config, options: InstalledLoadOptions) !LoadedDataset {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -4814,7 +4814,7 @@ test "exclude line order does not depend on the order the patterns are given" {
 // PR #255 replaced libsolv's `SolvFindBestAvailable` with a native lookup that
 // selected on EVR alone. Real repositories give the obsoleting package the same
 // EVR as the package it replaces, so the tie fell to iteration order and
-// `tdnf install <obsoleted>` pulled in the obsoleted package instead of its
+// `rpmz install <obsoleted>` pulled in the obsoleted package instead of its
 // replacement.
 test "an obsoleting package wins an EVR tie against the package it obsoletes" {
     const testing = std.testing;

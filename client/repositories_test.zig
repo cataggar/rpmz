@@ -1,7 +1,7 @@
 const std = @import("std");
 const root = @import("client_root");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 
 const CnfNode = abi.CnfNode;
 const RepoData = abi.RepoData;

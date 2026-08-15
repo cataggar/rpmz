@@ -3,10 +3,10 @@
 // Licensed under the GNU Lesser General Public License v2.1.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const abi = @import("client_abi");
 const transaction_options = @import("client_transaction_options");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const trans_flags = @import("rpmtrans_flags");
 const rpm_header = @import("rpm_header");
 const rpm_evr = @import("rpm_evr");
@@ -150,7 +150,7 @@ const PathKeyContext = struct {
 
 const PathEntry = struct {
     path: [:0]u8,
-    trigger_path: c.tdnf_rpm_trigger_path,
+    trigger_path: c.rpmz_rpm_trigger_path,
 };
 
 const PathList = struct {
@@ -224,8 +224,8 @@ const PathList = struct {
         return 0;
     }
 
-    fn flatten(self: *const PathList) ![]c.tdnf_rpm_trigger_path {
-        const result = try allocator.alloc(c.tdnf_rpm_trigger_path, self.entries.items.len);
+    fn flatten(self: *const PathList) ![]c.rpmz_rpm_trigger_path {
+        const result = try allocator.alloc(c.rpmz_rpm_trigger_path, self.entries.items.len);
         for (self.entries.items, 0..) |entry, index|
             result[index] = entry.trigger_path;
         return result;
@@ -263,17 +263,17 @@ const TransactionView = struct {
         alloc: std.mem.Allocator,
     ) struct { u32, TransactionView } {
         var result = TransactionView{ .alloc = alloc };
-        const iter = c.tdnf_rpmdb_iter_open_config(@ptrCast(config)) orelse
+        const iter = c.rpmz_rpmdb_iter_open_config(@ptrCast(config)) orelse
             {
                 result.deinit();
                 return .{ ERROR_TDNF_TRANSACTION_FAILED, .{} };
             };
-        defer c.tdnf_rpmdb_iter_close(iter);
+        defer c.rpmz_rpmdb_iter_close(iter);
         while (true) {
             var hnum: u32 = 0;
             var blob_ptr: [*c]const u8 = null;
             var blob_len: usize = 0;
-            const next = c.tdnf_rpmdb_iter_next_header_blob_hnum(
+            const next = c.rpmz_rpmdb_iter_next_header_blob_hnum(
                 iter,
                 &hnum,
                 &blob_ptr,
@@ -364,7 +364,7 @@ const TransactionView = struct {
         var count: c_int = 0;
         for (self.entries.items) |entry| {
             if (!entry.active) continue;
-            const matched = c.tdnf_rpm_header_name_equals(
+            const matched = c.rpmz_rpm_header_name_equals(
                 entry.blob.ptr,
                 entry.blob.len,
                 name_ptr,
@@ -376,13 +376,13 @@ const TransactionView = struct {
         return count;
     }
 
-    fn headers(self: *TransactionView, db_only: bool) ![]c.tdnf_rpm_header_view {
+    fn headers(self: *TransactionView, db_only: bool) ![]c.rpmz_rpm_header_view {
         var count: usize = 0;
         for (self.entries.items) |entry| {
             if ((db_only and entry.db_visible) or (!db_only and entry.active))
                 count += 1;
         }
-        const result = try allocator.alloc(c.tdnf_rpm_header_view, count);
+        const result = try allocator.alloc(c.rpmz_rpm_header_view, count);
         var index: usize = 0;
         for (self.entries.items) |entry| {
             if ((db_only and !entry.db_visible) or (!db_only and !entry.active))
@@ -463,7 +463,7 @@ extern fn TDNFGPGCheckPackageWithFile(
     ?*abi.Tdnf,
     ?*abi.RepoData,
     ?[*:0]const u8,
-    ?*c.tdnf_rpm_file,
+    ?*c.rpmz_rpm_file,
     ?*c_int,
 ) callconv(.c) u32;
 extern fn TDNFJoinArrayToString(
@@ -490,7 +490,7 @@ extern fn history_get_current_transaction_id(?*HistoryCtx) callconv(.c) c_int;
 extern fn history_add_transaction(?*HistoryCtx, ?[*:0]const u8) callconv(.c) c_int;
 extern fn history_restore_auto_flags(?*HistoryCtx, c_int) callconv(.c) c_int;
 extern fn history_replay_auto_flags(?*HistoryCtx, c_int, c_int) callconv(.c) c_int;
-extern fn tdnf_repomd_native_verified_transaction_solve_config(
+extern fn rpmz_repomd_native_verified_transaction_solve_config(
     ?[*]const c.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
     ?[*]const ?[*]const u8,
     ?[*]const usize,
@@ -540,7 +540,7 @@ fn freeItems(ts: *c.TDNFRPMTS) void {
     while (item) |current| {
         const current_ptr: *c.TDNF_RPM_TS_ITEM = @ptrCast(current);
         item = current_ptr.pNext;
-        c.tdnf_rpm_file_close(current_ptr.pRpmFile);
+        c.rpmz_rpm_file_close(current_ptr.pRpmFile);
         free(current_ptr.pszPath);
         free(current_ptr.pszName);
         free(current_ptr.pszEVR);
@@ -564,13 +564,13 @@ fn freeCached(list_opt: ?*c.TDNF_CACHED_RPM_LIST) void {
     free(list);
 }
 
-fn removeCached(tdnf: *abi.Tdnf, list: *c.TDNF_CACHED_RPM_LIST) u32 {
+fn removeCached(rpmz: *abi.Tdnf, list: *c.TDNF_CACHED_RPM_LIST) u32 {
     var entry = list.pHead;
     while (entry) |current| : (entry = @as(*c.TDNF_CACHED_RPM_ENTRY, @ptrCast(current)).pNext) {
         const current_ptr: *c.TDNF_CACHED_RPM_ENTRY = @ptrCast(current);
         if (!isEmpty(current_ptr.pszFilePath)) {
             const rc = TDNFRemovePackageFromCache(
-                tdnf,
+                rpmz,
                 current_ptr.pszFilePath,
             );
             if (rc != 0) return rc;
@@ -579,12 +579,12 @@ fn removeCached(tdnf: *abi.Tdnf, list: *c.TDNF_CACHED_RPM_LIST) u32 {
     return 0;
 }
 
-fn cleanupTransaction(tdnf: *abi.Tdnf, ts: *c.TDNFRPMTS) void {
-    const conf = tdnf.pConf.?;
-    const args = tdnf.pArgs.?;
+fn cleanupTransaction(rpmz: *abi.Tdnf, ts: *c.TDNFRPMTS) void {
+    const conf = rpmz.pConf.?;
+    const args = rpmz.pArgs.?;
     if (ts.pCachedRpmsArray) |cached| {
         if (conf.nKeepCache == 0 and args.nDownloadOnly == 0)
-            _ = removeCached(tdnf, cached);
+            _ = removeCached(rpmz, cached);
         freeCached(cached);
     }
     clearPlan(ts);
@@ -596,7 +596,7 @@ fn recordItem(
     ts: *c.TDNFRPMTS,
     kind: c_uint,
     package_kind: c_int,
-    rpm_file: ?*?*c.tdnf_rpm_file,
+    rpm_file: ?*?*c.rpmz_rpm_file,
     path: ?[*:0]const u8,
     hnum: u32,
     name: ?[*:0]const u8,
@@ -860,7 +860,7 @@ fn priorListContains(priors: []const FixedOrderRpmDbRow, hnum: u32) bool {
 
 fn identityMatchesMetadata(
     expected: FixedOrderPackageIdentity,
-    metadata: c.tdnf_rpm_file_metadata,
+    metadata: c.rpmz_rpm_file_metadata,
 ) bool {
     const name = metadata.name orelse return false;
     const version = metadata.version orelse return false;
@@ -907,23 +907,23 @@ fn digestLength(kind: c_int) ?usize {
 
 fn addInstallPackage(
     ts: *c.TDNFRPMTS,
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     info: *c.TDNF_PKG_INFO,
     repo: *abi.RepoData,
     install_flag: c_int,
 ) u32 {
-    const args = tdnf.pArgs.?;
-    const conf = tdnf.pConf.?;
+    const args = rpmz.pArgs.?;
+    const conf = rpmz.pConf.?;
     const location = info.pszLocation orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const package_name = info.pszName orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var path: ?[*:0]u8 = null;
     var rpm_fd: c_int = -1;
     var rpm_fd_borrowed = false;
-    var rpm_file: ?*c.tdnf_rpm_file = null;
+    var rpm_file: ?*c.rpmz_rpm_file = null;
     var cache_entry: ?*c.TDNF_CACHED_RPM_ENTRY = null;
     var header_evr: ?[*:0]u8 = null;
     defer {
-        c.tdnf_rpm_file_close(rpm_file);
+        c.rpmz_rpm_file_close(rpm_file);
         if (rpm_fd >= 0 and !rpm_fd_borrowed) _ = close(rpm_fd);
         free(header_evr);
         free(path);
@@ -940,7 +940,7 @@ fn addInstallPackage(
         if (info.dwSourcePackageHandle == 0)
             return errors.ERROR_TDNF_INVALID_PARAMETER;
         rc = TDNFPackageContextBorrowRpmFd(
-            tdnf.pSack,
+            rpmz.pSack,
             @intCast(info.dwSourcePackageHandle),
             &rpm_fd,
         );
@@ -982,7 +982,7 @@ fn addInstallPackage(
         }
         if (!in_place) {
             rc = TDNFDownloadPackageToCacheFd(
-                tdnf,
+                rpmz,
                 location,
                 package_name,
                 repo,
@@ -993,7 +993,7 @@ fn addInstallPackage(
         }
     } else {
         rc = TDNFDownloadPackageToDirectoryFd(
-            tdnf,
+            rpmz,
             location,
             package_name,
             repo,
@@ -1010,11 +1010,11 @@ fn addInstallPackage(
         return systemError();
     }
     rpm_file = if (rpm_fd >= 0)
-        c.tdnf_rpm_file_open_fd(rpm_fd)
+        c.rpmz_rpm_file_open_fd(rpm_fd)
     else
-        c.tdnf_rpm_file_open(path);
+        c.rpmz_rpm_file_open(path);
     if (rpm_file == null) {
-        common.log(LOG_ERR, "Unable to parse package %s: %s\n", .{ path.?, c.tdnf_rpmdb_last_error() });
+        common.log(LOG_ERR, "Unable to parse package %s: %s\n", .{ path.?, c.rpmz_rpmdb_last_error() });
         return ERROR_TDNF_RPMRC_NOTFOUND;
     }
 
@@ -1022,7 +1022,7 @@ fn addInstallPackage(
         const len = digestLength(info.nChecksumType) orelse
             return ERROR_TDNF_CHECKSUM_MISMATCH;
         var digest = [_]u8{0} ** 64;
-        if (c.tdnf_rpm_file_digest(
+        if (c.rpmz_rpm_file_digest(
             rpm_file,
             info.nChecksumType,
             &digest,
@@ -1036,17 +1036,17 @@ fn addInstallPackage(
 
     var bytes: [*c]const u8 = null;
     var byte_len: usize = 0;
-    if (c.tdnf_rpm_file_bytes(rpm_file, &bytes, &byte_len) != 0)
+    if (c.rpmz_rpm_file_bytes(rpm_file, &bytes, &byte_len) != 0)
         return ERROR_TDNF_RPM_CHECK;
     if (byte_len != info.dwDownloadSizeBytes) {
         common.log(LOG_ERR, "rpm file (%s) size (%zu) does not match expected size (%u)\n", .{ path.?, byte_len, info.dwDownloadSizeBytes });
         return ERROR_TDNF_SIZE_MISMATCH;
     }
-    rc = TDNFGPGCheckPackageWithFile(tdnf, repo, path, rpm_file, null);
+    rc = TDNFGPGCheckPackageWithFile(rpmz, repo, path, rpm_file, null);
     if (rc != 0) return rc;
 
-    var metadata = std.mem.zeroes(c.tdnf_rpm_file_metadata);
-    if (c.tdnf_rpm_file_get_metadata(rpm_file, &metadata) != 0 or
+    var metadata = std.mem.zeroes(c.rpmz_rpm_file_metadata);
+    if (c.rpmz_rpm_file_get_metadata(rpm_file, &metadata) != 0 or
         metadata.main_header_blob == null or metadata.main_header_blob_len == 0)
         return ERROR_TDNF_RPM_CHECK;
     if (metadata.has_epoch != 0) {
@@ -1085,9 +1085,9 @@ fn addInstallPackage(
 
     if (metadata.package_kind != package_binary) {
         if (args.nDownloadOnly == 0 and args.nTestOnly == 0 and
-            c.tdnf_rpm_file_extract_source_config(
+            c.rpmz_rpm_file_extract_source_config(
                 rpm_file,
-                @ptrCast(tdnf.pRpmConfig),
+                @ptrCast(rpmz.pRpmConfig),
                 ts.nTransFlags,
             ) != 0)
             return ERROR_TDNF_RPM_CHECK;
@@ -1117,16 +1117,16 @@ fn addInstallPackage(
 
 fn addInstallPackages(
     ts: *c.TDNFRPMTS,
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     first: ?*c.TDNF_PKG_INFO,
     install_flag: c_int,
 ) u32 {
     var info = first orelse return 0;
     while (true) {
         var repo: ?*abi.RepoData = null;
-        var rc = TDNFFindRepoById(tdnf, info.pszRepoName, &repo);
+        var rc = TDNFFindRepoById(rpmz, info.pszRepoName, &repo);
         if (rc != 0) return rc;
-        rc = addInstallPackage(ts, tdnf, info, repo.?, install_flag);
+        rc = addInstallPackage(ts, rpmz, info, repo.?, install_flag);
         if (rc != 0) return rc;
         info = info.pNext orelse break;
     }
@@ -1135,21 +1135,21 @@ fn addInstallPackages(
 
 fn addErasePackage(
     ts: *c.TDNFRPMTS,
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     info: *c.TDNF_PKG_INFO,
 ) u32 {
-    if (tdnf.pRpmConfig == null or isEmpty(info.pszName) or isEmpty(info.pszEVR))
+    if (rpmz.pRpmConfig == null or isEmpty(info.pszName) or isEmpty(info.pszEVR))
         return errors.ERROR_TDNF_INVALID_PARAMETER;
-    var matches: [*c]c.tdnf_rpmdb_label_match = null;
+    var matches: [*c]c.rpmz_rpmdb_label_match = null;
     var count: usize = 0;
-    if (c.tdnf_rpmdb_find_label_matches_config(
-        @ptrCast(tdnf.pRpmConfig),
+    if (c.rpmz_rpmdb_find_label_matches_config(
+        @ptrCast(rpmz.pRpmConfig),
         info.pszName,
         info.pszEVR,
         &matches,
         &count,
     ) != 0) return ERROR_TDNF_RPM_CHECK;
-    defer c.tdnf_rpmdb_label_matches_free(matches, count);
+    defer c.rpmz_rpmdb_label_matches_free(matches, count);
     for (matches[0..count]) |match| {
         if (!isEmpty(info.pszArch) and
             (isEmpty(match.arch) or !std.mem.eql(
@@ -1175,12 +1175,12 @@ fn addErasePackage(
 
 fn addErasePackages(
     ts: *c.TDNFRPMTS,
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     first: ?*c.TDNF_PKG_INFO,
 ) u32 {
     var info = first orelse return 0;
     while (true) {
-        const rc = addErasePackage(ts, tdnf, info);
+        const rc = addErasePackage(ts, rpmz, info);
         if (rc != 0) return rc;
         info = info.pNext orelse break;
     }
@@ -1189,41 +1189,41 @@ fn addErasePackages(
 
 fn populate(
     ts: *c.TDNFRPMTS,
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     solved: *c.TDNF_SOLVED_PKG_INFO,
 ) u32 {
-    var rc = addInstallPackages(ts, tdnf, solved.pPkgsToInstall, install_install);
+    var rc = addInstallPackages(ts, rpmz, solved.pPkgsToInstall, install_install);
     if (rc != 0) return rc;
-    rc = addInstallPackages(ts, tdnf, solved.pPkgsToReinstall, install_reinstall);
+    rc = addInstallPackages(ts, rpmz, solved.pPkgsToReinstall, install_reinstall);
     if (rc != 0) return rc;
-    rc = addInstallPackages(ts, tdnf, solved.pPkgsToUpgrade, install_upgrade);
+    rc = addInstallPackages(ts, rpmz, solved.pPkgsToUpgrade, install_upgrade);
     if (rc != 0) return rc;
-    rc = addErasePackages(ts, tdnf, solved.pPkgsToRemove);
+    rc = addErasePackages(ts, rpmz, solved.pPkgsToRemove);
     if (rc != 0) return rc;
-    rc = addErasePackages(ts, tdnf, solved.pPkgsObsoleted);
+    rc = addErasePackages(ts, rpmz, solved.pPkgsObsoleted);
     if (rc != 0) return rc;
-    rc = addInstallPackages(ts, tdnf, solved.pPkgsToDowngrade, install_install);
+    rc = addInstallPackages(ts, rpmz, solved.pPkgsToDowngrade, install_install);
     if (rc != 0) return rc;
-    return addErasePackages(ts, tdnf, solved.pPkgsRemovedByDowngrade);
+    return addErasePackages(ts, rpmz, solved.pPkgsRemovedByDowngrade);
 }
 
 fn createTransaction(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     solved: *c.TDNF_SOLVED_PKG_INFO,
 ) struct { u32, ?*c.TDNFRPMTS } {
-    if (tdnf.pArgs == null or tdnf.pConf == null)
+    if (rpmz.pArgs == null or rpmz.pConf == null)
         return .{ errors.ERROR_TDNF_INVALID_PARAMETER, null };
     const ts = allocate(c.TDNFRPMTS) orelse
         return .{ errors.ERROR_TDNF_OUT_OF_MEMORY, null };
-    ts.nQuiet = tdnf.pArgs.?.nQuiet;
-    ts.nTransFlags = tdnf.pConf.?.rpmTransFlags;
+    ts.nQuiet = rpmz.pArgs.?.nQuiet;
+    ts.nTransFlags = rpmz.pConf.?.rpmTransFlags;
     ts.pCachedRpmsArray = allocate(c.TDNF_CACHED_RPM_LIST) orelse {
         free(ts);
         return .{ errors.ERROR_TDNF_OUT_OF_MEMORY, null };
     };
-    const rc = populate(ts, tdnf, solved);
+    const rc = populate(ts, rpmz, solved);
     if (rc != 0) {
-        cleanupTransaction(tdnf, ts);
+        cleanupTransaction(rpmz, ts);
         return .{ rc, null };
     }
     return .{ 0, ts };
@@ -1278,20 +1278,20 @@ fn mapFixedExecutionError(
 /// Ownership of the caller's paths, identities, and order remains with the
 /// caller. RPM handles opened here are always closed before return.
 pub fn executeFixedOrder(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     transaction: FixedOrderTransaction,
 ) FixedOrderExecutionError!void {
-    return executeFixedOrderObserved(tdnf, transaction, null);
+    return executeFixedOrderObserved(rpmz, transaction, null);
 }
 
 /// Execute a preflighted transaction and report each input item only after
 /// that item's native mutation path has returned successfully.
 pub fn executeFixedOrderObserved(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     transaction: FixedOrderTransaction,
     observer: ?FixedOrderExecutionObserver,
 ) FixedOrderExecutionError!void {
-    if (tdnf.pArgs == null or tdnf.pConf == null or tdnf.pRpmConfig == null)
+    if (rpmz.pArgs == null or rpmz.pConf == null or rpmz.pRpmConfig == null)
         return error.InvalidContext;
     try validateFixedOrderInput(transaction);
     if (transaction.items.len == 0) return;
@@ -1354,8 +1354,8 @@ pub fn executeFixedOrderObserved(
         freeItems(ts);
         free(ts);
     }
-    ts.nQuiet = tdnf.pArgs.?.nQuiet;
-    ts.nTransFlags = tdnf.pConf.?.rpmTransFlags;
+    ts.nQuiet = rpmz.pArgs.?.nQuiet;
+    ts.nTransFlags = rpmz.pConf.?.rpmTransFlags;
 
     for (transaction.items) |item| {
         if (item == .erase) {
@@ -1384,15 +1384,15 @@ pub fn executeFixedOrderObserved(
         }
 
         const package = fixedItemPackage(item).?;
-        var rpm_file: ?*c.tdnf_rpm_file = if (package.handle) |handle|
+        var rpm_file: ?*c.rpmz_rpm_file = if (package.handle) |handle|
             @ptrCast(@alignCast(handle))
         else
-            c.tdnf_rpm_file_open(package.path.ptr) orelse
+            c.rpmz_rpm_file_open(package.path.ptr) orelse
                 return error.PackageOpenFailed;
         var transferred = package.handle != null;
-        defer if (!transferred) c.tdnf_rpm_file_close(rpm_file);
-        var metadata = std.mem.zeroes(c.tdnf_rpm_file_metadata);
-        if (c.tdnf_rpm_file_get_metadata(rpm_file, &metadata) != 0 or
+        defer if (!transferred) c.rpmz_rpm_file_close(rpm_file);
+        var metadata = std.mem.zeroes(c.rpmz_rpm_file_metadata);
+        if (c.rpmz_rpm_file_get_metadata(rpm_file, &metadata) != 0 or
             metadata.package_kind != package_binary)
             return error.PackageOpenFailed;
         if (!identityMatchesMetadata(package.identity, metadata))
@@ -1423,7 +1423,7 @@ pub fn executeFixedOrderObserved(
     var validation_failure: FixedOrderValidationFailure = .none;
     const rc = runTransactionNativeImpl(
         ts,
-        tdnf,
+        rpmz,
         &plan,
         expected_items,
         &validation_failure,
@@ -1482,7 +1482,7 @@ fn reportProblems(ts: *c.TDNFRPMTS) void {
 }
 
 fn logRpmzigError(action: [*:0]const u8) void {
-    const detail = c.tdnf_rpmdb_last_error();
+    const detail = c.rpmz_rpmdb_last_error();
     if (!isEmpty(detail))
         common.log(LOG_ERR, "rpmzig-transaction-execute: %s failed: %s\n", .{ action, detail })
     else
@@ -1502,7 +1502,7 @@ fn nativePathOwned(
     if (path == null) return -1;
     for (context.view.entries.items) |entry| {
         if (!entry.active or ownershipIgnores(context, entry.hnum)) continue;
-        const result = c.tdnf_rpm_header_owns_path_config(
+        const result = c.rpmz_rpm_header_owns_path_config(
             entry.blob.ptr,
             entry.blob.len,
             path,
@@ -1555,7 +1555,7 @@ fn collectHeaderTriggerPaths(
         .source_len = blob.len,
         .ownership = ownership,
     };
-    if (c.tdnf_rpm_header_foreach_trigger_file(
+    if (c.rpmz_rpm_header_foreach_trigger_file(
         blob.ptr,
         blob.len,
         flags,
@@ -1614,9 +1614,9 @@ fn schedulePostun(
     return 0;
 }
 
-fn effectiveFlags(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
+fn effectiveFlags(ts: *c.TDNFRPMTS, rpmz: *abi.Tdnf) u32 {
     var result = ts.nTransFlags;
-    if (tdnf.pArgs.?.nTestOnly != 0) {
+    if (rpmz.pArgs.?.nTestOnly != 0) {
         result |= trans_flags.TDNF_RPMTRANS_FLAG_TEST |
             trans_flags.TDNF_RPMTRANS_FLAG_NOSCRIPTS |
             trans_flags.TDNF_RPMTRANS_FLAG_NOTRIGGERS |
@@ -1629,7 +1629,7 @@ fn effectiveFlags(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
 fn logScriptletOutcome(
     nevra: ?[*:0]const u8,
     phase: [*:0]const u8,
-    result: *const c.tdnf_rpm_scriptlet_result,
+    result: *const c.rpmz_rpm_scriptlet_result,
 ) void {
     if (result.ran == 0 or
         result.outcome == c.TDNF_RPM_SCRIPTLET_OUTCOME_OK) return;
@@ -1660,9 +1660,9 @@ fn runScriptlet(
     script_fd: c_int,
     redirect: c_int,
 ) u32 {
-    var options = std.mem.zeroes(c.tdnf_rpm_scriptlet_options);
-    var result = std.mem.zeroes(c.tdnf_rpm_scriptlet_result);
-    const root_fd = c.tdnf_rpm_config_open_root_fd(@ptrCast(config));
+    var options = std.mem.zeroes(c.rpmz_rpm_scriptlet_options);
+    var result = std.mem.zeroes(c.rpmz_rpm_scriptlet_result);
+    const root_fd = c.rpmz_rpm_config_open_root_fd(@ptrCast(config));
     if (root_fd < 0) {
         logRpmzigError("pin scriptlet installroot");
         return ERROR_TDNF_TRANSACTION_FAILED;
@@ -1676,7 +1676,7 @@ fn runScriptlet(
     options.arg2 = arg2;
     options.script_fd = script_fd;
     options.redirect_stdout_to_stderr = redirect;
-    if (c.tdnf_rpm_header_run_scriptlet(
+    if (c.rpmz_rpm_header_run_scriptlet(
         blob.ptr,
         blob.len,
         phase,
@@ -1706,9 +1706,9 @@ fn runTriggers(
     redirect: c_int,
     arg2_override: ?c_int,
 ) u32 {
-    var options = std.mem.zeroes(c.tdnf_rpm_trigger_options);
-    var result = std.mem.zeroes(c.tdnf_rpm_trigger_result);
-    const root_fd = c.tdnf_rpm_config_open_root_fd(@ptrCast(config));
+    var options = std.mem.zeroes(c.rpmz_rpm_trigger_options);
+    var result = std.mem.zeroes(c.rpmz_rpm_trigger_result);
+    const root_fd = c.rpmz_rpm_config_open_root_fd(@ptrCast(config));
     if (root_fd < 0) return ERROR_TDNF_TRANSACTION_FAILED;
     defer _ = std.c.close(root_fd);
     const headers = view.headers(false) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
@@ -1732,7 +1732,7 @@ fn runTriggers(
         options.arg2_override_present = 1;
         options.arg2_override_value = value;
     }
-    if (c.tdnf_rpm_header_run_triggers(
+    if (c.rpmz_rpm_header_run_triggers(
         blob.ptr,
         blob.len,
         phase,
@@ -1746,7 +1746,7 @@ fn runTriggers(
 }
 
 fn runFileTriggerOwners(
-    owners: []c.tdnf_rpm_file_trigger_owner,
+    owners: []c.rpmz_rpm_file_trigger_owner,
     phase: c_uint,
     kind: c_uint,
     priority: c_uint,
@@ -1760,7 +1760,7 @@ fn runFileTriggerOwners(
 ) u32 {
     var output_count: usize = 0;
     for (owners) |owner| {
-        const has = c.tdnf_rpm_header_has_file_trigger_metadata(
+        const has = c.rpmz_rpm_header_has_file_trigger_metadata(
             owner.header_blob,
             owner.header_len,
             kind,
@@ -1775,11 +1775,11 @@ fn runFileTriggerOwners(
         }
     }
     if (output_count == 0) return 0;
-    const root_fd = c.tdnf_rpm_config_open_root_fd(@ptrCast(config));
+    const root_fd = c.rpmz_rpm_config_open_root_fd(@ptrCast(config));
     if (root_fd < 0) return ERROR_TDNF_TRANSACTION_FAILED;
     defer _ = std.c.close(root_fd);
-    var options = std.mem.zeroes(c.tdnf_rpm_file_trigger_options);
-    var result = std.mem.zeroes(c.tdnf_rpm_trigger_result);
+    var options = std.mem.zeroes(c.rpmz_rpm_file_trigger_options);
+    var result = std.mem.zeroes(c.rpmz_rpm_trigger_result);
     options.install_root = install_root;
     options.config = @ptrCast(config);
     options.install_root_fd = root_fd;
@@ -1787,7 +1787,7 @@ fn runFileTriggerOwners(
     options.script_fd = script_fd;
     options.redirect_stdout_to_stderr = redirect;
     options.suppress_stdin = suppress_stdin;
-    if (c.tdnf_rpm_run_file_triggers(
+    if (c.rpmz_rpm_run_file_triggers(
         owners.ptr,
         output_count,
         phase,
@@ -1818,7 +1818,7 @@ fn runOtherPackageFileTriggers(
     const flat = paths.flatten() catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(flat);
     var owners = allocator.alloc(
-        c.tdnf_rpm_file_trigger_owner,
+        c.rpmz_rpm_file_trigger_owner,
         view.entries.items.len,
     ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(owners);
@@ -1865,7 +1865,7 @@ fn runImmediatePackageFileTriggers(
     script_fd: c_int,
     redirect: c_int,
 ) u32 {
-    const has = c.tdnf_rpm_header_has_file_trigger_metadata(
+    const has = c.rpmz_rpm_header_has_file_trigger_metadata(
         owner_blob.ptr,
         owner_blob.len,
         c.TDNF_RPM_FILE_TRIGGER_KIND_PACKAGE,
@@ -1881,7 +1881,7 @@ fn runImmediatePackageFileTriggers(
     if (rc != 0) return rc;
     const flat = paths.flatten() catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(flat);
-    var owner = c.tdnf_rpm_file_trigger_owner{
+    var owner = c.rpmz_rpm_file_trigger_owner{
         .header_blob = owner_blob.ptr,
         .header_len = owner_blob.len,
         .paths = flat.ptr,
@@ -1889,7 +1889,7 @@ fn runImmediatePackageFileTriggers(
         .order = owner_order,
     };
     return runFileTriggerOwners(
-        @as([*]c.tdnf_rpm_file_trigger_owner, @ptrCast(&owner))[0..1],
+        @as([*]c.rpmz_rpm_file_trigger_owner, @ptrCast(&owner))[0..1],
         phase,
         c.TDNF_RPM_FILE_TRIGGER_KIND_PACKAGE,
         priority,
@@ -1917,7 +1917,7 @@ fn runStableTransactionFileTriggers(
     const flat = paths.flatten() catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(flat);
     var owners = allocator.alloc(
-        c.tdnf_rpm_file_trigger_owner,
+        c.rpmz_rpm_file_trigger_owner,
         view.entries.items.len,
     ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(owners);
@@ -1961,7 +1961,7 @@ fn runRemovedImmediateTransactionFileTriggers(
     for (view.entries.items) |entry| {
         if (!entry.removed) continue;
         removed_count += 1;
-        const has = c.tdnf_rpm_header_has_file_trigger_metadata(
+        const has = c.rpmz_rpm_header_has_file_trigger_metadata(
             entry.blob.ptr,
             entry.blob.len,
             c.TDNF_RPM_FILE_TRIGGER_KIND_TRANSACTION,
@@ -1985,7 +1985,7 @@ fn runRemovedImmediateTransactionFileTriggers(
             }
         }
         const entry = found orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-        var owner = c.tdnf_rpm_file_trigger_owner{
+        var owner = c.rpmz_rpm_file_trigger_owner{
             .header_blob = entry.blob.ptr,
             .header_len = entry.blob.len,
             .paths = flat.ptr,
@@ -1993,7 +1993,7 @@ fn runRemovedImmediateTransactionFileTriggers(
             .order = entry.removal_order,
         };
         rc = runFileTriggerOwners(
-            @as([*]c.tdnf_rpm_file_trigger_owner, @ptrCast(&owner))[0..1],
+            @as([*]c.rpmz_rpm_file_trigger_owner, @ptrCast(&owner))[0..1],
             c.TDNF_RPM_TRIGGER_PHASE_TRIGGERUN,
             c.TDNF_RPM_FILE_TRIGGER_KIND_TRANSACTION,
             c.TDNF_RPM_TRIGGER_PRIORITY_ALL,
@@ -2021,7 +2021,7 @@ fn runAddedImmediateTransactionFileTriggers(
     var any_triggers = false;
     for (view.entries.items) |entry| {
         if (!entry.added) continue;
-        const has = c.tdnf_rpm_header_has_file_trigger_metadata(
+        const has = c.rpmz_rpm_header_has_file_trigger_metadata(
             entry.blob.ptr,
             entry.blob.len,
             c.TDNF_RPM_FILE_TRIGGER_KIND_TRANSACTION,
@@ -2038,7 +2038,7 @@ fn runAddedImmediateTransactionFileTriggers(
     defer allocator.free(flat);
     for (view.entries.items) |entry| {
         if (!entry.added) continue;
-        var owner = c.tdnf_rpm_file_trigger_owner{
+        var owner = c.rpmz_rpm_file_trigger_owner{
             .header_blob = entry.blob.ptr,
             .header_len = entry.blob.len,
             .paths = flat.ptr,
@@ -2046,7 +2046,7 @@ fn runAddedImmediateTransactionFileTriggers(
             .order = entry.order,
         };
         rc = runFileTriggerOwners(
-            @as([*]c.tdnf_rpm_file_trigger_owner, @ptrCast(&owner))[0..1],
+            @as([*]c.rpmz_rpm_file_trigger_owner, @ptrCast(&owner))[0..1],
             c.TDNF_RPM_TRIGGER_PHASE_TRIGGERIN,
             c.TDNF_RPM_FILE_TRIGGER_KIND_TRANSACTION,
             c.TDNF_RPM_TRIGGER_PRIORITY_ALL,
@@ -2073,12 +2073,12 @@ fn runScheduledPostunTransactionFileTriggers(
     redirect: c_int,
 ) u32 {
     var owners = allocator.alloc(
-        c.tdnf_rpm_file_trigger_owner,
+        c.rpmz_rpm_file_trigger_owner,
         queue.owners.items.len,
     ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(owners);
     var flattened = allocator.alloc(
-        []c.tdnf_rpm_trigger_path,
+        []c.rpmz_rpm_trigger_path,
         queue.owners.items.len,
     ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(flattened);
@@ -2235,7 +2235,7 @@ fn prevalidatePlan(
     );
     if (rc != 0) return rc;
     for (view.entries.items) |entry| {
-        if (c.tdnf_rpm_header_validate_trigger_scripts_config(
+        if (c.rpmz_rpm_header_validate_trigger_scripts_config(
             entry.blob.ptr,
             entry.blob.len,
             @ptrCast(config),
@@ -2252,11 +2252,11 @@ fn prevalidatePlan(
                 return errors.ERROR_TDNF_INVALID_PARAMETER;
             var blob_ptr: [*c]const u8 = null;
             var blob_len: usize = 0;
-            if (c.tdnf_rpm_file_main_header_blob(
+            if (c.rpmz_rpm_file_main_header_blob(
                 file,
                 &blob_ptr,
                 &blob_len,
-            ) != 0 or c.tdnf_rpm_header_validate_trigger_scripts_config(
+            ) != 0 or c.rpmz_rpm_header_validate_trigger_scripts_config(
                 blob_ptr,
                 blob_len,
                 @ptrCast(config),
@@ -2346,7 +2346,7 @@ fn runTransactionScriptletPhase(
         const file = item.pRpmFile orelse return ERROR_TDNF_TRANSACTION_FAILED;
         var blob_ptr: [*c]const u8 = null;
         var blob_len: usize = 0;
-        if (c.tdnf_rpm_file_main_header_blob(file, &blob_ptr, &blob_len) != 0)
+        if (c.rpmz_rpm_file_main_header_blob(file, &blob_ptr, &blob_len) != 0)
             return ERROR_TDNF_TRANSACTION_FAILED;
         var arg1 = view.countName(@ptrCast(item.pszName));
         if (arg1 < 0) return ERROR_TDNF_TRANSACTION_FAILED;
@@ -2560,12 +2560,12 @@ fn eraseOldAfterReplace(
     );
     if (rc != 0) return rc;
 
-    var erase_options = std.mem.zeroes(c.tdnf_rpm_erase_options);
+    var erase_options = std.mem.zeroes(c.rpmz_rpm_erase_options);
     erase_options.config = @ptrCast(config);
     erase_options.trans_flags = flags;
     erase_options.keep_path_fn = nativePathOwned;
     erase_options.keep_path_fn_data = &ownership;
-    if (c.tdnf_rpm_erase_header_blob(
+    if (c.rpmz_rpm_erase_header_blob(
         install_root,
         old_blob.ptr,
         old_blob.len,
@@ -2634,7 +2634,7 @@ fn eraseOldAfterReplace(
     rc = schedulePostun(postun_queue, view, &transaction_paths);
     if (rc != 0) return rc;
     if ((flags & trans_flags.TDNF_RPMTRANS_FLAG_NODB) == 0) {
-        if (erase_db_row and c.tdnf_rpmdb_write_erase_hnum_config(
+        if (erase_db_row and c.rpmz_rpmdb_write_erase_hnum_config(
             @ptrCast(config),
             old_hnum,
         ) != 0) {
@@ -2698,7 +2698,7 @@ fn selectReplacementPriorIndex(
 
 fn processInstallItem(
     ts: *c.TDNFRPMTS,
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     plan: *const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
     input_index: usize,
     view: *TransactionView,
@@ -2717,7 +2717,7 @@ fn processInstallItem(
     const file = item.pRpmFile orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var blob_ptr: [*c]const u8 = null;
     var blob_len: usize = 0;
-    if (c.tdnf_rpm_file_main_header_blob(file, &blob_ptr, &blob_len) != 0)
+    if (c.rpmz_rpm_file_main_header_blob(file, &blob_ptr, &blob_len) != 0)
         return ERROR_TDNF_TRANSACTION_FAILED;
     const blob = blob_ptr[0..blob_len];
     const formatted = formatNevra(item);
@@ -2729,7 +2729,7 @@ fn processInstallItem(
     const planned = planItem(plan, input_index);
     const prior_count: usize = planned.dwPriorCount;
     var prior_views = allocator.alloc(
-        c.tdnf_rpm_install_prior_header,
+        c.rpmz_rpm_install_prior_header,
         prior_count,
     ) catch return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer allocator.free(prior_views);
@@ -2755,7 +2755,7 @@ fn processInstallItem(
         view,
         primary_hnums,
     ) catch return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const config = tdnf.pRpmConfig orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const config = rpmz.pRpmConfig orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var ownership = OwnershipContext{
         .view = view,
         .config = config,
@@ -2773,7 +2773,7 @@ fn processInstallItem(
         return ERROR_TDNF_TRANSACTION_FAILED;
     const arg1 = count + 1;
     var rc: u32 = 0;
-    if (tdnf.pArgs.?.nTestOnly == 0) {
+    if (rpmz.pArgs.?.nTestOnly == 0) {
         rc = runScriptlet(
             blob,
             c.TDNF_RPM_SCRIPTLET_PHASE_PRE,
@@ -2799,8 +2799,8 @@ fn processInstallItem(
         else
             @as([*:0]const u8, "Installing"), nevra orelse @as(?[*:0]const u8, @ptrCast(item.pszPath)) });
     }
-    if (tdnf.pArgs.?.nTestOnly == 0) {
-        var options = std.mem.zeroes(c.tdnf_rpm_install_options);
+    if (rpmz.pArgs.?.nTestOnly == 0) {
+        var options = std.mem.zeroes(c.rpmz_rpm_install_options);
         options.install_root = install_root;
         options.config = @ptrCast(config);
         options.trans_flags = flags;
@@ -2811,14 +2811,14 @@ fn processInstallItem(
         options.conflict_fn_data = &ownership;
         options.changed_path_fn = appendInstalledPath;
         options.changed_path_fn_data = &install_path_context;
-        if (c.tdnf_rpm_file_install(file, &options) != 0) {
+        if (c.rpmz_rpm_file_install(file, &options) != 0) {
             logRpmzigError("rpm_file_install");
             return ERROR_TDNF_TRANSACTION_FAILED;
         }
         var new_hnum: u32 = 0;
         if ((flags & trans_flags.TDNF_RPMTRANS_FLAG_NODB) == 0) {
             if (replacement_prior_index) |replacement_index| {
-                if (c.tdnf_rpmdb_write_replace_file_config(
+                if (c.rpmz_rpmdb_write_replace_file_config(
                     @ptrCast(config),
                     prior_entries[replacement_index].hnum,
                     file,
@@ -2829,7 +2829,7 @@ fn processInstallItem(
                     0,
                     &new_hnum,
                 ) != 0) return ERROR_TDNF_TRANSACTION_FAILED;
-            } else if (c.tdnf_rpmdb_write_install_file_config(
+            } else if (c.rpmz_rpmdb_write_install_file_config(
                 @ptrCast(config),
                 file,
                 install_tid,
@@ -2962,7 +2962,7 @@ fn processInstallItem(
 
 fn processEraseItem(
     ts: *c.TDNFRPMTS,
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     view: *TransactionView,
     postun_queue: *PostunQueue,
     item: *c.TDNF_RPM_TS_ITEM,
@@ -2983,7 +2983,7 @@ fn processEraseItem(
     const current_count = view.countName(@ptrCast(item.pszName));
     if (current_count <= 0) return ERROR_TDNF_TRANSACTION_FAILED;
     const count_after = current_count - 1;
-    const config = tdnf.pRpmConfig orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const config = rpmz.pRpmConfig orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var ignored = [_]u32{item.dwRpmDbHnum};
     var ownership = OwnershipContext{
         .view = view,
@@ -2998,7 +2998,7 @@ fn processEraseItem(
     if (rc != 0) return rc;
     rc = collectHeaderTriggerPaths(entry.blob, 0, null, &transaction_paths);
     if (rc != 0) return rc;
-    if (tdnf.pArgs.?.nTestOnly == 0) {
+    if (rpmz.pArgs.?.nTestOnly == 0) {
         rc = runImmediatePackageFileTriggers(
             view,
             entry.blob,
@@ -3085,13 +3085,13 @@ fn processEraseItem(
     }
     if (ts.nQuiet == 0)
         common.log(LOG_INFO, "Removing: %s\n", .{nevra orelse @as(?[*:0]const u8, @ptrCast(item.pszName))});
-    if (tdnf.pArgs.?.nTestOnly == 0) {
-        var erase_options = std.mem.zeroes(c.tdnf_rpm_erase_options);
+    if (rpmz.pArgs.?.nTestOnly == 0) {
+        var erase_options = std.mem.zeroes(c.rpmz_rpm_erase_options);
         erase_options.config = @ptrCast(config);
         erase_options.trans_flags = flags;
         erase_options.keep_path_fn = nativePathOwned;
         erase_options.keep_path_fn_data = &ownership;
-        if (c.tdnf_rpm_erase_header_blob(
+        if (c.rpmz_rpm_erase_header_blob(
             install_root,
             entry.blob.ptr,
             entry.blob.len,
@@ -3156,7 +3156,7 @@ fn processEraseItem(
         rc = schedulePostun(postun_queue, view, &transaction_paths);
         if (rc != 0) return rc;
         if ((flags & trans_flags.TDNF_RPMTRANS_FLAG_NODB) == 0) {
-            if (c.tdnf_rpmdb_write_erase_hnum_config(
+            if (c.rpmz_rpmdb_write_erase_hnum_config(
                 @ptrCast(config),
                 item.dwRpmDbHnum,
             ) != 0) return ERROR_TDNF_TRANSACTION_FAILED;
@@ -3181,24 +3181,24 @@ const PlanOrderIterator = struct {
 
 fn runTransactionNativeImpl(
     ts_opt: ?*c.TDNFRPMTS,
-    tdnf_opt: ?*abi.Tdnf,
+    rpmz_opt: ?*abi.Tdnf,
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
     expected_items: ?[]const FixedOrderExpectedItem,
     validation_failure: ?*FixedOrderValidationFailure,
     observer: ?FixedOrderExecutionObserver,
 ) u32 {
     const ts = ts_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const plan = plan_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf.pArgs == null or tdnf.pConf == null or tdnf.pRpmConfig == null or
+    if (rpmz.pArgs == null or rpmz.pConf == null or rpmz.pRpmConfig == null or
         plan.dwItemCount != ts.dwTransactionItemCount or
         (plan.dwPriorHnumCount != 0 and plan.pdwPriorHnums == null))
         return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const install_root: [*:0]const u8 = if (!isEmpty(tdnf.pArgs.?.pszInstallRoot))
-        tdnf.pArgs.?.pszInstallRoot.?
+    const install_root: [*:0]const u8 = if (!isEmpty(rpmz.pArgs.?.pszInstallRoot))
+        rpmz.pArgs.?.pszInstallRoot.?
     else
         "/";
-    const flags = effectiveFlags(ts, tdnf);
+    const flags = effectiveFlags(ts, rpmz);
     const now = time(null);
     const install_tid: u32 = @truncate(@as(u64, @bitCast(@as(i64, now))));
 
@@ -3248,7 +3248,7 @@ fn runTransactionNativeImpl(
             return errors.ERROR_TDNF_OUT_OF_MEMORY;
     }
 
-    const initialized = TransactionView.init(tdnf.pRpmConfig.?, plan.dwItemCount);
+    const initialized = TransactionView.init(rpmz.pRpmConfig.?, plan.dwItemCount);
     if (initialized[0] != 0) return initialized[0];
     var view = initialized[1];
     defer view.deinit();
@@ -3264,7 +3264,7 @@ fn runTransactionNativeImpl(
         plan,
         input_items,
         &view,
-        tdnf.pRpmConfig.?,
+        rpmz.pRpmConfig.?,
         expected_items,
         validation_failure,
     );
@@ -3291,7 +3291,7 @@ fn runTransactionNativeImpl(
         if (script_fd >= 0) _ = close(script_fd);
     }
     var redirect: c_int = 0;
-    if (tdnf.pArgs.?.nJsonOutput != 0) {
+    if (rpmz.pArgs.?.nJsonOutput != 0) {
         script_fd = std.c.fcntl(
             2,
             std.c.F.DUPFD_CLOEXEC,
@@ -3307,7 +3307,7 @@ fn runTransactionNativeImpl(
         plan,
         input_items,
         &view,
-        tdnf.pRpmConfig.?,
+        rpmz.pRpmConfig.?,
         c.TDNF_RPM_SCRIPTLET_PHASE_PRETRANS,
         "%pretrans",
         install_root,
@@ -3322,7 +3322,7 @@ fn runTransactionNativeImpl(
         c.TDNF_RPM_TRIGGER_PHASE_TRIGGERUN,
         "%transfiletriggerun",
         install_root,
-        tdnf.pRpmConfig.?,
+        rpmz.pRpmConfig.?,
         flags,
         script_fd,
         redirect,
@@ -3331,7 +3331,7 @@ fn runTransactionNativeImpl(
     rc = runRemovedImmediateTransactionFileTriggers(
         &view,
         install_root,
-        tdnf.pRpmConfig.?,
+        rpmz.pRpmConfig.?,
         flags,
         script_fd,
         redirect,
@@ -3351,7 +3351,7 @@ fn runTransactionNativeImpl(
             item_obsolete,
             => processInstallItem(
                 ts,
-                tdnf,
+                rpmz,
                 plan,
                 input_index,
                 &view,
@@ -3369,7 +3369,7 @@ fn runTransactionNativeImpl(
             ),
             item_erase => processEraseItem(
                 ts,
-                tdnf,
+                rpmz,
                 &view,
                 &postun_queue,
                 item,
@@ -3387,7 +3387,7 @@ fn runTransactionNativeImpl(
         plan,
         input_items,
         &view,
-        tdnf.pRpmConfig.?,
+        rpmz.pRpmConfig.?,
         c.TDNF_RPM_SCRIPTLET_PHASE_POSTTRANS,
         "%posttrans",
         install_root,
@@ -3402,7 +3402,7 @@ fn runTransactionNativeImpl(
         c.TDNF_RPM_TRIGGER_PHASE_TRIGGERIN,
         "%transfiletriggerin",
         install_root,
-        tdnf.pRpmConfig.?,
+        rpmz.pRpmConfig.?,
         flags,
         script_fd,
         redirect,
@@ -3412,7 +3412,7 @@ fn runTransactionNativeImpl(
         &postun_queue,
         &view,
         install_root,
-        tdnf.pRpmConfig.?,
+        rpmz.pRpmConfig.?,
         flags,
         script_fd,
         redirect,
@@ -3421,7 +3421,7 @@ fn runTransactionNativeImpl(
     return runAddedImmediateTransactionFileTriggers(
         &view,
         install_root,
-        tdnf.pRpmConfig.?,
+        rpmz.pRpmConfig.?,
         flags,
         script_fd,
         redirect,
@@ -3429,7 +3429,7 @@ fn runTransactionNativeImpl(
 }
 
 const PinnedTransactionTarget = struct {
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     args: *abi.CmdArgs,
     guard: transaction_lock.Guard,
     pinned_root: [:0]u8,
@@ -3438,21 +3438,21 @@ const PinnedTransactionTarget = struct {
     bound: bool = false,
 
     fn init(
-        tdnf: *abi.Tdnf,
+        rpmz: *abi.Tdnf,
         acquired_guard: transaction_lock.Guard,
     ) transaction_lock.Error!PinnedTransactionTarget {
         var guard = acquired_guard;
         errdefer guard.deinit();
-        const args = tdnf.pArgs orelse return error.InvalidTarget;
+        const args = rpmz.pArgs orelse return error.InvalidTarget;
         const pinned_root = allocator.dupeZ(
             u8,
             guard.config().installRoot(),
         ) catch return error.OutOfMemory;
         errdefer allocator.free(pinned_root);
-        const original_config = tdnf.pRpmConfig;
+        const original_config = rpmz.pRpmConfig;
         const original_install_root = args.pszInstallRoot;
         return .{
-            .tdnf = tdnf,
+            .rpmz = rpmz,
             .args = args,
             .guard = guard,
             .pinned_root = pinned_root,
@@ -3463,7 +3463,7 @@ const PinnedTransactionTarget = struct {
 
     fn bind(self: *PinnedTransactionTarget) void {
         std.debug.assert(!self.bound);
-        self.tdnf.pRpmConfig = @ptrCast(self.guard.config());
+        self.rpmz.pRpmConfig = @ptrCast(self.guard.config());
         self.args.pszInstallRoot = @constCast(self.pinned_root.ptr);
         self.bound = true;
     }
@@ -3471,7 +3471,7 @@ const PinnedTransactionTarget = struct {
     fn deinit(self: *PinnedTransactionTarget) void {
         if (self.bound) {
             self.args.pszInstallRoot = self.original_install_root;
-            self.tdnf.pRpmConfig = self.original_config;
+            self.rpmz.pRpmConfig = self.original_config;
             self.bound = false;
         }
         allocator.free(self.pinned_root);
@@ -3480,36 +3480,36 @@ const PinnedTransactionTarget = struct {
 };
 
 fn runWithAcquiredTransactionTarget(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     acquired_guard: transaction_lock.Guard,
     context: anytype,
     operation: anytype,
 ) u32 {
     var target = PinnedTransactionTarget.init(
-        tdnf,
+        rpmz,
         acquired_guard,
     ) catch |err| return transactionLockFailure(err);
     defer target.deinit();
     target.bind();
-    return operation(tdnf, context);
+    return operation(rpmz, context);
 }
 
 fn runWithTransactionTarget(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     context: anytype,
     operation: anytype,
 ) u32 {
     const config: *txn_config.TxnConfig = @ptrCast(@alignCast(
-        tdnf.pRpmConfig orelse
+        rpmz.pRpmConfig orelse
             return transactionLockFailure(error.InvalidTarget),
     ));
     if (config.targetLockHeld()) {
-        return operation(tdnf, context);
+        return operation(rpmz, context);
     }
-    const guard = acquireTransactionTarget(tdnf) catch |err|
+    const guard = acquireTransactionTarget(rpmz) catch |err|
         return transactionLockFailure(err);
     return runWithAcquiredTransactionTarget(
-        tdnf,
+        rpmz,
         guard,
         context,
         operation,
@@ -3522,25 +3522,25 @@ const NativeRunContext = struct {
 };
 
 fn runTransactionNativeLocked(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     context: *const NativeRunContext,
 ) u32 {
-    return runTransactionNativeUnlocked(context.ts, tdnf, context.plan);
+    return runTransactionNativeUnlocked(context.ts, rpmz, context.plan);
 }
 
 fn runTransactionNative(
     ts_opt: ?*c.TDNFRPMTS,
-    tdnf_opt: ?*abi.Tdnf,
+    rpmz_opt: ?*abi.Tdnf,
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf.pArgs == null) return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    if (rpmz.pArgs == null) return errors.ERROR_TDNF_INVALID_PARAMETER;
     const context = NativeRunContext{
         .ts = ts_opt,
         .plan = plan_opt,
     };
     return runWithTransactionTarget(
-        tdnf,
+        rpmz,
         &context,
         runTransactionNativeLocked,
     );
@@ -3548,13 +3548,13 @@ fn runTransactionNative(
 
 fn runTransactionNativeUnlocked(
     ts_opt: ?*c.TDNFRPMTS,
-    tdnf_opt: ?*abi.Tdnf,
+    rpmz_opt: ?*abi.Tdnf,
     plan_opt: ?*const c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN,
 ) callconv(.c) u32 {
-    return runTransactionNativeImpl(ts_opt, tdnf_opt, plan_opt, null, null, null);
+    return runTransactionNativeImpl(ts_opt, rpmz_opt, plan_opt, null, null, null);
 }
 
-fn orderAndCheck(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
+fn orderAndCheck(ts: *c.TDNFRPMTS, rpmz: *abi.Tdnf) u32 {
     clearPlan(ts);
     const count: usize = ts.dwTransactionItemCount;
     if (count == 0) return 0;
@@ -3596,12 +3596,12 @@ fn orderAndCheck(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
             var rpm_bytes: [*c]const u8 = null;
             var rpm_len: usize = 0;
             if (current_ptr.pRpmFile == null or
-                c.tdnf_rpm_file_main_header_blob(
+                c.rpmz_rpm_file_main_header_blob(
                     current_ptr.pRpmFile,
                     &header,
                     &header_len,
                 ) != 0 or
-                c.tdnf_rpm_file_bytes(current_ptr.pRpmFile, &rpm_bytes, &rpm_len) != 0)
+                c.rpmz_rpm_file_bytes(current_ptr.pRpmFile, &rpm_bytes, &rpm_len) != 0)
                 return ERROR_TDNF_RPM_CHECK;
             headers[index] = header;
             lengths[index] = header_len;
@@ -3615,13 +3615,13 @@ fn orderAndCheck(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
     }
     if (index != count) return errors.ERROR_TDNF_INVALID_PARAMETER;
     var plan: ?*c.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN = null;
-    const rc = tdnf_repomd_native_verified_transaction_solve_config(
+    const rc = rpmz_repomd_native_verified_transaction_solve_config(
         inputs.ptr,
         headers.ptr,
         lengths.ptr,
         sizes.ptr,
         @intCast(count),
-        tdnf.pRpmConfig,
+        rpmz.pRpmConfig,
         &plan,
     );
     if (rc != 0) {
@@ -3645,10 +3645,10 @@ fn orderAndCheck(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
     return 0;
 }
 
-fn runTransaction(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
+fn runTransaction(ts: *c.TDNFRPMTS, rpmz: *abi.Tdnf) u32 {
     return runNormalTransactionWith(
         ts,
-        tdnf,
+        rpmz,
         orderAndCheck,
         runTransactionNativeUnlocked,
         reportProblems,
@@ -3656,9 +3656,9 @@ fn runTransaction(ts: *c.TDNFRPMTS, tdnf: *abi.Tdnf) u32 {
 }
 
 fn acquireTransactionTarget(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
 ) transaction_lock.Error!transaction_lock.Guard {
-    const config = tdnf.pRpmConfig orelse return error.InvalidTarget;
+    const config = rpmz.pRpmConfig orelse return error.InvalidTarget;
     return transaction_lock.acquire(
         allocator,
         @ptrCast(@alignCast(config)),
@@ -3676,33 +3676,33 @@ fn transactionLockFailure(err: transaction_lock.Error) u32 {
 
 fn runNormalTransactionWith(
     ts: *c.TDNFRPMTS,
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     prepare: anytype,
     execute: anytype,
     report: anytype,
 ) u32 {
-    var rc = prepare(ts, tdnf);
+    var rc = prepare(ts, rpmz);
     if (rc != 0) {
         report(ts);
         return rc;
     }
     if (ts.dwTransactionItemCount == 0) return 0;
-    rc = execute(ts, tdnf, ts.pNativePlan);
+    rc = execute(ts, rpmz, ts.pNativePlan);
     if (rc != 0) report(ts);
     return rc;
 }
 
 fn runWithHistory(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     ts: *c.TDNFRPMTS,
     history: *HistoryCtx,
     command_line: ?[*:0]const u8,
 ) u32 {
-    if (history_sync_config(history, tdnf.pRpmConfig) != 0)
+    if (history_sync_config(history, rpmz.pRpmConfig) != 0)
         return errors.ERROR_TDNF_HISTORY_ERROR;
-    const rc = runTransaction(ts, tdnf);
+    const rc = runTransaction(ts, rpmz);
     if (rc != 0) return rc;
-    if (history_update_state_config(history, tdnf.pRpmConfig, command_line) != 0)
+    if (history_update_state_config(history, rpmz.pRpmConfig, command_line) != 0)
         return errors.ERROR_TDNF_HISTORY_ERROR;
     return 0;
 }
@@ -3714,15 +3714,15 @@ fn buildCommandLine(args: *abi.CmdArgs, output: *?[*:0]u8) u32 {
 }
 
 fn rpmExecTransactionLocked(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     solved: *c.TDNF_SOLVED_PKG_INFO,
 ) u32 {
-    const created = createTransaction(tdnf, solved);
+    const created = createTransaction(rpmz, solved);
     const ts = created[1] orelse return created[0];
-    defer cleanupTransaction(tdnf, ts);
-    const args = tdnf.pArgs.?;
+    defer cleanupTransaction(rpmz, ts);
+    const args = rpmz.pArgs.?;
     if (args.nDownloadOnly != 0) return 0;
-    if (args.nTestOnly != 0) return runTransaction(ts, tdnf);
+    if (args.nTestOnly != 0) return runTransaction(ts, rpmz);
 
     var history: ?*HistoryCtx = null;
     var command_line: ?[*:0]u8 = null;
@@ -3730,27 +3730,27 @@ fn rpmExecTransactionLocked(
         free(command_line);
         destroy_history_ctx(history);
     }
-    var rc = TDNFGetHistoryCtx(tdnf, &history, 0);
+    var rc = TDNFGetHistoryCtx(rpmz, &history, 0);
     if (rc != 0) return rc;
     rc = buildCommandLine(args, &command_line);
     if (rc != 0) return rc;
-    rc = runWithHistory(tdnf, ts, history.?, command_line);
+    rc = runWithHistory(rpmz, ts, history.?, command_line);
     if (rc != 0) return rc;
-    return TDNFMarkAutoInstalled(tdnf, history, solved, 0);
+    return TDNFMarkAutoInstalled(rpmz, history, solved, 0);
 }
 
 fn rpmExecTransaction(
-    tdnf_opt: ?*abi.Tdnf,
+    rpmz_opt: ?*abi.Tdnf,
     solved_opt: ?*c.TDNF_SOLVED_PKG_INFO,
 ) callconv(.c) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const solved = solved_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf.pArgs == null or tdnf.pConf == null)
+    if (rpmz.pArgs == null or rpmz.pConf == null)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     // Preparation can import rpmdb keys or extract source RPMs. Pin and lock
     // the target before createTransaction so those mutations share the same
     // lifetime as native execution and history updates.
-    return runWithTransactionTarget(tdnf, solved, rpmExecTransactionLocked);
+    return runWithTransactionTarget(rpmz, solved, rpmExecTransactionLocked);
 }
 
 const HistoryTransactionRunContext = struct {
@@ -3759,17 +3759,17 @@ const HistoryTransactionRunContext = struct {
 };
 
 fn rpmExecHistoryTransactionLocked(
-    tdnf: *abi.Tdnf,
+    rpmz: *abi.Tdnf,
     context: *const HistoryTransactionRunContext,
 ) u32 {
     const solved = context.solved;
     const history_args = context.history_args;
-    const created = createTransaction(tdnf, solved);
+    const created = createTransaction(rpmz, solved);
     const ts = created[1] orelse return created[0];
-    defer cleanupTransaction(tdnf, ts);
-    const args = tdnf.pArgs.?;
+    defer cleanupTransaction(rpmz, ts);
+    const args = rpmz.pArgs.?;
     if (args.nDownloadOnly != 0) return 0;
-    if (args.nTestOnly != 0) return runTransaction(ts, tdnf);
+    if (args.nTestOnly != 0) return runTransaction(ts, rpmz);
 
     var history: ?*HistoryCtx = null;
     var command_line: ?[*:0]u8 = null;
@@ -3777,18 +3777,18 @@ fn rpmExecHistoryTransactionLocked(
         free(command_line);
         destroy_history_ctx(history);
     }
-    var rc = TDNFGetHistoryCtx(tdnf, &history, 0);
+    var rc = TDNFGetHistoryCtx(rpmz, &history, 0);
     if (rc != 0) return rc;
     const transaction_id = history_get_current_transaction_id(history);
     rc = buildCommandLine(args, &command_line);
     if (rc != 0) return rc;
-    rc = runWithHistory(tdnf, ts, history.?, command_line);
+    rc = runWithHistory(rpmz, ts, history.?, command_line);
     if (rc != 0) return rc;
     if (transaction_id == history_get_current_transaction_id(history)) {
         if (history_add_transaction(history, command_line) != 0)
             return errors.ERROR_TDNF_HISTORY_ERROR;
     } else {
-        rc = TDNFMarkAutoInstalled(tdnf, history, solved, 1);
+        rc = TDNFMarkAutoInstalled(rpmz, history, solved, 1);
         if (rc != 0) return rc;
     }
     const history_rc = switch (history_args.nCommand) {
@@ -3801,21 +3801,21 @@ fn rpmExecHistoryTransactionLocked(
 }
 
 fn rpmExecHistoryTransaction(
-    tdnf_opt: ?*abi.Tdnf,
+    rpmz_opt: ?*abi.Tdnf,
     solved_opt: ?*c.TDNF_SOLVED_PKG_INFO,
     history_args_opt: ?*c.TDNF_HISTORY_ARGS,
 ) callconv(.c) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const solved = solved_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const history_args = history_args_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf.pArgs == null or tdnf.pConf == null)
+    if (rpmz.pArgs == null or rpmz.pConf == null)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     const context = HistoryTransactionRunContext{
         .solved = solved,
         .history_args = history_args,
     };
     return runWithTransactionTarget(
-        tdnf,
+        rpmz,
         &context,
         rpmExecHistoryTransactionLocked,
     );
@@ -4005,10 +4005,10 @@ test "transaction plan removal marking preserves native order and uniqueness" {
 
 test "test-only transactions force all non-mutating native flags" {
     var args = abi.CmdArgs{ .nTestOnly = 1 };
-    var tdnf = abi.Tdnf{ .pArgs = &args };
+    var rpmz = abi.Tdnf{ .pArgs = &args };
     var ts = std.mem.zeroes(c.TDNFRPMTS);
     ts.nTransFlags = trans_flags.TDNF_RPMTRANS_FLAG_NODOCS;
-    const actual = effectiveFlags(&ts, &tdnf);
+    const actual = effectiveFlags(&ts, &rpmz);
     try std.testing.expect(actual & trans_flags.TDNF_RPMTRANS_FLAG_TEST != 0);
     try std.testing.expect(actual & trans_flags.TDNF_RPMTRANS_FLAG_NOSCRIPTS != 0);
     try std.testing.expect(actual & trans_flags.TDNF_RPMTRANS_FLAG_NOTRIGGERS != 0);
@@ -4083,9 +4083,9 @@ test "fixed order transaction represents every replay action shape" {
 }
 
 test "fixed order executor compiles against the native engine" {
-    var tdnf = abi.Tdnf{};
+    var rpmz = abi.Tdnf{};
     try std.testing.expectError(error.InvalidContext, executeFixedOrder(
-        &tdnf,
+        &rpmz,
         .{ .items = &.{}, .order = &.{} },
     ));
 }
@@ -4108,7 +4108,7 @@ test "fixed executor accepts explicit zero for omitted RPM epoch" {
         .arch = "noarch",
     };
     try std.testing.expect(identityMatchesHeader(identity, blob));
-    const metadata = c.tdnf_rpm_file_metadata{
+    const metadata = c.rpmz_rpm_file_metadata{
         .name = "epochless",
         .version = "1",
         .release = "1",
@@ -4127,7 +4127,7 @@ test "selected package identity rejects substituted RPM metadata" {
         .release = "4",
         .arch = "x86_64",
     };
-    var metadata = c.tdnf_rpm_file_metadata{
+    var metadata = c.rpmz_rpm_file_metadata{
         .name = "selected",
         .version = "3",
         .release = "4",
@@ -4606,12 +4606,12 @@ test "normal transaction still prepares order and checks before execution" {
     Probe.count = 0;
     var ts = std.mem.zeroes(c.TDNFRPMTS);
     ts.dwTransactionItemCount = 1;
-    var tdnf = abi.Tdnf{};
+    var rpmz = abi.Tdnf{};
     try std.testing.expectEqual(
         @as(u32, 0),
         runNormalTransactionWith(
             &ts,
-            &tdnf,
+            &rpmz,
             Probe.prepare,
             Probe.execute,
             Probe.report,
@@ -4648,8 +4648,8 @@ test "normal preparation mutation probes hold the replay target lock" {
             self.failed = true;
         }
 
-        fn run(tdnf: *abi.Tdnf, self: *@This()) u32 {
-            const raw_config = tdnf.pRpmConfig orelse {
+        fn run(rpmz: *abi.Tdnf, self: *@This()) u32 {
+            const raw_config = rpmz.pRpmConfig orelse {
                 self.failed = true;
                 return 1;
             };
@@ -4713,12 +4713,12 @@ test "normal preparation mutation probes hold the replay target lock" {
 
     var args = abi.CmdArgs{ .pszInstallRoot = root_z.ptr };
     var conf = abi.Conf{};
-    var tdnf = abi.Tdnf{
+    var rpmz = abi.Tdnf{
         .pArgs = &args,
         .pConf = &conf,
         .pRpmConfig = @ptrCast(&normal_config),
     };
-    const original_config = tdnf.pRpmConfig;
+    const original_config = rpmz.pRpmConfig;
     const original_root = args.pszInstallRoot;
     var probe = Probe{
         .replay_config = &replay_config,
@@ -4727,7 +4727,7 @@ test "normal preparation mutation probes hold the replay target lock" {
     try std.testing.expectEqual(
         @as(u32, 0),
         runWithAcquiredTransactionTarget(
-            &tdnf,
+            &rpmz,
             acquired,
             &probe,
             Probe.run,
@@ -4737,7 +4737,7 @@ test "normal preparation mutation probes hold the replay target lock" {
     try std.testing.expect(probe.key_import_blocked);
     try std.testing.expect(probe.source_extract_blocked);
     try std.testing.expect(!probe.failed);
-    try std.testing.expectEqual(original_config, tdnf.pRpmConfig);
+    try std.testing.expectEqual(original_config, rpmz.pRpmConfig);
     try std.testing.expectEqual(original_root, args.pszInstallRoot);
 }
 
@@ -4782,19 +4782,19 @@ test "normal target binds config only from stable caller storage" {
         true,
     );
     var args = abi.CmdArgs{ .pszInstallRoot = root_z.ptr };
-    var tdnf = abi.Tdnf{
+    var rpmz = abi.Tdnf{
         .pArgs = &args,
         .pRpmConfig = @ptrCast(&config),
     };
-    const original_config = tdnf.pRpmConfig;
-    var target = try PinnedTransactionTarget.init(&tdnf, acquired);
+    const original_config = rpmz.pRpmConfig;
+    var target = try PinnedTransactionTarget.init(&rpmz, acquired);
     defer target.deinit();
 
-    try std.testing.expectEqual(original_config, tdnf.pRpmConfig);
+    try std.testing.expectEqual(original_config, rpmz.pRpmConfig);
     target.bind();
     try std.testing.expectEqual(
         @as(?*anyopaque, @ptrCast(&target.guard.pinned_config)),
-        tdnf.pRpmConfig,
+        rpmz.pRpmConfig,
     );
     try std.testing.expectEqual(
         @as([*:0]u8, @constCast(target.pinned_root.ptr)),

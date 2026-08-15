@@ -47,7 +47,7 @@ fn outputStream(default_stream: *libc.FILE, override: ?*libc.FILE) *libc.FILE {
     return override orelse default_stream;
 }
 
-fn tdnfLogGetStream(nLogLevel: c_int) ?*libc.FILE {
+fn rpmzLogGetStream(nLogLevel: c_int) ?*libc.FILE {
     switch (nLogLevel) {
         LOG_INFO, LOG_CRIT => {
             if (gbJson) {
@@ -111,12 +111,12 @@ export fn GlobalGetDnfCheckUpdateCompat() bool {
 }
 
 export fn TDNFLogGetStream(nLogLevel: c_int) ?*libc.FILE {
-    return tdnfLogGetStream(nLogLevel);
+    return rpmzLogGetStream(nLogLevel);
 }
 
 export fn log_console(nLogLevel: c_int, pszFormatOpt: ?[*:0]const u8, ...) callconv(.c) void {
     const pszFormat = pszFormatOpt orelse return;
-    const stream = tdnfLogGetStream(nLogLevel) orelse return;
+    const stream = rpmzLogGetStream(nLogLevel) orelse return;
 
     var args: variadic.VaList = undefined;
     if (comptime variadic.needs_manual_start) {
@@ -133,31 +133,31 @@ test "GlobalSetQuiet only suppresses info logs" {
     resetGlobalStateForTest();
     defer resetGlobalStateForTest();
 
-    try std.testing.expect(tdnfLogGetStream(LOG_INFO) == stdout);
-    try std.testing.expect(tdnfLogGetStream(LOG_CRIT) == stdout);
-    try std.testing.expect(tdnfLogGetStream(LOG_ERR) == stderr);
+    try std.testing.expect(rpmzLogGetStream(LOG_INFO) == stdout);
+    try std.testing.expect(rpmzLogGetStream(LOG_CRIT) == stdout);
+    try std.testing.expect(rpmzLogGetStream(LOG_ERR) == stderr);
 
     GlobalSetQuiet(1);
-    try std.testing.expect(tdnfLogGetStream(LOG_INFO) == null);
-    try std.testing.expect(tdnfLogGetStream(LOG_CRIT) == stdout);
-    try std.testing.expect(tdnfLogGetStream(LOG_ERR) == stderr);
+    try std.testing.expect(rpmzLogGetStream(LOG_INFO) == null);
+    try std.testing.expect(rpmzLogGetStream(LOG_CRIT) == stdout);
+    try std.testing.expect(rpmzLogGetStream(LOG_ERR) == stderr);
 
     GlobalSetQuiet(0);
-    try std.testing.expect(tdnfLogGetStream(LOG_INFO) == null);
+    try std.testing.expect(rpmzLogGetStream(LOG_INFO) == null);
 }
 
 test "notice logs go to stderr but obey quiet and json suppression" {
     resetGlobalStateForTest();
     defer resetGlobalStateForTest();
 
-    try std.testing.expect(tdnfLogGetStream(LOG_NOTICE) == stderr);
+    try std.testing.expect(rpmzLogGetStream(LOG_NOTICE) == stderr);
 
     GlobalSetQuiet(1);
-    try std.testing.expect(tdnfLogGetStream(LOG_NOTICE) == null);
+    try std.testing.expect(rpmzLogGetStream(LOG_NOTICE) == null);
 
     resetGlobalStateForTest();
     GlobalSetJson(1);
-    try std.testing.expect(tdnfLogGetStream(LOG_NOTICE) == null);
+    try std.testing.expect(rpmzLogGetStream(LOG_NOTICE) == null);
 }
 
 test "GlobalSetJson suppresses stdout logs and is one way" {
@@ -165,13 +165,13 @@ test "GlobalSetJson suppresses stdout logs and is one way" {
     defer resetGlobalStateForTest();
 
     GlobalSetJson(1);
-    try std.testing.expect(tdnfLogGetStream(LOG_INFO) == null);
-    try std.testing.expect(tdnfLogGetStream(LOG_CRIT) == null);
-    try std.testing.expect(tdnfLogGetStream(LOG_ERR) == stderr);
+    try std.testing.expect(rpmzLogGetStream(LOG_INFO) == null);
+    try std.testing.expect(rpmzLogGetStream(LOG_CRIT) == null);
+    try std.testing.expect(rpmzLogGetStream(LOG_ERR) == stderr);
 
     GlobalSetJson(0);
-    try std.testing.expect(tdnfLogGetStream(LOG_INFO) == null);
-    try std.testing.expect(tdnfLogGetStream(LOG_CRIT) == null);
+    try std.testing.expect(rpmzLogGetStream(LOG_INFO) == null);
+    try std.testing.expect(rpmzLogGetStream(LOG_CRIT) == null);
 }
 
 test "GlobalSetDnfCheckUpdateCompat is one way" {
@@ -196,8 +196,8 @@ test "log setters ignore non positive values and unknown levels are suppressed" 
 
     GlobalSetQuiet(-1);
     GlobalSetJson(0);
-    try std.testing.expect(tdnfLogGetStream(LOG_INFO) == stdout);
-    try std.testing.expect(tdnfLogGetStream(99) == null);
+    try std.testing.expect(rpmzLogGetStream(LOG_INFO) == stdout);
+    try std.testing.expect(rpmzLogGetStream(99) == null);
 }
 
 test "log_console preserves levels, quiet, json, streams, and formatting" {

@@ -9,7 +9,7 @@
 import os
 import pytest
 
-PLUGIN_NAME = 'tdnfrepogpgcheck'
+PLUGIN_NAME = 'rpmzrepogpgcheck'
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -56,20 +56,20 @@ def set_repo_flag_repo_gpgcheck(utils, flag):
     utils.edit_config({'repo_gpgcheck': flag, 'skip_if_unavailable': 'False'}, repo='photon-test')
 
 
-# make sure the tdnfrepogpgcheck built-in is enabled without issues
-def test_tdnfrepogpgcheck_plugin_load(utils):
+# make sure the rpmzrepogpgcheck built-in is enabled without issues
+def test_rpmzrepogpgcheck_plugin_load(utils):
     enable_plugins(utils)
-    ret = utils.run(['tdnf', 'repolist'])
+    ret = utils.run(['rpmz', 'repolist'])
     # we should load the plugin
-    assert ret['stdout'][0].startswith('Loaded plugin: tdnfrepogpgcheck')  # nosec
+    assert ret['stdout'][0].startswith('Loaded plugin: rpmzrepogpgcheck')  # nosec
     # we should also pass the repolist command
     assert ret['retval'] == 0  # nosec
 
 
-# make sure the tdnfrepogpgcheck built-in validates repository signatures
-def test_tdnfrepogpgcheck_plugin_validatesignature(utils):
+# make sure the rpmzrepogpgcheck built-in validates repository signatures
+def test_rpmzrepogpgcheck_plugin_validatesignature(utils):
     set_repo_flag_repo_gpgcheck(utils, "1")
-    ret = utils.run(['tdnf', 'repolist', '--refresh'])
+    ret = utils.run(['rpmz', 'repolist', '--refresh'])
     # we should load the plugin
-    assert ret['stdout'][0].startswith('Loaded plugin: tdnfrepogpgcheck')  # nosec
+    assert ret['stdout'][0].startswith('Loaded plugin: rpmzrepogpgcheck')  # nosec
     assert ret['retval'] == 0

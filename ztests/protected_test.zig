@@ -76,7 +76,7 @@ test "removing a dependency is refused when it would erase a protected dependent
     defer result.deinit();
     // The request never names the protected package: keeping it installed is
     // what makes erasing its dependency unsatisfiable. The solve therefore
-    // fails as an ordinary dependency problem, and tdnf re-solves with the
+    // fails as an ordinary dependency problem, and rpmz re-solves with the
     // protected names dropped to find out whether protection was the cause.
     try result.expectCode(protected_code);
     try result.expectStderrContains(

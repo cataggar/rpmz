@@ -1,7 +1,7 @@
 //! Binary-level transaction-plan CLI test.
 //!
 //! The fixture is deliberately local and tiny: the test consumes only the
-//! installed `tdnf` executable's stdout, then parses the versioned JSON.
+//! installed `rpmz` executable's stdout, then parses the versioned JSON.
 
 const std = @import("std");
 const client = @import("client_root");
@@ -94,7 +94,7 @@ test "plan command accepts a trailing-slash installroot and emits parseable vers
     const allocator = std.testing.allocator;
     const prefix = std.testing.environ.getAlloc(
         allocator,
-        "TDNF_CLI_TEST_PREFIX",
+        "RPMZ_CLI_TEST_PREFIX",
     ) catch try allocator.dupe(u8, "out");
     defer allocator.free(prefix);
 
@@ -142,7 +142,7 @@ test "plan command accepts a trailing-slash installroot and emits parseable vers
     try tmp.dir.writeFile(io, .{ .sub_path = "repos/base.repo", .data = repo_file });
 
     try tmp.dir.writeFile(io, .{
-        .sub_path = "tdnf.conf",
+        .sub_path = "rpmz.conf",
         .data =
         \\[main]
         \\gpgcheck=0
@@ -156,9 +156,9 @@ test "plan command accepts a trailing-slash installroot and emits parseable vers
         ,
     });
 
-    const tdnf = try std.fs.path.join(allocator, &.{ prefix, "bin", "tdnf" });
-    defer allocator.free(tdnf);
-    const config = try std.fs.path.join(allocator, &.{ root, "tdnf.conf" });
+    const rpmz = try std.fs.path.join(allocator, &.{ prefix, "bin", "rpmz" });
+    defer allocator.free(rpmz);
+    const config = try std.fs.path.join(allocator, &.{ root, "rpmz.conf" });
     defer allocator.free(config);
     const installroot_arg = try std.fmt.allocPrint(
         allocator,
@@ -173,7 +173,7 @@ test "plan command accepts a trailing-slash installroot and emits parseable vers
 
     const run_result = try std.process.run(allocator, io, .{
         .argv = &.{
-            tdnf,
+            rpmz,
             "-c",
             config,
             installroot_arg,
@@ -206,7 +206,7 @@ test "plan command accepts a trailing-slash installroot and emits parseable vers
 
     const broken_result = try std.process.run(allocator, io, .{
         .argv = &.{
-            tdnf,
+            rpmz,
             "-c",
             config,
             "--installroot",
@@ -250,7 +250,7 @@ test "the plan command and the public resolver agree byte for byte" {
     const allocator = std.testing.allocator;
     const prefix = std.testing.environ.getAlloc(
         allocator,
-        "TDNF_CLI_TEST_PREFIX",
+        "RPMZ_CLI_TEST_PREFIX",
     ) catch try allocator.dupe(u8, "out");
     defer allocator.free(prefix);
 
@@ -324,7 +324,7 @@ test "the plan command and the public resolver agree byte for byte" {
     try tmp.dir.writeFile(io, .{ .sub_path = "repos/base.repo", .data = repo_file });
 
     try tmp.dir.writeFile(io, .{
-        .sub_path = "tdnf.conf",
+        .sub_path = "rpmz.conf",
         .data =
         \\[main]
         \\gpgcheck=0
@@ -340,9 +340,9 @@ test "the plan command and the public resolver agree byte for byte" {
         ,
     });
 
-    const tdnf = try std.fs.path.join(allocator, &.{ prefix, "bin", "tdnf" });
-    defer allocator.free(tdnf);
-    const config = try std.fs.path.join(allocator, &.{ root, "tdnf.conf" });
+    const rpmz = try std.fs.path.join(allocator, &.{ prefix, "bin", "rpmz" });
+    defer allocator.free(rpmz);
+    const config = try std.fs.path.join(allocator, &.{ root, "rpmz.conf" });
     defer allocator.free(config);
 
     var environ: std.process.Environ.Map = .init(allocator);
@@ -357,7 +357,7 @@ test "the plan command and the public resolver agree byte for byte" {
     for ([_][]const u8{ "app", "broken" }) |subject| {
         const cli = try std.process.run(allocator, io, .{
             .argv = &.{
-                tdnf,            "-c",          config,
+                rpmz,            "-c",          config,
                 "--installroot", root,          "--releasever",
                 "1",             "--forcearch", "x86_64",
                 "plan",          "install",     subject,

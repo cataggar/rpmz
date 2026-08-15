@@ -119,11 +119,11 @@ const MetalinkRepo = struct {
 };
 
 const MetalinkState = struct {
-    tdnf: ?*anyopaque,
+    rpmz: ?*anyopaque,
     repos: std.array_list.Managed(MetalinkRepo),
 
-    fn init(tdnf: ?*anyopaque) MetalinkState {
-        return .{ .tdnf = tdnf, .repos = .init(allocator) };
+    fn init(rpmz: ?*anyopaque) MetalinkState {
+        return .{ .rpmz = rpmz, .repos = .init(allocator) };
     }
 
     fn deinit(self: *MetalinkState) void {
@@ -140,11 +140,11 @@ const MetalinkState = struct {
 };
 
 const RepoGPGCheckState = struct {
-    tdnf: ?*anyopaque,
+    rpmz: ?*anyopaque,
     repos: std.array_list.Managed([]u8),
 
-    fn init(tdnf: ?*anyopaque) RepoGPGCheckState {
-        return .{ .tdnf = tdnf, .repos = .init(allocator) };
+    fn init(rpmz: ?*anyopaque) RepoGPGCheckState {
+        return .{ .rpmz = rpmz, .repos = .init(allocator) };
     }
 
     fn deinit(self: *RepoGPGCheckState) void {
@@ -318,13 +318,13 @@ fn sectionHasOption(
 }
 
 pub export fn BuiltinMetalinkCreate(
-    tdnf: ?*anyopaque,
+    rpmz: ?*anyopaque,
     out_handle: ?*?*anyopaque,
 ) u32 {
     const out = out_handle orelse return ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf == null) return ERROR_TDNF_INVALID_PARAMETER;
+    if (rpmz == null) return ERROR_TDNF_INVALID_PARAMETER;
     const state = allocator.create(MetalinkState) catch return ERROR_TDNF_OUT_OF_MEMORY;
-    state.* = .init(tdnf);
+    state.* = .init(rpmz);
     out.* = state;
     return 0;
 }
@@ -367,13 +367,13 @@ pub export fn BuiltinMetalinkRepoMDDownloadStart(
     const entry = state.find(repo_id) orelse return 0;
 
     var repo: ?*anyopaque = null;
-    var rc = BuiltinFindRepo(state.tdnf, repo_id_z, &repo);
+    var rc = BuiltinFindRepo(state.rpmz, repo_id_z, &repo);
     if (rc != 0) return rc;
     if (repo == null) return ERROR_TDNF_INVALID_PARAMETER;
 
     var metalink_file = PinnedFile{};
     defer metalink_file.close();
-    var need_download = BuiltinRefreshRequested(state.tdnf) != 0;
+    var need_download = BuiltinRefreshRequested(state.rpmz) != 0;
     if (!need_download) {
         const opened = openPinnedRegular(
             repo_data_dir,
@@ -394,7 +394,7 @@ pub export fn BuiltinMetalinkRepoMDDownloadStart(
     }
     if (need_download) {
         rc = BuiltinDownloadMetalink(
-            state.tdnf,
+            state.rpmz,
             repo,
             repo_data_dir,
             "metalink",
@@ -626,14 +626,14 @@ fn checkMetalinkHashes(fd: c_int, hashes: []const MetalinkHash) u32 {
 }
 
 pub export fn BuiltinRepoGPGCheckCreate(
-    tdnf: ?*anyopaque,
+    rpmz: ?*anyopaque,
     out_handle: ?*?*anyopaque,
 ) u32 {
     const out = out_handle orelse return ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf == null) return ERROR_TDNF_INVALID_PARAMETER;
+    if (rpmz == null) return ERROR_TDNF_INVALID_PARAMETER;
     const state = allocator.create(RepoGPGCheckState) catch
         return ERROR_TDNF_OUT_OF_MEMORY;
-    state.* = .init(tdnf);
+    state.* = .init(rpmz);
     out.* = state;
     return 0;
 }
@@ -683,7 +683,7 @@ pub export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
     if (!state.has(std.mem.span(repo_id_z))) return 0;
 
     var repo: ?*anyopaque = null;
-    var rc = BuiltinFindRepo(state.tdnf, repo_id_z, &repo);
+    var rc = BuiltinFindRepo(state.rpmz, repo_id_z, &repo);
     if (rc != 0) return rc;
     if (repo == null) return ERROR_TDNF_INVALID_PARAMETER;
 
@@ -699,7 +699,7 @@ pub export fn BuiltinRepoGPGCheckRepoMDDownloadEnd(
     const directory = PinnedDirectory{ .fd = repomd_file.directory_fd };
     var signature_file = PinnedFile{};
     rc = BuiltinDownloadRepoFile(
-        state.tdnf,
+        state.rpmz,
         repo,
         signature_location.ptr,
         &directory,

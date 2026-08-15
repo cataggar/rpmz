@@ -36,7 +36,7 @@ def teardown_test(utils):
 def test_priority(utils):
     pkgname = utils.config['mulversion_pkgname']
     pkgname_low = pkgname + "=" + utils.config['mulversion_lower']
-    ret = utils.run(["tdnf",
+    ret = utils.run(["rpmz",
                      "-y", "--nogpgcheck",
                      "--downloadonly", f"--downloaddir={REPODIR}",
                      "install", pkgname_low],
@@ -52,7 +52,7 @@ def test_priority(utils):
     utils.create_repoconf(filename, baseurl, REPONAME)
     utils.edit_config({'priority': "25"}, repo=REPONAME)
 
-    ret = utils.run(["tdnf",
+    ret = utils.run(["rpmz",
                      "-y", "--nogpgcheck",
                      "install", pkgname],
                     cwd=REPODIR)

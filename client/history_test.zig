@@ -8,7 +8,7 @@ const std = @import("std");
 const testing = std.testing;
 const history = @import("client_history");
 const txn_config = @import("rpm_txn_config");
-const tdnf_error = @import("tdnf_error");
+const rpmz_error = @import("rpmz_error");
 
 comptime {
     _ = @import("client_root");
@@ -16,7 +16,7 @@ comptime {
 
 extern fn destroy_history_ctx(context: ?*history.HistoryCtx) void;
 extern fn TDNFGetHistoryCtx(
-    tdnf: ?*history.Tdnf,
+    rpmz: ?*history.Tdnf,
     context: ?*?*history.HistoryCtx,
     must_exist: c_int,
 ) u32;
@@ -66,26 +66,26 @@ fn getHistory(
     var conf = history.Conf{
         .pszPersistDir = @constCast(persist_dir),
     };
-    var tdnf = history.Tdnf{
+    var rpmz = history.Tdnf{
         .pArgs = &args,
         .pConf = &conf,
         .pRpmConfig = @ptrCast(&rpm_config),
     };
-    return TDNFGetHistoryCtx(&tdnf, out, must_exist);
+    return TDNFGetHistoryCtx(&rpmz, out, must_exist);
 }
 
 test "TDNFGetHistoryCtx rejects only its required arguments" {
     var sentinel: ?*history.HistoryCtx = @ptrFromInt(1);
     try testing.expectEqual(
-        tdnf_error.ERROR_TDNF_INVALID_PARAMETER,
+        rpmz_error.ERROR_TDNF_INVALID_PARAMETER,
         TDNFGetHistoryCtx(null, &sentinel, 0),
     );
     try testing.expectEqual(@as(usize, 1), @intFromPtr(sentinel.?));
 
-    var tdnf = history.Tdnf{};
+    var rpmz = history.Tdnf{};
     try testing.expectEqual(
-        tdnf_error.ERROR_TDNF_INVALID_PARAMETER,
-        TDNFGetHistoryCtx(&tdnf, null, 0),
+        rpmz_error.ERROR_TDNF_INVALID_PARAMETER,
+        TDNFGetHistoryCtx(&rpmz, null, 0),
     );
 }
 
@@ -113,7 +113,7 @@ test "TDNFGetHistoryCtx must-exist leaves a missing path untouched" {
 
     var context: ?*history.HistoryCtx = null;
     try testing.expectEqual(
-        tdnf_error.ERROR_TDNF_HISTORY_NODB,
+        rpmz_error.ERROR_TDNF_HISTORY_NODB,
         try getHistory(fixture.root.ptr, "/persist", &context, 1),
     );
     try testing.expect(context == null);
@@ -155,7 +155,7 @@ test "TDNFGetHistoryCtx opens regular and rejects symlink databases" {
         .{},
     );
     try testing.expectEqual(
-        tdnf_error.ERROR_TDNF_HISTORY_ERROR,
+        rpmz_error.ERROR_TDNF_HISTORY_ERROR,
         try getHistory(fixture.root.ptr, "/persist", &context, 1),
     );
     try testing.expect(context == null);
@@ -178,7 +178,7 @@ test "TDNFGetHistoryCtx reports directory creation failure" {
 
     var context: ?*history.HistoryCtx = null;
     try testing.expectEqual(
-        tdnf_error.ERROR_TDNF_INVALID_DIR,
+        rpmz_error.ERROR_TDNF_INVALID_DIR,
         try getHistory(blocker.ptr, "/persist", &context, 0),
     );
     try testing.expect(context == null);
@@ -194,7 +194,7 @@ test "TDNFGetHistoryCtx cleans up after context creation failure" {
 
     var context: ?*history.HistoryCtx = null;
     try testing.expectEqual(
-        tdnf_error.ERROR_TDNF_HISTORY_ERROR,
+        rpmz_error.ERROR_TDNF_HISTORY_ERROR,
         try getHistory(fixture.root.ptr, "/persist", &context, 0),
     );
     try testing.expect(context == null);

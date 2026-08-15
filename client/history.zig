@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License. The terms
 // of the License are located in the COPYING file of this distribution.
 
-const tdnf_error = @import("tdnf_error");
+const rpmz_error = @import("rpmz_error");
 const abi = @import("client_abi");
 
 pub const CmdArgs = abi.CmdArgs;
@@ -27,14 +27,14 @@ pub export fn TDNFGetHistoryCtx(
     nMustExist: c_int,
 ) u32 {
     if (pTdnf == null or ppCtx == null) {
-        return tdnf_error.ERROR_TDNF_INVALID_PARAMETER;
+        return rpmz_error.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    const tdnf = pTdnf.?;
-    const conf = tdnf.pConf orelse
-        return tdnf_error.ERROR_TDNF_INVALID_PARAMETER;
-    const raw_config = tdnf.pRpmConfig orelse
-        return tdnf_error.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = pTdnf.?;
+    const conf = rpmz.pConf orelse
+        return rpmz_error.ERROR_TDNF_INVALID_PARAMETER;
+    const raw_config = rpmz.pRpmConfig orelse
+        return rpmz_error.ERROR_TDNF_INVALID_PARAMETER;
     const result = history_open_config(
         @ptrCast(@alignCast(raw_config)),
         conf.pszPersistDir,
@@ -42,9 +42,9 @@ pub export fn TDNFGetHistoryCtx(
         ppCtx,
     );
     if (result == 0) return 0;
-    if (result == 1) return tdnf_error.ERROR_TDNF_HISTORY_NODB;
-    if (result == 2) return tdnf_error.ERROR_TDNF_INVALID_DIR;
-    return tdnf_error.ERROR_TDNF_HISTORY_ERROR;
+    if (result == 1) return rpmz_error.ERROR_TDNF_HISTORY_NODB;
+    if (result == 2) return rpmz_error.ERROR_TDNF_INVALID_DIR;
+    return rpmz_error.ERROR_TDNF_HISTORY_ERROR;
 }
 
 comptime {
@@ -54,5 +54,5 @@ comptime {
         @compileError("TDNF_CONF.pszPersistDir ABI drift");
     if (@offsetOf(Tdnf, "pArgs") != @sizeOf(?*anyopaque) or
         @offsetOf(Tdnf, "pConf") != 2 * @sizeOf(?*anyopaque))
-        @compileError("TDNF handle prefix ABI drift");
+        @compileError("RPMZ handle prefix ABI drift");
 }

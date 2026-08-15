@@ -37,7 +37,7 @@ const RawMainFdPin = extern struct {
     database: ?*anyopaque,
 };
 
-extern fn tdnf_sqlite_confined_open_at(
+extern fn rpmz_sqlite_confined_open_at(
     dir_fd: c_int,
     basename: [*]const u8,
     basename_len: usize,
@@ -46,25 +46,25 @@ extern fn tdnf_sqlite_confined_open_at(
     pinned_main_fd: c_int,
     output: *RawConnection,
 ) callconv(.c) c_int;
-extern fn tdnf_sqlite_confined_close(
+extern fn rpmz_sqlite_confined_close(
     connection: *RawConnection,
 ) callconv(.c) c_int;
-extern fn tdnf_sqlite_confined_verify(
+extern fn rpmz_sqlite_confined_verify(
     connection: *const RawConnection,
 ) callconv(.c) c_int;
-extern fn tdnf_sqlite_confined_pin_main_fd(
+extern fn rpmz_sqlite_confined_pin_main_fd(
     connection: *const RawConnection,
 ) callconv(.c) RawMainFdPin;
-extern fn tdnf_sqlite_confined_create_exclusive_main_pin(
+extern fn rpmz_sqlite_confined_create_exclusive_main_pin(
     dir_fd: c_int,
     basename: [*]const u8,
     basename_len: usize,
     output: *RawMainFdPin,
 ) callconv(.c) c_int;
-extern fn tdnf_sqlite_confined_release_main_fd_pin(
+extern fn rpmz_sqlite_confined_release_main_fd_pin(
     database: ?*anyopaque,
 ) callconv(.c) void;
-extern fn tdnf_sqlite_confined_retain_main_fd_pin(
+extern fn rpmz_sqlite_confined_retain_main_fd_pin(
     database: ?*anyopaque,
 ) callconv(.c) void;
 
@@ -82,11 +82,11 @@ pub const MainFdPin = struct {
     }
 
     pub fn releaseOpaque(database: ?*anyopaque) void {
-        tdnf_sqlite_confined_release_main_fd_pin(database);
+        rpmz_sqlite_confined_release_main_fd_pin(database);
     }
 
     pub fn retainOpaque(database: ?*anyopaque) void {
-        tdnf_sqlite_confined_retain_main_fd_pin(database);
+        rpmz_sqlite_confined_retain_main_fd_pin(database);
     }
 };
 
@@ -100,7 +100,7 @@ pub const Connection = struct {
 
     pub fn tryClose(self: *Connection) bool {
         var raw = RawConnection{ .db = self.db, .handle = self.handle };
-        if (tdnf_sqlite_confined_close(&raw) != c.SQLITE_OK)
+        if (rpmz_sqlite_confined_close(&raw) != c.SQLITE_OK)
             return false;
         self.* = .{ .db = null, .handle = null };
         return true;
@@ -108,12 +108,12 @@ pub const Connection = struct {
 
     pub fn verify(self: *const Connection) Error!void {
         const raw = RawConnection{ .db = self.db, .handle = self.handle };
-        try statusError(tdnf_sqlite_confined_verify(&raw));
+        try statusError(rpmz_sqlite_confined_verify(&raw));
     }
 
     pub fn pinMainFd(self: *const Connection) Error!MainFdPin {
         const raw = RawConnection{ .db = self.db, .handle = self.handle };
-        const pin = tdnf_sqlite_confined_pin_main_fd(&raw);
+        const pin = rpmz_sqlite_confined_pin_main_fd(&raw);
         if (pin.fd < 0 or pin.database == null) return error.SyscallFailed;
         return .{ .fd = pin.fd, .database = pin.database };
     }
@@ -129,7 +129,7 @@ pub fn openAt(
         callback(options.mutation_context);
     }
     var raw = RawConnection{ .db = null, .handle = null };
-    try statusError(tdnf_sqlite_confined_open_at(
+    try statusError(rpmz_sqlite_confined_open_at(
         dir_fd,
         basename.ptr,
         basename.len,
@@ -147,7 +147,7 @@ pub fn createExclusiveMainPinAt(
     basename: []const u8,
 ) Error!MainFdPin {
     var raw = RawMainFdPin{ .fd = -1, .database = null };
-    try statusError(tdnf_sqlite_confined_create_exclusive_main_pin(
+    try statusError(rpmz_sqlite_confined_create_exclusive_main_pin(
         dir_fd,
         basename.ptr,
         basename.len,

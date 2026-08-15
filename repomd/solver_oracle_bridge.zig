@@ -255,7 +255,7 @@ pub export fn TDNFRepoMdNativeLoadInstalledSolvRepo(
 
 pub export fn TDNFRepoMdNativeLoadInstalledSolvRepoConfig(
     raw_repo: ?*c.Repo,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     flags: c_int,
 ) u32 {
     clearError();
@@ -1351,7 +1351,7 @@ test "file dependency bridge seeds ten thousand paths by kind" {
 }
 
 test "bridged repository keeps the file provides libsolv reads from the filtered filelist" {
-    // Regression pin for the `tdnf plan` failure in #268. `addPrimary` marks
+    // Regression pin for the `rpmz plan` failure in #268. `addPrimary` marks
     // its repodata `REPODATA_FILELIST_FILTERED`, and `pool_addfileprovides()`
     // then treats that repodata as the only source for any path the standard
     // filter accepts. When it held no files at all, every file provide in the
@@ -1424,23 +1424,23 @@ fn loadInstalledPackagesIntoBridge(
     arena: std.mem.Allocator,
     bridge: *NativeRpmBridge,
     root_dir: ?[*:0]const u8,
-    config: ?*const abi.tdnf_rpm_config,
+    config: ?*const abi.rpmz_rpm_config,
     flags: c_int,
 ) NativeRpmError!void {
     const iter = (if (config) |cfg|
-        abi.tdnf_rpmdb_iter_open_config(cfg)
+        abi.rpmz_rpmdb_iter_open_config(cfg)
     else
-        abi.tdnf_rpmdb_iter_open(root_dir)) orelse {
-        setError("failed to open rpmdb iterator: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
+        abi.rpmz_rpmdb_iter_open(root_dir)) orelse {
+        setError("failed to open rpmdb iterator: {s}", .{std.mem.span(abi.rpmz_rpmdb_last_error())});
         return error.RpmDbOpenFailed;
     };
-    defer abi.tdnf_rpmdb_iter_close(iter);
+    defer abi.rpmz_rpmdb_iter_close(iter);
 
     while (true) {
         var hnum: u32 = 0;
         var blob_ptr: ?[*]const u8 = null;
         var blob_len: usize = 0;
-        const rc = abi.tdnf_rpmdb_iter_next_header_blob_hnum(
+        const rc = abi.rpmz_rpmdb_iter_next_header_blob_hnum(
             iter,
             &hnum,
             &blob_ptr,
@@ -1450,7 +1450,7 @@ fn loadInstalledPackagesIntoBridge(
             break;
         }
         if (rc < 0) {
-            setError("failed to read rpmdb iterator: {s}", .{std.mem.span(abi.tdnf_rpmdb_last_error())});
+            setError("failed to read rpmdb iterator: {s}", .{std.mem.span(abi.rpmz_rpmdb_last_error())});
             return error.RpmDbReadFailed;
         }
         const ptr = blob_ptr orelse continue;

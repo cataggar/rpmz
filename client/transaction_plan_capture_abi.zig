@@ -441,7 +441,7 @@ pub const RepositoryRefreshView = extern struct {
 };
 
 pub const RepositoryRefreshInput = extern struct {
-    tdnf_handle: ?*anyopaque = null,
+    rpmz_handle: ?*anyopaque = null,
     sack: ?*anyopaque = null,
     live_sack: ?*anyopaque = null,
     repository_head: ?*anyopaque = null,
@@ -467,7 +467,7 @@ pub const RepositoryRefreshInput = extern struct {
 };
 
 pub const RepositoryInitInput = extern struct {
-    tdnf_handle: ?*anyopaque = null,
+    rpmz_handle: ?*anyopaque = null,
     repo_data: ?*anyopaque = null,
     context: ?*anyopaque = null,
     callbacks: ?*const RepositoryInitCallbacks = null,

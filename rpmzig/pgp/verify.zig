@@ -43,7 +43,7 @@ const signature = @import("signature.zig");
 const keyring = @import("keyring.zig");
 
 /// Verification verdict. Numeric values preserve the standalone
-/// `tdnf-rpm-verify` helper's historical exit-status mapping.
+/// `rpmz-rpm-verify` helper's historical exit-status mapping.
 pub const Status = enum(u8) {
     ok = 0,
     no_sig = 1,

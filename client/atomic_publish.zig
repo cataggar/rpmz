@@ -62,7 +62,7 @@ pub const Staging = struct {
 
     /// Prefix for staging directories. The leading dot keeps it out of casual
     /// listings, and the name is deliberately not a plausible bundle name.
-    pub const staging_prefix = ".tdnf-bundle-staging-";
+    pub const staging_prefix = ".rpmz-bundle-staging-";
 
     pub fn create(
         allocator: std.mem.Allocator,

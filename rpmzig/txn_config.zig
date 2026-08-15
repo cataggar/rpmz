@@ -1,6 +1,6 @@
 //! Minimal native macro/config resolution for the transaction engine.
 //!
-//! This intentionally models only the small librpm surface that tdnf's
+//! This intentionally models only the small librpm surface that rpmz's
 //! native transaction work needs today:
 //! - `%{_dbpath}` for rpmdb open/init/rebuild/verify
 //! - `%{_tmppath}` for temporary transaction/script files

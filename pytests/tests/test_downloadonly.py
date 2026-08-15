@@ -10,7 +10,7 @@ import shutil
 import glob
 import pytest
 
-DOWNLOADDIR = '/tmp/tdnf/download'
+DOWNLOADDIR = '/tmp/rpmz/download'
 
 
 @pytest.fixture(scope='function', autouse=True)
@@ -25,7 +25,7 @@ def teardown_test(utils):
 
 
 def check_package_in_cache(utils, pkgname):
-    cache_dir = utils.tdnf_config.get('main', 'cachedir')
+    cache_dir = utils.rpmz_config.get('main', 'cachedir')
     ret = utils.run(['find', cache_dir, '-name', pkgname + '*.rpm'])
     if ret['stdout']:
         return True
@@ -36,7 +36,7 @@ def check_package_in_cache(utils, pkgname):
 # be in cache dir
 def test_install_download_only(utils):
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', '--downloadonly', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--downloadonly', pkgname])
     assert ret['retval'] == 0
     assert not utils.check_package(pkgname)
     assert check_package_in_cache(utils, pkgname)
@@ -47,7 +47,7 @@ def test_install_download_only(utils):
 def test_install_download_only_to_directory(utils):
     pkgname = utils.config["sglversion_pkgname"]
     os.makedirs(DOWNLOADDIR, exist_ok=True)
-    ret = utils.run(['tdnf', 'install', '-y', '--downloadonly', '--downloaddir', DOWNLOADDIR, pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--downloadonly', '--downloaddir', DOWNLOADDIR, pkgname])
     print(ret)
     assert ret['retval'] == 0
     assert not utils.check_package(pkgname)
@@ -57,7 +57,7 @@ def test_install_download_only_to_directory(utils):
 # --downloaddir option without --downloadonly should fail
 def test_install_downloaddir_no_downloadonly(utils):
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', '--downloaddir', DOWNLOADDIR, pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--downloaddir', DOWNLOADDIR, pkgname])
     assert ret['retval'] != 0
     assert not utils.check_package(pkgname)
 
@@ -65,7 +65,7 @@ def test_install_downloaddir_no_downloadonly(utils):
 # --alldeps option without --downloadonly should fail
 def test_install_aldeps_no_downloadonly(utils):
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', '--alldeps', DOWNLOADDIR, pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--alldeps', DOWNLOADDIR, pkgname])
     assert ret['retval'] != 0
     assert not utils.check_package(pkgname)
 
@@ -73,7 +73,7 @@ def test_install_aldeps_no_downloadonly(utils):
 # --nodeps option without --downloadonly should fail
 def test_install_nodeps_no_downloadonly(utils):
     pkgname = utils.config["sglversion_pkgname"]
-    ret = utils.run(['tdnf', 'install', '-y', '--nodeps', DOWNLOADDIR, pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--nodeps', DOWNLOADDIR, pkgname])
     assert ret['retval'] != 0
     assert not utils.check_package(pkgname)
 
@@ -88,7 +88,7 @@ def test_install_download_only_and_requires(utils):
 
     os.makedirs(DOWNLOADDIR, exist_ok=True)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--downloadonly', '--downloaddir', DOWNLOADDIR, pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--downloadonly', '--downloaddir', DOWNLOADDIR, pkgname])
 
     assert ret['retval'] == 0
     assert not utils.check_package(pkgname)
@@ -105,7 +105,7 @@ def test_install_download_only_alldeps(utils):
 
     os.makedirs(DOWNLOADDIR, exist_ok=True)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--downloadonly', '--downloaddir', DOWNLOADDIR, '--alldeps', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--downloadonly', '--downloaddir', DOWNLOADDIR, '--alldeps', pkgname])
 
     assert ret['retval'] == 0
     assert not utils.check_package(pkgname)
@@ -122,7 +122,7 @@ def test_install_download_only_nodeps(utils):
 
     os.makedirs(DOWNLOADDIR, exist_ok=True)
 
-    ret = utils.run(['tdnf', 'install', '-y', '--downloadonly', '--downloaddir', DOWNLOADDIR, '--nodeps', pkgname])
+    ret = utils.run(['rpmz', 'install', '-y', '--downloadonly', '--downloaddir', DOWNLOADDIR, '--nodeps', pkgname])
 
     assert ret['retval'] == 0
     assert not utils.check_package(pkgname)

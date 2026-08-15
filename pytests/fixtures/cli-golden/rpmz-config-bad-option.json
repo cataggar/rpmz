@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "rpmz-config",
+    "--bad-option"
+  ],
+  "stdout": "",
+  "stderr": "rpmz-config: unrecognized option '--bad-option'",
+  "retval": 1
+}

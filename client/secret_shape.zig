@@ -1,4 +1,4 @@
-//! Credential-shaped text detection shared by every versioned tdnf artifact.
+//! Credential-shaped text detection shared by every versioned rpmz artifact.
 //!
 //! These predicates are the last line of defence against a secret reaching a
 //! plan, a bundle manifest, a digest, or a filename. They are deliberately

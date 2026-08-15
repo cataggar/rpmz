@@ -26,18 +26,18 @@ def teardown_test(utils):
 
 
 def test_check_local_no_args(utils):
-    ret = utils.run(['tdnf', 'check-local'])
+    ret = utils.run(['rpmz', 'check-local'])
     assert ret['retval'] == 906
 
 
 def test_check_local_with_invalid_dir(utils):
-    ret = utils.run(['tdnf', 'check-local', '/home/invalid_dir'])
+    ret = utils.run(['rpmz', 'check-local', '/home/invalid_dir'])
     assert ret['retval'] == 1602
 
 
 def test_check_local_empty_directory(utils):
     temp_dir = tempfile.TemporaryDirectory()
-    ret = utils.run(['tdnf', 'check-local', temp_dir.name])
+    ret = utils.run(['rpmz', 'check-local', temp_dir.name])
     assert ret['retval'] == 0
 
 
@@ -47,5 +47,5 @@ def test_check_local_with_local_rpm(utils):
         src = os.path.join(utils.config['repo_path'], 'build', 'RPMS', ARCH, 'tdnf-test-two-1.0.1-1.{}.rpm'.format(ARCH))
         shutil.copyfile(src, dest)
 
-        ret = utils.run(['tdnf', 'check-local', tmpdir])
+        ret = utils.run(['rpmz', 'check-local', tmpdir])
         assert ret['retval'] == 0

@@ -4,9 +4,9 @@
 // you may not use this file except in compliance with the License. The terms
 // of the License are located in the COPYING file of this distribution.
 
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const abi = @import("transaction_plan_capture_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const c = @import("client_init_abi").C;
 
 extern fn TDNFFreeMemory(?*anyopaque) callconv(.c) void;
@@ -82,7 +82,7 @@ fn setRepositoryEnabled(
 }
 
 fn buildRefreshInput(
-    raw_handle: ?*c.TDNF,
+    raw_handle: ?*c.RPMZ,
     sack: ?*c.TDNF_PACKAGE_CONTEXT,
     raw_input: ?*abi.RepositoryRefreshInput,
 ) callconv(.c) u32 {
@@ -95,7 +95,7 @@ fn buildRefreshInput(
     }
 
     @memset(@as([*]u8, @ptrCast(input))[0..@sizeOf(abi.RepositoryRefreshInput)], 0);
-    input.tdnf_handle = @ptrCast(handle);
+    input.rpmz_handle = @ptrCast(handle);
     input.sack = @ptrCast(sack);
     input.live_sack = @ptrCast(handle.pSack);
     input.repository_head = @ptrCast(handle.pRepos);

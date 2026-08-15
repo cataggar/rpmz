@@ -1,7 +1,7 @@
-//! tdnf build script (replacement for the former CMake build).
+//! rpmz build script (replacement for the former CMake build).
 //!
-//! Produces the tdnf executable, support tools, and built-in plugins. The
-//! reusable package surface is the public `tdnf` Zig module registered below;
+//! Produces the rpmz executable, support tools, and built-in plugins. The
+//! reusable package surface is the public `rpmz` Zig module registered below;
 //! there are no installed C libraries or headers.
 //!
 //! All compilation goes through `zig cc` (clang from Zig's bundled LLVM).
@@ -14,8 +14,8 @@ const LazyPath = Build.LazyPath;
 const ResolvedTarget = Build.ResolvedTarget;
 const OptimizeMode = std.builtin.OptimizeMode;
 
-const project_name = "tdnf";
-const default_project_version = "4.0.0";
+const project_name = "rpmz";
+const default_project_version = "0.1.0";
 
 /// Patch level of the vendored libsolv (see `.libsolv` in build.zig.zon).
 /// Used only by the opt-in libsolv solver oracle.
@@ -23,14 +23,14 @@ const vendored_libsolv_version_patch = "39";
 
 /// Warnings + hardening flags from the former cmake/CFlags.cmake, filtered
 /// to the strict set clang accepts. GCC-only warnings have been removed.
-const tdnf_cflags = [_][]const u8{
+const rpmz_cflags = [_][]const u8{
     // Vendored libsolv's headers are reached with -I rather than
     // -isystem, because zig cc orders /usr/include *ahead* of user
     // -isystem directories: with -isystem, a host libsolv-devel silently
     // wins and the build compiles against the host's headers while
     // linking the vendored .a. -I restores the intended precedence, and
     // this flag restores the warning suppression that -isystem used to
-    // provide, without exempting any of tdnf's own sources -- every
+    // provide, without exempting any of rpmz's own sources -- every
     // libsolv header is spelled <solv/...>, and a
     // header included from a system header is itself a system header, so
     // libsolv's internal quoted includes are covered too.
@@ -154,19 +154,19 @@ pub fn build(b: *Build) void {
     transaction_bundle_mod.addImport("canonical_json", canonical_json_mod);
     transaction_bundle_mod.addImport("secret_shape", secret_shape_mod);
     transaction_bundle_mod.addImport("transaction_plan", transaction_plan_mod);
-    const public_tdnf_mod = b.addModule("tdnf", .{
-        .root_source_file = b.path("tdnf.zig"),
+    const public_rpmz_mod = b.addModule("rpmz", .{
+        .root_source_file = b.path("rpmz.zig"),
         .target = target,
         .optimize = optimize,
     });
-    public_tdnf_mod.addImport("transaction_plan", transaction_plan_mod);
-    public_tdnf_mod.addImport("transaction_bundle", transaction_bundle_mod);
-    public_tdnf_mod.addImport("bundle_reader", bundle_reader_mod);
+    public_rpmz_mod.addImport("transaction_plan", transaction_plan_mod);
+    public_rpmz_mod.addImport("transaction_bundle", transaction_bundle_mod);
+    public_rpmz_mod.addImport("bundle_reader", bundle_reader_mod);
     // Registered so the public-API audit can see the whole compiled closure,
-    // not because `tdnf.zig` re-exports them. They are shared implementation
+    // not because `rpmz.zig` re-exports them. They are shared implementation
     // detail with no stability promise of their own.
-    public_tdnf_mod.addImport("canonical_json", canonical_json_mod);
-    public_tdnf_mod.addImport("secret_shape", secret_shape_mod);
+    public_rpmz_mod.addImport("canonical_json", canonical_json_mod);
+    public_rpmz_mod.addImport("secret_shape", secret_shape_mod);
 
     // Zig 0.16 documents an empty Build.pkg_hash as the root package. A
     // dependency consumer needs the resolve module graph, which is built
@@ -191,7 +191,7 @@ pub fn build(b: *Build) void {
     const history_db_dir = b.option(
         []const u8,
         "history-db-dir",
-        "Directory for tdnf history database (default: /var/lib/tdnf)",
+        "Directory for rpmz history database (compatibility default: /var/lib/tdnf)",
     ) orelse "/var/lib/tdnf";
     const systemd_dir = b.option(
         []const u8,
@@ -211,8 +211,8 @@ pub fn build(b: *Build) void {
     const plugin_dir_rel = b.option(
         []const u8,
         "plugin-dir",
-        "Plugin install directory (relative to prefix, default: lib/tdnf-plugins)",
-    ) orelse "lib/tdnf-plugins";
+        "Plugin install directory (relative to prefix, default: lib/rpmz-plugins)",
+    ) orelse "lib/rpmz-plugins";
     const prefix = b.install_prefix;
     const libdir = "lib";
     // `b.install_prefix` is the literal `--prefix` argument (e.g. `./out`)
@@ -230,7 +230,7 @@ pub fn build(b: *Build) void {
         b.build_root.path.?,
         ".zig-cache",
         "replay-acceptance",
-        "tdnf-replay-export",
+        "rpmz-replay-export",
     });
     const full_libdir = b.fmt("{s}/{s}", .{ abs_prefix, libdir });
     const client_config_options = b.addOptions();
@@ -267,7 +267,7 @@ pub fn build(b: *Build) void {
         },
     });
     const sqlite_confined_lib = b.addLibrary(.{
-        .name = "tdnfsqliteconfined",
+        .name = "rpmzsqliteconfined",
         .linkage = .static,
         .root_module = sqlite_confined_mod,
     });
@@ -315,20 +315,20 @@ pub fn build(b: *Build) void {
             .{ .key = "CMAKE_CURRENT_BINARY_DIR", .value = abs_prefix },
             .{ .key = "CMAKE_BINARY_DIR", .value = abs_prefix },
             .{ .key = "PLUGIN_PATH", .value = b.fmt("{s}/{s}", .{ abs_prefix, plugin_dir_rel }) },
-            .{ .key = "NATIVE_FILE_INSTALL_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-rpm-install", .{abs_prefix}) },
-            .{ .key = "NATIVE_FILE_ERASE_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-rpm-erase", .{abs_prefix}) },
-            .{ .key = "HISTORY_UTIL_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-history-util", .{abs_prefix}) },
-            .{ .key = "TEST_SUPPORT_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-test-support", .{abs_prefix}) },
+            .{ .key = "NATIVE_FILE_INSTALL_BINARY", .value = b.fmt("{s}/libexec/rpmz/rpmz-rpm-install", .{abs_prefix}) },
+            .{ .key = "NATIVE_FILE_ERASE_BINARY", .value = b.fmt("{s}/libexec/rpmz/rpmz-rpm-erase", .{abs_prefix}) },
+            .{ .key = "HISTORY_UTIL_BINARY", .value = b.fmt("{s}/libexec/rpmz/rpmz-history-util", .{abs_prefix}) },
+            .{ .key = "TEST_SUPPORT_BINARY", .value = b.fmt("{s}/libexec/rpmz/rpmz-test-support", .{abs_prefix}) },
             .{ .key = "REPLAY_EXPORT_BINARY", .value = replay_acceptance_export_path },
-            .{ .key = "RPMDB_LIST_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-rpmdb-list", .{abs_prefix}) },
-            .{ .key = "RPMDB_WRITE_BINARY", .value = b.fmt("{s}/libexec/tdnf/tdnf-rpmdb-write", .{abs_prefix}) },
-            .{ .key = "AUTOMATIC_SCRIPT", .value = b.fmt("{s}/bin/tdnf-automatic", .{abs_prefix}) },
+            .{ .key = "RPMDB_LIST_BINARY", .value = b.fmt("{s}/libexec/rpmz/rpmz-rpmdb-list", .{abs_prefix}) },
+            .{ .key = "RPMDB_WRITE_BINARY", .value = b.fmt("{s}/libexec/rpmz/rpmz-rpmdb-write", .{abs_prefix}) },
+            .{ .key = "AUTOMATIC_SCRIPT", .value = b.fmt("{s}/bin/rpmz-automatic", .{abs_prefix}) },
         });
 
         writeTemplateExecutable(
             b,
-            "bin/tdnf-automatic.in",
-            "bin/tdnf-automatic",
+            "bin/rpmz-automatic.in",
+            "bin/rpmz-automatic",
             &.{.{ .key = "VERSION", .value = project_version }},
         );
     }
@@ -383,6 +383,16 @@ pub fn build(b: *Build) void {
     migration_audit_step.dependOn(&test_replay_docs_audit.step);
     migration_audit_step.dependOn(&run_replay_confinement_audit.step);
     migration_audit_step.dependOn(&test_replay_confinement_audit.step);
+    const rebrand_audit_step = b.step(
+        "rebrand-audit",
+        "Reject stale public and installable legacy product naming",
+    );
+    const run_rebrand_audit = b.addSystemCommand(
+        &.{ "python3", "scripts/rebrand-audit.py" },
+    );
+    run_rebrand_audit.setCwd(b.path("."));
+    rebrand_audit_step.dependOn(&run_rebrand_audit.step);
+    migration_audit_step.dependOn(&run_rebrand_audit.step);
     const dead_errdefer_audit_step = b.step(
         "dead-errdefer-audit",
         "Reject errdefer in functions that cannot return an error",
@@ -479,7 +489,7 @@ pub fn build(b: *Build) void {
     replay_acceptance_export_step.dependOn(
         &run_replay_acceptance_export.step,
     );
-    const tdnf_error_mod = b.createModule(.{
+    const rpmz_error_mod = b.createModule(.{
         .root_source_file = b.path("abi/error_codes.zig"),
         .target = target,
         .optimize = optimize,
@@ -490,7 +500,7 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    common_api_mod.addImport("tdnf_error", tdnf_error_mod);
+    common_api_mod.addImport("rpmz_error", rpmz_error_mod);
     const internal_abi_mod = b.createModule(.{
         .root_source_file = b.path("abi/internal.zig"),
         .target = target,
@@ -540,13 +550,13 @@ pub fn build(b: *Build) void {
     client_abi_mod.addIncludePath(b.path("rpmzig"));
     client_varsdir_mod.addImport("client_abi", client_abi_mod);
     {
-        const tests = b.addTest(.{ .root_module = tdnf_error_mod });
+        const tests = b.addTest(.{ .root_module = rpmz_error_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);
     }
 
     {
-        const tests = b.addTest(.{ .root_module = public_tdnf_mod });
+        const tests = b.addTest(.{ .root_module = public_rpmz_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);
     }
@@ -558,7 +568,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.addIncludePath(b.path("client"));
         test_mod.addIncludePath(b.path("rpmzig"));
         const tests = b.addTest(.{ .root_module = test_mod });
@@ -645,8 +655,8 @@ pub fn build(b: *Build) void {
         transaction_plan_capture_abi_mod,
     );
     transaction_plan_request_trace_mod.addImport(
-        "tdnf_error",
-        tdnf_error_mod,
+        "rpmz_error",
+        rpmz_error_mod,
     );
     const transaction_plan_capture_test_step = b.step(
         "transaction-plan-capture-test",
@@ -679,7 +689,7 @@ pub fn build(b: *Build) void {
         "transaction_plan_request_trace",
         transaction_plan_request_trace_mod,
     );
-    transaction_plan_capture_test_mod.addImport("tdnf_error", tdnf_error_mod);
+    transaction_plan_capture_test_mod.addImport("rpmz_error", rpmz_error_mod);
     {
         const tests = b.addTest(.{
             .root_module = transaction_plan_capture_test_mod,
@@ -864,7 +874,7 @@ pub fn build(b: *Build) void {
     repomd_mod.addImport("content_digest", content_digest_mod);
     repomd_mod.addImport("rpm_header", rpmzig_header_mod);
     repomd_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
-    repomd_mod.addImport("tdnf_error", tdnf_error_mod);
+    repomd_mod.addImport("rpmz_error", rpmz_error_mod);
     repomd_mod.addImport("tdnf_internal_abi", internal_abi_mod);
     repomd_mod.addIncludePath(b.path("rpmzig"));
 
@@ -879,7 +889,7 @@ pub fn build(b: *Build) void {
         "transaction_plan_capture_abi",
         transaction_plan_capture_abi_mod,
     );
-    transaction_plan_native_mod.addImport("tdnf_error", tdnf_error_mod);
+    transaction_plan_native_mod.addImport("rpmz_error", rpmz_error_mod);
     transaction_plan_native_mod.addImport("repomd", repomd_mod);
     const transaction_plan_repository_integration_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_plan_repository.zig"),
@@ -941,14 +951,14 @@ pub fn build(b: *Build) void {
         transaction_plan_request_trace_mod,
     );
     transaction_plan_integration_mod.addImport(
-        "tdnf_common",
+        "rpmz_common",
         common_api_mod,
     );
     transaction_plan_integration_mod.addImport(
         "rpm_txn_config",
         rpmzig_txn_config_mod,
     );
-    transaction_plan_integration_mod.addImport("tdnf_error", tdnf_error_mod);
+    transaction_plan_integration_mod.addImport("rpmz_error", rpmz_error_mod);
 
     // ----- static libraries ----- //
 
@@ -961,7 +971,7 @@ pub fn build(b: *Build) void {
             .pic = true,
         });
         mod.addIncludePath(b.path("common"));
-        mod.addImport("tdnf_error", tdnf_error_mod);
+        mod.addImport("rpmz_error", rpmz_error_mod);
         mod.addImport("tdnf_internal_abi", internal_abi_mod);
         const lib = b.addLibrary(.{
             .name = "common",
@@ -981,7 +991,7 @@ pub fn build(b: *Build) void {
         });
         mod.addIncludePath(b.path("llconf"));
         const lib = b.addLibrary(.{
-            .name = "tdnfllconf",
+            .name = "rpmzllconf",
             .linkage = .static,
             .root_module = mod,
         });
@@ -1018,7 +1028,7 @@ pub fn build(b: *Build) void {
             },
         });
         const lib = b.addLibrary(.{
-            .name = "tdnfhistory",
+            .name = "rpmzhistory",
             .linkage = .static,
             .root_module = mod,
         });
@@ -1046,7 +1056,7 @@ pub fn build(b: *Build) void {
         mod.addImport("rpm_file_handle", rpmzig_file_handle_mod);
         configureLuaScriptletSupport(b, mod, zlua_mod);
         const lib = b.addLibrary(.{
-            .name = "tdnfrpmzig",
+            .name = "rpmzrpmzig",
             .linkage = .static,
             .root_module = mod,
         });
@@ -1068,7 +1078,7 @@ pub fn build(b: *Build) void {
             "transaction_plan_capture_abi",
             transaction_plan_capture_abi_mod,
         );
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.addImport("repomd", repomd_mod);
         test_mod.linkLibrary(rpmzig_lib);
         const tests = b.addTest(.{ .root_module = test_mod });
@@ -1095,7 +1105,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("content_digest", content_digest_mod);
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.addImport("tdnf_internal_abi", internal_abi_mod);
         test_mod.addImport("sqlite", sqlite_dep.module("sqlite"));
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
@@ -1118,7 +1128,7 @@ pub fn build(b: *Build) void {
         .imports = &.{
             .{ .name = "client_abi", .module = client_abi_mod },
             .{ .name = "tls", .module = tls_dep.module("tls") },
-            .{ .name = "tdnf_error", .module = tdnf_error_mod },
+            .{ .name = "rpmz_error", .module = rpmz_error_mod },
         },
     });
 
@@ -1135,8 +1145,8 @@ pub fn build(b: *Build) void {
         });
         test_mod.addImport("client_abi", client_abi_mod);
         test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
-        test_mod.addImport("tdnf_common", common_api_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_common", common_api_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.addIncludePath(b.path("client"));
         test_mod.addIncludePath(b.path("rpmzig"));
         test_mod.linkLibrary(common_lib);
@@ -1160,8 +1170,8 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
-        test_mod.addImport("tdnf_common", common_api_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_common", common_api_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
         test_mod.addIncludePath(b.path("client"));
         test_mod.addIncludePath(b.path("rpmzig"));
@@ -1187,8 +1197,8 @@ pub fn build(b: *Build) void {
             .imports = &.{
                 .{ .name = "client_abi", .module = client_abi_mod },
                 .{ .name = "client_download", .module = client_download_mod },
-                .{ .name = "tdnf_common", .module = common_api_mod },
-                .{ .name = "tdnf_error", .module = tdnf_error_mod },
+                .{ .name = "rpmz_common", .module = common_api_mod },
+                .{ .name = "rpmz_error", .module = rpmz_error_mod },
                 .{ .name = "uri_sanitize", .module = uri_sanitize_mod },
                 .{ .name = "rpm_txn_config", .module = rpmzig_txn_config_mod },
             },
@@ -1241,8 +1251,8 @@ pub fn build(b: *Build) void {
         );
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
-        test_mod.addImport("tdnf_common", common_api_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_common", common_api_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         const test_options = b.addOptions();
         test_options.addOption(bool, "standalone_test", true);
         test_mod.addOptions(
@@ -1268,7 +1278,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addIncludePath(b.path("common"));
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.addImport("tdnf_internal_abi", internal_abi_mod);
         test_mod.linkLibrary(llconf_lib);
         test_mod.linkLibrary(rpmzig_lib);
@@ -1328,7 +1338,7 @@ pub fn build(b: *Build) void {
         test_mod.addIncludePath(b.path("tools/cli"));
         test_mod.addIncludePath(b.path("tools/cli/lib"));
         test_mod.addImport("jsondump_abi", jsondump_abi_mod);
-        test_mod.addImport("tdnf_common", common_api_mod);
+        test_mod.addImport("rpmz_common", common_api_mod);
         test_mod.addImport("tdnf_internal_abi", internal_abi_mod);
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(jsondump_lib);
@@ -1351,8 +1361,8 @@ pub fn build(b: *Build) void {
         test_mod.addImport("client_varsdir", client_varsdir_mod);
         test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
         test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
-        test_mod.addImport("tdnf_common", common_api_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_common", common_api_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(llconf_lib);
         test_mod.linkLibrary(rpmzig_lib);
@@ -1376,8 +1386,8 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
-        test_mod.addImport("tdnf_common", common_api_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_common", common_api_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.linkLibrary(common_lib);
         test_mod.linkLibrary(llconf_lib);
         test_mod.linkLibrary(rpmzig_lib);
@@ -1461,7 +1471,7 @@ pub fn build(b: *Build) void {
             .imports = &.{
                 .{ .name = "client_abi", .module = client_abi_mod },
                 .{ .name = "tls", .module = tls_dep.module("tls") },
-                .{ .name = "tdnf_error", .module = tdnf_error_mod },
+                .{ .name = "rpmz_error", .module = rpmz_error_mod },
             },
         });
         const tests = b.addTest(.{ .root_module = test_mod });
@@ -1497,7 +1507,7 @@ pub fn build(b: *Build) void {
 
     var read_tool_install_steps: [4]*std.Build.Step = undefined;
 
-    // tdnf-rpmdb-count: smoke-test exe for the native rpmdb reader.
+    // rpmz-rpmdb-count: smoke-test exe for the native rpmdb reader.
     {
         const mod = b.createModule(.{
             .root_source_file = b.path("rpmzig/count_main.zig"),
@@ -1508,18 +1518,18 @@ pub fn build(b: *Build) void {
         });
         mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpmdb-count",
+            .name = "rpmz-rpmdb-count",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
         read_tool_install_steps[0] = &install.step;
     }
 
-    // tdnf-rpmdb-list: smoke-test exe for the rpmzig iterator.
+    // rpmz-rpmdb-list: smoke-test exe for the rpmzig iterator.
     {
         const mod = b.createModule(.{
             .root_source_file = b.path("rpmzig/list_main.zig"),
@@ -1530,18 +1540,18 @@ pub fn build(b: *Build) void {
         });
         mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpmdb-list",
+            .name = "rpmz-rpmdb-list",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
         read_tool_install_steps[1] = &install.step;
     }
 
-    // tdnf-rpm-info: smoke-test exe for the rpmzig `.rpm` file parser.
+    // rpmz-rpm-info: smoke-test exe for the rpmzig `.rpm` file parser.
     {
         const mod = b.createModule(.{
             .root_source_file = b.path("rpmzig/info_main.zig"),
@@ -1552,12 +1562,12 @@ pub fn build(b: *Build) void {
         });
         mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpm-info",
+            .name = "rpmz-rpm-info",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
         read_tool_install_steps[2] = &install.step;
@@ -1565,7 +1575,7 @@ pub fn build(b: *Build) void {
 
     var key_tool_install_steps: [3]*std.Build.Step = undefined;
 
-    // tdnf-rpmdb-pubkeys: smoke-test exe for the rpmdb gpg-pubkey
+    // rpmz-rpmdb-pubkeys: smoke-test exe for the rpmdb gpg-pubkey
     // iterator. Lists every rpm-imported public key.
     {
         const mod = b.createModule(.{
@@ -1577,18 +1587,18 @@ pub fn build(b: *Build) void {
         });
         mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpmdb-pubkeys",
+            .name = "rpmz-rpmdb-pubkeys",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
         key_tool_install_steps[0] = &install.step;
     }
 
-    // tdnf-rpmdb-import-pubkeys: smoke-test exe for atomic native
+    // rpmz-rpmdb-import-pubkeys: smoke-test exe for atomic native
     // OpenPGP certificate import.
     {
         const mod = b.createModule(.{
@@ -1600,18 +1610,18 @@ pub fn build(b: *Build) void {
         });
         mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpmdb-import-pubkeys",
+            .name = "rpmz-rpmdb-import-pubkeys",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
         key_tool_install_steps[1] = &install.step;
     }
 
-    // tdnf-rpmdb-write: smoke-test exe for the native sqlite rpmdb
+    // rpmz-rpmdb-write: smoke-test exe for the native sqlite rpmdb
     // write path.
     {
         const mod = b.createModule(.{
@@ -1623,12 +1633,12 @@ pub fn build(b: *Build) void {
         });
         mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpmdb-write",
+            .name = "rpmz-rpmdb-write",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
         key_tool_install_steps[2] = &install.step;
@@ -1645,22 +1655,22 @@ pub fn build(b: *Build) void {
         run_tests.setEnvironmentVariable(
             "TDNF_RPMDB_PUBKEYS_TEST_BINARY",
             b.getInstallPath(
-                .{ .custom = "libexec/tdnf" },
-                "tdnf-rpmdb-pubkeys",
+                .{ .custom = "libexec/rpmz" },
+                "rpmz-rpmdb-pubkeys",
             ),
         );
         run_tests.setEnvironmentVariable(
             "TDNF_RPMDB_IMPORT_PUBKEYS_TEST_BINARY",
             b.getInstallPath(
-                .{ .custom = "libexec/tdnf" },
-                "tdnf-rpmdb-import-pubkeys",
+                .{ .custom = "libexec/rpmz" },
+                "rpmz-rpmdb-import-pubkeys",
             ),
         );
         run_tests.setEnvironmentVariable(
             "TDNF_RPMDB_WRITE_TEST_BINARY",
             b.getInstallPath(
-                .{ .custom = "libexec/tdnf" },
-                "tdnf-rpmdb-write",
+                .{ .custom = "libexec/rpmz" },
+                "rpmz-rpmdb-write",
             ),
         );
         run_tests.setEnvironmentVariable(
@@ -1679,7 +1689,7 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
-    // tdnf-rpm-files: smoke-test exe for the cpio walker + payload
+    // rpmz-rpm-files: smoke-test exe for the cpio walker + payload
     // decompressor.
     {
         const mod = b.createModule(.{
@@ -1692,12 +1702,12 @@ pub fn build(b: *Build) void {
         mod.addImport("rpm_cpio", rpmzig_cpio_mod);
         mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpm-files",
+            .name = "rpmz-rpm-files",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
         read_tool_install_steps[3] = &install.step;
@@ -1716,10 +1726,10 @@ pub fn build(b: *Build) void {
         const run_cpio_tests = b.addRunArtifact(cpio_tests);
         inline for (
             .{
-                "tdnf-rpmdb-count",
-                "tdnf-rpmdb-list",
-                "tdnf-rpm-info",
-                "tdnf-rpm-files",
+                "rpmz-rpmdb-count",
+                "rpmz-rpmdb-list",
+                "rpmz-rpm-info",
+                "rpmz-rpm-files",
             },
             .{
                 "TDNF_RPMDB_COUNT_TEST_BINARY",
@@ -1730,7 +1740,7 @@ pub fn build(b: *Build) void {
         ) |binary, environment_name| {
             run_tests.setEnvironmentVariable(
                 environment_name,
-                b.getInstallPath(.{ .custom = "libexec/tdnf" }, binary),
+                b.getInstallPath(.{ .custom = "libexec/rpmz" }, binary),
             );
         }
         for (&read_tool_install_steps) |install_step| {
@@ -1746,7 +1756,7 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_cpio_tests.step);
     }
 
-    // tdnf-rpm-install: smoke-test exe for the native file-install
+    // rpmz-rpm-install: smoke-test exe for the native file-install
     // engine.
     {
         const mod = b.createModule(.{
@@ -1759,17 +1769,17 @@ pub fn build(b: *Build) void {
         mod.addImport("rpm_header", rpmzig_header_mod);
         mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpm-install",
+            .name = "rpmz-rpm-install",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
     }
 
-    // tdnf-rpm-scriptlet: smoke-test exe for the native
+    // rpmz-rpm-scriptlet: smoke-test exe for the native
     // scriptlet executor.
     {
         const mod = b.createModule(.{
@@ -1783,17 +1793,17 @@ pub fn build(b: *Build) void {
         mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         configureLuaScriptletSupport(b, mod, zlua_mod);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpm-scriptlet",
+            .name = "rpmz-rpm-scriptlet",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
     }
 
-    // tdnf-rpm-trigger: smoke-test exe for the native trigger
+    // rpmz-rpm-trigger: smoke-test exe for the native trigger
     // executor.
     {
         const mod = b.createModule(.{
@@ -1811,17 +1821,17 @@ pub fn build(b: *Build) void {
         mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         configureLuaScriptletSupport(b, mod, zlua_mod);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpm-trigger",
+            .name = "rpmz-rpm-trigger",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
     }
 
-    // tdnf-rpm-erase: smoke-test exe for the native file-erase
+    // rpmz-rpm-erase: smoke-test exe for the native file-erase
     // engine.
     {
         const mod = b.createModule(.{
@@ -1838,17 +1848,17 @@ pub fn build(b: *Build) void {
         mod.addImport("rpm_header", rpmzig_header_mod);
         mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpm-erase",
+            .name = "rpmz-rpm-erase",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
     }
 
-    // tdnf-rpm-verify: smoke-test exe for the pure-Zig signature
+    // rpmz-rpm-verify: smoke-test exe for the pure-Zig signature
     // verifier. Builds the same in-memory --key / --rpmdb keyring
     // path the client uses.
     {
@@ -1862,12 +1872,12 @@ pub fn build(b: *Build) void {
         mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         mod.addImport("rpmdb", rpmzig_lib.root_module);
         const exe = b.addExecutable(.{
-            .name = "tdnf-rpm-verify",
+            .name = "rpmz-rpm-verify",
             .root_module = mod,
         });
         hardenExe(exe);
         const install = b.addInstallArtifact(exe, .{
-            .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+            .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
         });
         b.getInstallStep().dependOn(&install.step);
 
@@ -1885,8 +1895,8 @@ pub fn build(b: *Build) void {
         run_cli_tests.setEnvironmentVariable(
             "TDNF_RPM_VERIFY_TEST_BINARY",
             b.getInstallPath(
-                .{ .custom = "libexec/tdnf" },
-                "tdnf-rpm-verify",
+                .{ .custom = "libexec/rpmz" },
+                "rpmz-rpm-verify",
             ),
         );
         run_cli_tests.step.dependOn(&install.step);
@@ -1924,8 +1934,8 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     client_plugins_mod.addImport("client_abi", client_abi_mod);
-    client_plugins_mod.addImport("tdnf_common", common_api_mod);
-    client_plugins_mod.addImport("tdnf_error", tdnf_error_mod);
+    client_plugins_mod.addImport("rpmz_common", common_api_mod);
+    client_plugins_mod.addImport("rpmz_error", rpmz_error_mod);
     client_plugins_mod.addImport("builtin_plugins", builtin_plugins_mod);
     client_plugins_mod.addImport("plugin_metadata", plugin_metadata_mod);
     client_plugins_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
@@ -1938,7 +1948,7 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     client_history_mod.addImport("client_abi", client_abi_mod);
-    client_history_mod.addImport("tdnf_error", tdnf_error_mod);
+    client_history_mod.addImport("rpmz_error", rpmz_error_mod);
 
     const client_updateinfo_mod = b.createModule(.{
         .root_source_file = b.path("client/updateinfo_exports.zig"),
@@ -1947,7 +1957,7 @@ pub fn build(b: *Build) void {
         .link_libc = true,
         .pic = true,
     });
-    client_updateinfo_mod.addImport("tdnf_error", tdnf_error_mod);
+    client_updateinfo_mod.addImport("rpmz_error", rpmz_error_mod);
     client_updateinfo_mod.addImport("client_abi", client_abi_mod);
     client_updateinfo_mod.addIncludePath(b.path("client"));
     client_updateinfo_mod.addIncludePath(b.path("rpmzig"));
@@ -1964,8 +1974,8 @@ pub fn build(b: *Build) void {
         transaction_plan_capture_abi_mod,
     );
     client_init_mod.addImport("client_init_abi", client_abi_mod);
-    client_init_mod.addImport("tdnf_common", common_api_mod);
-    client_init_mod.addImport("tdnf_error", tdnf_error_mod);
+    client_init_mod.addImport("rpmz_common", common_api_mod);
+    client_init_mod.addImport("rpmz_error", rpmz_error_mod);
 
     const transaction_lock_mod = b.createModule(.{
         .root_source_file = b.path("client/transaction_lock.zig"),
@@ -2033,8 +2043,8 @@ pub fn build(b: *Build) void {
     client_mod.addImport("canonical_json", canonical_json_mod);
     client_mod.addImport("content_digest", content_digest_mod);
     client_mod.addImport("rpm_evr", rpm_evr_mod);
-    client_mod.addImport("tdnf_common", common_api_mod);
-    client_mod.addImport("tdnf_error", tdnf_error_mod);
+    client_mod.addImport("rpmz_common", common_api_mod);
+    client_mod.addImport("rpmz_error", rpmz_error_mod);
     client_mod.addImport("client_updateinfo", client_updateinfo_mod);
     client_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
     const client_gpgcheck_options = b.addOptions();
@@ -2055,9 +2065,9 @@ pub fn build(b: *Build) void {
 
     // `client/root.zig` is the whole private implementation; only the
     // `resolver` namespace it re-exports is public. Registering the module
-    // under a name `tdnf.zig` narrows keeps the consumer from compiling the
+    // under a name `rpmz.zig` narrows keeps the consumer from compiling the
     // graph twice.
-    public_tdnf_mod.addImport("client_root", client_mod);
+    public_rpmz_mod.addImport("client_root", client_mod);
 
     // Everything past this point is the product build: artifacts, test steps,
     // audits, and packaging. A dependency consumer needs none of it.
@@ -2094,8 +2104,8 @@ pub fn build(b: *Build) void {
         "rpm_package_test",
         transaction_rpm_package_test_mod,
     );
-    transaction_test_mod.addImport("tdnf_common", common_api_mod);
-    transaction_test_mod.addImport("tdnf_error", tdnf_error_mod);
+    transaction_test_mod.addImport("rpmz_common", common_api_mod);
+    transaction_test_mod.addImport("rpmz_error", rpmz_error_mod);
     transaction_test_mod.addIncludePath(b.path("client"));
     transaction_test_mod.addIncludePath(b.path("rpmzig"));
     transaction_test_mod.linkLibrary(common_lib);
@@ -2145,8 +2155,8 @@ pub fn build(b: *Build) void {
         "rpm_package_test",
         replay_rpm_package_test_mod,
     );
-    replay_test_mod.addImport("tdnf_common", common_api_mod);
-    replay_test_mod.addImport("tdnf_error", tdnf_error_mod);
+    replay_test_mod.addImport("rpmz_common", common_api_mod);
+    replay_test_mod.addImport("rpmz_error", rpmz_error_mod);
     replay_test_mod.addImport("transaction_bundle", transaction_bundle_mod);
     replay_test_mod.addImport("transaction_plan", transaction_plan_mod);
     replay_test_mod.addImport("verified_fetch", verified_fetch_mod);
@@ -2190,7 +2200,7 @@ pub fn build(b: *Build) void {
         });
         test_mod.addImport("client_root", client_mod);
         test_mod.addImport("client_abi", client_abi_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         const tests = b.addTest(.{
             .name = "client-repositories-integration-test",
             .root_module = test_mod,
@@ -2280,8 +2290,8 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
-        test_mod.addImport("tdnf_common", common_api_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_common", common_api_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.addImport("rpm_gpgcheck", rpmzig_gpgcheck_mod);
         test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
         test_mod.addImport("transaction_lock", transaction_lock_mod);
@@ -2347,7 +2357,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("client_history", client_history_mod);
         test_mod.addImport("client_root", client_mod);
         test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         client_history_test_step.dependOn(&run_tests.step);
@@ -2367,7 +2377,7 @@ pub fn build(b: *Build) void {
         });
         test_mod.addImport("client_root", client_mod);
         test_mod.addImport("client_abi", client_abi_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         client_api_test_step.dependOn(&run_tests.step);
@@ -2412,8 +2422,8 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
-        test_mod.addImport("tdnf_common", common_api_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_common", common_api_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.addImport("builtin_plugins", test_backend_mod);
         test_mod.addImport("plugin_metadata", plugin_metadata_mod);
         test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
@@ -2479,7 +2489,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_root", client_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         const tests = b.addTest(.{ .root_module = test_mod });
         const run_tests = b.addRunArtifact(tests);
         client_updateinfo_test_step.dependOn(&run_tests.step);
@@ -2499,34 +2509,34 @@ pub fn build(b: *Build) void {
     cli_mod.addIncludePath(b.path("tools/cli"));
     cli_mod.addIncludePath(b.path("tools/cli/lib"));
     cli_mod.addImport("jsondump_abi", jsondump_abi_mod);
-    cli_mod.addImport("tdnf_common", common_api_mod);
+    cli_mod.addImport("rpmz_common", common_api_mod);
     cli_mod.addImport("tdnf_internal_abi", internal_abi_mod);
     cli_mod.linkLibrary(jsondump_lib);
 
     // ----- executables ----- //
 
-    // tdnf
-    const tdnf_mod = b.createModule(.{
+    // rpmz
+    const rpmz_mod = b.createModule(.{
         .root_source_file = b.path("tools/cli/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .pic = true,
     });
-    tdnf_mod.addIncludePath(b.path("tools/cli"));
-    tdnf_mod.addImport("jsondump_abi", jsondump_abi_mod);
-    tdnf_mod.addImport("tdnf_common", common_api_mod);
-    tdnf_mod.addImport("tdnf_internal_abi", internal_abi_mod);
-    tdnf_mod.addImport("tdnf_client", client_mod);
-    tdnf_mod.addImport("tdnf_cli", cli_mod);
-    tdnf_mod.addImport("tdnf", public_tdnf_mod);
-    tdnf_mod.linkLibrary(jsondump_lib);
-    const tdnf_exe = b.addExecutable(.{
-        .name = "tdnf",
-        .root_module = tdnf_mod,
+    rpmz_mod.addIncludePath(b.path("tools/cli"));
+    rpmz_mod.addImport("jsondump_abi", jsondump_abi_mod);
+    rpmz_mod.addImport("rpmz_common", common_api_mod);
+    rpmz_mod.addImport("tdnf_internal_abi", internal_abi_mod);
+    rpmz_mod.addImport("rpmz_client", client_mod);
+    rpmz_mod.addImport("rpmz_cli", cli_mod);
+    rpmz_mod.addImport("rpmz", public_rpmz_mod);
+    rpmz_mod.linkLibrary(jsondump_lib);
+    const rpmz_exe = b.addExecutable(.{
+        .name = "rpmz",
+        .root_module = rpmz_mod,
     });
-    hardenExe(tdnf_exe);
-    b.installArtifact(tdnf_exe);
+    hardenExe(rpmz_exe);
+    b.installArtifact(rpmz_exe);
 
     {
         const plan_cli_test_mod = b.createModule(.{
@@ -2539,7 +2549,7 @@ pub fn build(b: *Build) void {
         const plan_cli_tests = b.addTest(.{ .root_module = plan_cli_test_mod });
         const run_plan_cli_tests = b.addRunArtifact(plan_cli_tests);
         run_plan_cli_tests.setEnvironmentVariable(
-            "TDNF_CLI_TEST_PREFIX",
+            "RPMZ_CLI_TEST_PREFIX",
             b.getInstallPath(.prefix, ""),
         );
         run_plan_cli_tests.step.dependOn(b.getInstallStep());
@@ -2558,13 +2568,13 @@ pub fn build(b: *Build) void {
             .optimize = optimize,
             .link_libc = true,
         });
-        replay_cli_test_mod.addImport("tdnf", public_tdnf_mod);
+        replay_cli_test_mod.addImport("rpmz", public_rpmz_mod);
         const replay_cli_tests = b.addTest(.{
             .root_module = replay_cli_test_mod,
         });
         const run_replay_cli_tests = b.addRunArtifact(replay_cli_tests);
         run_replay_cli_tests.setEnvironmentVariable(
-            "TDNF_CLI_TEST_PREFIX",
+            "RPMZ_CLI_TEST_PREFIX",
             b.getInstallPath(.prefix, ""),
         );
         run_replay_cli_tests.step.dependOn(b.getInstallStep());
@@ -2573,27 +2583,27 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_replay_cli_tests.step);
     }
 
-    // tdnf-config
-    const tdnf_config_mod = b.createModule(.{
+    // rpmz-config
+    const rpmz_config_mod = b.createModule(.{
         .root_source_file = b.path("tools/config/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .pic = true,
     });
-    tdnf_config_mod.addIncludePath(b.path("."));
-    tdnf_config_mod.addImport("jsondump_abi", jsondump_abi_mod);
-    tdnf_config_mod.linkLibrary(llconf_lib);
-    tdnf_config_mod.linkLibrary(jsondump_lib);
-    linkSystem(tdnf_config_mod, &.{"dl"});
-    const tdnf_config_exe = b.addExecutable(.{
-        .name = "tdnf-config",
-        .root_module = tdnf_config_mod,
+    rpmz_config_mod.addIncludePath(b.path("."));
+    rpmz_config_mod.addImport("jsondump_abi", jsondump_abi_mod);
+    rpmz_config_mod.linkLibrary(llconf_lib);
+    rpmz_config_mod.linkLibrary(jsondump_lib);
+    linkSystem(rpmz_config_mod, &.{"dl"});
+    const rpmz_config_exe = b.addExecutable(.{
+        .name = "rpmz-config",
+        .root_module = rpmz_config_mod,
     });
-    hardenExe(tdnf_config_exe);
-    b.installArtifact(tdnf_config_exe);
+    hardenExe(rpmz_config_exe);
+    b.installArtifact(rpmz_config_exe);
 
-    // tdnf-history-util links the vendored-SQLite history and rpmzig libs.
+    // rpmz-history-util links the vendored-SQLite history and rpmzig libs.
     const history_util_options = b.addOptions();
     history_util_options.addOption([]const u8, "db_dir", history_db_dir);
     const history_util_mod = b.createModule(.{
@@ -2612,12 +2622,12 @@ pub fn build(b: *Build) void {
     history_util_mod.addImport("transaction_lock", transaction_lock_mod);
     history_util_mod.linkLibrary(rpmzig_lib);
     const history_util_exe = b.addExecutable(.{
-        .name = "tdnf-history-util",
+        .name = "rpmz-history-util",
         .root_module = history_util_mod,
     });
     hardenExe(history_util_exe);
     const install_history_util = b.addInstallArtifact(history_util_exe, .{
-        .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+        .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
     });
     b.getInstallStep().dependOn(&install_history_util.step);
 
@@ -2632,14 +2642,14 @@ pub fn build(b: *Build) void {
         run_tests.setEnvironmentVariable(
             "TDNF_HISTORY_UTIL_TEST_BINARY",
             b.getInstallPath(
-                .{ .custom = "libexec/tdnf" },
-                "tdnf-history-util",
+                .{ .custom = "libexec/rpmz" },
+                "rpmz-history-util",
             ),
         );
         run_tests.step.dependOn(&install_history_util.step);
         const history_util_test_step = b.step(
             "history-util-test",
-            "Run tdnf-history-util CLI tests",
+            "Run rpmz-history-util CLI tests",
         );
         history_util_test_step.dependOn(&run_tests.step);
         zig_test_step.dependOn(&run_tests.step);
@@ -2867,7 +2877,7 @@ pub fn build(b: *Build) void {
         test_mod.addImport("rpm_header", rpmzig_header_mod);
         test_mod.addImport("rpm_pkgfile", rpmzig_pkgfile_mod);
         test_mod.addImport("rpmdb_test", rpmzig_rpmdb_test_mod);
-        test_mod.addImport("tdnf_error", tdnf_error_mod);
+        test_mod.addImport("rpmz_error", rpmz_error_mod);
         test_mod.addImport("tdnf_internal_abi", internal_abi_mod);
         test_mod.addIncludePath(b.path("rpmzig"));
         const tests = b.addTest(.{ .root_module = test_mod });
@@ -2945,33 +2955,33 @@ pub fn build(b: *Build) void {
     }
 
     const install_automatic = b.addInstallFileWithDir(
-        b.path("bin/tdnf-automatic"),
+        b.path("bin/rpmz-automatic"),
         .bin,
-        "tdnf-automatic",
+        "rpmz-automatic",
     );
     b.getInstallStep().dependOn(&install_automatic.step);
-    const chmod_automatic = b.addSystemCommand(&.{ "chmod", "+x", b.getInstallPath(.bin, "tdnf-automatic") });
+    const chmod_automatic = b.addSystemCommand(&.{ "chmod", "+x", b.getInstallPath(.bin, "rpmz-automatic") });
     chmod_automatic.step.dependOn(&install_automatic.step);
     b.getInstallStep().dependOn(&chmod_automatic.step);
 
     // ----- static config files ----- //
 
-    const tdnf_conf_dir: Build.InstallDir = .{ .custom = b.fmt("{s}/tdnf", .{sysconf_dir}) };
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("etc/tdnf/tdnf.conf"), tdnf_conf_dir, "tdnf.conf").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("etc/tdnf/automatic.conf"), tdnf_conf_dir, "automatic.conf").step);
+    const rpmz_conf_dir: Build.InstallDir = .{ .custom = b.fmt("{s}/rpmz", .{sysconf_dir}) };
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("etc/rpmz/rpmz.conf"), rpmz_conf_dir, "rpmz.conf").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("etc/rpmz/automatic.conf"), rpmz_conf_dir, "automatic.conf").step);
 
-    const pluginconf_dir: Build.InstallDir = .{ .custom = b.fmt("{s}/tdnf/pluginconf.d", .{sysconf_dir}) };
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("etc/tdnf/pluginconf.d/tdnfmetalink.conf"), pluginconf_dir, "tdnfmetalink.conf").step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("etc/tdnf/pluginconf.d/tdnfrepogpgcheck.conf"), pluginconf_dir, "tdnfrepogpgcheck.conf").step);
+    const pluginconf_dir: Build.InstallDir = .{ .custom = b.fmt("{s}/rpmz/pluginconf.d", .{sysconf_dir}) };
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("etc/rpmz/pluginconf.d/rpmzmetalink.conf"), pluginconf_dir, "rpmzmetalink.conf").step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(b.path("etc/rpmz/pluginconf.d/rpmzrepogpgcheck.conf"), pluginconf_dir, "rpmzrepogpgcheck.conf").step);
 
     const systemd_install_dir: Build.InstallDir = .{ .custom = systemd_dir };
     for ([_][]const u8{
-        "tdnf-automatic.service",
-        "tdnf-automatic.timer",
-        "tdnf-automatic-notifyonly.service",
-        "tdnf-automatic-notifyonly.timer",
-        "tdnf-automatic-install.service",
-        "tdnf-automatic-install.timer",
+        "rpmz-automatic.service",
+        "rpmz-automatic.timer",
+        "rpmz-automatic-notifyonly.service",
+        "rpmz-automatic-notifyonly.timer",
+        "rpmz-automatic-install.service",
+        "rpmz-automatic-install.timer",
     }) |fname| {
         b.getInstallStep().dependOn(
             &b.addInstallFileWithDir(b.path(b.fmt("etc/systemd/{s}", .{fname})), systemd_install_dir, fname).step,
@@ -2980,12 +2990,12 @@ pub fn build(b: *Build) void {
 
     const motd_install_dir: Build.InstallDir = .{ .custom = motdgen_dir };
     b.getInstallStep().dependOn(
-        &b.addInstallFileWithDir(b.path("etc/motdgen.d/02-tdnf-updateinfo.sh"), motd_install_dir, "02-tdnf-updateinfo.sh").step,
+        &b.addInstallFileWithDir(b.path("etc/motdgen.d/02-rpmz-updateinfo.sh"), motd_install_dir, "02-rpmz-updateinfo.sh").step,
     );
 
     const completion_dir: Build.InstallDir = .{ .custom = "share/bash-completion/completions" };
     b.getInstallStep().dependOn(
-        &b.addInstallFileWithDir(b.path("etc/bash_completion.d/tdnf-completion.bash"), completion_dir, "tdnf").step,
+        &b.addInstallFileWithDir(b.path("etc/bash_completion.d/rpmz-completion.bash"), completion_dir, "rpmz").step,
     );
 
     // pytests/config.json is written directly into the source tree by
@@ -3008,12 +3018,12 @@ pub fn build(b: *Build) void {
     pytest_support_mod.linkLibrary(llconf_lib);
     pytest_support_mod.linkLibrary(rpmzig_lib);
     const pytest_support_exe = b.addExecutable(.{
-        .name = "tdnf-test-support",
+        .name = "rpmz-test-support",
         .root_module = pytest_support_mod,
     });
     zig_test_step.dependOn(&pytest_support_exe.step);
     const install_pytest_support = b.addInstallArtifact(pytest_support_exe, .{
-        .dest_dir = .{ .override = .{ .custom = "libexec/tdnf" } },
+        .dest_dir = .{ .override = .{ .custom = "libexec/rpmz" } },
     });
     b.getInstallStep().dependOn(&install_pytest_support.step);
     const pytest_support_step = b.step(
@@ -3053,9 +3063,9 @@ pub fn build(b: *Build) void {
             \\  status=1
             \\fi
             \\
-            \\tdnf="$prefix/bin/tdnf"
-            \\if [ ! -x "$tdnf" ]; then
-            \\  echo "error: ztest binary missing: $tdnf" >&2
+            \\rpmz="$prefix/bin/rpmz"
+            \\if [ ! -x "$rpmz" ]; then
+            \\  echo "error: ztest binary missing: $rpmz" >&2
             \\  echo "help: build it first with: zig build install --prefix \"$prefix\"" >&2
             \\  echo 'help: for the documented ztest layout, use: zig build install --prefix ./out' >&2
             \\  status=1
@@ -3086,8 +3096,8 @@ pub fn build(b: *Build) void {
         });
         run_ztest_preflight.setCwd(b.path("."));
 
-        const ztest_install_tdnf = b.addInstallArtifact(tdnf_exe, .{});
-        ztest_install_tdnf.step.dependOn(&run_ztest_preflight.step);
+        const ztest_install_rpmz = b.addInstallArtifact(rpmz_exe, .{});
+        ztest_install_rpmz.step.dependOn(&run_ztest_preflight.step);
 
         const ztest_mod = b.createModule(.{
             .root_source_file = b.path("ztests/root.zig"),
@@ -3105,7 +3115,7 @@ pub fn build(b: *Build) void {
             "TDNF_ZTEST_PLUGIN_DIR",
             b.getInstallPath(.{ .custom = plugin_dir_rel }, ""),
         );
-        run_ztests.step.dependOn(&ztest_install_tdnf.step);
+        run_ztests.step.dependOn(&ztest_install_rpmz.step);
         run_ztests.has_side_effects = true;
         ztest_step.dependOn(&run_ztests.step);
 
@@ -3132,7 +3142,7 @@ pub fn build(b: *Build) void {
             "TDNF_ZTEST_PLUGIN_DIR",
             b.getInstallPath(.{ .custom = plugin_dir_rel }, ""),
         );
-        run_plugin_ztests.step.dependOn(&ztest_install_tdnf.step);
+        run_plugin_ztests.step.dependOn(&ztest_install_rpmz.step);
         run_plugin_ztests.has_side_effects = true;
         plugin_ztest_step.dependOn(&run_plugin_ztests.step);
     }
@@ -3174,7 +3184,7 @@ fn staticLib(
     mod.addCSourceFiles(.{
         .root = b.path(opts.root),
         .files = opts.files,
-        .flags = &tdnf_cflags,
+        .flags = &rpmz_cflags,
     });
     return b.addLibrary(.{
         .name = opts.name,
@@ -3219,7 +3229,7 @@ fn addLibsolvIncludes(mod: *Build.Module, trees: LibsolvIncludes) void {
     // -I, not -isystem: zig cc searches /usr/include *before* user
     // -isystem directories, so with -isystem a host libsolv-devel wins
     // and the build compiles against the host's headers while linking the
-    // vendored .a. tdnf_cflags carries --system-header-prefix=solv/ to
+    // vendored .a. rpmz_cflags carries --system-header-prefix=solv/ to
     // keep libsolv's own warnings suppressed, and both the C and Zig
     // sides assert on TDNF_VENDORED_LIBSOLV_VERSION_PATCH below so a
     // regression here fails the build instead of passing quietly.

@@ -20,7 +20,7 @@ metalink_file_path = 'photon-test/metalink'
 repomd_file_path = 'photon-test/repodata/repomd.xml'
 
 
-# tdnf writes progress notices to stderr alongside errors, so the error we
+# rpmz writes progress notices to stderr alongside errors, so the error we
 # care about is not necessarily the first line. Match any line instead of
 # pinning to stderr[0], which breaks whenever a notice is added or removed.
 def assert_stderr_has(ret, prefix):
@@ -45,12 +45,12 @@ def teardown_test(utils):
     set_sha512(utils, False)
     pkgname = utils.config["mulversion_pkgname"]
     if utils.check_package(pkgname):
-        utils.run(['tdnf', 'erase', '-y', pkgname])
+        utils.run(['rpmz', 'erase', '-y', pkgname])
     disable_plugin(utils)
 
 
 def set_baseurl(utils, enabled):
-    repo_file = os.path.join(utils.tdnf_config.get('main', 'repodir'), REPO_FILENAME)
+    repo_file = os.path.join(utils.rpmz_config.get('main', 'repodir'), REPO_FILENAME)
     repo_config = configparser.ConfigParser()
     repo_config.read(repo_file)
     if enabled:
@@ -62,7 +62,7 @@ def set_baseurl(utils, enabled):
 
 
 def set_metalink(utils, enabled):
-    repo_file = os.path.join(utils.tdnf_config.get('main', 'repodir'), REPO_FILENAME)
+    repo_file = os.path.join(utils.rpmz_config.get('main', 'repodir'), REPO_FILENAME)
     repo_config = configparser.ConfigParser()
     repo_config.read(repo_file)
     if enabled:
@@ -75,41 +75,41 @@ def set_metalink(utils, enabled):
 
 def disable_plugin(utils):
     # write a plugin config file
-    conf_file = os.path.join(utils.config['repo_path'], 'tdnf.conf')
-    tdnf_config = configparser.ConfigParser()
-    tdnf_config.read(conf_file)
+    conf_file = os.path.join(utils.config['repo_path'], 'rpmz.conf')
+    rpmz_config = configparser.ConfigParser()
+    rpmz_config.read(conf_file)
 
     plugin_conf_path = os.path.join(utils.config['repo_path'], 'pluginconf.d')
 
-    tdnf_config['main']['plugins'] = '0'
+    rpmz_config['main']['plugins'] = '0'
     with open(conf_file, 'w') as f:
-        tdnf_config.write(f, space_around_delimiters=False)
+        rpmz_config.write(f, space_around_delimiters=False)
 
     os.makedirs(plugin_conf_path, exist_ok=True)
 
-    plugin_file = os.path.join(plugin_conf_path, 'tdnfmetalink.conf')
+    plugin_file = os.path.join(plugin_conf_path, 'rpmzmetalink.conf')
     with open(plugin_file, 'w') as f:
         f.write('[main]\nenabled=0\n')
 
 
 def enable_plugin(utils):
     # write a plugin config file
-    conf_file = os.path.join(utils.config['repo_path'], 'tdnf.conf')
-    tdnf_config = configparser.ConfigParser()
-    tdnf_config.read(conf_file)
+    conf_file = os.path.join(utils.config['repo_path'], 'rpmz.conf')
+    rpmz_config = configparser.ConfigParser()
+    rpmz_config.read(conf_file)
 
     plugin_conf_path = os.path.join(utils.config['repo_path'], 'pluginconf.d')
     plugin_path = utils.config['plugin_path']
 
-    tdnf_config['main']['plugins'] = '1'
-    tdnf_config['main']['pluginconfpath'] = plugin_conf_path
-    tdnf_config['main']['pluginpath'] = plugin_path
+    rpmz_config['main']['plugins'] = '1'
+    rpmz_config['main']['pluginconfpath'] = plugin_conf_path
+    rpmz_config['main']['pluginpath'] = plugin_path
     with open(conf_file, 'w') as f:
-        tdnf_config.write(f, space_around_delimiters=False)
+        rpmz_config.write(f, space_around_delimiters=False)
 
     os.makedirs(plugin_conf_path, exist_ok=True)
 
-    plugin_file = os.path.join(plugin_conf_path, 'tdnfmetalink.conf')
+    plugin_file = os.path.join(plugin_conf_path, 'rpmzmetalink.conf')
     with open(plugin_file, 'w') as f:
         f.write('[main]\nenabled=1\n')
 
@@ -195,7 +195,7 @@ def set_invalid_sha1_length(utils):
 
 
 def assert_package_available(utils, pkgname):
-    ret = utils.run(['tdnf', 'list', '-j', 'available', pkgname])
+    ret = utils.run(['rpmz', 'list', '-j', 'available', pkgname])
     assert ret['retval'] == 0
     available = json.loads('\n'.join(ret['stdout']))
     assert any(pkg['Name'] == pkgname for pkg in available)
@@ -209,7 +209,7 @@ def test_with_metalink_and_url(utils):
     set_sha256(utils, False)
     set_sha512(utils, False)
     set_md5(utils, False)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)
@@ -223,7 +223,7 @@ def test_metalink_without_baseurl(utils):
     set_sha512(utils, True)
     set_sha1(utils, False)
     set_md5(utils, False)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)
@@ -238,7 +238,7 @@ def test_url_without_metalink(utils):
     set_sha512(utils, False)
     set_sha1(utils, False)
     set_md5(utils, False)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)
@@ -252,7 +252,7 @@ def test_without_url_and_metalink(utils):
     set_sha512(utils, False)
     set_sha1(utils, False)
     set_md5(utils, False)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert_stderr_has(ret, 'Error: Cannot find a valid base URL for repo')
 
 
@@ -263,7 +263,7 @@ def test_md5_digest(utils):
     set_sha1(utils, False)
     set_sha256(utils, False)
     set_sha512(utils, False)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)
@@ -276,7 +276,7 @@ def test_sha1_digest(utils):
     set_sha1(utils, True)
     set_sha256(utils, False)
     set_sha512(utils, False)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)
@@ -289,7 +289,7 @@ def test_sha256_digest(utils):
     set_sha1(utils, False)
     set_sha256(utils, True)
     set_sha512(utils, False)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)
@@ -302,7 +302,7 @@ def test_sha512_digest(utils):
     set_sha1(utils, False)
     set_sha256(utils, False)
     set_sha512(utils, True)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)
@@ -316,10 +316,10 @@ def test_invalid_md5_digest(utils):
     set_sha256(utils, False)
     set_sha512(utils, False)
     set_invalid_md5(utils)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 2501
     assert_stderr_has(ret, 'Error: Validating Checksum')
-    cache_dir = utils.tdnf_config.get('main', 'cachedir')
+    cache_dir = utils.rpmz_config.get('main', 'cachedir')
     tmp_dir = os.path.join(cache_dir, 'photon-test/tmp')
     assert not os.path.isdir(tmp_dir)
 
@@ -332,10 +332,10 @@ def test_invalid_sha1_digest(utils):
     set_sha256(utils, False)
     set_sha512(utils, False)
     set_invalid_sha1(utils)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 2501
     assert_stderr_has(ret, 'Error: Validating Checksum')
-    cache_dir = utils.tdnf_config.get('main', 'cachedir')
+    cache_dir = utils.rpmz_config.get('main', 'cachedir')
     tmp_dir = os.path.join(cache_dir, 'photon-test/tmp')
     assert not os.path.isdir(tmp_dir)
 
@@ -348,10 +348,10 @@ def test_invalid_sha256_digest(utils):
     set_sha256(utils, False)
     set_sha512(utils, False)
     set_invalid_sha256(utils)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 2501
     assert_stderr_has(ret, 'Error: Validating Checksum')
-    cache_dir = utils.tdnf_config.get('main', 'cachedir')
+    cache_dir = utils.rpmz_config.get('main', 'cachedir')
     tmp_dir = os.path.join(cache_dir, 'photon-test/tmp')
     assert not os.path.isdir(tmp_dir)
 
@@ -365,7 +365,7 @@ def test_invalid_sha256_valid_sha1(utils):
     set_sha512(utils, False)
     set_invalid_sha256_length(utils)
     set_sha1(utils, True)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)
@@ -380,7 +380,7 @@ def test_invalid_sha512_valid_sha1(utils):
     set_sha512(utils, False)
     set_invalid_sha512_length(utils)
     set_sha1(utils, True)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)
@@ -395,7 +395,7 @@ def test_invalid_sha1_valid_md5(utils):
     set_sha512(utils, False)
     set_invalid_sha1_length(utils)
     set_md5(utils, True)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     pkgname = utils.config["mulversion_pkgname"]
     assert_package_available(utils, pkgname)

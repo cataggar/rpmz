@@ -39,7 +39,7 @@ def create_snapshot_repo(utils, reponame):
         utils.config['repo_path'], "yum.repos.d", f"{reponame}.list"
     )
 
-    ret = utils.run(["tdnf", "repoquery", "--available", "--qf", "%{name}=%{evr}"])
+    ret = utils.run(["rpmz", "repoquery", "--available", "--qf", "%{name}=%{evr}"])
     snapshot_list = ret['stdout']
 
     with open(snapshot_file, "wt") as f:
@@ -84,7 +84,7 @@ def test_obsoleting_pkg_not_in_snapshot(utils):
     list, confirming the snapshot filter is in effect.
     """
     import json
-    ret = utils.run(["tdnf", "-j", "--repoid", REPONAME, "--available", "list"])
+    ret = utils.run(["rpmz", "-j", "--repoid", REPONAME, "--available", "list"])
     infolist = json.loads("\n".join(ret['stdout']))
 
     names = {info['Name'] for info in infolist}
@@ -107,7 +107,7 @@ def test_install_obsoleted_via_snapshot_does_not_pull_obsoleting(utils):
 
     try:
         ret = utils.run([
-            "tdnf", "-y", "--nogpgcheck", "--debugsolver", "--noautoremove",
+            "rpmz", "-y", "--nogpgcheck", "--debugsolver", "--noautoremove",
             "--disablerepo=*", "--repoid", REPONAME,
             "install", PKGNAME_OBSOLETED,
         ])

@@ -105,7 +105,7 @@ present under `var/lib/rpm/`.
 transactions through:
 
 1. real `rpm --root ... --justdb`
-2. `tdnf-rpmdb-write`
+2. `rpmz-rpmdb-write`
 
 and compares:
 

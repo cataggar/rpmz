@@ -91,13 +91,13 @@ def find_repo(repolist, id):
 
 
 def test_repolist(utils):
-    ret = utils.run(['tdnf', 'repolist'])
+    ret = utils.run(['rpmz', 'repolist'])
     assert ret['retval'] == 0
 
 
 # -j returns a list of repos. Easier to parse.
 def test_repolist_json(utils):
-    ret = utils.run(['tdnf', 'repolist', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert find_repo(repolist, 'foo')
@@ -107,7 +107,7 @@ def test_repolist_json(utils):
 
 # disabled repo should be listed when we enable it on the command line
 def test_repolist_json_enable_one(utils):
-    ret = utils.run(['tdnf', 'repolist', '--enablerepo=foo-debug', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--enablerepo=foo-debug', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert find_repo(repolist, 'foo')
@@ -116,12 +116,12 @@ def test_repolist_json_enable_one(utils):
 
 
 def test_repolist_all(utils):
-    ret = utils.run(['tdnf', 'repolist', 'all'])
+    ret = utils.run(['rpmz', 'repolist', 'all'])
     assert ret['retval'] == 0
 
 
 def test_repolist_json_all(utils):
-    ret = utils.run(['tdnf', 'repolist', 'all', '-j'])
+    ret = utils.run(['rpmz', 'repolist', 'all', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert find_repo(repolist, 'foo')
@@ -130,17 +130,17 @@ def test_repolist_json_all(utils):
 
 
 def test_repolist_enabled(utils):
-    ret = utils.run(['tdnf', 'repolist', 'enabled'])
+    ret = utils.run(['rpmz', 'repolist', 'enabled'])
     assert ret['retval'] == 0
 
 
 def test_repolist_disabled(utils):
-    ret = utils.run(['tdnf', 'repolist', 'disabled'])
+    ret = utils.run(['rpmz', 'repolist', 'disabled'])
     assert ret['retval'] == 0
 
 
 def test_repolist_json_disabled(utils):
-    ret = utils.run(['tdnf', 'repolist', 'disabled', '-j'])
+    ret = utils.run(['rpmz', 'repolist', 'disabled', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert not find_repo(repolist, 'foo')
@@ -149,13 +149,13 @@ def test_repolist_json_disabled(utils):
 
 
 def test_repolist_invalid(utils):
-    ret = utils.run(['tdnf', 'repolist', 'invalid_repo'])
+    ret = utils.run(['rpmz', 'repolist', 'invalid_repo'])
     assert ret['retval'] == 901
 
 
 # memcheck
 def test_repolist_memcheck(utils):
-    ret = utils.run_memcheck(['tdnf', 'repolist'])
+    ret = utils.run_memcheck(['rpmz', 'repolist'])
     assert ret['retval'] == 0
 
 
@@ -185,7 +185,7 @@ def test_multiple_repoid(utils):
         filename=repofile_test1
     )
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'makecache'])
     assert ret['retval'] == 1037
@@ -194,7 +194,7 @@ def test_multiple_repoid(utils):
 
 # Test comma-separated repo names for enablerepo
 def test_repolist_enable_comma_separated(utils):
-    ret = utils.run(['tdnf', 'repolist', '--enablerepo=foo-debug,bar', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--enablerepo=foo-debug,bar', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert find_repo(repolist, 'foo')
@@ -204,7 +204,7 @@ def test_repolist_enable_comma_separated(utils):
 
 # Test comma-separated repo names for disablerepo
 def test_repolist_disable_comma_separated(utils):
-    ret = utils.run(['tdnf', 'repolist', '--disablerepo=foo,bar', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--disablerepo=foo,bar', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert not find_repo(repolist, 'foo')
@@ -215,7 +215,7 @@ def test_repolist_disable_comma_separated(utils):
 
 # Test comma-separated repo names for repoid
 def test_repolist_repoid_comma_separated(utils):
-    ret = utils.run(['tdnf', 'repolist', '--repoid=foo-debug,bar', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--repoid=foo-debug,bar', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     # repoid disables all repos first, then enables only the specified ones
@@ -230,7 +230,7 @@ def test_repolist_repoid_comma_separated(utils):
 
 # Test comma-separated repo names for repo (alias for repoid)
 def test_repolist_repo_comma_separated(utils):
-    ret = utils.run(['tdnf', 'repolist', '--repo=foo-debug,bar', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--repo=foo-debug,bar', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     # repo disables all repos first, then enables only the specified ones
@@ -245,7 +245,7 @@ def test_repolist_repo_comma_separated(utils):
 
 # Test glob pattern for enablerepo
 def test_repolist_enable_glob(utils):
-    ret = utils.run(['tdnf', 'repolist', '--enablerepo=example*', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--enablerepo=example*', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert find_repo(repolist, 'example-test')
@@ -255,7 +255,7 @@ def test_repolist_enable_glob(utils):
 
 # Test glob pattern for disablerepo
 def test_repolist_disable_glob(utils):
-    ret = utils.run(['tdnf', 'repolist', '--disablerepo=foo*', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--disablerepo=foo*', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert not find_repo(repolist, 'foo')
@@ -266,7 +266,7 @@ def test_repolist_disable_glob(utils):
 
 # Test comma-separated globs for enablerepo
 def test_repolist_enable_comma_separated_globs(utils):
-    ret = utils.run(['tdnf', 'repolist', '--enablerepo=example*,foo*', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--enablerepo=example*,foo*', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert find_repo(repolist, 'example-test')
@@ -278,7 +278,7 @@ def test_repolist_enable_comma_separated_globs(utils):
 
 # Test comma-separated globs for disablerepo
 def test_repolist_disable_comma_separated_globs(utils):
-    ret = utils.run(['tdnf', 'repolist', '--disablerepo=example*,foo*', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--disablerepo=example*,foo*', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert not find_repo(repolist, 'example-test')
@@ -292,7 +292,7 @@ def test_repolist_disable_comma_separated_globs(utils):
 
 # Test mixed comma-separated (globs and non-globs) for enablerepo
 def test_repolist_enable_mixed(utils):
-    ret = utils.run(['tdnf', 'repolist', '--enablerepo=example*,bar', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--enablerepo=example*,bar', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert find_repo(repolist, 'example-test')
@@ -303,7 +303,7 @@ def test_repolist_enable_mixed(utils):
 
 # Test mixed comma-separated (globs and non-globs) for disablerepo
 def test_repolist_disable_mixed(utils):
-    ret = utils.run(['tdnf', 'repolist', '--disablerepo=foo*,bar', '-j'])
+    ret = utils.run(['rpmz', 'repolist', '--disablerepo=foo*,bar', '-j'])
     assert ret['retval'] == 0
     repolist = json.loads("\n".join(ret['stdout']))
     assert not find_repo(repolist, 'foo')

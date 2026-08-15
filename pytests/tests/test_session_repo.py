@@ -5,7 +5,7 @@ import time
 
 
 def test_session_repository_is_isolated(utils):
-    marker = os.environ.get('TDNF_SESSION_MARKER', str(os.getpid()))
+    marker = os.environ.get('RPMZ_SESSION_MARKER', str(os.getpid()))
     repo_path = os.path.realpath(utils.config['repo_path'])
     seed_path = os.path.realpath(utils.config['repo_seed_path'])
 
@@ -21,11 +21,11 @@ def test_session_repository_is_isolated(utils):
     time.sleep(2)
 
     session_config = configparser.ConfigParser()
-    session_config.read(os.path.join(repo_path, 'tdnf.conf'))
+    session_config.read(os.path.join(repo_path, 'rpmz.conf'))
     assert session_config['main']['session_marker'] == marker
 
     seed_config = configparser.ConfigParser()
-    seed_config.read(os.path.join(seed_path, 'tdnf.conf'))
+    seed_config.read(os.path.join(seed_path, 'rpmz.conf'))
     assert 'session_marker' not in seed_config['main']
 
 

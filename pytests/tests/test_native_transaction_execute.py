@@ -8,7 +8,7 @@
 """
 Targeted coverage for the composed rpmzig transaction executor.
 
-tdnf install/erase/upgrade always dispatch through the composed native
+rpmz install/erase/upgrade always dispatch through the composed native
 executor in client/transaction.zig. The former rollback build flag was
 removed after issue #117, so these tests always run.
 """
@@ -28,11 +28,11 @@ with open(CONFIG_PATH) as _cf:
     CONFIG = json.load(_cf)
 
 REPO_ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
-TDNF_BIN = os.path.join(REPO_ROOT, 'out', 'bin', 'tdnf')
-TDNF_CONF = os.path.join(REPO_ROOT, 'out', 'repo', 'tdnf.conf')
+RPMZ_BIN = os.path.join(REPO_ROOT, 'out', 'bin', 'rpmz')
+RPMZ_CONF = os.path.join(REPO_ROOT, 'out', 'repo', 'rpmz.conf')
 CASE_ROOT = os.path.join(REPO_ROOT, 'out', 'native-transaction-execute')
 RPMDB_WRITE = os.path.join(
-    REPO_ROOT, 'out', 'libexec', 'tdnf', 'tdnf-rpmdb-write')
+    REPO_ROOT, 'out', 'libexec', 'rpmz', 'rpmz-rpmdb-write')
 
 PKG_ONE = 'tdnf-test-one'
 PKG_TWO = 'tdnf-test-two'
@@ -71,8 +71,8 @@ def _skip_module_pkg_check():
 
 @pytest.fixture(scope='module', autouse=True)
 def _require_env(utils):
-    if not os.path.exists(TDNF_BIN):
-        pytest.skip('tdnf binary not built at {}'.format(TDNF_BIN))
+    if not os.path.exists(RPMZ_BIN):
+        pytest.skip('rpmz binary not built at {}'.format(RPMZ_BIN))
     if not shutil.which('unshare'):
         pytest.skip('unshare is unavailable')
     probe = subprocess.run(
@@ -82,7 +82,7 @@ def _require_env(utils):
     )
     if probe.returncode != 0:
         pytest.skip('unshare -Ur is unavailable in this environment')
-    # tdnf hardcodes /var/run/.tdnf-instance-lockfile — even with `unshare
+    # rpmz retains /var/run/.tdnf-instance-lockfile — even with `unshare
     # -Ur` mapping our uid to root inside the namespace, the inode ACLs on
     # /var/run are enforced against our real uid. We work around this by
     # additionally creating a mount namespace (`-m`) and mounting a
@@ -91,24 +91,24 @@ def _require_env(utils):
     lock_probe = subprocess.run(
         _unshare_wrapper() + [
             'sh', '-c',
-            'touch /var/run/.tdnf-crosscheck-probe && '
-            'rm -f /var/run/.tdnf-crosscheck-probe'
+            'touch /var/run/.rpmz-crosscheck-probe && '
+            'rm -f /var/run/.rpmz-crosscheck-probe'
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     if lock_probe.returncode != 0:
         pytest.skip(
-            '/var/run is not writable (tdnf instance lockfile) in this '
-            'environment; end-to-end tdnf crosscheck is unavailable'
+            '/var/run is not writable (legacy instance lockfile) in this '
+            'environment; end-to-end rpmz crosscheck is unavailable'
         )
 
 
 def _unshare_wrapper():
     """Build the wrapper that (1) fakes root and (2) mounts a private
-    tmpfs on /var/run so the tdnf instance lockfile is writable.
+    tmpfs on /var/run so the legacy instance lockfile is writable.
 
-    Uses `-Urm` (user + mount) rather than `-Urnm`, because tdnf must
+    Uses `-Urm` (user + mount) rather than `-Urnm`, because rpmz must
     still reach the outer test HTTP server on localhost:8080 — creating
     a fresh net namespace would drop us into an empty loopback.
     """
@@ -169,10 +169,10 @@ def _repo_rpm(name, evr):
     return matches[0]
 
 
-def _run_tdnf(root, extra_args, check=True):
+def _run_rpmz(root, extra_args, check=True):
     cmd = _unshare_wrapper() + [
-        TDNF_BIN,
-        '-c', TDNF_CONF,
+        RPMZ_BIN,
+        '-c', RPMZ_CONF,
         '-y',
         '--installroot', root,
         '--releasever=4.0',
@@ -188,7 +188,7 @@ def _run_tdnf(root, extra_args, check=True):
     )
     if check:
         assert result.returncode == 0, (
-            'tdnf {} failed rc={}\nstdout:\n{}\nstderr:\n{}'.format(
+            'rpmz {} failed rc={}\nstdout:\n{}\nstderr:\n{}'.format(
                 ' '.join(extra_args), result.returncode,
                 result.stdout, result.stderr,
             )
@@ -200,7 +200,7 @@ def test_native_transaction_execute_install_and_erase(utils):
     root = _fresh_root('install-erase')
     _rpm_initdb(root)
 
-    _run_tdnf(root, ['install', PKG_ONE])
+    _run_rpmz(root, ['install', PKG_ONE])
 
     installed = _rpm_qa(root)
     assert any(line.startswith(PKG_ONE + '-') for line in installed), installed
@@ -210,7 +210,7 @@ def test_native_transaction_execute_install_and_erase(utils):
     )
     assert os.path.exists(expected_file), expected_file
 
-    _run_tdnf(root, ['erase', PKG_ONE])
+    _run_rpmz(root, ['erase', PKG_ONE])
 
     installed_after = _rpm_qa(root)
     assert not any(line.startswith(PKG_ONE + '-') for line in installed_after), \
@@ -222,7 +222,7 @@ def test_native_transaction_execute_multi_install(utils):
     root = _fresh_root('multi-install')
     _rpm_initdb(root)
 
-    _run_tdnf(root, ['install', PKG_ONE, PKG_TWO])
+    _run_rpmz(root, ['install', PKG_ONE, PKG_TWO])
 
     installed = _rpm_qa(root)
     assert any(line.startswith(PKG_ONE + '-') for line in installed), installed
@@ -233,7 +233,7 @@ def test_native_execution_orders_provider_before_dependent_script(utils):
     root = _fresh_root('install-order')
     _rpm_initdb(root)
 
-    _run_tdnf(root, ['install', ORDER_PRE, ORDER_HELPER])
+    _run_rpmz(root, ['install', ORDER_PRE, ORDER_HELPER])
 
     installed = _rpm_qa(root)
     assert any(line.startswith(ORDER_HELPER + '-') for line in installed)
@@ -243,9 +243,9 @@ def test_native_execution_orders_provider_before_dependent_script(utils):
 def test_native_execution_orders_erase_script_prerequisite(utils):
     root = _fresh_root('erase-order')
     _rpm_initdb(root)
-    _run_tdnf(root, ['install', ORDER_HELPER, ORDER_PREUN])
+    _run_rpmz(root, ['install', ORDER_HELPER, ORDER_PREUN])
 
-    _run_tdnf(root, ['erase', ORDER_HELPER, ORDER_PREUN])
+    _run_rpmz(root, ['erase', ORDER_HELPER, ORDER_PREUN])
 
     installed = _rpm_qa(root)
     assert not any(line.startswith(ORDER_HELPER + '-') for line in installed)
@@ -256,10 +256,10 @@ def test_native_transaction_execute_upgrade(utils):
     root = _fresh_root('upgrade')
     _rpm_initdb(root)
 
-    _run_tdnf(root, [
+    _run_rpmz(root, [
         'install', '{}-1.0.1-1.{}'.format(PKG_MULTI, HOST_ARCH),
     ])
-    _run_tdnf(root, ['upgrade', PKG_MULTI])
+    _run_rpmz(root, ['upgrade', PKG_MULTI])
 
     installed = [
         line for line in _rpm_qa(root) if line.startswith(PKG_MULTI + '-')
@@ -271,8 +271,8 @@ def test_native_transaction_execute_reinstall(utils):
     root = _fresh_root('reinstall')
     _rpm_initdb(root)
 
-    _run_tdnf(root, ['install', PKG_ONE])
-    _run_tdnf(root, ['reinstall', PKG_ONE])
+    _run_rpmz(root, ['install', PKG_ONE])
+    _run_rpmz(root, ['reinstall', PKG_ONE])
 
     installed = [
         line for line in _rpm_qa(root) if line.startswith(PKG_ONE + '-')
@@ -288,7 +288,7 @@ def test_native_reinstall_collapses_duplicate_nevra_rows(utils):
     second = _native_rpmdb_install(root, rpm_path)
     assert first < second
 
-    _run_tdnf(root, ['reinstall', PKG_ONE])
+    _run_rpmz(root, ['reinstall', PKG_ONE])
 
     installed = [
         line for line in _rpm_qa(root) if line.startswith(PKG_ONE + '-')
@@ -308,7 +308,7 @@ def test_native_erase_exact_name_evr_with_multiple_versions(utils):
     _native_rpmdb_install(root, _repo_rpm(PKG_MULTI, lower))
     _native_rpmdb_install(root, _repo_rpm(PKG_MULTI, higher))
 
-    _run_tdnf(root, ['erase', '{}={}'.format(PKG_MULTI, lower)])
+    _run_rpmz(root, ['erase', '{}={}'.format(PKG_MULTI, lower)])
 
     installed = _rpm_qa(root)
     assert not any(
@@ -330,7 +330,7 @@ def test_native_erase_removes_all_identical_name_evr_rows(utils):
     second = _native_rpmdb_install(root, rpm_path)
     assert first < second
 
-    _run_tdnf(root, ['erase', '{}={}'.format(PKG_MULTI, evr)])
+    _run_rpmz(root, ['erase', '{}={}'.format(PKG_MULTI, evr)])
 
     assert not any(
         line.startswith('{}-{}'.format(PKG_MULTI, evr))
@@ -377,7 +377,7 @@ def test_native_erase_handles_multiple_arch_rows(utils):
             ),
         )
 
-    _run_tdnf(root, ['erase', name + '.noarch'])
+    _run_rpmz(root, ['erase', name + '.noarch'])
 
     installed = [
         line for line in _rpm_qa(root) if line.startswith(name + '-')
@@ -385,7 +385,7 @@ def test_native_erase_handles_multiple_arch_rows(utils):
     assert not any(line.endswith('.noarch') for line in installed)
     assert any(line.endswith('.' + HOST_ARCH) for line in installed)
 
-    _run_tdnf(root, ['erase', name])
+    _run_rpmz(root, ['erase', name])
     assert not any(line.startswith(name + '-') for line in _rpm_qa(root))
 
 
@@ -425,7 +425,7 @@ def test_native_transaction_execute_upgrade_removes_orphan_files(utils):
     root = _fresh_root('upgrade-orphans')
     _rpm_initdb(root)
 
-    _run_tdnf(root, [
+    _run_rpmz(root, [
         'install', '{}-1.0-1.{}'.format(PKG_ORPHANS, HOST_ARCH),
     ])
 
@@ -437,7 +437,7 @@ def test_native_transaction_execute_upgrade_removes_orphan_files(utils):
     ], installed_v1
     assert not installed_v1[os.path.join(ORPHANS_ROOT_DIR, 'new-only')], installed_v1
 
-    _run_tdnf(root, ['upgrade', PKG_ORPHANS])
+    _run_rpmz(root, ['upgrade', PKG_ORPHANS])
 
     installed = [
         line for line in _rpm_qa(root) if line.startswith(PKG_ORPHANS + '-')
@@ -470,7 +470,7 @@ def test_native_transaction_execute_upgrade_removes_orphan_files(utils):
 
     # Cross-verify against real rpm on a separate scratch root: apply
     # the same install/upgrade using the OS `rpm` binary and confirm
-    # its post-upgrade file set matches tdnf-native's.
+    # its post-upgrade file set matches rpmz-native's.
     v1_rpms = _find_rpms('{}-1.0-1'.format(PKG_ORPHANS))
     v2_rpms = _find_rpms('{}-2.0-1'.format(PKG_ORPHANS))
     if not v1_rpms or not v2_rpms:
@@ -483,8 +483,8 @@ def test_native_transaction_execute_upgrade_removes_orphan_files(utils):
 
     rpm_after = _paths_under(rpm_root, all_paths)
     assert rpm_after == after, (
-        'tdnf-native upgrade file set diverges from real rpm -U:\n'
-        '  tdnf: {}\n  rpm : {}'.format(after, rpm_after)
+        'rpmz-native upgrade file set diverges from real rpm -U:\n'
+        '  rpmz: {}\n  rpm : {}'.format(after, rpm_after)
     )
 
 
