@@ -15,6 +15,7 @@ PLAN_DOC = ROOT / "doc" / "transaction-plan-api.md"
 BUNDLE_DOC = ROOT / "doc" / "transaction-bundle.md"
 README = ROOT / "README.md"
 CLI_SOURCE = ROOT / "tools" / "cli" / "main.zig"
+HELP_TEXT = ROOT / "tools" / "cli" / "lib" / "help.txt"
 
 ENUM_SECTIONS = {
     "Status": ("#### Status values", "#### Validation failure values"),
@@ -50,6 +51,11 @@ MANDATORY_REPLAY_CLAUSES = (
         "A no-network namespace or equivalent isolation is the enforcement "
         "boundary for that payload code."
     ),
+)
+MANDATORY_HELP_CLAUSE = (
+    "OS-level no-network isolation is required whenever offline behavior "
+    "must include RPM scriptlets, triggers, interpreters, or descendant "
+    "processes."
 )
 CONTRADICTORY_REPLAY_CLAUSES = (
     "replay cannot network",
@@ -219,6 +225,7 @@ def audit_contract(
     bundle_doc: str,
     readme: str,
     cli_source: str,
+    help_text: str,
 ) -> None:
     for enum_name, boundaries in ENUM_SECTIONS.items():
         enum_section = section(document, *boundaries)
@@ -291,6 +298,7 @@ def audit_contract(
         (bundle_doc, "transaction bundle documentation"),
         (readme, "README"),
         (cli_prose, "CLI help source"),
+        (help_text, "embedded CLI help"),
     )
     for clause in CONTRADICTORY_REPLAY_CLAUSES:
         for text, name in semantic_documents:
@@ -342,6 +350,11 @@ def audit_contract(
         ),
         "CLI mandatory payload isolation",
     )
+    require_clause(
+        help_text,
+        MANDATORY_HELP_CLAUSE,
+        "embedded help mandatory payload isolation",
+    )
 
 
 def remove_from_section(
@@ -382,7 +395,7 @@ def remove_normalized_clause(text: str, clause: str) -> str:
     return changed
 
 
-def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
+def self_test(inputs: tuple[str, str, str, str, str, str, str, str]) -> None:
     (
         source,
         options_source,
@@ -391,6 +404,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
         bundle_doc,
         readme,
         cli_source,
+        help_text,
     ) = inputs
     audit_contract(*inputs)
 
@@ -411,6 +425,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
                 bundle_doc,
                 readme,
                 cli_source,
+                help_text,
             ),
             f"{enum_name}.{tag} missing from its own section",
         )
@@ -426,6 +441,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
             bundle_doc,
             readme,
             cli_source,
+            help_text,
         ),
         f"accepted option spelling {spelling} omitted",
     )
@@ -441,9 +457,25 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
                 bundle_doc,
                 readme,
                 cli_source,
+                help_text,
             ),
             f"mandatory replay clause omitted: {clause}",
         )
+
+    changed_help = remove_normalized_clause(help_text, MANDATORY_HELP_CLAUSE)
+    expect_rejected(
+        lambda: audit_contract(
+            source,
+            options_source,
+            document,
+            plan_doc,
+            bundle_doc,
+            readme,
+            cli_source,
+            changed_help,
+        ),
+        "embedded help mandatory isolation clause omitted",
+    )
 
     for clause in CONTRADICTORY_REPLAY_CLAUSES:
         changed = document + "\n\n" + clause + ".\n"
@@ -456,6 +488,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
                 bundle_doc,
                 readme,
                 cli_source,
+                help_text,
             ),
             f"contradictory replay clause accepted: {clause}",
         )
@@ -467,6 +500,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
             plan_doc,
             bundle_doc,
             readme,
+            help_text,
         ),
         (
             "transaction plan: need not",
@@ -474,6 +508,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
             plan_doc + "\n\nTriggers need not use OS-level network isolation.\n",
             bundle_doc,
             readme,
+            help_text,
         ),
         (
             "transaction bundle: may omit",
@@ -483,6 +518,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
                 "\n\nPayload descendants may omit a no-network namespace.\n"
             ),
             readme,
+            help_text,
         ),
         (
             "README: without isolation",
@@ -493,16 +529,43 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
                 "\n\nPayload interpreters can execute without network "
                 "isolation.\n"
             ),
+            help_text,
+        ),
+        (
+            "embedded help: may omit",
+            document,
+            plan_doc,
+            bundle_doc,
+            readme,
+            help_text + (
+                "\nPayload descendants may omit a no-network namespace.\n"
+            ),
+        ),
+        (
+            "embedded help: optional",
+            document,
+            plan_doc,
+            bundle_doc,
+            readme,
+            help_text + (
+                "\nNetwork isolation is optional for RPM scriptlets.\n"
+            ),
         ),
     )
-    for label, changed_doc, changed_plan, changed_bundle, changed_readme in (
-        semantic_cases
-    ):
+    for (
+        label,
+        changed_doc,
+        changed_plan,
+        changed_bundle,
+        changed_readme,
+        changed_help,
+    ) in semantic_cases:
         expect_rejected(
             lambda changed_doc=changed_doc,
             changed_plan=changed_plan,
             changed_bundle=changed_bundle,
-            changed_readme=changed_readme: audit_contract(
+            changed_readme=changed_readme,
+            changed_help=changed_help: audit_contract(
                 source,
                 options_source,
                 changed_doc,
@@ -510,6 +573,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
                 changed_bundle,
                 changed_readme,
                 cli_source,
+                changed_help,
             ),
             f"semantic isolation contradiction accepted in {label}",
         )
@@ -526,10 +590,11 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
         bundle_doc,
         readme,
         cli_source,
+        help_text,
     )
 
 
-def load_inputs() -> tuple[str, str, str, str, str, str, str]:
+def load_inputs() -> tuple[str, str, str, str, str, str, str, str]:
     return (
         REPLAY_SOURCE.read_text(encoding="utf-8"),
         REPLAY_OPTIONS.read_text(encoding="utf-8"),
@@ -538,6 +603,7 @@ def load_inputs() -> tuple[str, str, str, str, str, str, str]:
         BUNDLE_DOC.read_text(encoding="utf-8"),
         README.read_text(encoding="utf-8"),
         CLI_SOURCE.read_text(encoding="utf-8"),
+        HELP_TEXT.read_text(encoding="utf-8"),
     )
 
 
