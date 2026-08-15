@@ -16,6 +16,8 @@
     "build_dynamic_library_declarations": 0,
     "build_install_header_calls": 0,
     "public_zig_module_declarations": 1,
-    "public_zig_api_audit_steps": 1
+    "public_zig_api_audit_steps": 1,
+    "replay_docs_audit_steps": 1,
+    "replay_confinement_audit_steps": 1
   }
 }

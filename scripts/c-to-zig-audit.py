@@ -45,6 +45,8 @@ METRIC_LABELS = {
     "build_install_header_calls": "build.zig header install declarations",
     "public_zig_module_declarations": "Public tdnf Zig modules",
     "public_zig_api_audit_steps": "Public Zig API audit steps",
+    "replay_docs_audit_steps": "Replay documentation audit steps",
+    "replay_confinement_audit_steps": "Replay confinement audit steps",
 }
 
 ZERO_ONLY_METRICS = {
@@ -59,6 +61,8 @@ ZERO_ONLY_METRICS = {
 EXACT_METRICS = {
     "public_zig_module_declarations": 1,
     "public_zig_api_audit_steps": 1,
+    "replay_docs_audit_steps": 1,
+    "replay_confinement_audit_steps": 1,
 }
 
 RETIRED_PUBLIC_C_FILES = {
@@ -176,6 +180,12 @@ def collect_metrics():
         ),
         "public_zig_api_audit_steps": build_source.count(
             '"public-zig-api-audit"'
+        ),
+        "replay_docs_audit_steps": build_source.count(
+            '"replay-docs-audit"'
+        ),
+        "replay_confinement_audit_steps": build_source.count(
+            '"replay-confinement-audit"'
         ),
     }
 

@@ -5,12 +5,11 @@ vendored `libsolv`, with native RPM handling in `rpmzig/` and downloads
 through Zig's HTTP/TLS stack. tdnf is distributed as a Zig package and
 executable; it does not install a C SDK or shared libraries.
 
-Two of its public Zig modules are worth naming up front. `transaction_plan`
-describes a transaction as a canonical, digest-addressed document that can be
-compared across machines; see `doc/transaction-plan-api.md`. `bundle_export`
-turns such a plan into a self-contained directory holding every metadata file
-and RPM the transaction needs, which validates as a closed set long after the
-repository it came from is gone; see `doc/transaction-bundle.md`.
+The public Zig workflow resolves a canonical `transaction_plan`, publishes its
+inputs with `bundle_export`, validates the closed `transaction_bundle` through
+`bundle_reader`, and applies its exact v2 order with offline `replay`. See
+`doc/transaction-plan-api.md`, `doc/transaction-bundle.md`, and
+`doc/replay-api.md`.
 
 ## Build
 
@@ -55,16 +54,30 @@ const tdnf_dep = b.dependency("tdnf", .{
 exe.root_module.addImport("tdnf", tdnf_dep.module("tdnf"));
 ```
 
-Application source can then use `@import("tdnf").resolver` to resolve a
-transaction into an owned canonical plan, plus
-`@import("tdnf").transaction_plan` for the versioned `schema` and the public
-plan model types. Those two namespaces are the whole supported surface;
-consumers should not import files from the component directories directly.
+Application source can use:
+
+- `@import("tdnf").resolver` and `.transaction_plan` to resolve and inspect a
+  canonical plan;
+- `.bundle_export`, `.transaction_bundle`, and `.bundle_reader` to publish and
+  validate its closed input set;
+- `.replay` to validate and apply one exact v2 bundle without resolving or
+  entering a network-capable path.
+
+Those namespaces are the whole supported surface. Consumers should not import
+files from the component directories directly. There is no public C SDK,
+header, pkg-config, or shared-library API.
 
 `tdnf plan <verb>` prints the same document from the command line. See
 [doc/transaction-plan-api.md](doc/transaction-plan-api.md) for what a plan
 contains, the explicit-input and ownership rules, how failures are reported,
 what makes two plans identical, and why planning never executes anything.
+
+`tdnf replay --installroot ROOT --rpmdb-path /var/lib/rpm --forcearch ARCH
+BUNDLE` validates and applies a replay-capable bundle. It always writes one
+versioned canonical result to stdout for a valid invocation. See
+[doc/replay-api.md](doc/replay-api.md) for the API ownership contract, v2
+requirement, validation boundary, result schema, CLI exit statuses, and
+network-isolation guidance.
 
 ## Configuration
 
@@ -135,6 +148,8 @@ Dependency, public-Zig-consumer, and migration gates are available as:
 zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
 zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
 zig build -Doptimize=ReleaseSafe migration-audit --prefix ./out
+zig build replay-docs-audit
+zig build replay-confinement-audit
 zig build -Doptimize=ReleaseSafe dead-errdefer-audit --prefix ./out
 zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
 ```

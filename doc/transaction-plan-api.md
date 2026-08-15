@@ -22,7 +22,8 @@ A plan is a complete, self-describing record of one resolve:
   prior rows.
 - **`execution`** — v1 records `unmaterialized`; v2 records the exact ordered
   low-level install, erase, reinstall, and upgrade items accepted by the native
-  transaction engine, each tied back to an `action-N` and `package-N`.
+  transaction engine, each tied back to an `action-N` and `package-N`. This
+  order, not the canonical ordering of `actions`, is the execution authority.
 - **`problems`** — structured solver contradictions.
 - **`skipped`** — jobs dropped by a skip policy.
 - **`repositories`** — the metadata snapshot each repository was read at.
@@ -152,15 +153,17 @@ This layer resolves. It does not download packages and it does not execute.
 
 - Downloading the resolved RPMs and atomically exporting a self-contained
   bundle is [#187](https://github.com/cataggar/tdnf/issues/187).
-- Replaying or executing a plan is
-  [#188](https://github.com/cataggar/tdnf/issues/188). Replay does not resolve
-  again; the plan is the authority.
+- [`tdnf.replay`](replay-api.md) executes only a closed v2 bundle. It does not
+  resolve again; the v2 plan's materialized `execution_steps` are the
+  authority.
 
 `transaction_plan.parse` accepts canonical v1 and v2 documents. It validates,
 re-serializes, and requires byte identity, so reordered keys, extra fields,
 alternate whitespace, malformed references, and forged digests are rejected.
 Use `Plan.isReplayable()` rather than assuming any parsed plan can execute.
-There is no public C ABI for this surface.
+Version 1 remains supported for resolve-only compatibility, but replay
+requires v2 and rejects v1 rather than inventing an order. There is no public C
+ABI for this surface.
 
 ## How this is proven
 
@@ -186,3 +189,23 @@ cannot be known before the RPM headers are present.
 
 `doc/transaction-bundle.md` describes the layout, what a consumer may rely on,
 and the failures a published bundle is expected to survive.
+
+## Actions versus execution order
+
+`actions` are the stable semantic result of solving: they say which package is
+installed, erased, upgraded, downgraded, reinstalled, or obsoleted and name
+the exact prior rows. Their canonical array order makes plans reproducible,
+but it is not sufficient to drive the native transaction engine.
+
+A v2 export additionally records `execution_steps` in the exact sequence
+returned by the production native transaction planner after verified RPM
+headers are available. Multiple low-level steps may contribute to one action,
+and one shared erase may contribute to multiple downgrade or obsolete
+actions. Export rejects an order or replacement graph that cannot be
+represented without loss.
+
+Replay validates that binding, keeps the selected RPMs pinned, and submits the
+steps in their stored order. It never sorts actions into a guessed order,
+coalesces priors, re-solves, or selects a newer package. Result action statuses
+are reported in action-index order and aggregate the recorded low-level steps;
+the v2 `execution_steps` remain the source of truth for exact execution order.

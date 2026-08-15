@@ -35,6 +35,9 @@ const replay_usage =
     \\Replay applies only the exact offline bundle through tdnf.replay.
     \\All three target options are required exactly once. Paths must already
     \\be canonical absolute paths; the rpmdb path is install-root-relative.
+    \\Options: --installroot/-i, --rpmdb-path, --forcearch, --json, --help/-h.
+    \\A valid invocation writes one canonical replay-result JSON document to
+    \\stdout. Diagnostics, usage, and scriptlet output are written to stderr.
     \\Exit status: 0 success, 2 invocation error, 3 validation failure,
     \\4 transaction failure, 1 internal/output failure.
     \\
