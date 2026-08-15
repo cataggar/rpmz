@@ -107,6 +107,19 @@ Common Options
 --version                  Show version information
                            Example: tdnf --version
 
+Replay Options
+--rpmdb-path <path>        Exact absolute install-root-relative RPM database path
+                           Example: tdnf replay --installroot /image --rpmdb-path /var/lib/rpm --forcearch x86_64 /bundle
+
+Replay requires exactly one canonical absolute bundle directory and explicit
+--installroot, --rpmdb-path, and --forcearch values. It never initializes the
+normal configuration, repository, solver, cache, or download path. Replay does
+not require uid 0, but the caller must have all target permissions; scriptlets
+that require unavailable privilege fail as transaction failures. Exit status
+is 0 for success, 2 for invocation errors, 3 for validation failures, and 4
+for transaction failures. Callers should also enforce OS-level network
+isolation.
+
 Repoquery Select Options
 --available                Show only available packages
                            Example: tdnf repoquery --available pkg
@@ -257,6 +270,8 @@ mark <action> <pkg>        Mark package(s) (install|remove)
                            Example: tdnf mark install package
 plan <cmd> [pkg]           Resolve a transaction command and print its canonical plan JSON
                            Example: tdnf plan install package
+replay <bundle-directory>  Apply an exact offline bundle and print canonical replay-result JSON
+                           Example: tdnf replay --installroot /image --rpmdb-path /var/lib/rpm --forcearch x86_64 /bundle
 provides <cap>             Same as 'whatprovides'
                            Example: tdnf provides /usr/bin/bash
 whatprovides <cap>         Find what package provides the given value

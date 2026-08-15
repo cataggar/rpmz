@@ -8,24 +8,34 @@ const std = @import("std");
 const common = @import("tdnf_common");
 const abi = @import("tdnf_internal_abi");
 
+const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
 const help_msg = @embedFile("help.txt");
+var parser_json_diagnostics = false;
+
+pub fn setParserJsonDiagnostics(enabled: bool) void {
+    parser_json_diagnostics = enabled;
+}
+
+pub fn parserDiagnosticLevel(default_level: c_int) c_int {
+    return if (parser_json_diagnostics) LOG_ERR else default_level;
+}
 
 pub export fn TDNFCliShowUsage() void {
-    common.log(LOG_CRIT, "You need to give some command\n", .{});
+    common.log(parserDiagnosticLevel(LOG_CRIT), "You need to give some command\n", .{});
     TDNFCliShowHelp();
 }
 
 pub export fn TDNFCliShowHelp() void {
-    common.log(LOG_CRIT, "%.*s\n", .{ @as(c_int, @intCast(help_msg.len)), help_msg.ptr });
+    common.log(parserDiagnosticLevel(LOG_CRIT), "%.*s\n", .{ @as(c_int, @intCast(help_msg.len)), help_msg.ptr });
 }
 
 pub export fn TDNFCliShowNoSuchCommand(pszCmd: ?[*:0]const u8) void {
-    common.log(LOG_CRIT, "No such command: %s. Please use /usr/bin/tdnf --help\n", .{pszCmd orelse ""});
+    common.log(parserDiagnosticLevel(LOG_CRIT), "No such command: %s. Please use /usr/bin/tdnf --help\n", .{pszCmd orelse ""});
 }
 
 pub export fn TDNFCliShowNoSuchOption(pszOption: ?[*:0]const u8) void {
-    common.log(LOG_CRIT, "No such option: %s. Please use /usr/bin/tdnf --help\n", .{pszOption orelse ""});
+    common.log(parserDiagnosticLevel(LOG_CRIT), "No such option: %s. Please use /usr/bin/tdnf --help\n", .{pszOption orelse ""});
 }
 
 pub export fn TDNFCliHelpCommand(

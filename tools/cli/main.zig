@@ -5,6 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
+const tdnf = @import("tdnf");
 const jsondump = @import("jsondump_abi");
 const common = @import("tdnf_common");
 const client = @import("tdnf_client");
@@ -27,6 +28,60 @@ comptime {
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
+
+const replay_usage =
+    \\Usage: tdnf replay --installroot <absolute-path> --rpmdb-path <absolute-path> --forcearch <arch> <bundle-directory>
+    \\
+    \\Replay applies only the exact offline bundle through tdnf.replay.
+    \\All three target options are required exactly once. Paths must already
+    \\be canonical absolute paths; the rpmdb path is install-root-relative.
+    \\Exit status: 0 success, 2 invocation error, 3 validation failure,
+    \\4 transaction failure, 1 internal/output failure.
+    \\
+;
+
+const replay_exit = struct {
+    const internal: u8 = 1;
+    const usage: u8 = 2;
+    const validation: u8 = 3;
+    const transaction: u8 = 4;
+};
+
+const replay_invocation_error_schema = "tdnf.replay-invocation-error/v1";
+
+const ReplayArgs = struct {
+    bundle_directory: []const u8,
+    install_root: []const u8,
+    rpmdb_path: []const u8,
+    architecture: []const u8,
+};
+
+const ReplayInvocation = union(enum) {
+    help,
+    run: ReplayArgs,
+};
+
+const ReplayParseError = error{
+    DuplicateOption,
+    ExtraOperand,
+    MissingBundle,
+    EmptyBundle,
+    MissingInstallRoot,
+    MissingRpmDbPath,
+    MissingArchitecture,
+    MissingOptionValue,
+    UnsupportedOption,
+};
+
+const OptionMatch = union(enum) {
+    separate,
+    attached: []const u8,
+};
+
+const ReplayParseDiagnostic = struct {
+    code: [*:0]const u8,
+    message: [*:0]const u8,
+};
 
 const command_map = [_]abi.TDNF_CLI_CMD_MAP{
     .{ .pszCmdName = "autoerase", .pFnCmd = abi.TDNFCliAutoEraseCommand, .ReqRoot = true },
@@ -107,6 +162,406 @@ fn findCommand(pszCmd: [*c]const u8) ?*const abi.TDNF_CLI_CMD_MAP {
         }
     }
     return null;
+}
+
+fn hasSetOption(
+    cmd_args: *const abi.TDNF_CMD_ARGS,
+    name: [*:0]const u8,
+) bool {
+    if (cmd_args.cn_setopts == null) return false;
+    var node = cmd_args.cn_setopts[0].first_child;
+    while (node != null) : (node = node[0].next) {
+        if (node[0].name != null and c.strcmp(node[0].name, name) == 0)
+            return true;
+    }
+    return false;
+}
+
+fn matchNamedOption(arg: []const u8, name: []const u8) ?OptionMatch {
+    const prefix_len: usize = if (std.mem.startsWith(u8, arg, "--"))
+        2
+    else if (std.mem.startsWith(u8, arg, "-"))
+        1
+    else
+        return null;
+    const body = arg[prefix_len..];
+    if (std.mem.eql(u8, body, name)) return .separate;
+    if (body.len > name.len and body[name.len] == '=' and
+        std.mem.eql(u8, body[0..name.len], name))
+    {
+        return .{ .attached = body[name.len + 1 ..] };
+    }
+    return null;
+}
+
+fn replayOptionValue(
+    argv: []const [*:0]const u8,
+    index: *usize,
+    matched: OptionMatch,
+) ReplayParseError![]const u8 {
+    const value = switch (matched) {
+        .attached => |attached| attached,
+        .separate => value: {
+            index.* += 1;
+            if (index.* >= argv.len) return error.MissingOptionValue;
+            break :value std.mem.span(argv[index.*]);
+        },
+    };
+    if (value.len == 0) return error.MissingOptionValue;
+    return value;
+}
+
+fn parseReplayInvocation(
+    argv: []const [*:0]const u8,
+    json_output: bool,
+) ReplayParseError!ReplayInvocation {
+    var install_root: ?[]const u8 = null;
+    var rpmdb_path: ?[]const u8 = null;
+    var architecture: ?[]const u8 = null;
+    var bundle_directory: ?[]const u8 = null;
+    var saw_command = false;
+    var help = false;
+    var end_options = false;
+
+    var index: usize = 1;
+    while (index < argv.len) : (index += 1) {
+        const arg = std.mem.span(argv[index]);
+        if (!end_options) {
+            if (std.mem.eql(u8, arg, "--")) {
+                end_options = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+                if (help) return error.DuplicateOption;
+                help = true;
+                continue;
+            }
+            if (json_output and isJsonOutputOption(arg))
+                continue;
+
+            if (matchNamedOption(arg, "installroot")) |matched| {
+                if (install_root != null) return error.DuplicateOption;
+                install_root = try replayOptionValue(argv, &index, matched);
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "-i") or
+                (arg.len > 2 and std.mem.startsWith(u8, arg, "-i") and
+                    !std.mem.startsWith(u8, arg, "-installroot")))
+            {
+                if (install_root != null) return error.DuplicateOption;
+                const matched: OptionMatch = if (arg.len == 2)
+                    .separate
+                else
+                    .{ .attached = arg[2..] };
+                install_root = try replayOptionValue(argv, &index, matched);
+                continue;
+            }
+            if (matchNamedOption(arg, "forcearch")) |matched| {
+                if (architecture != null) return error.DuplicateOption;
+                architecture = try replayOptionValue(argv, &index, matched);
+                continue;
+            }
+            if (matchNamedOption(arg, "rpmdb-path")) |matched| {
+                if (rpmdb_path != null) return error.DuplicateOption;
+                rpmdb_path = try replayOptionValue(argv, &index, matched);
+                continue;
+            }
+            if (arg.len != 0 and arg[0] == '-')
+                return error.UnsupportedOption;
+        }
+
+        if (!saw_command) {
+            if (!std.mem.eql(u8, arg, "replay")) return error.ExtraOperand;
+            saw_command = true;
+        } else if (bundle_directory == null) {
+            if (arg.len == 0) return error.EmptyBundle;
+            bundle_directory = arg;
+        } else {
+            return error.ExtraOperand;
+        }
+    }
+
+    if (help) return .help;
+    if (!saw_command or bundle_directory == null) return error.MissingBundle;
+    return .{ .run = .{
+        .bundle_directory = bundle_directory.?,
+        .install_root = install_root orelse return error.MissingInstallRoot,
+        .rpmdb_path = rpmdb_path orelse return error.MissingRpmDbPath,
+        .architecture = architecture orelse return error.MissingArchitecture,
+    } };
+}
+
+fn optionConsumesNext(arg: []const u8) bool {
+    const prefix_len: usize = if (std.mem.startsWith(u8, arg, "--"))
+        2
+    else if (std.mem.startsWith(u8, arg, "-"))
+        1
+    else
+        return false;
+    const body = arg[prefix_len..];
+    if (body.len == 0) return false;
+
+    const equals_index = std.mem.indexOfScalar(u8, body, '=');
+    const name = if (equals_index) |index| body[0..index] else body;
+    if (cli.matchLegacyLongOption(name)) |matched| {
+        return equals_index == null and matched.arity != .none;
+    }
+    if (prefix_len != 1 or equals_index != null) return false;
+
+    for (body, 0..) |letter, index| {
+        const arity = cli.legacyShortOptionArity(letter) orelse return false;
+        if (arity != .none) return index + 1 == body.len;
+    }
+    return false;
+}
+
+fn jsonOutputRequested(argv: []const [*:0]const u8) bool {
+    if (argv.len > 0) {
+        const arg0 = std.mem.span(argv[0]);
+        if (arg0.len >= 5 and std.mem.eql(u8, arg0[arg0.len - 5 ..], "tdnfj"))
+            return true;
+    }
+
+    var index: usize = 1;
+    while (index < argv.len) : (index += 1) {
+        const arg = std.mem.span(argv[index]);
+        if (std.mem.eql(u8, arg, "--")) break;
+        if (arg.len == 0 or arg[0] != '-') continue;
+
+        const prefix_len: usize = if (std.mem.startsWith(u8, arg, "--")) 2 else 1;
+        const body = arg[prefix_len..];
+        const equals_index = std.mem.indexOfScalar(u8, body, '=');
+        const name = if (equals_index) |offset| body[0..offset] else body;
+        if (cli.matchLegacyLongOption(name)) |matched| {
+            if (std.mem.eql(u8, matched.name, "json")) return true;
+        }
+
+        if (optionConsumesNext(arg) and index + 1 < argv.len)
+            index += 1;
+    }
+    return false;
+}
+
+fn isJsonOutputOption(arg: []const u8) bool {
+    const prefix_len: usize = if (std.mem.startsWith(u8, arg, "--"))
+        2
+    else if (std.mem.startsWith(u8, arg, "-"))
+        1
+    else
+        return false;
+    const body = arg[prefix_len..];
+    if (body.len == 0 or std.mem.indexOfScalar(u8, body, '=') != null)
+        return false;
+    const matched = cli.matchLegacyLongOption(body) orelse return false;
+    return matched.arity == .none and std.mem.eql(u8, matched.name, "json");
+}
+
+fn isReplayInvocation(argv: []const [*:0]const u8) bool {
+    var index: usize = 1;
+    while (index < argv.len) : (index += 1) {
+        const arg = std.mem.span(argv[index]);
+        if (std.mem.eql(u8, arg, "--")) {
+            return index + 1 < argv.len and
+                std.mem.eql(u8, std.mem.span(argv[index + 1]), "replay");
+        }
+        if (arg.len == 0 or arg[0] != '-')
+            return std.mem.eql(u8, arg, "replay");
+        if (optionConsumesNext(arg) and index + 1 < argv.len)
+            index += 1;
+    }
+    return false;
+}
+
+fn replayParseDiagnostic(err: ReplayParseError) ReplayParseDiagnostic {
+    return switch (err) {
+        error.DuplicateOption => .{
+            .code = "duplicate_option",
+            .message = "target options must appear exactly once",
+        },
+        error.ExtraOperand => .{
+            .code = "extra_operand",
+            .message = "expected exactly one bundle directory",
+        },
+        error.MissingBundle => .{
+            .code = "missing_bundle",
+            .message = "missing bundle directory",
+        },
+        error.EmptyBundle => .{
+            .code = "empty_bundle",
+            .message = "bundle directory must be non-empty",
+        },
+        error.MissingInstallRoot => .{
+            .code = "missing_install_root",
+            .message = "missing required --installroot",
+        },
+        error.MissingRpmDbPath => .{
+            .code = "missing_rpmdb_path",
+            .message = "missing required --rpmdb-path",
+        },
+        error.MissingArchitecture => .{
+            .code = "missing_architecture",
+            .message = "missing required --forcearch",
+        },
+        error.MissingOptionValue => .{
+            .code = "missing_option_value",
+            .message = "target option requires a non-empty value",
+        },
+        error.UnsupportedOption => .{
+            .code = "unsupported_option",
+            .message = "unsupported option for offline replay",
+        },
+    };
+}
+
+fn printReplayUsage(parse_error: ?ReplayParseError) void {
+    if (parse_error) |err| {
+        const diagnostic = replayParseDiagnostic(err);
+        common.log(LOG_ERR, "tdnf replay: %s\n", .{diagnostic.message});
+    }
+    _ = c.fwrite(replay_usage.ptr, 1, replay_usage.len, c.stderr);
+    _ = c.fflush(c.stderr);
+}
+
+const ReplayStdoutGuard = struct {
+    saved_stdout: c_int,
+    active: bool = true,
+
+    fn begin() error{RedirectFailed}!ReplayStdoutGuard {
+        const stderr_flags_result = std.posix.system.fcntl(
+            c.STDERR_FILENO,
+            std.posix.F.GETFL,
+            @as(usize, 0),
+        );
+        if (std.posix.errno(stderr_flags_result) != .SUCCESS)
+            return error.RedirectFailed;
+        const stderr_flags: std.posix.O = @bitCast(
+            @as(u32, @intCast(stderr_flags_result)),
+        );
+        if (stderr_flags.ACCMODE == .RDONLY)
+            return error.RedirectFailed;
+
+        if (c.fflush(c.stdout) != 0) return error.RedirectFailed;
+        const saved = std.c.fcntl(
+            c.STDOUT_FILENO,
+            std.c.F.DUPFD_CLOEXEC,
+            @as(c_int, 3),
+        );
+        if (saved < 0) return error.RedirectFailed;
+        if (c.dup2(c.STDERR_FILENO, c.STDOUT_FILENO) < 0) {
+            _ = c.close(saved);
+            return error.RedirectFailed;
+        }
+        return .{ .saved_stdout = saved };
+    }
+
+    fn restore(self: *ReplayStdoutGuard) bool {
+        if (!self.active) return true;
+        const flushed = c.fflush(c.stdout) == 0;
+        const restored = c.dup2(self.saved_stdout, c.STDOUT_FILENO) >= 0;
+        const closed = c.close(self.saved_stdout) == 0;
+        self.active = false;
+        return flushed and restored and closed;
+    }
+};
+
+fn writeReplayResult(bytes: []const u8) bool {
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const written = c.fwrite(
+            bytes.ptr + offset,
+            1,
+            bytes.len - offset,
+            c.stdout,
+        );
+        if (written == 0) return false;
+        offset += written;
+    }
+    return c.fflush(c.stdout) == 0;
+}
+
+fn writeReplayInvocationError(err: ReplayParseError) bool {
+    const diagnostic = replayParseDiagnostic(err);
+    var jd: ?*jsondump.JsonDump = jsondump.jd_create(0);
+    if (jd == null) return false;
+    defer destroyJsonDump(&jd);
+
+    if (checkJsonResult(jsondump.jd_map_start(jd)) != 0) return false;
+    if (checkJsonResult(jsondump.jd_map_add_string(
+        jd,
+        "schema",
+        replay_invocation_error_schema,
+    )) != 0) return false;
+    if (checkJsonResult(jsondump.jd_map_add_string(
+        jd,
+        "error",
+        diagnostic.code,
+    )) != 0) return false;
+    if (checkJsonResult(jsondump.jd_map_add_string(
+        jd,
+        "message",
+        diagnostic.message,
+    )) != 0) return false;
+    return writeReplayResult(std.mem.span(jd.?.buf));
+}
+
+fn runReplay(invocation: ReplayArgs) u8 {
+    const allocator = std.heap.c_allocator;
+    var io_state: std.Io.Threaded = .init(allocator, .{});
+    defer io_state.deinit();
+
+    var stdout_guard = ReplayStdoutGuard.begin() catch {
+        common.log(LOG_ERR, "tdnf replay: cannot reserve machine-output channel\n", .{});
+        return replay_exit.internal;
+    };
+    defer _ = stdout_guard.restore();
+
+    const result = tdnf.replay.run(allocator, io_state.io(), .{
+        .bundle_directory = invocation.bundle_directory,
+        .target = .{
+            .install_root = invocation.install_root,
+            .rpmdb_path = invocation.rpmdb_path,
+            .architecture = invocation.architecture,
+        },
+    }) catch {
+        _ = stdout_guard.restore();
+        common.log(LOG_ERR, "tdnf replay: out of memory\n", .{});
+        return replay_exit.internal;
+    };
+    defer result.deinit();
+
+    if (!stdout_guard.restore()) {
+        common.log(LOG_ERR, "tdnf replay: cannot restore machine-output channel\n", .{});
+        return replay_exit.internal;
+    }
+
+    const canonical = result.canonicalJsonAlloc(allocator) catch {
+        common.log(LOG_ERR, "tdnf replay: out of memory rendering result\n", .{});
+        return replay_exit.internal;
+    };
+    defer allocator.free(canonical);
+    if (!writeReplayResult(canonical)) return replay_exit.internal;
+
+    return switch (result.status) {
+        .succeeded => 0,
+        .validation_failed => replay_exit.validation,
+        .transaction_failed => replay_exit.transaction,
+    };
+}
+
+fn dispatchReplay(argv: []const [*:0]const u8, json_output: bool) u8 {
+    const invocation = parseReplayInvocation(argv, json_output) catch |err| {
+        printReplayUsage(err);
+        if (json_output and !writeReplayInvocationError(err))
+            return replay_exit.internal;
+        return replay_exit.usage;
+    };
+    return switch (invocation) {
+        .help => help: {
+            printReplayUsage(null);
+            break :help 0;
+        },
+        .run => |replay_args| runReplay(replay_args),
+    };
 }
 
 fn initializeContext() abi.TDNF_CLI_CONTEXT {
@@ -430,6 +885,10 @@ fn TDNFCliInvokeMark(
 
 pub fn main(init: std.process.Init.Minimal) u8 {
     const argv = init.args.vector;
+    const requested_json = jsonOutputRequested(argv);
+    if (isReplayInvocation(argv))
+        return dispatchReplay(argv, requested_json);
+
     const argc: c_int = @intCast(argv.len);
     const argv_ptr: [*c]?[*:0]u8 = @ptrCast(@constCast(argv.ptr));
 
@@ -444,10 +903,13 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         if (pCmdArgs != null) {
             abi.TDNFFreeCmdArgs(pCmdArgs);
         }
-        abi.TDNFUninit();
     }
 
-    dwError = abi.TDNFCliParseArgs(argc, @ptrCast(argv_ptr), &pCmdArgs);
+    dwError = parse: {
+        cli.setParserJsonDiagnostics(requested_json);
+        defer cli.setParserJsonDiagnostics(false);
+        break :parse abi.TDNFCliParseArgs(argc, @ptrCast(argv_ptr), &pCmdArgs);
+    };
     if (dwError == 0) {
         const cmd_args = pCmdArgs.?;
 
@@ -455,6 +917,13 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             TDNFCliShowVersion(cmd_args);
         } else if (cmd_args.nShowHelp != 0) {
             abi.TDNFCliShowHelp();
+        } else if (hasSetOption(cmd_args, "rpmdb-path")) {
+            common.log(
+                LOG_ERR,
+                "--rpmdb-path is only valid with the replay command\n",
+                .{},
+            );
+            dwError = abi.ERROR_TDNF_CLI_OPTION_NAME_INVALID;
         } else if (cmd_args.nCmdCount > 0) {
             const pszCmd: [*c]const u8 = cmd_args.ppszCmds[0];
             var context = initializeContext();
@@ -490,8 +959,15 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         }
     }
 
+    abi.TDNFUninit();
     if (dwError != 0) {
-        _ = TDNFCliPrintError(dwError, if (pCmdArgs) |args| args.nJsonOutput else 0);
+        const do_json: c_int = if (requested_json)
+            1
+        else if (pCmdArgs) |args|
+            args.nJsonOutput
+        else
+            0;
+        _ = TDNFCliPrintError(dwError, do_json);
         if (dwError == abi.ERROR_TDNF_CLI_NOTHING_TO_DO or dwError == abi.ERROR_TDNF_NO_DATA) {
             dwError = 0;
         }

@@ -2450,6 +2450,7 @@ pub fn build(b: *Build) void {
     tdnf_mod.addImport("tdnf_internal_abi", internal_abi_mod);
     tdnf_mod.addImport("tdnf_client", client_mod);
     tdnf_mod.addImport("tdnf_cli", cli_mod);
+    tdnf_mod.addImport("tdnf", public_tdnf_mod);
     tdnf_mod.linkLibrary(jsondump_lib);
     const tdnf_exe = b.addExecutable(.{
         .name = "tdnf",
@@ -2475,6 +2476,32 @@ pub fn build(b: *Build) void {
         run_plan_cli_tests.step.dependOn(b.getInstallStep());
         run_plan_cli_tests.has_side_effects = true;
         zig_test_step.dependOn(&run_plan_cli_tests.step);
+    }
+
+    const replay_cli_test_step = b.step(
+        "replay-cli-test",
+        "Run binary-level offline replay CLI tests",
+    );
+    {
+        const replay_cli_test_mod = b.createModule(.{
+            .root_source_file = b.path("tools/cli/replay_cli_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        replay_cli_test_mod.addImport("tdnf", public_tdnf_mod);
+        const replay_cli_tests = b.addTest(.{
+            .root_module = replay_cli_test_mod,
+        });
+        const run_replay_cli_tests = b.addRunArtifact(replay_cli_tests);
+        run_replay_cli_tests.setEnvironmentVariable(
+            "TDNF_CLI_TEST_PREFIX",
+            b.getInstallPath(.prefix, ""),
+        );
+        run_replay_cli_tests.step.dependOn(b.getInstallStep());
+        run_replay_cli_tests.has_side_effects = true;
+        replay_cli_test_step.dependOn(&run_replay_cli_tests.step);
+        zig_test_step.dependOn(&run_replay_cli_tests.step);
     }
 
     // tdnf-config

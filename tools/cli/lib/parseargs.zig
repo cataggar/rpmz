@@ -24,8 +24,20 @@ extern fn TDNFStrIsValidRepoName(str: ?[*:0]const u8) c_int;
 const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
 const LEGACY_VERBOSITY_INFO: c_int = 6;
+const short_options = "46bCc:d:e:hi:qvxy";
 
 var option_state: abi.TDNF_CMD_ARGS = std.mem.zeroes(abi.TDNF_CMD_ARGS);
+
+pub const OptionArity = enum {
+    none,
+    required,
+    optional,
+};
+
+pub const LongOptionMatch = struct {
+    name: []const u8,
+    arity: OptionArity,
+};
 
 fn optionEntry(
     name: ?[*:0]const u8,
@@ -81,6 +93,7 @@ var pstOptions = [_]getopt.struct_option{
     optionEntry("repoid", getopt.required_argument, null, 0),
     optionEntry("rpmverbosity", getopt.required_argument, null, 0),
     optionEntry("rpmdefine", getopt.required_argument, null, 0),
+    optionEntry("rpmdb-path", getopt.required_argument, null, 0),
     optionEntry("sec-severity", getopt.required_argument, null, 0),
     optionEntry("security", getopt.no_argument, null, 0),
     optionEntry("setopt", getopt.required_argument, null, 0),
@@ -143,6 +156,62 @@ var pstOptions = [_]getopt.struct_option{
     optionEntry("reverse", getopt.no_argument, null, 0),
     optionEntry(null, 0, null, 0),
 };
+
+fn optionArity(has_arg: c_int) OptionArity {
+    if (has_arg == getopt.required_argument) return .required;
+    if (has_arg == getopt.optional_argument) return .optional;
+    return .none;
+}
+
+pub fn matchLegacyLongOption(name: []const u8) ?LongOptionMatch {
+    var matched: ?LongOptionMatch = null;
+    var ambiguous = false;
+    for (pstOptions) |option| {
+        const option_name = if (option.name) |value|
+            std.mem.span(value)
+        else
+            break;
+        if (std.mem.eql(u8, option_name, name))
+            return .{
+                .name = option_name,
+                .arity = optionArity(option.has_arg),
+            };
+        if (!std.mem.startsWith(u8, option_name, name)) continue;
+        if (matched != null) {
+            ambiguous = true;
+        } else {
+            matched = .{
+                .name = option_name,
+                .arity = optionArity(option.has_arg),
+            };
+        }
+    }
+    return if (ambiguous) null else matched;
+}
+
+pub fn legacyLongOptionArity(name: []const u8) ?OptionArity {
+    const matched = matchLegacyLongOption(name) orelse return null;
+    return matched.arity;
+}
+
+pub fn legacyShortOptionArity(letter: u8) ?OptionArity {
+    var index: usize = 0;
+    while (index < short_options.len) {
+        const candidate = short_options[index];
+        index += 1;
+        var arity: OptionArity = .none;
+        if (index < short_options.len and short_options[index] == ':') {
+            arity = .required;
+            index += 1;
+            if (index < short_options.len and short_options[index] == ':') {
+                arity = .optional;
+                index += 1;
+            }
+        }
+        if (candidate == letter) return arity;
+    }
+    return null;
+}
 
 fn resetOptionState() void {
     option_state = std.mem.zeroes(abi.TDNF_CMD_ARGS);
@@ -325,7 +394,7 @@ pub export fn TDNFCliParseArgs(
         const nOption = argparse.TDNFCliArgParseLongOnly(
             argc,
             argv,
-            "46bCc:d:e:hi:qvxy",
+            short_options,
             &pstOptions,
             &nOptionIndex,
         );
@@ -379,16 +448,6 @@ pub export fn TDNFCliParseArgs(
         }
     }
 
-    if (pCmdArgs.?.pszInstallRoot == null) {
-        dwError = duplicateCString(pszDefaultInstallRoot, &pCmdArgs.?.pszInstallRoot);
-        if (dwError != 0) {
-            return dwError;
-        }
-    } else if (pCmdArgs.?.pszInstallRoot[0] != '/') {
-        common.log(LOG_CRIT, "Install root must be an absolute path.\n", .{});
-        return abi.ERROR_TDNF_INVALID_PARAMETER;
-    }
-
     dwError = TDNFCopyOptions(&option_state, pCmdArgs);
     if (dwError != 0) {
         return dwError;
@@ -421,16 +480,30 @@ pub export fn TDNFCliParseArgs(
         }
     }
 
-    if (pCmdArgs.?.pszDownloadDir != null and pCmdArgs.?.nDownloadOnly == 0) {
-        return abi.ERROR_TDNF_CLI_DOWNLOADDIR_REQUIRES_DOWNLOADONLY;
+    const is_replay = pCmdArgs.?.nCmdCount > 0 and
+        c.strcmp(pCmdArgs.?.ppszCmds[0], "replay") == 0;
+    if (pCmdArgs.?.pszInstallRoot == null) {
+        dwError = duplicateCString(pszDefaultInstallRoot, &pCmdArgs.?.pszInstallRoot);
+        if (dwError != 0) {
+            return dwError;
+        }
+    } else if (pCmdArgs.?.pszInstallRoot[0] != '/' and !is_replay) {
+        common.log(help.parserDiagnosticLevel(LOG_CRIT), "Install root must be an absolute path.\n", .{});
+        return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
 
-    if (pCmdArgs.?.nAllDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
-        return abi.ERROR_TDNF_CLI_ALLDEPS_REQUIRES_DOWNLOADONLY;
-    }
+    if (!is_replay) {
+        if (pCmdArgs.?.pszDownloadDir != null and pCmdArgs.?.nDownloadOnly == 0) {
+            return abi.ERROR_TDNF_CLI_DOWNLOADDIR_REQUIRES_DOWNLOADONLY;
+        }
 
-    if (pCmdArgs.?.nNoDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
-        return abi.ERROR_TDNF_CLI_NODEPS_REQUIRES_DOWNLOADONLY;
+        if (pCmdArgs.?.nAllDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
+            return abi.ERROR_TDNF_CLI_ALLDEPS_REQUIRES_DOWNLOADONLY;
+        }
+
+        if (pCmdArgs.?.nNoDeps != 0 and pCmdArgs.?.nDownloadOnly == 0 and pCmdArgs.?.nUrlsOnly == 0) {
+            return abi.ERROR_TDNF_CLI_NODEPS_REQUIRES_DOWNLOADONLY;
+        }
     }
 
     ppCmdArgs.?.* = pCmdArgs;
