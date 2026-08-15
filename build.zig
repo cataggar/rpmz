@@ -341,7 +341,7 @@ pub fn build(b: *Build) void {
     replay_docs_audit_step.dependOn(&test_replay_docs_audit.step);
     const replay_confinement_audit_step = b.step(
         "replay-confinement-audit",
-        "Pin replay to its local-only direct dependency boundary",
+        "Pin project-owned replay code to its offline dependency boundary",
     );
     const run_replay_confinement_audit = b.addSystemCommand(
         &.{ "python3", "scripts/replay-confinement-audit.py" },

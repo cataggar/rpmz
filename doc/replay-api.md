@@ -1,9 +1,12 @@
 # Offline transaction replay
 
-Replay applies one previously exported transaction exactly as recorded. It
-does not resolve dependencies, select alternatives, refresh metadata, enter a
-cache, or request a remote URL. The supported interfaces are the public Zig
-namespace `@import("tdnf").replay` and the `tdnf replay` command.
+Replay applies one previously exported transaction exactly as recorded. The
+project-owned replay implementation does not resolve dependencies, select
+alternatives, refresh metadata, enter a cache, or request repository URLs. It
+does execute untrusted RPM payload scriptlets and triggers, which can spawn
+processes or use the network unless the caller isolates them. The supported
+interfaces are the public Zig namespace `@import("tdnf").replay` and the
+`tdnf replay` command.
 
 Replay accepts only a `tdnf.transaction-bundle/v2` whose `plan.json` is a
 canonical `tdnf.transaction-plan/v2` with a materialized native execution
@@ -261,9 +264,11 @@ unshare --net -- \
   /srv/bundles/update-2026-08
 ```
 
-Replay itself never requests remote URLs, but callers **should still enforce
-OS-level network isolation**. This protects the surrounding process and future
-dependencies as well as replay.
+The trusted replay implementation never follows the bundle's provenance URLs,
+but RPM scriptlets, triggers, interpreters, and their descendants are outside
+that static guarantee and may make network requests or launch processes.
+Callers **must enforce OS-level network isolation**, such as a no-network
+namespace, when exact offline enforcement includes payload code.
 
 ### Exit status and output channels
 
@@ -291,13 +296,14 @@ stdout empty, and exits zero.
 Callers should select behavior from the exit status and the versioned stdout
 document, not by parsing human-readable stderr.
 
-## Network confinement
+## Trusted-code network confinement
 
 The replay API exposes no URL, repository configuration, proxy, credential,
-cache, mirror, fetch callback, or solver job. Its bundle metadata
+cache, mirror, fetch callback, or solver job. Its project-owned metadata
 decompression and checksum verification operate only on already-opened local
-bundle bytes. A static confinement audit pins that dependency boundary and
-requires every `@import` to contain exactly one allowlisted literal string. It
+bundle bytes. A static confinement audit pins that trusted-code dependency
+boundary and requires every `@import` to contain exactly one allowlisted
+literal string. It
 rejects every `@cImport` and `@extern`, dynamic reflection primitives such as
 `@field`, and exact identifier tokens for known standard and platform socket
 namespaces and APIs, including address lookup, connect/listen, socket options,
@@ -311,8 +317,15 @@ launch families. The audit also rejects forbidden members of network-adjacent
 internal modules such as repository live-solving or verified fetching. This
 fail-closed token policy covers aliases, blocks, function returns, aggregates,
 and parenthesized access, but is not a proof against arbitrary numeric syscalls
-or machine code. Binary-level zero-request tests remain complementary, and
-callers should still enforce OS-level network isolation.
+or machine code.
+
+This audit covers only the project-owned replay implementation. RPM payload
+scriptlets, triggers, embedded interpreters, and descendant processes are
+untrusted execution outside that static guarantee. They can open sockets,
+resolve names, load code, or spawn other processes. Binary-level zero-request
+tests therefore remain complementary rather than proving payload confinement.
+Callers must place replay in an OS-level no-network namespace or equivalent
+network isolation when the entire transaction must be offline.
 
 This design is deliberately narrower than `--cacheonly`: cache-only mode still
 performs an ordinary solve over cached repository state, while replay treats

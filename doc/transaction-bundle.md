@@ -273,8 +273,10 @@ opens it as a closed local input set, rechecks canonical manifest and plan
 bytes, metadata and RPM content, signatures, architecture, rpmdb snapshot, and
 prior rows, then executes the v2 steps in their recorded order.
 
-Replay never follows the manifest's sanitized source records to a repository
-and never requests a remote URL. The source records are provenance, not replay
-inputs. Callers should nevertheless enforce OS-level network isolation as
-defense in depth. The full API, result, failure, and CLI contract is in
-[Offline transaction replay](replay-api.md).
+The project-owned replay implementation never follows the manifest's sanitized
+source records to a repository; those records are provenance, not replay
+inputs. RPM payload scriptlets, triggers, interpreters, and their descendants
+are outside that guarantee and can use the network. Callers must enforce an
+OS-level no-network namespace or equivalent isolation for exact offline
+execution. The full API, result, failure, and CLI contract is in [Offline
+transaction replay](replay-api.md).

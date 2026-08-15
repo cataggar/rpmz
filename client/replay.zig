@@ -3,6 +3,8 @@
 //! Replay accepts only a closed bundle directory and an explicit RPM target.
 //! It does not accept repository configuration, solver jobs, URLs, caches, or
 //! fetch callbacks, and it calls the fixed-order native executor directly.
+//! RPM payload scriptlets and triggers are untrusted and require caller-enforced
+//! OS-level network isolation when the whole transaction must remain offline.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -296,8 +298,9 @@ const Snapshot = struct {
 };
 
 /// Validate the complete bundle and target state before invoking the native
-/// fixed-order executor. Callers should additionally enforce OS-level network
-/// isolation; this function itself has no network-capable input or code path.
+/// fixed-order executor. Project-owned orchestration has no network-capable
+/// input; callers must enforce OS-level isolation for RPM payload scriptlets,
+/// triggers, interpreters, and descendant processes.
 pub fn run(
     allocator: Allocator,
     io: std.Io,

@@ -179,7 +179,11 @@ def audit_contract(
         "stdout",
         "stderr",
         "OS-level network isolation",
-        "never requests remote URLs",
+        "project-owned replay implementation",
+        "RPM payload scriptlets",
+        "outside that static guarantee",
+        "no-network namespace",
+        "descendant processes",
         "validation precedes mutation",
         "recorded sequence",
         "first appearance in",
@@ -201,6 +205,13 @@ def audit_contract(
     )
     require(readme, "doc/replay-api.md", "README replay reference")
     require(readme, ".replay", "README public replay namespace")
+    require(readme, "RPM payload scriptlets", "README payload caveat")
+    require(readme, "no-network namespace", "README isolation requirement")
+    require(
+        bundle_doc,
+        "outside that guarantee",
+        "transaction bundle payload caveat",
+    )
 
 
 def remove_from_section(
@@ -262,6 +273,19 @@ def self_test(inputs: tuple[str, str, str, str, str, str]) -> None:
             readme,
         ),
         f"accepted option spelling {spelling} omitted",
+    )
+
+    changed = document.replace("outside that static guarantee", "REMOVED")
+    expect_rejected(
+        lambda: audit_contract(
+            source,
+            options_source,
+            changed,
+            plan_doc,
+            bundle_doc,
+            readme,
+        ),
+        "RPM payload confinement caveat omitted",
     )
 
 

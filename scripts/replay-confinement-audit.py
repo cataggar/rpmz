@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin the public replay entry point to its local-only dependency boundary."""
+"""Pin project-owned replay code to its trusted offline dependency boundary."""
 
 import argparse
 from dataclasses import dataclass
@@ -934,11 +934,11 @@ def main() -> int:
         source = REPLAY.read_text(encoding="utf-8")
         if args.self_test:
             self_test(source)
-            print("Replay confinement audit self-tests passed")
+            print("Trusted replay confinement audit self-tests passed")
         else:
             audit_source(source)
             print(
-                "Replay confinement audit passed "
+                "Trusted replay implementation confinement audit passed "
                 "(imports, foreign/reflection APIs, and denied tokens)"
             )
     except (OSError, RuntimeError) as error:

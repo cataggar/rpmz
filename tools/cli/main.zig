@@ -42,6 +42,8 @@ const replay_usage =
     \\Help accepts --help and -h.
     \\A valid invocation writes one canonical replay-result JSON document to
     \\stdout. Diagnostics, usage, and scriptlet output are written to stderr.
+    \\RPM scriptlets/triggers are untrusted; use OS-level no-network isolation
+    \\when the entire transaction must be offline.
     \\Exit status: 0 success, 2 invocation error, 3 validation failure,
     \\4 transaction failure, 1 internal/output failure.
     \\

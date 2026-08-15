@@ -61,7 +61,12 @@ Application source can use:
 - `.bundle_export`, `.transaction_bundle`, and `.bundle_reader` to publish and
   validate its closed input set;
 - `.replay` to validate and apply one exact v2 bundle without resolving or
-  entering a network-capable path.
+  entering a repository/download path in project-owned replay code.
+
+Replay executes RPM payload scriptlets and triggers. That untrusted payload
+code and its descendants can launch processes or access the network, so callers
+must use an OS-level no-network namespace or equivalent isolation when the
+whole transaction must be offline.
 
 Those namespaces are the whole supported surface. Consumers should not import
 files from the component directories directly. There is no public C SDK,
