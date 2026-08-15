@@ -34,6 +34,11 @@ pub const OptionArity = enum {
     optional,
 };
 
+pub const LongOptionMatch = struct {
+    name: []const u8,
+    arity: OptionArity,
+};
+
 fn optionEntry(
     name: ?[*:0]const u8,
     has_arg: c_int,
@@ -158,8 +163,8 @@ fn optionArity(has_arg: c_int) OptionArity {
     return .none;
 }
 
-pub fn legacyLongOptionArity(name: []const u8) ?OptionArity {
-    var matched: ?OptionArity = null;
+pub fn matchLegacyLongOption(name: []const u8) ?LongOptionMatch {
+    var matched: ?LongOptionMatch = null;
     var ambiguous = false;
     for (pstOptions) |option| {
         const option_name = if (option.name) |value|
@@ -167,15 +172,26 @@ pub fn legacyLongOptionArity(name: []const u8) ?OptionArity {
         else
             break;
         if (std.mem.eql(u8, option_name, name))
-            return optionArity(option.has_arg);
+            return .{
+                .name = option_name,
+                .arity = optionArity(option.has_arg),
+            };
         if (!std.mem.startsWith(u8, option_name, name)) continue;
         if (matched != null) {
             ambiguous = true;
         } else {
-            matched = optionArity(option.has_arg);
+            matched = .{
+                .name = option_name,
+                .arity = optionArity(option.has_arg),
+            };
         }
     }
     return if (ambiguous) null else matched;
+}
+
+pub fn legacyLongOptionArity(name: []const u8) ?OptionArity {
+    const matched = matchLegacyLongOption(name) orelse return null;
+    return matched.arity;
 }
 
 pub fn legacyShortOptionArity(letter: u8) ?OptionArity {

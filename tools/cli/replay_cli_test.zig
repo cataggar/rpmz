@@ -505,11 +505,15 @@ fn parseResult(
 fn expectLegacyOptionJson(
     binary: []const u8,
     args: []const []const u8,
+    expected_code: u8,
+    expected_error: i64,
+    expected_message: []const u8,
+    expected_stderr: ?[]const u8,
 ) !void {
     const result = try runCli(binary, args);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    try std.testing.expectEqual(@as(u8, 140), exitCode(result));
+    try std.testing.expectEqual(expected_code, exitCode(result));
 
     const parsed = try std.json.parseFromSlice(
         std.json.Value,
@@ -520,13 +524,18 @@ fn expectLegacyOptionJson(
     defer parsed.deinit();
     try std.testing.expectEqual(@as(usize, 2), parsed.value.object.count());
     try std.testing.expectEqual(
-        @as(i64, 908),
+        expected_error,
         parsed.value.object.get("Error").?.integer,
     );
     try std.testing.expectEqualStrings(
-        "Command line error: option is invalid.",
+        expected_message,
         parsed.value.object.get("ErrorMessage").?.string,
     );
+    if (expected_stderr) |message| {
+        try std.testing.expect(std.mem.indexOf(u8, result.stderr, message) != null);
+    } else {
+        try std.testing.expectEqual(@as(usize, 0), result.stderr.len);
+    }
 }
 
 fn apiCanonical(
@@ -725,45 +734,81 @@ test "replay-only options preserve legacy JSON and diagnostic channels" {
         "--rpmdb-path",
         "/var/lib/rpm",
         "list",
-    });
+    }, 140, 908, "Command line error: option is invalid.", "--rpmdb-path is only valid");
     try expectLegacyOptionJson(binary, &.{
         "--json",
         "--rpmdb-path",
         "/var/lib/rpm",
         "unknown-command",
-    });
+    }, 140, 908, "Command line error: option is invalid.", "--rpmdb-path is only valid");
     try expectLegacyOptionJson(binary, &.{
         "--json",
         "--rpmdb-path",
         "/var/lib/rpm",
-    });
+    }, 140, 908, "Command line error: option is invalid.", "--rpmdb-path is only valid");
     try expectLegacyOptionJson(binary, &.{
         "--json",
         "--rpmdb-path",
         "/var/lib/rpm",
         "list",
         "extra",
-    });
+    }, 140, 908, "Command line error: option is invalid.", "--rpmdb-path is only valid");
 
-    const non_json = try runCli(binary, &.{
-        "--rpmdb-path",
-        "/var/lib/rpm",
-        "list",
-    });
-    defer allocator.free(non_json.stdout);
-    defer allocator.free(non_json.stderr);
-    try std.testing.expectEqual(@as(u8, 140), exitCode(non_json));
-    try std.testing.expectEqual(@as(usize, 0), non_json.stdout.len);
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        non_json.stderr,
-        "--rpmdb-path is only valid with the replay command",
-    ) != null);
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        non_json.stderr,
-        "Error(908) : Command line error: option is invalid.",
-    ) != null);
+    const malformed = [_][]const []const u8{
+        &.{ "--json", "--rpmdb-path" },
+        &.{ "list", "--json", "--rpmdb-path" },
+        &.{ "--json", "--config" },
+        &.{ "list", "--json", "--config" },
+    };
+    for (malformed) |args| {
+        try expectLegacyOptionJson(
+            binary,
+            args,
+            141,
+            909,
+            "Command line error: expected one argument.",
+            "requires an argument",
+        );
+    }
+
+    const empty = [_][]const []const u8{
+        &.{ "--json", "--rpmdb-path=", "list" },
+        &.{ "list", "--json", "--rpmdb-path=" },
+        &.{ "--json", "--config=", "list" },
+        &.{ "list", "--json", "--config=" },
+    };
+    for (empty) |args| {
+        try expectLegacyOptionJson(
+            binary,
+            args,
+            141,
+            909,
+            "Command line error: expected one argument.",
+            null,
+        );
+    }
+
+    const json_operands = [_][]const []const u8{
+        &.{ "--rpmdb-path", "--json", "list" },
+        &.{ "list", "--rpmdb-path", "--json" },
+    };
+    for (json_operands) |args| {
+        const non_json = try runCli(binary, args);
+        defer allocator.free(non_json.stdout);
+        defer allocator.free(non_json.stderr);
+        try std.testing.expectEqual(@as(u8, 140), exitCode(non_json));
+        try std.testing.expectEqual(@as(usize, 0), non_json.stdout.len);
+        try std.testing.expect(std.mem.indexOf(
+            u8,
+            non_json.stderr,
+            "--rpmdb-path is only valid with the replay command",
+        ) != null);
+        try std.testing.expect(std.mem.indexOf(
+            u8,
+            non_json.stderr,
+            "Error(908) : Command line error: option is invalid.",
+        ) != null);
+    }
 }
 
 test "replay CLI success is canonical offline and bypasses normal initialization" {

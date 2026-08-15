@@ -293,14 +293,43 @@ fn optionConsumesNext(arg: []const u8) bool {
 
     const equals_index = std.mem.indexOfScalar(u8, body, '=');
     const name = if (equals_index) |index| body[0..index] else body;
-    if (cli.legacyLongOptionArity(name)) |arity| {
-        return equals_index == null and arity != .none;
+    if (cli.matchLegacyLongOption(name)) |matched| {
+        return equals_index == null and matched.arity != .none;
     }
     if (prefix_len != 1 or equals_index != null) return false;
 
     for (body, 0..) |letter, index| {
         const arity = cli.legacyShortOptionArity(letter) orelse return false;
         if (arity != .none) return index + 1 == body.len;
+    }
+    return false;
+}
+
+fn jsonOutputRequested(argv: []const [*:0]const u8) bool {
+    if (argv.len > 0) {
+        const arg0 = std.mem.span(argv[0]);
+        if (arg0.len >= 5 and std.mem.eql(u8, arg0[arg0.len - 5 ..], "tdnfj"))
+            return true;
+    }
+
+    var index: usize = 1;
+    while (index < argv.len) : (index += 1) {
+        const arg = std.mem.span(argv[index]);
+        if (std.mem.eql(u8, arg, "--")) break;
+        if (arg.len == 0 or arg[0] != '-') continue;
+
+        const prefix_len: usize = if (std.mem.startsWith(u8, arg, "--")) 2 else 1;
+        const body = arg[prefix_len..];
+        const equals_index = std.mem.indexOfScalar(u8, body, '=');
+        const name = if (equals_index) |offset| body[0..offset] else body;
+        if (equals_index == null) {
+            if (cli.matchLegacyLongOption(name)) |matched| {
+                if (std.mem.eql(u8, matched.name, "json")) return true;
+            }
+        }
+
+        if (optionConsumesNext(arg) and index + 1 < argv.len)
+            index += 1;
     }
     return false;
 }
@@ -778,6 +807,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const argv = init.args.vector;
     if (isReplayInvocation(argv))
         return dispatchReplay(argv);
+    const requested_json = jsonOutputRequested(argv);
 
     const argc: c_int = @intCast(argv.len);
     const argv_ptr: [*c]?[*:0]u8 = @ptrCast(@constCast(argv.ptr));
@@ -847,7 +877,13 @@ pub fn main(init: std.process.Init.Minimal) u8 {
 
     abi.TDNFUninit();
     if (dwError != 0) {
-        _ = TDNFCliPrintError(dwError, if (pCmdArgs) |args| args.nJsonOutput else 0);
+        const do_json: c_int = if (requested_json)
+            1
+        else if (pCmdArgs) |args|
+            args.nJsonOutput
+        else
+            0;
+        _ = TDNFCliPrintError(dwError, do_json);
         if (dwError == abi.ERROR_TDNF_CLI_NOTHING_TO_DO or dwError == abi.ERROR_TDNF_NO_DATA) {
             dwError = 0;
         }

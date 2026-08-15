@@ -26,6 +26,8 @@ const parseupdateinfo = @import("parseupdateinfo.zig");
 const updateinfocmd = @import("updateinfocmd.zig");
 
 pub const OptionArity = parseargs.OptionArity;
+pub const LongOptionMatch = parseargs.LongOptionMatch;
+pub const matchLegacyLongOption = parseargs.matchLegacyLongOption;
 pub const legacyLongOptionArity = parseargs.legacyLongOptionArity;
 pub const legacyShortOptionArity = parseargs.legacyShortOptionArity;
 
