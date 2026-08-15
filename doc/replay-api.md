@@ -297,9 +297,11 @@ The replay API exposes no URL, repository configuration, proxy, credential,
 cache, mirror, fetch callback, or solver job. Its bundle metadata
 decompression and checksum verification operate only on already-opened local
 bundle bytes. A static confinement audit pins that dependency boundary and
-rejects direct or aliased standard-library networking plus C imports and
-socket-related extern declarations; binary-level replay tests own the
-behavioral zero-request proof.
+requires every `@import` to contain exactly one allowlisted literal string. It
+rejects direct or aliased standard-library networking, every `@cImport` and
+`@extern`, and dynamic reflection primitives such as `@field` that could
+recover a network API indirectly. Binary-level replay tests own the behavioral
+zero-request proof.
 
 This design is deliberately narrower than `--cacheonly`: cache-only mode still
 performs an ordinary solve over cached repository state, while replay treats

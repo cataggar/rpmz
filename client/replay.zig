@@ -1737,22 +1737,17 @@ fn installedPackageLessThan(
 }
 
 fn compareIdentity(left: PackageIdentity, right: PackageIdentity) std.math.Order {
-    inline for (.{ "name", "epoch", "version", "release", "arch" }) |field| {
-        if (comptime std.mem.eql(u8, field, "epoch")) {
-            const left_epoch = left.epoch orelse 0;
-            const right_epoch = right.epoch orelse 0;
-            if (left_epoch < right_epoch) return .lt;
-            if (left_epoch > right_epoch) return .gt;
-        } else {
-            const order = std.mem.order(
-                u8,
-                @field(left, field),
-                @field(right, field),
-            );
-            if (order != .eq) return order;
-        }
-    }
-    return .eq;
+    var order = std.mem.order(u8, left.name, right.name);
+    if (order != .eq) return order;
+    const left_epoch = left.epoch orelse 0;
+    const right_epoch = right.epoch orelse 0;
+    if (left_epoch < right_epoch) return .lt;
+    if (left_epoch > right_epoch) return .gt;
+    order = std.mem.order(u8, left.version, right.version);
+    if (order != .eq) return order;
+    order = std.mem.order(u8, left.release, right.release);
+    if (order != .eq) return order;
+    return std.mem.order(u8, left.arch, right.arch);
 }
 
 fn effectiveEpoch(epoch: ?u32) u32 {

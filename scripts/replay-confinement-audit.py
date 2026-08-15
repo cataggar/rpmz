@@ -41,6 +41,16 @@ FORBIDDEN_IDENTIFIERS = {
     "fetchToFile",
     "curl",
 }
+FORBIDDEN_REFLECTION_BUILTINS = (
+    "field",
+    "fieldParentPtr",
+    "hasDecl",
+    "hasField",
+    "typeInfo",
+    "Type",
+    "TypeOf",
+    "unionInit",
+)
 SOCKET_CALLS = (
     "socket",
     "socketpair",
@@ -258,16 +268,21 @@ def lex_zig(source: str) -> Lexed:
 def import_calls(lexed: Lexed) -> list[tuple[int, int, str]]:
     calls = []
     for match in re.finditer(r"@import\s*\(", lexed.code):
-        close = lexed.code.find(")", match.end())
-        if close < 0:
-            continue
-        values = [
-            token.value
+        opening = lexed.code.find("(", match.start(), match.end())
+        close = matching_parenthesis(lexed.code, opening)
+        if close is None:
+            raise RuntimeError("replay closure contains malformed @import")
+        tokens = [
+            token
             for token in lexed.strings
-            if match.end() <= token.start and token.end <= close
+            if opening < token.start and token.end <= close
         ]
-        if len(values) == 1:
-            calls.append((match.start(), close + 1, values[0]))
+        body = lexed.code[opening + 1:close]
+        if len(tokens) != 1 or body.strip():
+            raise RuntimeError(
+                "every replay @import must contain exactly one literal string"
+            )
+        calls.append((match.start(), close + 1, tokens[0].value))
     return calls
 
 
@@ -390,15 +405,9 @@ def reject_network_paths(lexical: str) -> None:
                 )
 
 
-def socket_symbol(name: str) -> bool:
-    return re.fullmatch(
-        SOCKET_SYMBOL_PATTERN,
-        name,
-        flags=re.IGNORECASE,
-    ) is not None
-
-
 def matching_parenthesis(code: str, opening: int) -> int | None:
+    if opening < 0:
+        return None
     depth = 0
     for index in range(opening, len(code)):
         if code[index] == "(":
@@ -410,35 +419,11 @@ def matching_parenthesis(code: str, opening: int) -> int | None:
     return None
 
 
-def reject_builtin_externs(lexed: Lexed) -> None:
-    for match in re.finditer(r"@extern\s*\(", lexed.code):
-        opening = lexed.code.find("(", match.start(), match.end())
-        closing = matching_parenthesis(lexed.code, opening)
-        if closing is None:
-            raise RuntimeError("replay closure contains malformed @extern")
-        body_start = opening + 1
-        body = lexed.code[body_start:closing]
-        for name_match in re.finditer(r"\.\s*name\s*=", body):
-            value_start = body_start + name_match.end()
-            values = [
-                token.value
-                for token in lexed.strings
-                if value_start <= token.start and
-                token.end <= closing and
-                not lexed.code[value_start:token.start].strip()
-            ]
-            if not values:
-                continue
-            name = values[0]
-            if socket_symbol(name):
-                raise RuntimeError(
-                    f"replay closure imports network symbol via @extern: {name}"
-                )
-
-
-def reject_foreign_socket_apis(lexical: str, lexed: Lexed) -> None:
+def reject_foreign_socket_apis(lexical: str) -> None:
     if re.search(r"@cImport\s*\(", lexical):
         raise RuntimeError("replay closure contains @cImport")
+    if re.search(r"@extern\s*\(", lexical):
+        raise RuntimeError("replay closure contains @extern")
     extern_socket = re.search(
         "".join((
             r"\bextern\s+(?:\"\"\s+)?fn\s+",
@@ -454,7 +439,6 @@ def reject_foreign_socket_apis(lexical: str, lexed: Lexed) -> None:
                 extern_socket.group(0)
             )
         )
-    reject_builtin_externs(lexed)
 
 
 def audit_source(source: str) -> None:
@@ -503,8 +487,13 @@ def audit_source(source: str) -> None:
             raise RuntimeError(
                 f"replay reaches forbidden network dependency: {identifier}"
             )
+    for builtin in FORBIDDEN_REFLECTION_BUILTINS:
+        if re.search(r"@" + re.escape(builtin) + r"\s*\(", lexical):
+            raise RuntimeError(
+                f"replay closure contains dynamic reflection builtin @{builtin}"
+            )
     reject_network_paths(lexical)
-    reject_foreign_socket_apis(lexical, lexed)
+    reject_foreign_socket_apis(lexical)
 
 
 def expect_rejected(source: str, fixture: str, description: str) -> None:
@@ -527,11 +516,9 @@ def self_test(source: str) -> None:
         ";\n"
         'const @"socket" = 1;\n'
         "const fmt_alias = std.fmt;\n"
-        "const safe_foreign = @extern(*const fn () void, .{\n"
-        '    .name = "clock_gettime",\n'
-        "});\n"
         'const harmless_name = .{ .name = "socket" };\n'
         'const extern_text = "@extern name = \\"WSASocketW\\"";\n'
+        'const field_text = "@field(std.posix, \\"socket\\")";\n'
     )
     audit_source(harmless)
 
@@ -595,6 +582,15 @@ def self_test(source: str) -> None:
             "@import std alias",
             'const standard = @import("std");\n'
             "const attempt = standard.posix.socket;",
+        ),
+        (
+            "computed std import concatenation",
+            'const standard = @import("st" ++ "d");',
+        ),
+        (
+            "computed std import name",
+            'const module_name = "std";\n'
+            "const standard = @import(module_name);",
         ),
         (
             "std.Io.net alias",
@@ -707,6 +703,26 @@ def self_test(source: str) -> None:
             "const attempt = @extern(*const fn () c_int, .{\n"
             '    .name = "GetAddrInfo\\x57",\n'
             "});",
+        ),
+        (
+            "computed @extern socket name",
+            'const symbol_name = "socket";\n'
+            "const attempt = @extern(*const fn () c_int, .{\n"
+            "    .name = symbol_name,\n"
+            "});",
+        ),
+        (
+            "@field networking",
+            'const attempt = @field(std.posix, "socket");',
+        ),
+        (
+            "@field networking through alias",
+            "const posix = std.posix;\n"
+            'const attempt = @field(posix, "connect");',
+        ),
+        (
+            "@hasDecl networking reflection",
+            'const attempt = @hasDecl(std.posix, "getaddrinfo");',
         ),
     )
     for description, fixture in fixtures:
