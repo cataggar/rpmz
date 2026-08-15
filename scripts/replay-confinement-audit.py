@@ -64,7 +64,12 @@ SOCKET_CALLS = (
     "inet_ntop",
 )
 SOCKET_CALL_PATTERN = "(?:" + "|".join(SOCKET_CALLS) + ")"
+SOCKET_SYMBOL_PATTERN = "(?:__)?(?:WSA)?" + SOCKET_CALL_PATTERN
 FORBIDDEN_STD_PATTERNS = (
+    (
+        re.compile(r"\bstd\s*\.\s*http\b"),
+        "std.http network namespace",
+    ),
     (
         re.compile(r"\bstd\s*\.\s*Io\s*\.\s*net\b"),
         "std.Io.net network namespace",
@@ -124,15 +129,27 @@ def production_source(source: str) -> str:
     return source if first_test is None else source[:first_test.start()]
 
 
-def strip_comments_and_literals(source: str) -> str:
+def strip_comments(source: str) -> str:
     def preserve_lines(match):
         return "\n" * match.group(0).count("\n")
 
     source = re.sub(r"/\*.*?\*/", preserve_lines, source, flags=re.S)
-    source = re.sub(r"//[^\n]*", "", source)
+    return re.sub(r"//[^\n]*", "", source)
+
+
+def strip_literals(source: str) -> str:
     source = re.sub(r'"(?:\\.|[^"\\])*"', '""', source)
-    source = re.sub(r"'(?:\\.|[^'\\])*'", "''", source)
-    return source
+    return re.sub(r"'(?:\\.|[^'\\])*'", "''", source)
+
+
+def lexical_source(source: str) -> str:
+    source = strip_comments(source)
+    source = re.sub(
+        r'@import\(\s*"std"\s*\)',
+        "std",
+        source,
+    )
+    return strip_literals(source)
 
 
 def struct_fields(source: str, name: str) -> list[str]:
@@ -146,9 +163,75 @@ def struct_fields(source: str, name: str) -> list[str]:
     return re.findall(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", match.group(1))
 
 
+def simple_const_aliases(source: str) -> dict[str, str]:
+    aliases = {}
+    pattern = re.compile(
+        r"(?m)^\s*(?:pub\s+)?const\s+"
+        r"([A-Za-z_][A-Za-z0-9_]*)"
+        r"(?:\s*:\s*[^=;\n]+)?\s*=\s*"
+        r"([A-Za-z_][A-Za-z0-9_]*"
+        r"(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*;"
+    )
+    for name, value in pattern.findall(source):
+        aliases[name] = re.sub(r"\s+", "", value)
+    return aliases
+
+
+def resolve_alias(path: str, aliases: dict[str, str]) -> str:
+    parts = re.sub(r"\s+", "", path).split(".")
+    visited = set()
+    while parts and parts[0] in aliases and parts[0] not in visited:
+        name = parts[0]
+        visited.add(name)
+        parts = aliases[name].split(".") + parts[1:]
+    return ".".join(parts)
+
+
+def dotted_paths(source: str) -> list[str]:
+    return re.findall(
+        r"\b[A-Za-z_][A-Za-z0-9_]*"
+        r"(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)+\b",
+        source,
+    )
+
+
+def reject_network_paths(lexical: str) -> None:
+    aliases = simple_const_aliases(lexical)
+    for path in dotted_paths(lexical):
+        resolved = resolve_alias(path, aliases)
+        for pattern, description in FORBIDDEN_STD_PATTERNS:
+            if pattern.search(resolved):
+                raise RuntimeError(
+                    f"replay reaches forbidden {description} via {path}"
+                )
+
+
+def reject_foreign_socket_apis(lexical: str) -> None:
+    if re.search(r"@cImport\s*\(", lexical):
+        raise RuntimeError("replay closure contains @cImport")
+    extern_socket = re.search(
+        "".join((
+            r"\bextern\s+(?:\"\"\s+)?fn\s+",
+            SOCKET_SYMBOL_PATTERN,
+            r"\b",
+        )),
+        lexical,
+        flags=re.IGNORECASE,
+    )
+    if extern_socket:
+        raise RuntimeError(
+            "replay closure declares socket-related extern function {}".format(
+                extern_socket.group(0)
+            )
+        )
+
+
 def audit_source(source: str) -> None:
     source = production_source(source)
-    imports = set(re.findall(r'@import\(\s*"([^"]+)"\s*\)', source))
+    comments_removed = strip_comments(source)
+    imports = set(
+        re.findall(r'@import\(\s*"([^"]+)"\s*\)', comments_removed)
+    )
     if imports != ALLOWED_IMPORTS:
         added = sorted(imports - ALLOWED_IMPORTS)
         removed = sorted(ALLOWED_IMPORTS - imports)
@@ -185,17 +268,14 @@ def audit_source(source: str) -> None:
             )
         )
 
-    lexical = strip_comments_and_literals(source)
+    lexical = lexical_source(source)
     for identifier in sorted(FORBIDDEN_IDENTIFIERS):
         if re.search(r"\b" + re.escape(identifier) + r"\b", lexical):
             raise RuntimeError(
                 f"replay reaches forbidden network dependency: {identifier}"
             )
-    if re.search(r"\bstd\s*\.\s*http\b", lexical):
-        raise RuntimeError("replay reaches std.http")
-    for pattern, description in FORBIDDEN_STD_PATTERNS:
-        if pattern.search(lexical):
-            raise RuntimeError(f"replay reaches forbidden {description}")
+    reject_network_paths(lexical)
+    reject_foreign_socket_apis(lexical)
 
 
 def expect_rejected(source: str, fixture: str, description: str) -> None:
@@ -210,7 +290,8 @@ def self_test(source: str) -> None:
     audit_source(source)
     harmless = production_source(source) + (
         "\n// std.posix.socket is documentation, not a call.\n"
-        'const harmless_text = "std.Io.net and std.net";\n'
+        'const harmless_text = "std.Io.net, @cImport, and extern fn socket";\n'
+        "const fmt_alias = std.fmt;\n"
     )
     audit_source(harmless)
 
@@ -231,6 +312,59 @@ def self_test(source: str) -> None:
             "std.os.windows.ws2_32.WSAConnect",
             "const attempt = std.os.windows.ws2_32.WSAConnect;",
         ),
+        (
+            "std.posix alias",
+            "const posix = std.posix;\nconst attempt = posix.socket;",
+        ),
+        (
+            "chained std.posix alias",
+            "const standard = std;\n"
+            "const posix = standard.posix;\n"
+            "const attempt = posix.connect;",
+        ),
+        (
+            "std.c alias",
+            "const libc = std.c;\nconst attempt = libc.socket;",
+        ),
+        (
+            "std.os.linux alias",
+            "const linux = std.os.linux;\nconst attempt = linux.connect;",
+        ),
+        (
+            "std.http alias",
+            "const http = std.http;\nconst attempt = http.Client;",
+        ),
+        (
+            "@import std alias",
+            'const standard = @import("std");\n'
+            "const attempt = standard.posix.socket;",
+        ),
+        (
+            "std.Io.net alias",
+            "const network = std.Io.net;\nconst attempt = network;",
+        ),
+        (
+            "std.net alias",
+            "const network = std.net;\nconst attempt = network;",
+        ),
+        (
+            "@cImport c.socket",
+            'const c = @cImport({ @cInclude("sys/socket.h"); });\n'
+            "const attempt = c.socket;",
+        ),
+        (
+            "@cImport c.connect",
+            'const c = @cImport({ @cInclude("sys/socket.h"); });\n'
+            "const attempt = c.connect;",
+        ),
+        (
+            "extern fn socket",
+            "extern fn socket(domain: c_int, kind: c_int) c_int;",
+        ),
+        (
+            'extern "c" fn connect',
+            'extern "c" fn connect(fd: c_int) c_int;',
+        ),
     )
     for description, fixture in fixtures:
         expect_rejected(source, fixture, description)
@@ -249,7 +383,7 @@ def main() -> int:
             audit_source(source)
             print(
                 "Replay confinement audit passed "
-                "(direct imports, network namespaces, and socket APIs)"
+                "(imports, aliases, foreign APIs, and network namespaces)"
             )
     except (OSError, RuntimeError) as error:
         print(f"replay confinement audit failed: {error}", file=sys.stderr)
