@@ -31,7 +31,10 @@ jobs:
             createrepo-c \
             gcc \
             gnupg \
-            rpm
+            rpm \
+            python3-openssl \
+            python3-pytest \
+            python3-requests
 
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
@@ -92,6 +95,12 @@ jobs:
           sudo ln -sf /usr/bin/createrepo_c /usr/local/bin/createrepo
           sudo ln -sf /usr/bin/modifyrepo_c /usr/local/bin/modifyrepo
           bash pytests/repo/setup-repo.sh "$(pwd)/out/repo" "$(pwd)/pytests/repo"
+
+      - name: Offline replay acceptance tests
+        run: |
+          zig build -Doptimize=ReleaseSafe replay-acceptance-export --prefix ./out
+          cd pytests
+          sudo -E env "PATH=$PATH" python3 -m pytest -v tests/test_replay_acceptance.py
 
       - name: Zig integration tests
         run: sudo -E env "PATH=$PATH" zig build -Doptimize=ReleaseSafe ztest --prefix ./out --summary all
