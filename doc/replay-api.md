@@ -302,14 +302,17 @@ rejects every `@cImport` and `@extern`, dynamic reflection primitives such as
 `@field`, and exact identifier tokens for known standard and platform socket
 namespaces and APIs, including address lookup, connect/listen, socket options,
 send/receive, Linux batched messages, legacy resolver/DNS families, and
-Winsock variants. Dynamic-library loaders and symbol lookup APIs are denied so
-replay cannot recover socket entry points from libc or a platform library. The
-audit also rejects forbidden members of network-adjacent internal modules such
-as repository live-solving or verified fetching. This fail-closed token policy
-covers aliases, blocks, function returns, aggregates, and parenthesized access,
-but is not a proof against arbitrary numeric syscalls or machine code.
-Binary-level zero-request tests remain complementary, and callers should still
-enforce OS-level network isolation.
+Winsock variants, including asynchronous and resolver-state entry points.
+Dynamic-library loaders and symbol lookup APIs, including Windows native
+loader calls, are denied so replay cannot recover socket entry points from
+libc or a platform library. Process execution APIs are also denied, including
+Zig child spawning, POSIX exec/spawn and shell calls, and Windows process/shell
+launch families. The audit also rejects forbidden members of network-adjacent
+internal modules such as repository live-solving or verified fetching. This
+fail-closed token policy covers aliases, blocks, function returns, aggregates,
+and parenthesized access, but is not a proof against arbitrary numeric syscalls
+or machine code. Binary-level zero-request tests remain complementary, and
+callers should still enforce OS-level network isolation.
 
 This design is deliberately narrower than `--cacheonly`: cache-only mode still
 performs an ordinary solve over cached repository state, while replay treats

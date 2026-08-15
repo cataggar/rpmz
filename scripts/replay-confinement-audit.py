@@ -108,7 +108,46 @@ FORBIDDEN_DYNAMIC_LOOKUP_TOKENS = {
     "loadpackagedlibrary",
     "getprocaddress",
     "getprocaddressforcaller",
+    "ldrloaddll",
+    "ldrunloaddll",
+    "ldrgetprocedureaddress",
+    "ldrgetprocedureaddressex",
+    "ldrgetdllhandle",
+    "ldrgetdllhandleex",
+    "ldrgetdllhandlebymapping",
+    "ldrgetdllhandlebyname",
 }
+FORBIDDEN_PROCESS_TOKENS = {
+    "process",
+    "spawn",
+    "spawnpath",
+    "exec",
+    "execl",
+    "execle",
+    "execlp",
+    "execv",
+    "execve",
+    "execvp",
+    "execvpe",
+    "fexecve",
+    "posix_spawn",
+    "posix_spawnp",
+    "system",
+    "popen",
+    "pclose",
+    "createprocessa",
+    "createprocessw",
+    "createprocessasusera",
+    "createprocessasuserw",
+    "createprocesswithlogonw",
+    "createprocesswithtokenw",
+    "shellexecutea",
+    "shellexecutew",
+    "shellexecuteexa",
+    "shellexecuteexw",
+    "winexec",
+}
+FORBIDDEN_PROCESS_MEMBER_TOKENS = {"Child", "run", "spawn", "spawnPath"}
 FORBIDDEN_RESOLVER_TOKENS = {
     "gethostbyname",
     "gethostbyname2",
@@ -116,6 +155,10 @@ FORBIDDEN_RESOLVER_TOKENS = {
     "gethostbyname_r",
     "gethostbyname2_r",
     "gethostbyaddr_r",
+    "getaddrinfo_a",
+    "gai_suspend",
+    "gai_cancel",
+    "gai_error",
     "getipnodebyname",
     "getipnodebyaddr",
     "freehostent",
@@ -126,6 +169,17 @@ FORBIDDEN_RESOLVER_TOKENS = {
     "res_nquery",
     "res_nsearch",
     "res_nsend",
+    "res_querydomain",
+    "res_nquerydomain",
+    "res_mkquery",
+    "res_nmkquery",
+    "res_close",
+    "res_nclose",
+    "res_ninit",
+    "res_ndestroy",
+    "res_nsendsigned",
+    "res_send_setqhook",
+    "res_send_setrhook",
     "dn_expand",
     "ns_initparse",
     "ns_parserr",
@@ -374,6 +428,10 @@ def reject_token_policy(lexical: str) -> None:
             raise RuntimeError(
                 f"replay closure contains dynamic symbol lookup token {token}"
             )
+        if lowered in FORBIDDEN_PROCESS_TOKENS:
+            raise RuntimeError(
+                f"replay closure contains process execution token {token}"
+            )
         if (
             lowered in FORBIDDEN_RESOLVER_TOKENS or
             re.fullmatch(
@@ -396,6 +454,11 @@ def reject_token_policy(lexical: str) -> None:
         ):
             raise RuntimeError(
                 f"replay closure contains known network API token {token}"
+            )
+    for member in FORBIDDEN_PROCESS_MEMBER_TOKENS:
+        if re.search(r"\.\s*" + re.escape(member) + r"\b", lexical):
+            raise RuntimeError(
+                f"replay closure contains process execution member {member}"
             )
 
 
@@ -518,6 +581,10 @@ def self_test(source: str) -> None:
         "const dynlib_state = 8;\n"
         "const dnsquery_cache = 9;\n"
         "const gethostbyname_result = 10;\n"
+        "const process_state = 11;\n"
+        "const system_result = 12;\n"
+        "const ldrloaddll_state = 13;\n"
+        "const getaddrinfo_a_result = 14;\n"
     )
     audit_source(harmless)
 
@@ -544,6 +611,12 @@ def self_test(source: str) -> None:
             source,
             f"const attempt = std.c.{token};",
             f"dynamic symbol lookup {token}",
+        )
+    for token in sorted(FORBIDDEN_PROCESS_TOKENS):
+        expect_rejected(
+            source,
+            f"const attempt = std.c.{token};",
+            f"process execution API {token}",
         )
     for token in sorted(FORBIDDEN_RESOLVER_TOKENS):
         expect_rejected(
@@ -809,6 +882,44 @@ def self_test(source: str) -> None:
             "libc socket lookup through dlsym",
             'const libc = std.c.dlopen("libc.so.6", 0);\n'
             'const attempt = std.c.dlsym(libc, "socket");',
+        ),
+        (
+            "Zig 0.16 std.process.spawn getent hosts",
+            "fn lookupHost(io_value: std.Io) !void {\n"
+            "    var child = try std.process.spawn(io_value, .{\n"
+            '        .argv = &.{ "getent", "hosts", "example.com" },\n'
+            "    });\n"
+            "    _ = try child.wait(io_value);\n"
+            "}",
+        ),
+        (
+            "process run through returned namespace",
+            "const executor = getProcessNamespace();\n"
+            "const attempt = executor.run;",
+        ),
+        (
+            "C ABI system",
+            'const attempt = std.c.system("getent hosts example.com");',
+        ),
+        (
+            "C ABI posix_spawn",
+            "const attempt = std.c.posix_spawn;",
+        ),
+        (
+            "Windows CreateProcessW",
+            "const attempt = std.os.windows.kernel32.CreateProcessW;",
+        ),
+        (
+            "Windows ShellExecuteExW",
+            "const attempt = std.os.windows.shell32.ShellExecuteExW;",
+        ),
+        (
+            "Windows native LdrLoadDll",
+            "const attempt = std.os.windows.ntdll.LdrLoadDll;",
+        ),
+        (
+            "Windows native LdrGetProcedureAddress",
+            "const attempt = std.os.windows.ntdll.LdrGetProcedureAddress;",
         ),
     )
     for description, fixture in fixtures:
