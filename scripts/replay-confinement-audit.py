@@ -95,6 +95,48 @@ WINDOWS_SOCKET_SYMBOLS = {
     "freeaddrinfoex",
     "freeaddrinfoexw",
 }
+FORBIDDEN_DYNAMIC_LOOKUP_TOKENS = {
+    "dynlib",
+    "dlopen",
+    "dlmopen",
+    "dlsym",
+    "dlvsym",
+    "loadlibrarya",
+    "loadlibraryw",
+    "loadlibraryexa",
+    "loadlibraryexw",
+    "loadpackagedlibrary",
+    "getprocaddress",
+    "getprocaddressforcaller",
+}
+FORBIDDEN_RESOLVER_TOKENS = {
+    "gethostbyname",
+    "gethostbyname2",
+    "gethostbyaddr",
+    "gethostbyname_r",
+    "gethostbyname2_r",
+    "gethostbyaddr_r",
+    "getipnodebyname",
+    "getipnodebyaddr",
+    "freehostent",
+    "res_init",
+    "res_query",
+    "res_search",
+    "res_send",
+    "res_nquery",
+    "res_nsearch",
+    "res_nsend",
+    "dn_expand",
+    "ns_initparse",
+    "ns_parserr",
+}
+WINDOWS_RESOLVER_SYMBOL_PATTERN = (
+    r"(?:"
+    r"DnsQuery(?:_[AW]|_UTF8|Ex|Raw)?|"
+    r"GetAddrInfo(?:A|W|ExA|ExW|ExCancel|ExOverlappedResult)?|"
+    r"GetHostBy(?:Name|Name2|Addr)(?:A|W)?"
+    r")"
+)
 WINDOWS_SOCKET_VARIANT_TESTS = (
     "WSASocketA",
     "WSASocketW",
@@ -112,6 +154,23 @@ WINDOWS_SOCKET_VARIANT_TESTS = (
     "FreeAddrInfoW",
     "GetNameInfoA",
     "GetNameInfoW",
+)
+WINDOWS_RESOLVER_VARIANT_TESTS = (
+    "DnsQuery_A",
+    "DnsQuery_W",
+    "DnsQuery_UTF8",
+    "DnsQueryEx",
+    "DnsQueryRaw",
+    "GetAddrInfoA",
+    "GetAddrInfoW",
+    "GetAddrInfoExA",
+    "GetAddrInfoExW",
+    "GetAddrInfoExCancel",
+    "GetAddrInfoExOverlappedResult",
+    "GetHostByNameA",
+    "GetHostByNameW",
+    "GetHostByName2A",
+    "GetHostByAddrW",
 )
 FORBIDDEN_NETWORK_TOKENS = {
     "http",
@@ -311,6 +370,21 @@ def reject_token_policy(lexical: str) -> None:
             raise RuntimeError(
                 f"replay closure contains forbidden internal member {token}"
             )
+        if lowered in FORBIDDEN_DYNAMIC_LOOKUP_TOKENS:
+            raise RuntimeError(
+                f"replay closure contains dynamic symbol lookup token {token}"
+            )
+        if (
+            lowered in FORBIDDEN_RESOLVER_TOKENS or
+            re.fullmatch(
+                WINDOWS_RESOLVER_SYMBOL_PATTERN,
+                token,
+                flags=re.IGNORECASE,
+            )
+        ):
+            raise RuntimeError(
+                f"replay closure contains resolver API token {token}"
+            )
         if (
             lowered in WINDOWS_SOCKET_SYMBOLS or
             lowered in FORBIDDEN_NETWORK_TOKENS or
@@ -441,6 +515,9 @@ def self_test(source: str) -> None:
         "const send_message = 5;\n"
         "const recvmmsg_count = 6;\n"
         "const freeaddrinfo_cache = 7;\n"
+        "const dynlib_state = 8;\n"
+        "const dnsquery_cache = 9;\n"
+        "const gethostbyname_result = 10;\n"
     )
     audit_source(harmless)
 
@@ -461,6 +538,24 @@ def self_test(source: str) -> None:
             source,
             f"const attempt = std.os.windows.ws2_32.{token};",
             f"Windows socket variant {token}",
+        )
+    for token in sorted(FORBIDDEN_DYNAMIC_LOOKUP_TOKENS):
+        expect_rejected(
+            source,
+            f"const attempt = std.c.{token};",
+            f"dynamic symbol lookup {token}",
+        )
+    for token in sorted(FORBIDDEN_RESOLVER_TOKENS):
+        expect_rejected(
+            source,
+            f"const attempt = std.c.{token};",
+            f"legacy resolver API {token}",
+        )
+    for token in WINDOWS_RESOLVER_VARIANT_TESTS:
+        expect_rejected(
+            source,
+            f"const attempt = std.os.windows.ws2_32.{token};",
+            f"Windows resolver variant {token}",
         )
 
     fixtures = (
@@ -704,6 +799,16 @@ def self_test(source: str) -> None:
         (
             "verified_fetch download member",
             "const attempt = verified_fetch.download;",
+        ),
+        (
+            "libc socket lookup through DynLib",
+            'const libc = try std.DynLib.open("libc.so.6");\n'
+            'const attempt = libc.lookup(*const fn () c_int, "socket");',
+        ),
+        (
+            "libc socket lookup through dlsym",
+            'const libc = std.c.dlopen("libc.so.6", 0);\n'
+            'const attempt = std.c.dlsym(libc, "socket");',
         ),
     )
     for description, fixture in fixtures:

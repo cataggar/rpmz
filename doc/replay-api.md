@@ -301,13 +301,15 @@ requires every `@import` to contain exactly one allowlisted literal string. It
 rejects every `@cImport` and `@extern`, dynamic reflection primitives such as
 `@field`, and exact identifier tokens for known standard and platform socket
 namespaces and APIs, including address lookup, connect/listen, socket options,
-send/receive, Linux batched messages, and Winsock variants. It also rejects
-forbidden members of network-adjacent internal modules such as repository
-live-solving or verified fetching. This fail-closed token policy covers
-aliases, blocks, function returns, aggregates, and parenthesized access, but is
-not a proof against arbitrary numeric syscalls or machine code. Binary-level
-zero-request tests remain complementary, and callers should still enforce
-OS-level network isolation.
+send/receive, Linux batched messages, legacy resolver/DNS families, and
+Winsock variants. Dynamic-library loaders and symbol lookup APIs are denied so
+replay cannot recover socket entry points from libc or a platform library. The
+audit also rejects forbidden members of network-adjacent internal modules such
+as repository live-solving or verified fetching. This fail-closed token policy
+covers aliases, blocks, function returns, aggregates, and parenthesized access,
+but is not a proof against arbitrary numeric syscalls or machine code.
+Binary-level zero-request tests remain complementary, and callers should still
+enforce OS-level network isolation.
 
 This design is deliberately narrower than `--cacheonly`: cache-only mode still
 performs an ordinary solve over cached repository state, while replay treats
