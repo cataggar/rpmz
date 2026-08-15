@@ -47,6 +47,13 @@ identity and position, including interleaving and shared priors. Upgrade and
 reinstall priors must be exactly representable by the native replacement item;
 export rejects any order or multi-prior graph it cannot preserve.
 
+`tdnf replay` emits the same canonical `tdnf.replay-result/v1` document for a
+successfully invoked replay, including validation and transaction failures,
+whether JSON mode was selected with `--json` or the `tdnfj` alias. Malformed
+replay invocations in JSON mode emit one
+`tdnf.replay-invocation-error/v1` document on stdout with stable `error` and
+human-readable `message` fields; diagnostics and usage remain on stderr.
+
 If the pinned target has no rpmdb main file, that absence is authoritative.
 Replay completes fallible pure preparation, revalidates the absence, then
 creates the new main file exclusively through the confined SQLite lease. The

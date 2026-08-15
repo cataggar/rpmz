@@ -831,6 +831,72 @@ fn expectUsage(binary: []const u8, args: []const []const u8) !void {
     ) != null);
 }
 
+fn expectJsonUsage(
+    binary: []const u8,
+    args: []const []const u8,
+    expected_error: []const u8,
+) !void {
+    return expectJsonUsageArgv0(binary, binary, args, expected_error);
+}
+
+fn expectJsonUsageArgv0(
+    binary: []const u8,
+    argv0: []const u8,
+    args: []const []const u8,
+    expected_error: []const u8,
+) !void {
+    const result = if (std.mem.eql(u8, binary, argv0))
+        try runCli(binary, args)
+    else result: {
+        const binary_absolute = try std.Io.Dir.cwd().realPathFileAlloc(
+            io,
+            binary,
+            allocator,
+        );
+        defer allocator.free(binary_absolute);
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.symLink(io, binary_absolute, argv0, .{});
+        var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const path_length = try tmp.dir.realPath(io, &path_buffer);
+        const alias_binary = try std.fs.path.join(
+            allocator,
+            &.{ path_buffer[0..path_length], argv0 },
+        );
+        defer allocator.free(alias_binary);
+        break :result try runCli(alias_binary, args);
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    try std.testing.expectEqual(@as(u8, 2), exitCode(result));
+    try std.testing.expect(result.stdout.len != 0);
+    try std.testing.expect(!std.mem.endsWith(u8, result.stdout, "\n"));
+    const parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        result.stdout,
+        .{},
+    );
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 3), parsed.value.object.count());
+    try std.testing.expectEqualStrings(
+        "tdnf.replay-invocation-error/v1",
+        parsed.value.object.get("schema").?.string,
+    );
+    try std.testing.expectEqualStrings(
+        expected_error,
+        parsed.value.object.get("error").?.string,
+    );
+    try std.testing.expect(
+        parsed.value.object.get("message").?.string.len != 0,
+    );
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        result.stderr,
+        "Usage: tdnf replay",
+    ) != null);
+}
+
 test "replay-only options preserve legacy JSON and diagnostic channels" {
     const binary = try tdnfPath();
     defer allocator.free(binary);
@@ -924,6 +990,8 @@ test "replay CLI success is canonical offline and bypasses normal initialization
     const api_root = try fixture.createDir("api-root");
     const network_root = try fixture.createDir("network-root");
     const parity_root = try fixture.createDir("parity-root");
+    const json_root = try fixture.createDir("json-root");
+    const alias_root = try fixture.createDir("alias-root");
     const trap_root = try fixture.createDir("trap-root");
 
     const expected = try apiCanonical(bundle, api_root, "x86_64");
@@ -971,6 +1039,49 @@ test "replay CLI success is canonical offline and bypasses normal initialization
     defer allocator.free(options_first.stderr);
     try std.testing.expectEqual(@as(u8, 0), exitCode(options_first));
     try std.testing.expectEqualStrings(network_result.stdout, options_first.stdout);
+
+    const json_result = try runCli(binary, &.{
+        "--json",
+        "replay",
+        "--installroot",
+        json_root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        bundle,
+    });
+    defer allocator.free(json_result.stdout);
+    defer allocator.free(json_result.stderr);
+    try std.testing.expectEqual(@as(u8, 0), exitCode(json_result));
+    try std.testing.expectEqualStrings(network_result.stdout, json_result.stdout);
+
+    const binary_absolute = try std.Io.Dir.cwd().realPathFileAlloc(
+        io,
+        binary,
+        allocator,
+    );
+    defer allocator.free(binary_absolute);
+    try fixture.tmp.dir.symLink(io, binary_absolute, "tdnfj", .{});
+    const alias_binary = try std.fs.path.join(
+        allocator,
+        &.{ fixture.base, "tdnfj" },
+    );
+    defer allocator.free(alias_binary);
+    const alias_result = try runCli(alias_binary, &.{
+        "replay",
+        "--installroot",
+        alias_root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+        bundle,
+    });
+    defer allocator.free(alias_result.stdout);
+    defer allocator.free(alias_result.stderr);
+    try std.testing.expectEqual(@as(u8, 0), exitCode(alias_result));
+    try std.testing.expectEqualStrings(network_result.stdout, alias_result.stdout);
 
     try configureRepositoryTrap(&fixture, "trap-root");
     const ordinary = try runCli(binary, &.{
@@ -1306,17 +1417,35 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         "replay",
         "",
     });
-    try expectUsage(binary, &.{
-        "replay",
+    try expectJsonUsage(binary, &.{
         "--json",
+        "replay",
+    }, "missing_bundle");
+    try expectJsonUsage(binary, &.{
         "--installroot",
         root,
         "--rpmdb-path",
         "/var/lib/rpm",
         "--forcearch",
         "x86_64",
+        "--json",
+        "replay",
+    }, "missing_bundle");
+    try expectJsonUsage(binary, &.{
+        "--json",
+        "replay",
+        "--installroot",
+        root,
+        "--rpmdb-path",
+        "/var/lib/rpm",
+        "--forcearch",
+        "x86_64",
+    }, "missing_bundle");
+    try expectJsonUsage(binary, &.{
+        "replay",
+        "--json",
         bundle,
-    });
+    }, "missing_install_root");
     try expectUsage(binary, &.{
         "replay",
         "--downloaddir",
@@ -1329,6 +1458,13 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         "x86_64",
         bundle,
     });
+
+    try expectJsonUsageArgv0(
+        binary,
+        "tdnfj",
+        &.{"replay"},
+        "missing_bundle",
+    );
 
     const unsafe = try runCli(binary, &.{
         "replay",

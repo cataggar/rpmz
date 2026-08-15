@@ -47,6 +47,8 @@ const replay_exit = struct {
     const transaction: u8 = 4;
 };
 
+const replay_invocation_error_schema = "tdnf.replay-invocation-error/v1";
+
 const ReplayArgs = struct {
     bundle_directory: []const u8,
     install_root: []const u8,
@@ -74,6 +76,11 @@ const ReplayParseError = error{
 const OptionMatch = union(enum) {
     separate,
     attached: []const u8,
+};
+
+const ReplayParseDiagnostic = struct {
+    code: [*:0]const u8,
+    message: [*:0]const u8,
 };
 
 const command_map = [_]abi.TDNF_CLI_CMD_MAP{
@@ -206,6 +213,7 @@ fn replayOptionValue(
 
 fn parseReplayInvocation(
     argv: []const [*:0]const u8,
+    json_output: bool,
 ) ReplayParseError!ReplayInvocation {
     var install_root: ?[]const u8 = null;
     var rpmdb_path: ?[]const u8 = null;
@@ -228,6 +236,8 @@ fn parseReplayInvocation(
                 help = true;
                 continue;
             }
+            if (json_output and isJsonOutputOption(arg))
+                continue;
 
             if (matchNamedOption(arg, "installroot")) |matched| {
                 if (install_root != null) return error.DuplicateOption;
@@ -332,6 +342,20 @@ fn jsonOutputRequested(argv: []const [*:0]const u8) bool {
     return false;
 }
 
+fn isJsonOutputOption(arg: []const u8) bool {
+    const prefix_len: usize = if (std.mem.startsWith(u8, arg, "--"))
+        2
+    else if (std.mem.startsWith(u8, arg, "-"))
+        1
+    else
+        return false;
+    const body = arg[prefix_len..];
+    if (body.len == 0 or std.mem.indexOfScalar(u8, body, '=') != null)
+        return false;
+    const matched = cli.matchLegacyLongOption(body) orelse return false;
+    return matched.arity == .none and std.mem.eql(u8, matched.name, "json");
+}
+
 fn isReplayInvocation(argv: []const [*:0]const u8) bool {
     var index: usize = 1;
     while (index < argv.len) : (index += 1) {
@@ -348,20 +372,51 @@ fn isReplayInvocation(argv: []const [*:0]const u8) bool {
     return false;
 }
 
+fn replayParseDiagnostic(err: ReplayParseError) ReplayParseDiagnostic {
+    return switch (err) {
+        error.DuplicateOption => .{
+            .code = "duplicate_option",
+            .message = "target options must appear exactly once",
+        },
+        error.ExtraOperand => .{
+            .code = "extra_operand",
+            .message = "expected exactly one bundle directory",
+        },
+        error.MissingBundle => .{
+            .code = "missing_bundle",
+            .message = "missing bundle directory",
+        },
+        error.EmptyBundle => .{
+            .code = "empty_bundle",
+            .message = "bundle directory must be non-empty",
+        },
+        error.MissingInstallRoot => .{
+            .code = "missing_install_root",
+            .message = "missing required --installroot",
+        },
+        error.MissingRpmDbPath => .{
+            .code = "missing_rpmdb_path",
+            .message = "missing required --rpmdb-path",
+        },
+        error.MissingArchitecture => .{
+            .code = "missing_architecture",
+            .message = "missing required --forcearch",
+        },
+        error.MissingOptionValue => .{
+            .code = "missing_option_value",
+            .message = "target option requires a non-empty value",
+        },
+        error.UnsupportedOption => .{
+            .code = "unsupported_option",
+            .message = "unsupported option for offline replay",
+        },
+    };
+}
+
 fn printReplayUsage(parse_error: ?ReplayParseError) void {
     if (parse_error) |err| {
-        const message = switch (err) {
-            error.DuplicateOption => "target options must appear exactly once",
-            error.ExtraOperand => "expected exactly one bundle directory",
-            error.MissingBundle => "missing bundle directory",
-            error.EmptyBundle => "bundle directory must be non-empty",
-            error.MissingInstallRoot => "missing required --installroot",
-            error.MissingRpmDbPath => "missing required --rpmdb-path",
-            error.MissingArchitecture => "missing required --forcearch",
-            error.MissingOptionValue => "target option requires a non-empty value",
-            error.UnsupportedOption => "unsupported option for offline replay",
-        };
-        common.log(LOG_ERR, "tdnf replay: %s\n", .{message});
+        const diagnostic = replayParseDiagnostic(err);
+        common.log(LOG_ERR, "tdnf replay: %s\n", .{diagnostic.message});
     }
     _ = c.fwrite(replay_usage.ptr, 1, replay_usage.len, c.stderr);
     _ = c.fflush(c.stderr);
@@ -424,6 +479,31 @@ fn writeReplayResult(bytes: []const u8) bool {
     return c.fflush(c.stdout) == 0;
 }
 
+fn writeReplayInvocationError(err: ReplayParseError) bool {
+    const diagnostic = replayParseDiagnostic(err);
+    var jd: ?*jsondump.JsonDump = jsondump.jd_create(0);
+    if (jd == null) return false;
+    defer destroyJsonDump(&jd);
+
+    if (checkJsonResult(jsondump.jd_map_start(jd)) != 0) return false;
+    if (checkJsonResult(jsondump.jd_map_add_string(
+        jd,
+        "schema",
+        replay_invocation_error_schema,
+    )) != 0) return false;
+    if (checkJsonResult(jsondump.jd_map_add_string(
+        jd,
+        "error",
+        diagnostic.code,
+    )) != 0) return false;
+    if (checkJsonResult(jsondump.jd_map_add_string(
+        jd,
+        "message",
+        diagnostic.message,
+    )) != 0) return false;
+    return writeReplayResult(std.mem.span(jd.?.buf));
+}
+
 fn runReplay(invocation: ReplayArgs) u8 {
     const allocator = std.heap.c_allocator;
     var io_state: std.Io.Threaded = .init(allocator, .{});
@@ -468,9 +548,11 @@ fn runReplay(invocation: ReplayArgs) u8 {
     };
 }
 
-fn dispatchReplay(argv: []const [*:0]const u8) u8 {
-    const invocation = parseReplayInvocation(argv) catch |err| {
+fn dispatchReplay(argv: []const [*:0]const u8, json_output: bool) u8 {
+    const invocation = parseReplayInvocation(argv, json_output) catch |err| {
         printReplayUsage(err);
+        if (json_output and !writeReplayInvocationError(err))
+            return replay_exit.internal;
         return replay_exit.usage;
     };
     return switch (invocation) {
@@ -803,9 +885,9 @@ fn TDNFCliInvokeMark(
 
 pub fn main(init: std.process.Init.Minimal) u8 {
     const argv = init.args.vector;
-    if (isReplayInvocation(argv))
-        return dispatchReplay(argv);
     const requested_json = jsonOutputRequested(argv);
+    if (isReplayInvocation(argv))
+        return dispatchReplay(argv, requested_json);
 
     const argc: c_int = @intCast(argv.len);
     const argv_ptr: [*c]?[*:0]u8 = @ptrCast(@constCast(argv.ptr));
