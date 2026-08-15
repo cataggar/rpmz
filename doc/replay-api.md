@@ -253,9 +253,9 @@ tdnf replay \
   /srv/bundles/update-2026-08
 ```
 
-For defense in depth, run the same command inside the operating system's
-network-isolation mechanism, for example a container or namespace with no
-network interface:
+To enforce offline behavior for payload code, run the command inside the
+operating system's network-isolation mechanism, for example a container or
+namespace with no network interface:
 
 ```sh
 unshare --net -- \
@@ -296,36 +296,31 @@ stdout empty, and exits zero.
 Callers should select behavior from the exit status and the versioned stdout
 document, not by parsing human-readable stderr.
 
-## Trusted-code network confinement
+## Replay entry-point audit and payload isolation
 
 The replay API exposes no URL, repository configuration, proxy, credential,
 cache, mirror, fetch callback, or solver job. Its project-owned metadata
-decompression and checksum verification operate only on already-opened local
-bundle bytes. A static confinement audit pins that trusted-code dependency
-boundary and requires every `@import` to contain exactly one allowlisted
-literal string. It
-rejects every `@cImport` and `@extern`, dynamic reflection primitives such as
-`@field`, and exact identifier tokens for known standard and platform socket
-namespaces and APIs, including address lookup, connect/listen, socket options,
-send/receive, Linux batched messages, legacy resolver/DNS families, and
-Winsock variants, including asynchronous and resolver-state entry points.
-Dynamic-library loaders and symbol lookup APIs, including Windows native
-loader calls, are denied so replay cannot recover socket entry points from
-libc or a platform library. Process execution APIs are also denied, including
-Zig child spawning, POSIX exec/spawn and shell calls, and Windows process/shell
-launch families. The audit also rejects forbidden members of network-adjacent
-internal modules such as repository live-solving or verified fetching. This
-fail-closed token policy covers aliases, blocks, function returns, aggregates,
-and parenthesized access, but is not a proof against arbitrary numeric syscalls
-or machine code.
+decompression and checksum verification operate on already-opened local bundle
+bytes.
 
-This audit covers only the project-owned replay implementation. RPM payload
-scriptlets, triggers, embedded interpreters, and descendant processes are
-untrusted execution outside that static guarantee. They can open sockets,
-resolve names, load code, or spawn other processes. Binary-level zero-request
-tests therefore remain complementary rather than proving payload confinement.
-Callers must place replay in an OS-level no-network namespace or equivalent
-network isolation when the entire transaction must be offline.
+The replay entry-point audit reads only `client/replay.zig`; it does not
+inspect or prove transitive implementation dependencies. It validates that
+file's direct `@import` literals and allowlist, rejects foreign/dynamic APIs and
+reflection, and denies known network, process, loader, resolver, and
+network-adjacent internal member tokens in that entry-point source. These
+checks are useful regression guards, not a confinement proof for imported
+modules, arbitrary numeric syscalls, generated machine code, or RPM payloads.
+
+RPM payload scriptlets, triggers, embedded interpreters, and descendant
+processes are untrusted execution outside the entry-point audit. They can open
+sockets, resolve names, load code, or spawn other processes. Binary-level
+zero-request tests remain complementary rather than proving payload
+confinement.
+
+OS-level network isolation is required whenever offline behavior must include
+RPM scriptlets, triggers, interpreters, or descendant processes. A no-network
+namespace or equivalent isolation is the enforcement boundary for that
+payload code.
 
 This design is deliberately narrower than `--cacheonly`: cache-only mode still
 performs an ordinary solve over cached repository state, while replay treats

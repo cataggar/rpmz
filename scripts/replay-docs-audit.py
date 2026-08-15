@@ -30,6 +30,41 @@ ENUM_SECTIONS = {
         "### Transaction failure semantics",
     ),
 }
+MANDATORY_REPLAY_CLAUSES = (
+    (
+        "The replay entry-point audit reads only `client/replay.zig`; "
+        "it does not inspect or prove transitive implementation dependencies."
+    ),
+    (
+        "RPM payload scriptlets, triggers, embedded interpreters, and "
+        "descendant processes are untrusted execution outside the "
+        "entry-point audit."
+    ),
+    (
+        "OS-level network isolation is required whenever offline behavior "
+        "must include RPM scriptlets, triggers, interpreters, or descendant "
+        "processes."
+    ),
+    (
+        "A no-network namespace or equivalent isolation is the enforcement "
+        "boundary for that payload code."
+    ),
+)
+CONTRADICTORY_REPLAY_CLAUSES = (
+    "callers need not enforce network isolation",
+    "callers need not use network isolation",
+    "network isolation is optional",
+    "no-network namespace is optional",
+    "network isolation is recommended only",
+    "network isolation is only recommended",
+    "network isolation is defense in depth",
+    "replay cannot network",
+    "replay cannot make network requests",
+    "replay never makes network requests",
+    "replay is guaranteed not to make network requests",
+    "the audit covers the full replay closure",
+    "the audit proves transitive implementation dependencies",
+)
 
 
 def enum_members(source: str, name: str) -> list[str]:
@@ -59,6 +94,15 @@ def const_string(source: str, name: str) -> str:
 
 def require(text: str, needle: str, description: str) -> None:
     if needle not in text:
+        raise RuntimeError(f"replay documentation is missing {description}")
+
+
+def normalize_prose(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def require_clause(text: str, clause: str, description: str) -> None:
+    if normalize_prose(clause) not in normalize_prose(text):
         raise RuntimeError(f"replay documentation is missing {description}")
 
 
@@ -179,16 +223,23 @@ def audit_contract(
         "stdout",
         "stderr",
         "OS-level network isolation",
-        "project-owned replay implementation",
         "RPM payload scriptlets",
-        "outside that static guarantee",
-        "no-network namespace",
         "descendant processes",
         "validation precedes mutation",
         "recorded sequence",
         "first appearance in",
     ):
         require(document.lower(), term.lower(), term)
+    for clause in MANDATORY_REPLAY_CLAUSES:
+        require_clause(document, clause, f"mandatory clause: {clause}")
+    for clause in CONTRADICTORY_REPLAY_CLAUSES:
+        for text, name in (
+            (document, "replay documentation"),
+            (readme, "README"),
+            (bundle_doc, "transaction bundle documentation"),
+        ):
+            if normalize_prose(clause) in normalize_prose(text):
+                raise RuntimeError(f"{name} contains contradiction: {clause}")
 
     for text, name in (
         (plan_doc, "transaction plan documentation"),
@@ -207,6 +258,15 @@ def audit_contract(
     require(readme, ".replay", "README public replay namespace")
     require(readme, "RPM payload scriptlets", "README payload caveat")
     require(readme, "no-network namespace", "README isolation requirement")
+    require_clause(
+        readme,
+        (
+            "callers must use an OS-level no-network namespace or equivalent "
+            "isolation whenever offline behavior must include payload "
+            "execution."
+        ),
+        "README mandatory payload isolation",
+    )
     require(
         bundle_doc,
         "outside that guarantee",
@@ -235,6 +295,21 @@ def expect_rejected(run, description: str) -> None:
     except RuntimeError:
         return
     raise RuntimeError(f"negative self-test was accepted: {description}")
+
+
+def remove_normalized_clause(text: str, clause: str) -> str:
+    pattern = re.escape(clause)
+    pattern = pattern.replace(r"\ ", r"\s+")
+    changed, count = re.subn(
+        pattern,
+        "REMOVED",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if count != 1:
+        raise RuntimeError(f"self-test clause is missing: {clause}")
+    return changed
 
 
 def self_test(inputs: tuple[str, str, str, str, str, str]) -> None:
@@ -275,18 +350,33 @@ def self_test(inputs: tuple[str, str, str, str, str, str]) -> None:
         f"accepted option spelling {spelling} omitted",
     )
 
-    changed = document.replace("outside that static guarantee", "REMOVED")
-    expect_rejected(
-        lambda: audit_contract(
-            source,
-            options_source,
-            changed,
-            plan_doc,
-            bundle_doc,
-            readme,
-        ),
-        "RPM payload confinement caveat omitted",
-    )
+    for clause in MANDATORY_REPLAY_CLAUSES:
+        changed = remove_normalized_clause(document, clause)
+        expect_rejected(
+            lambda changed=changed: audit_contract(
+                source,
+                options_source,
+                changed,
+                plan_doc,
+                bundle_doc,
+                readme,
+            ),
+            f"mandatory replay clause omitted: {clause}",
+        )
+
+    for clause in CONTRADICTORY_REPLAY_CLAUSES:
+        changed = document + "\n\n" + clause + ".\n"
+        expect_rejected(
+            lambda changed=changed: audit_contract(
+                source,
+                options_source,
+                changed,
+                plan_doc,
+                bundle_doc,
+                readme,
+            ),
+            f"contradictory replay clause accepted: {clause}",
+        )
 
 
 def load_inputs() -> tuple[str, str, str, str, str, str]:

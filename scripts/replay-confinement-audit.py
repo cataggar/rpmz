@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin project-owned replay code to its trusted offline dependency boundary."""
+"""Audit the direct source boundary of the public replay entry point."""
 
 import argparse
 from dataclasses import dataclass
@@ -375,7 +375,7 @@ def import_calls(lexed: Lexed) -> list[tuple[int, int, str]]:
         opening = lexed.code.find("(", match.start(), match.end())
         close = matching_parenthesis(lexed.code, opening)
         if close is None:
-            raise RuntimeError("replay closure contains malformed @import")
+            raise RuntimeError("replay entry point contains malformed @import")
         tokens = [
             token
             for token in lexed.strings
@@ -422,15 +422,15 @@ def reject_token_policy(lexical: str) -> None:
         lowered = token.lower()
         if token in FORBIDDEN_INTERNAL_MEMBER_TOKENS:
             raise RuntimeError(
-                f"replay closure contains forbidden internal member {token}"
+                f"replay entry point contains forbidden internal member {token}"
             )
         if lowered in FORBIDDEN_DYNAMIC_LOOKUP_TOKENS:
             raise RuntimeError(
-                f"replay closure contains dynamic symbol lookup token {token}"
+                f"replay entry point contains dynamic symbol lookup token {token}"
             )
         if lowered in FORBIDDEN_PROCESS_TOKENS:
             raise RuntimeError(
-                f"replay closure contains process execution token {token}"
+                f"replay entry point contains process execution token {token}"
             )
         if (
             lowered in FORBIDDEN_RESOLVER_TOKENS or
@@ -441,7 +441,7 @@ def reject_token_policy(lexical: str) -> None:
             )
         ):
             raise RuntimeError(
-                f"replay closure contains resolver API token {token}"
+                f"replay entry point contains resolver API token {token}"
             )
         if (
             lowered in WINDOWS_SOCKET_SYMBOLS or
@@ -453,12 +453,12 @@ def reject_token_policy(lexical: str) -> None:
             )
         ):
             raise RuntimeError(
-                f"replay closure contains known network API token {token}"
+                f"replay entry point contains known network API token {token}"
             )
     for member in FORBIDDEN_PROCESS_MEMBER_TOKENS:
         if re.search(r"\.\s*" + re.escape(member) + r"\b", lexical):
             raise RuntimeError(
-                f"replay closure contains process execution member {member}"
+                f"replay entry point contains process execution member {member}"
             )
 
 
@@ -478,9 +478,9 @@ def matching_parenthesis(code: str, opening: int) -> int | None:
 
 def reject_foreign_socket_apis(lexical: str) -> None:
     if re.search(r"@cImport\s*\(", lexical):
-        raise RuntimeError("replay closure contains @cImport")
+        raise RuntimeError("replay entry point contains @cImport")
     if re.search(r"@extern\s*\(", lexical):
-        raise RuntimeError("replay closure contains @extern")
+        raise RuntimeError("replay entry point contains @extern")
     extern_socket = re.search(
         "".join((
             r"\bextern\s+(?:\"\"\s+)?fn\s+",
@@ -492,7 +492,7 @@ def reject_foreign_socket_apis(lexical: str) -> None:
     )
     if extern_socket:
         raise RuntimeError(
-            "replay closure declares socket-related extern function {}".format(
+            "replay entry point declares socket-related extern function {}".format(
                 extern_socket.group(0)
             )
         )
@@ -542,7 +542,7 @@ def audit_source(source: str) -> None:
     for builtin in FORBIDDEN_REFLECTION_BUILTINS:
         if re.search(r"@" + re.escape(builtin) + r"\s*\(", lexical):
             raise RuntimeError(
-                f"replay closure contains dynamic reflection builtin @{builtin}"
+                f"replay entry point contains dynamic reflection builtin @{builtin}"
             )
     reject_token_policy(lexical)
     reject_foreign_socket_apis(lexical)
@@ -934,15 +934,15 @@ def main() -> int:
         source = REPLAY.read_text(encoding="utf-8")
         if args.self_test:
             self_test(source)
-            print("Trusted replay confinement audit self-tests passed")
+            print("Replay entry-point audit self-tests passed")
         else:
             audit_source(source)
             print(
-                "Trusted replay implementation confinement audit passed "
+                "Replay entry-point audit passed "
                 "(imports, foreign/reflection APIs, and denied tokens)"
             )
     except (OSError, RuntimeError) as error:
-        print(f"replay confinement audit failed: {error}", file=sys.stderr)
+        print(f"replay entry-point audit failed: {error}", file=sys.stderr)
         return 1
     return 0
 

@@ -65,8 +65,10 @@ Application source can use:
 
 Replay executes RPM payload scriptlets and triggers. That untrusted payload
 code and its descendants can launch processes or access the network, so callers
-must use an OS-level no-network namespace or equivalent isolation when the
-whole transaction must be offline.
+must use an OS-level no-network namespace or equivalent isolation whenever
+offline behavior must include payload execution. The replay entry-point audit
+checks only `client/replay.zig`; it does not inspect transitive dependencies or
+payload code.
 
 Those namespaces are the whole supported surface. Consumers should not import
 files from the component directories directly. There is no public C SDK,

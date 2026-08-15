@@ -46,7 +46,7 @@ METRIC_LABELS = {
     "public_zig_module_declarations": "Public tdnf Zig modules",
     "public_zig_api_audit_steps": "Public Zig API audit steps",
     "replay_docs_audit_steps": "Replay documentation audit steps",
-    "replay_confinement_audit_steps": "Replay confinement audit steps",
+    "replay_confinement_audit_steps": "Replay entry-point audit steps",
 }
 
 ZERO_ONLY_METRICS = {
