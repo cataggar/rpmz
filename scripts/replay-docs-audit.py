@@ -14,6 +14,7 @@ REPLAY_DOC = ROOT / "doc" / "replay-api.md"
 PLAN_DOC = ROOT / "doc" / "transaction-plan-api.md"
 BUNDLE_DOC = ROOT / "doc" / "transaction-bundle.md"
 README = ROOT / "README.md"
+CLI_SOURCE = ROOT / "tools" / "cli" / "main.zig"
 
 ENUM_SECTIONS = {
     "Status": ("#### Status values", "#### Validation failure values"),
@@ -51,19 +52,42 @@ MANDATORY_REPLAY_CLAUSES = (
     ),
 )
 CONTRADICTORY_REPLAY_CLAUSES = (
-    "callers need not enforce network isolation",
-    "callers need not use network isolation",
-    "network isolation is optional",
-    "no-network namespace is optional",
-    "network isolation is recommended only",
-    "network isolation is only recommended",
-    "network isolation is defense in depth",
     "replay cannot network",
     "replay cannot make network requests",
     "replay never makes network requests",
     "replay is guaranteed not to make network requests",
     "the audit covers the full replay closure",
     "the audit proves transitive implementation dependencies",
+)
+PAYLOAD_CONTEXT_TERMS = (
+    "payload",
+    "scriptlet",
+    "trigger",
+    "descendant",
+    "interpreter",
+)
+ISOLATION_TERMS = (
+    "network isolation",
+    "no-network namespace",
+    "network namespace",
+)
+ISOLATION_CONTRADICTION_PATTERNS = (
+    r"\bnot required\b",
+    r"\bneed not\b",
+    r"\bmay omit\b",
+    r"\bcan omit\b",
+    r"\boptional\b",
+    r"\bunnecessary\b",
+    r"\bis not mandatory\b",
+    r"\bdoes not require\b",
+    r"\bnot need\b",
+    r"\brecommended only\b",
+    r"\bonly recommended\b",
+    (
+        r"\b(?:run|execute|operate|proceed|be run|be executed)\b"
+        r".{0,80}\bwithout (?:os-level )?"
+        r"(?:network isolation|a no-network namespace|isolation)\b"
+    ),
 )
 
 
@@ -104,6 +128,33 @@ def normalize_prose(text: str) -> str:
 def require_clause(text: str, clause: str, description: str) -> None:
     if normalize_prose(clause) not in normalize_prose(text):
         raise RuntimeError(f"replay documentation is missing {description}")
+
+
+def prose_clauses(text: str) -> list[str]:
+    return [
+        normalize_prose(clause)
+        for clause in re.split(r"(?<=[.!?])\s+|\n\s*\n|\|", text)
+        if clause.strip()
+    ]
+
+
+def isolation_contradictions(text: str) -> list[str]:
+    contradictions = []
+    for clause in prose_clauses(text):
+        if not any(term in clause for term in PAYLOAD_CONTEXT_TERMS):
+            continue
+        if not any(term in clause for term in ISOLATION_TERMS):
+            continue
+        if any(
+            re.search(pattern, clause)
+            for pattern in ISOLATION_CONTRADICTION_PATTERNS
+        ):
+            contradictions.append(clause)
+    return contradictions
+
+
+def zig_multiline_prose(source: str) -> str:
+    return re.sub(r"(?m)^\s*\\\\", "", source)
 
 
 def require_order(text: str, values: list[str], description: str) -> None:
@@ -167,6 +218,7 @@ def audit_contract(
     plan_doc: str,
     bundle_doc: str,
     readme: str,
+    cli_source: str,
 ) -> None:
     for enum_name, boundaries in ENUM_SECTIONS.items():
         enum_section = section(document, *boundaries)
@@ -232,14 +284,24 @@ def audit_contract(
         require(document.lower(), term.lower(), term)
     for clause in MANDATORY_REPLAY_CLAUSES:
         require_clause(document, clause, f"mandatory clause: {clause}")
+    cli_prose = zig_multiline_prose(cli_source)
+    semantic_documents = (
+        (document, "replay documentation"),
+        (plan_doc, "transaction plan documentation"),
+        (bundle_doc, "transaction bundle documentation"),
+        (readme, "README"),
+        (cli_prose, "CLI help source"),
+    )
     for clause in CONTRADICTORY_REPLAY_CLAUSES:
-        for text, name in (
-            (document, "replay documentation"),
-            (readme, "README"),
-            (bundle_doc, "transaction bundle documentation"),
-        ):
+        for text, name in semantic_documents:
             if normalize_prose(clause) in normalize_prose(text):
                 raise RuntimeError(f"{name} contains contradiction: {clause}")
+    for text, name in semantic_documents:
+        contradictions = isolation_contradictions(text)
+        if contradictions:
+            raise RuntimeError(
+                f"{name} makes payload isolation optional: {contradictions[0]}"
+            )
 
     for text, name in (
         (plan_doc, "transaction plan documentation"),
@@ -271,6 +333,14 @@ def audit_contract(
         bundle_doc,
         "outside that guarantee",
         "transaction bundle payload caveat",
+    )
+    require_clause(
+        cli_prose,
+        (
+            "OS-level no-network isolation is required when offline behavior "
+            "must include payload execution."
+        ),
+        "CLI mandatory payload isolation",
     )
 
 
@@ -312,8 +382,16 @@ def remove_normalized_clause(text: str, clause: str) -> str:
     return changed
 
 
-def self_test(inputs: tuple[str, str, str, str, str, str]) -> None:
-    source, options_source, document, plan_doc, bundle_doc, readme = inputs
+def self_test(inputs: tuple[str, str, str, str, str, str, str]) -> None:
+    (
+        source,
+        options_source,
+        document,
+        plan_doc,
+        bundle_doc,
+        readme,
+        cli_source,
+    ) = inputs
     audit_contract(*inputs)
 
     for enum_name, tag in (
@@ -332,6 +410,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str]) -> None:
                 plan_doc,
                 bundle_doc,
                 readme,
+                cli_source,
             ),
             f"{enum_name}.{tag} missing from its own section",
         )
@@ -346,6 +425,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str]) -> None:
             plan_doc,
             bundle_doc,
             readme,
+            cli_source,
         ),
         f"accepted option spelling {spelling} omitted",
     )
@@ -360,6 +440,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str]) -> None:
                 plan_doc,
                 bundle_doc,
                 readme,
+                cli_source,
             ),
             f"mandatory replay clause omitted: {clause}",
         )
@@ -374,12 +455,81 @@ def self_test(inputs: tuple[str, str, str, str, str, str]) -> None:
                 plan_doc,
                 bundle_doc,
                 readme,
+                cli_source,
             ),
             f"contradictory replay clause accepted: {clause}",
         )
 
+    semantic_cases = (
+        (
+            "replay documentation: not required",
+            document + "\n\nNetwork isolation is not required for RPM scriptlets.\n",
+            plan_doc,
+            bundle_doc,
+            readme,
+        ),
+        (
+            "transaction plan: need not",
+            document,
+            plan_doc + "\n\nTriggers need not use OS-level network isolation.\n",
+            bundle_doc,
+            readme,
+        ),
+        (
+            "transaction bundle: may omit",
+            document,
+            plan_doc,
+            bundle_doc + (
+                "\n\nPayload descendants may omit a no-network namespace.\n"
+            ),
+            readme,
+        ),
+        (
+            "README: without isolation",
+            document,
+            plan_doc,
+            bundle_doc,
+            readme + (
+                "\n\nPayload interpreters can execute without network "
+                "isolation.\n"
+            ),
+        ),
+    )
+    for label, changed_doc, changed_plan, changed_bundle, changed_readme in (
+        semantic_cases
+    ):
+        expect_rejected(
+            lambda changed_doc=changed_doc,
+            changed_plan=changed_plan,
+            changed_bundle=changed_bundle,
+            changed_readme=changed_readme: audit_contract(
+                source,
+                options_source,
+                changed_doc,
+                changed_plan,
+                changed_bundle,
+                changed_readme,
+                cli_source,
+            ),
+            f"semantic isolation contradiction accepted in {label}",
+        )
 
-def load_inputs() -> tuple[str, str, str, str, str, str]:
+    insufficient = document + (
+        "\n\nThe replay entry-point audit does not provide network isolation "
+        "for payload scriptlets; OS-level network isolation is required.\n"
+    )
+    audit_contract(
+        source,
+        options_source,
+        insufficient,
+        plan_doc,
+        bundle_doc,
+        readme,
+        cli_source,
+    )
+
+
+def load_inputs() -> tuple[str, str, str, str, str, str, str]:
     return (
         REPLAY_SOURCE.read_text(encoding="utf-8"),
         REPLAY_OPTIONS.read_text(encoding="utf-8"),
@@ -387,6 +537,7 @@ def load_inputs() -> tuple[str, str, str, str, str, str]:
         PLAN_DOC.read_text(encoding="utf-8"),
         BUNDLE_DOC.read_text(encoding="utf-8"),
         README.read_text(encoding="utf-8"),
+        CLI_SOURCE.read_text(encoding="utf-8"),
     )
 
 
