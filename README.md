@@ -5,8 +5,6 @@ It is derived from upstream [tdnf](https://github.com/vmware/tdnf).
 
 ## Install
 
-For the upcoming v0.1.0 tagged release:
-
 ```sh
 ghr install cataggar/rpmz@v0.1.0
 ```
