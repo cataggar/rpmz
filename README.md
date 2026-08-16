@@ -1,177 +1,26 @@
-# rpmz - tiny dandified yum
+# rpmz
 
-A Zig implementation of a dnf/yum-compatible package manager built on
-vendored `libsolv`, with native RPM handling in `rpmzig/` and downloads
-through Zig's HTTP/TLS stack. rpmz is distributed as a Zig package and
-executable; it does not install a C SDK or shared libraries.
+rpmz is a Zig dnf/yum-compatible RPM package manager.
+It is derived from upstream [tdnf](https://github.com/vmware/tdnf).
 
-The public Zig workflow resolves a canonical `transaction_plan`, publishes its
-inputs with `bundle_export`, validates the closed `transaction_bundle` through
-`bundle_reader`, and applies its exact v2 order with offline `replay`. See
-`doc/transaction-plan-api.md`, `doc/transaction-bundle.md`, and
-`doc/replay-api.md`.
+## Install
 
-## Build
-
-Requires Zig 0.16+. SQLite and libsolv are built from the dependencies
-pinned in `build.zig.zon`. No RPM development package is needed. Binary
-audits additionally use `binutils`; Python lint uses `flake8`.
-
-Then:
+For the upcoming v0.1.0 tagged release:
 
 ```sh
-zig build install --prefix ./out
+ghr install cataggar/rpmz@v0.1.0
 ```
 
-This produces `./out/bin/rpmz`, `./out/bin/rpmz-config`, and the support
-tools under `./out/libexec/rpmz/`.
-
-Debug build:
-```sh
-zig build -Doptimize=Debug install --prefix ./out
-```
-
-Native Lua scriptlet support (for `<lua>` RPM scriptlets) is always
-enabled through the pure-Zig runtime pinned in `build.zig.zon`. No
-system Lua headers or libraries are required. This is needed by real
-base packages in supported distros, including Fedora
-`bash`/`glibc`/`filesystem`/`setup` and Azure Linux `filesystem`.
-
-The composed native transaction executor (rpmzig install, rpmdb-write,
-file-erase, scriptlet, trigger engines) is the sole transaction-
-execution path — every `rpmz install`/`erase`/`upgrade` dispatches
-through it. There is no host-library fallback.
-
-Zig consumers use the public `rpmz` module registered by this package's
-`build.zig`. Its initial stable surface is the canonical transaction-plan
-model from issue #186:
-
-```zig
-const rpmz_dep = b.dependency("rpmz", .{
-    .target = target,
-    .optimize = optimize,
-});
-exe.root_module.addImport("rpmz", rpmz_dep.module("rpmz"));
-```
-
-Application source can use:
-
-- `@import("rpmz").resolver` and `.transaction_plan` to resolve and inspect a
-  canonical plan;
-- `.bundle_export`, `.transaction_bundle`, and `.bundle_reader` to publish and
-  validate its closed input set;
-- `.replay` to validate and apply one exact v2 bundle without resolving or
-  entering a repository/download path in project-owned replay code.
-
-Replay executes RPM payload scriptlets and triggers. That untrusted payload
-code and its descendants can launch processes or access the network, so callers
-must use an OS-level no-network namespace or equivalent isolation whenever
-offline behavior must include payload execution. The replay entry-point audit
-checks only `client/replay.zig`; it does not inspect transitive dependencies or
-payload code.
-
-Those namespaces are the whole supported surface. Consumers should not import
-files from the component directories directly. There is no public C SDK,
-header, pkg-config, or shared-library API.
-
-`rpmz plan <verb>` prints the same document from the command line. See
-[doc/transaction-plan-api.md](doc/transaction-plan-api.md) for what a plan
-contains, the explicit-input and ownership rules, how failures are reported,
-what makes two plans identical, and why planning never executes anything.
-
-`rpmz replay --installroot ROOT --rpmdb-path /var/lib/rpm --forcearch ARCH
-BUNDLE` validates and applies a replay-capable bundle. It always writes one
-versioned canonical result to stdout for a valid invocation. See
-[doc/replay-api.md](doc/replay-api.md) for the API ownership contract, v2
-requirement, validation boundary, result schema, CLI exit statuses, and
-network-isolation guidance.
-
-## Configuration
-
-Create `rpmz.conf` under `/etc/rpmz/`:
-
-```text
-[main]
-gpgcheck=1
-installonly_limit=3
-clean_requirements_on_remove=true
-repodir=/etc/yum.repos.d
-cachedir=/var/cache/tdnf
-```
-
-Place `.repo` files under `/etc/yum.repos.d` (or your `repodir`).
-The legacy cache and `/var/lib/tdnf` state paths remain the defaults so
-upgrades retain package marks, history, and cross-version transaction locks.
+## Build from source
 
 ```sh
-./out/bin/rpmz list installed
+zig build -Doptimize=ReleaseSafe install --prefix ./out
 ```
 
-## Testing
+## Documentation
 
-The pytest suite under `pytests/` exercises the binaries against a
-locally-served rpm repo. It requires an rpm-aware host: `rpm`,
-`rpmbuild`, `createrepo_c`, and the `python3-pytest`/`python3-requests`/
-`python3-pyOpenSSL` stack. These are test fixture generators and
-cross-check oracles only; production never invokes them. With those in
-place:
-
-```sh
-zig build install --prefix ./out
-cd pytests && pytest -v
-```
-
-The normal install includes `libexec/rpmz/rpmz-test-support`, the private
-command bridge used by integration tests that need direct access to internal
-Zig APIs. It ships with the other libexec helpers so the documented
-install-then-pytest workflow has no hidden build prerequisite.
-
-Or use the convenience step:
-
-```sh
-zig build check
-```
-
-The Zig integration suite under `ztests/` covers the same ground for the
-commands it has been migrated to, and is much faster because each test
-installs into its own throwaway root instead of the host rpmdb: a
-disposable root starts empty, so a transaction has no installed packages
-to validate against. It reuses the RPM fixtures `pytests` generates, and
-skips itself when they are absent. Installing sets each file's owner from
-its rpm header, so like pytest it needs root:
-
-```sh
-sudo -E zig build ztest --prefix ./out
-```
-
-The CI-sized native smoke suite builds signed fixture packages with the
-host tools, then executes every `rpmz-rpm*` helper against scratch roots:
-
-```sh
-./scripts/smoke-rpmzig.sh ./out
-```
-
-Dependency, public-Zig-consumer, and migration gates are available as:
-
-```sh
-zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe migration-audit --prefix ./out
-zig build replay-docs-audit
-zig build replay-confinement-audit
-zig build -Doptimize=ReleaseSafe dead-errdefer-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
-```
-
-Use `-Doptimize=ReleaseSafe`, as CI does. The native dependency audit
-inspects the installed prefix and rejects public C headers, pkg-config
-metadata, `librpmz*`/`libtdnf*` artifacts, and forbidden dynamic dependencies.
-
-`pytests/config.json`, `pytests/mount-small-cache`, and
-`bin/rpmz-automatic` are generated by `build.zig` and are not source files.
-Edit their templates instead.
-
-## Static analysis (Coverity)
-
-`ci/coverity.sh` wraps `zig build` with `cov-build`. It generates an
-HTML report under `build-coverity/html/`.
+- [Configuration and usage](doc/configuration.md)
+- [Public Zig API and transaction plans](doc/transaction-plan-api.md)
+- [Transaction bundles](doc/transaction-bundle.md) and [replay](doc/replay-api.md)
+- [Contributing](CONTRIBUTING.md), [building, and testing](doc/building-and-testing.md)
+- [Migration from tdnf](doc/migrating-from-tdnf.md)

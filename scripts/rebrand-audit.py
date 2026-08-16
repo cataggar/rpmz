@@ -43,7 +43,9 @@ DYNAMIC_FIXTURE_RENAME = re.compile(
 )
 POLICY_FILES = {
     "README.md",
+    "doc/migrating-from-tdnf.md",
     "scripts/c-to-zig-audit.py",
+    "scripts/docs-audit.py",
     "scripts/librpm-audit.py",
     "scripts/public-zig-api-audit.py",
     "scripts/rebrand-audit.py",
@@ -258,6 +260,7 @@ def scrub_allowed(source, relative, fixture_names, legacy_fixture_tokens):
     source = source.replace("tdnf_internal_abi", "")
     source = source.replace("github.com/vmware/tdnf-cli-libs", "")
     source = source.replace("github.com/vmware/tdnf", "")
+    source = source.replace("migrating-from-tdnf.md", "")
     source = source.replace("rpmzig-smoke@tdnf.invalid", "")
     source = source.replace("/var/lib/tdnf/locks", "")
     source = source.replace("/var/lib/tdnf", "")
@@ -304,6 +307,12 @@ def scrub_allowed(source, relative, fixture_names, legacy_fixture_tokens):
         source = source.replace("libtdnf", "")
         source = source.replace("tdnf-cli-libs.pc", "")
         source = source.replace("tdnf.pc", "")
+    if relative.as_posix() in {
+        "README.md",
+        "doc/migrating-from-tdnf.md",
+        "scripts/docs-audit.py",
+    }:
+        source = LEGACY_PRODUCT.sub("", source)
     return source
 
 
@@ -332,7 +341,8 @@ def main():
             ))
     for relative in files:
         name = relative.as_posix()
-        if "tdnf" in name and not name.startswith(FIXTURE_ROOTS):
+        legacy_path = "tdnf" in name and not name.startswith(FIXTURE_ROOTS)
+        if legacy_path and name != "doc/migrating-from-tdnf.md":
             errors.append(f"{name}: stale product name in tracked path")
         if name.startswith(FIXTURE_ROOTS) and (
             relative.suffix in {".spec", ".xml"}
