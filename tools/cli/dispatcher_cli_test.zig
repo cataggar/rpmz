@@ -66,12 +66,26 @@ test "rpmz dispatches tdnf compatibility commands" {
 
     const rpmz = try std.fs.path.join(allocator, &.{ prefix, "bin", "rpmz" });
     defer allocator.free(rpmz);
-    const tdnf = try std.fs.path.join(allocator, &.{ prefix, "bin", "tdnf" });
-    defer allocator.free(tdnf);
+    const installed_tdnf = try std.fs.path.join(allocator, &.{ prefix, "bin", "tdnf" });
+    defer allocator.free(installed_tdnf);
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(io, installed_tdnf, .{}),
+    );
 
-    var link_target: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const link_len = try std.Io.Dir.readLinkAbsolute(io, tdnf, &link_target);
-    try std.testing.expectEqualStrings("rpmz", link_target[0..link_len]);
+    const rpmz_absolute = try std.Io.Dir.cwd().realPathFileAlloc(io, rpmz, allocator);
+    defer allocator.free(rpmz_absolute);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.symLink(io, rpmz_absolute, "tdnf", .{});
+
+    var tmp_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const tmp_path_len = try tmp.dir.realPath(io, &tmp_path_buffer);
+    const tdnf = try std.fs.path.join(
+        allocator,
+        &.{ tmp_path_buffer[0..tmp_path_len], "tdnf" },
+    );
+    defer allocator.free(tdnf);
 
     try expectCompatibilityParity(allocator, tdnf, rpmz, &.{"--version"});
     try expectCompatibilityParity(allocator, tdnf, rpmz, &.{"--help"});

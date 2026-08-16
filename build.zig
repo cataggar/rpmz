@@ -2583,15 +2583,7 @@ pub fn build(b: *Build) void {
         .root_module = rpmz_mod,
     });
     hardenExe(rpmz_exe);
-    const install_rpmz = b.addInstallArtifact(rpmz_exe, .{});
-    const install_tdnf_compat = b.addSystemCommand(&.{
-        "ln",
-        "-sfn",
-        "rpmz",
-        b.getInstallPath(.bin, "tdnf"),
-    });
-    install_tdnf_compat.step.dependOn(&install_rpmz.step);
-    b.getInstallStep().dependOn(&install_tdnf_compat.step);
+    b.installArtifact(rpmz_exe);
 
     {
         const plan_cli_test_mod = b.createModule(.{
@@ -3181,13 +3173,6 @@ pub fn build(b: *Build) void {
 
         const ztest_install_rpmz = b.addInstallArtifact(rpmz_exe, .{});
         ztest_install_rpmz.step.dependOn(&run_ztest_preflight.step);
-        const ztest_install_tdnf_compat = b.addSystemCommand(&.{
-            "ln",
-            "-sfn",
-            "rpmz",
-            b.getInstallPath(.bin, "tdnf"),
-        });
-        ztest_install_tdnf_compat.step.dependOn(&ztest_install_rpmz.step);
 
         const ztest_mod = b.createModule(.{
             .root_source_file = b.path("ztests/root.zig"),
@@ -3205,7 +3190,7 @@ pub fn build(b: *Build) void {
             "TDNF_ZTEST_PLUGIN_DIR",
             b.getInstallPath(.{ .custom = plugin_dir_rel }, ""),
         );
-        run_ztests.step.dependOn(&ztest_install_tdnf_compat.step);
+        run_ztests.step.dependOn(&ztest_install_rpmz.step);
         run_ztests.has_side_effects = true;
         ztest_step.dependOn(&run_ztests.step);
 
@@ -3232,7 +3217,7 @@ pub fn build(b: *Build) void {
             "TDNF_ZTEST_PLUGIN_DIR",
             b.getInstallPath(.{ .custom = plugin_dir_rel }, ""),
         );
-        run_plugin_ztests.step.dependOn(&ztest_install_tdnf_compat.step);
+        run_plugin_ztests.step.dependOn(&ztest_install_rpmz.step);
         run_plugin_ztests.has_side_effects = true;
         plugin_ztest_step.dependOn(&run_plugin_ztests.step);
     }
