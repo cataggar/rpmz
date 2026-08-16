@@ -14,7 +14,7 @@ import socket
 import configparser
 
 rpmz_conf = None
-automatic_cmd = None
+automatic_command = None
 automatic_conf = None
 
 tmp_auto_conf = '/tmp/auto.conf'
@@ -26,10 +26,10 @@ ini = configparser.ConfigParser()
 
 @pytest.fixture(scope='module', autouse=True)
 def setup_test(utils):
-    global automatic_conf, rpmz_conf, automatic_cmd
+    global automatic_conf, rpmz_conf, automatic_command
     automatic_conf = utils.config['automatic_conf']
     rpmz_conf = os.path.join(utils.config['repo_path'], 'rpmz.conf')
-    automatic_cmd = utils.config['automatic_script']
+    automatic_command = utils.config['automatic_command']
     repo_file = get_repo_file_path()
     shutil.copy(repo_file, repo_file + '.bak')
 
@@ -104,8 +104,8 @@ def run_test_cmd(utils, cmd):
 
 
 def prepare_and_run_test_cmd(utils, opt, retval, retstr=''):
-    tmp = [automatic_cmd]
-    if '-c' not in opt and '--config' not in opt:
+    tmp = [automatic_command, 'auto']
+    if '-c' not in opt and '--conf' not in opt:
         tmp += ['-c', tmp_auto_conf]
     ret = run_test_cmd(utils, tmp + opt)
     assert ret['retval'] == retval
@@ -124,16 +124,18 @@ def prepare_and_run_test_cmd(utils, opt, retval, retstr=''):
     assert found
 
 
-def test_rpmz_automatic_show_help(utils):
-    prepare_and_run_test_cmd(utils, ['-h'], 0, 'rpmz-automatic help:')
+@pytest.mark.parametrize('option', ['-h', '--help'])
+def test_rpmz_auto_show_help(utils, option):
+    prepare_and_run_test_cmd(utils, [option], 0, 'rpmz auto help:')
 
 
-def test_rpmz_automatic_show_version(utils):
-    prepare_and_run_test_cmd(utils, ['-v'], 0, 'rpmz-automatic - version:')
+@pytest.mark.parametrize('option', ['-v', '--version'])
+def test_rpmz_auto_show_version(utils, option):
+    prepare_and_run_test_cmd(utils, [option], 0, 'rpmz auto - version:')
 
 
-def test_rpmz_automatic_invalid_arg(utils):
-    prepare_and_run_test_cmd(utils, ['--invalid'], 22, 'rpmz-automatic help:')
+def test_rpmz_auto_invalid_arg(utils):
+    prepare_and_run_test_cmd(utils, ['--invalid'], 22, 'rpmz auto help:')
 
 
 def test_rpmz_automatic_invalid_cfg_opt1(utils):
@@ -161,11 +163,12 @@ def test_rpmz_automatic_invalid_automatic_conf(utils):
     prepare_and_run_test_cmd(utils, ['-c', '/badpath/badfile.conf'], 2, 'does not exist')
 
 
-def test_rpmz_automatic_rand_sleep(utils):
+@pytest.mark.parametrize('option', ['-t', '--timer'])
+def test_rpmz_automatic_rand_sleep(utils, option):
     ini_load(automatic_conf)
     ini_set('commands', 'random_sleep', '3')
     set_base_conf_and_store(tmp_auto_conf)
-    prepare_and_run_test_cmd(utils, ['-t'], 0, 'Sleep for')
+    prepare_and_run_test_cmd(utils, [option], 0, 'Sleep for')
 
 
 def test_rpmz_automatic_refresh_cache(utils):

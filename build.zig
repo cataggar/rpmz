@@ -322,13 +322,13 @@ pub fn build(b: *Build) void {
             .{ .key = "REPLAY_EXPORT_BINARY", .value = replay_acceptance_export_path },
             .{ .key = "RPMDB_LIST_BINARY", .value = b.fmt("{s}/libexec/rpmz/rpmz-rpmdb-list", .{abs_prefix}) },
             .{ .key = "RPMDB_WRITE_BINARY", .value = b.fmt("{s}/libexec/rpmz/rpmz-rpmdb-write", .{abs_prefix}) },
-            .{ .key = "AUTOMATIC_SCRIPT", .value = b.fmt("{s}/bin/rpmz-automatic", .{abs_prefix}) },
+            .{ .key = "AUTOMATIC_COMMAND", .value = b.fmt("{s}/bin/rpmz", .{abs_prefix}) },
         });
 
         writeTemplateExecutable(
             b,
-            "bin/rpmz-automatic.in",
-            "bin/rpmz-automatic",
+            "libexec/rpmz-auto.in",
+            "libexec/rpmz-auto",
             &.{.{ .key = "VERSION", .value = project_version }},
         );
     }
@@ -3029,13 +3029,14 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
+    const automatic_install_dir: Build.InstallDir = .{ .custom = "libexec/rpmz" };
     const install_automatic = b.addInstallFileWithDir(
-        b.path("bin/rpmz-automatic"),
-        .bin,
-        "rpmz-automatic",
+        b.path("libexec/rpmz-auto"),
+        automatic_install_dir,
+        "rpmz-auto",
     );
     b.getInstallStep().dependOn(&install_automatic.step);
-    const chmod_automatic = b.addSystemCommand(&.{ "chmod", "+x", b.getInstallPath(.bin, "rpmz-automatic") });
+    const chmod_automatic = b.addSystemCommand(&.{ "chmod", "+x", b.getInstallPath(automatic_install_dir, "rpmz-auto") });
     chmod_automatic.step.dependOn(&install_automatic.step);
     b.getInstallStep().dependOn(&chmod_automatic.step);
 

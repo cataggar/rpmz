@@ -8,4 +8,4 @@ Type=oneshot
 Nice=19
 IOSchedulingClass=2
 IOSchedulingPriority=7
-ExecStart=/usr/bin/rpmz-automatic -c /etc/rpmz/automatic.conf --timer --notify
+ExecStart=/usr/bin/rpmz auto -c /etc/rpmz/automatic.conf --timer --notify

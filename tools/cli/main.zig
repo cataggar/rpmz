@@ -21,6 +21,8 @@ const c = @cImport({
 });
 
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
+extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, replace: c_int) c_int;
+extern fn readlink(path: [*:0]const u8, buf: [*]u8, len: usize) isize;
 
 comptime {
     _ = client;
@@ -35,6 +37,7 @@ const top_level_help =
     \\Usage: rpmz COMMAND
     \\
     \\Commands:
+    \\  auto     Run the automatic updater
     \\  replay   Apply an offline transaction bundle
     \\  tdnf     Run the compatibility package manager
     \\
@@ -1042,6 +1045,66 @@ fn runCompatibility(argv: []const [*:0]const u8, argument_start: usize) u8 {
     return runTdnf(normalized_argv);
 }
 
+fn runAutomatic(argv: []const [*:0]const u8) u8 {
+    var executable_path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const executable_path_length_signed = readlink(
+        "/proc/self/exe",
+        executable_path_buffer[0..].ptr,
+        executable_path_buffer.len - 1,
+    );
+    if (executable_path_length_signed <= 0) {
+        common.log(LOG_CRIT, "Unable to resolve rpmz executable path\n", .{});
+        return 1;
+    }
+    const executable_path_length: usize = @intCast(executable_path_length_signed);
+    if (executable_path_length >= executable_path_buffer.len) {
+        common.log(LOG_CRIT, "rpmz executable path is too long\n", .{});
+        return 1;
+    }
+    executable_path_buffer[executable_path_length] = 0;
+    const executable_path = executable_path_buffer[0..executable_path_length :0];
+    const executable_directory = std.fs.path.dirname(executable_path) orelse {
+        common.log(LOG_CRIT, "Unable to resolve rpmz executable directory\n", .{});
+        return 1;
+    };
+
+    var helper_path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const helper_path = std.fmt.bufPrintZ(
+        &helper_path_buffer,
+        "{s}/../libexec/rpmz/rpmz-auto",
+        .{executable_directory},
+    ) catch {
+        common.log(LOG_CRIT, "rpmz auto helper path is too long\n", .{});
+        return 1;
+    };
+
+    if (setenv("RPMZ_AUTO_EXECUTABLE", executable_path.ptr, 1) != 0) {
+        common.log(LOG_CRIT, "Unable to configure rpmz auto helper\n", .{});
+        return 1;
+    }
+
+    const helper_argv = std.heap.page_allocator.alloc(
+        ?[*:0]const u8,
+        argv.len,
+    ) catch {
+        common.log(LOG_CRIT, "Unable to allocate rpmz auto arguments\n", .{});
+        return 1;
+    };
+    defer std.heap.page_allocator.free(helper_argv);
+
+    helper_argv[0] = helper_path.ptr;
+    for (argv[2..], 1..) |arg, index| {
+        helper_argv[index] = arg;
+    }
+    helper_argv[helper_argv.len - 1] = null;
+
+    _ = c.execv(helper_path.ptr, @ptrCast(helper_argv.ptr));
+    common.log(LOG_CRIT, "Unable to start rpmz auto helper: %s\n", .{
+        c.strerror(getErrno()),
+    });
+    return 1;
+}
+
 pub fn main(init: std.process.Init.Minimal) u8 {
     const argv = init.args.vector;
     const first_arg = if (argv.len > 1) std.mem.span(argv[1]) else null;
@@ -1049,6 +1112,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
 
     switch (action) {
         .compatibility => |argument_start| return runCompatibility(argv, argument_start),
+        .auto => return runAutomatic(argv),
         else => {},
     }
 
@@ -1070,5 +1134,6 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             return 1;
         },
         .compatibility => unreachable,
+        .auto => unreachable,
     }
 }

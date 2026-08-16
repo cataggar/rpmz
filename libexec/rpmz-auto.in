@@ -8,7 +8,7 @@
 # of the License are located in the COPYING file of this distribution.
 #
 
-# File:       rpmz-automatic
+# File:       rpmz-auto
 # Author:     Shreenidhi Shedi <sshedi@vmware.com>
 # Brief:      Automates system updates
 
@@ -26,25 +26,31 @@ EchoErr()
 
 ShowVersion()
 {
-  echo "rpmz-automatic - version: @VERSION@"
+  echo "rpmz auto - version: @VERSION@"
 }
 
 ShowHelp()
 {
   local ret="$1"
-  local msg="\nrpmz-automatic help:"
-  msg+="\nrpmz-automatic [{-c|--conf config-file}(optional)] "
-  msg+="[{-i|--install}] [{-n|--notify}] [{-h|--help}] [{-v|--version}]\n\n"
+  local msg="\nrpmz auto help:"
+  msg+="\nrpmz auto [{-c|--conf config-file}(optional)] "
+  msg+="[{-i|--install}] [{-n|--notify}] [{-t|--timer}] [{-h|--help}] [{-v|--version}]\n\n"
 
-  msg+="-c, --conf\trpmz-automatic configuration file (Optional argument)\n"
+  msg+="-c, --conf\trpmz auto configuration file (Optional argument)\n"
   msg+="-i, --install\tOverride automatic.conf apply_updates and install updates\n"
   msg+="-n, --notify\tShow available updates\n"
+  msg+="-t, --timer\tEnable the configured randomized timer delay\n"
   msg+="-h, --help\tShow this help message\n"
-  msg+="-v, --version\tShow rpmz-automatic version information\n"
+  msg+="-v, --version\tShow rpmz auto version information\n"
 
   [ "${ret}" = "0" ] && echo -e "${msg}" || EchoErr "${msg}"
 
   exit "${ret}"
+}
+
+RunRpmz()
+{
+  "${RPMZ_AUTO_EXECUTABLE}" tdnf "$@"
 }
 
 # function returns '1' or '0' based on boolean input
@@ -287,7 +293,7 @@ RefreshCache()
   local retstr
 
   while true; do
-    retstr="$(rpmz -q -c "${RpmzConf}" --refresh makecache 2>&1)"
+    retstr="$(RunRpmz -q -c "${RpmzConf}" --refresh makecache 2>&1)"
     ret="$?"
     if echo "${retstr}" | grep -qiw "ERROR: failed to acquire lock on"; then
       EchoErr "Another instance of rpmz running, retrying..."
@@ -336,7 +342,7 @@ WaitForNetwork()
   # try to connect till timeout
   while [ "${CurTime}" -le "${EndTime}" ]; do
     # get list of all enabled repos
-    local enabled_repos=($(rpmz -c "${RpmzConf}" --refresh repolist enabled 2> /dev/null | \
+    local enabled_repos=($(RunRpmz -c "${RpmzConf}" --refresh repolist enabled 2> /dev/null | \
       grep -vE "repo id|Refreshing metadata for" | cut -d' ' -f1; exit ${PIPESTATUS[0]}))
     if [ "$?" != "0" ]; then
       EchoErr "Failed to get enabled repos, retrying..."
@@ -429,7 +435,7 @@ ShowOrApplyUpdates()
       sys_name="$(hostname)"
     fi
 
-    local msg="$(rpmz -c "${RpmzConf}" check-update)"
+    local msg="$(RunRpmz -c "${RpmzConf}" check-update)"
     if [ "$?" != "0" ]; then
       EchoErr "rpmz check-update failed..."
       return 121
@@ -443,7 +449,7 @@ ShowOrApplyUpdates()
 
     if [ "${update_type}" = "all" ]; then
       local f="$(mktemp)"
-      $(rpmz -c "${RpmzConf}" upgrade --assumeno 2>&1 | grep -Ev "Total|aborted|Upgrading" > "${f}"; \
+      $(RunRpmz -c "${RpmzConf}" upgrade --assumeno 2>&1 | grep -Ev "Total|aborted|Upgrading" > "${f}"; \
         exit ${PIPESTATUS[0]})
       if [ "$?" != "8" ]; then
         rm -f "${f}"
@@ -461,7 +467,7 @@ ShowOrApplyUpdates()
       done < "${f}"
       rm -f "${f}"
     else
-      available_updates="$(rpmz -c "${RpmzConf}" updateinfo info)"
+      available_updates="$(RunRpmz -c "${RpmzConf}" updateinfo info)"
       if [ "$?" != "0" ]; then
         EchoErr "rpmz updateinfo info failed..."
         return 121
@@ -470,7 +476,7 @@ ShowOrApplyUpdates()
   fi
 
   if [ "${install}" = 1 ]; then
-    [ "${update_type}" = "all" ] && rpmz -c "${RpmzConf}" upgrade -y || rpmz -c "${RpmzConf}" --security update -y
+    [ "${update_type}" = "all" ] && RunRpmz -c "${RpmzConf}" upgrade -y || RunRpmz -c "${RpmzConf}" --security update -y
     if [ "$?" != "0" ]; then
       EchoErr "rpmz upgrade | rpmz --security update failed..."
       return 121
@@ -495,7 +501,7 @@ ExitHandler()
   local exit_status="$?"
   local msg=
 
-  msg="\nrpmz-automatic - completed with exit status ${exit_status} at $(date)...\n"
+  msg="\nrpmz auto - completed with exit status ${exit_status} at $(date)...\n"
   [ "${exit_status}" = "0" ] && echo -e "${msg}" || EchoErr "${msg}"
 
   exit "${exit_status}"
@@ -585,12 +591,12 @@ Main()
 }
 
 if [ ${EUID} -ne 0 ]; then
-  EchoErr "rpmz-automatic - this script must be run as root..."
+  EchoErr "rpmz auto - this command must be run as root..."
   exit 13
 fi
 
-if ! command -v rpmz &> /dev/null; then
-  EchoErr "rpmz command not found..."
+if [ -z "${RPMZ_AUTO_EXECUTABLE:-}" ] || [ ! -x "${RPMZ_AUTO_EXECUTABLE}" ]; then
+  EchoErr "rpmz auto executable not found..."
   exit 65
 fi
 
@@ -599,7 +605,7 @@ if [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
   exit 125
 fi
 
-echo -e "\nrpmz-automatic - started at $(date)...\n"
+echo -e "\nrpmz auto - started at $(date)...\n"
 
 trap ExitHandler EXIT
 

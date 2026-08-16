@@ -90,7 +90,7 @@ zig-out/
 .zig-cache/
 out/
 out-rs/
-/bin/rpmz-automatic
+/libexec/rpmz-auto
 /zig-pkg/
 /tests/public-zig-consumer/zig-pkg/
 /.scriptlet-zig-tests/

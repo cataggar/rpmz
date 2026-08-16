@@ -42,7 +42,7 @@
         "plugins",
         "rpmzig",
         "tools",
-        "bin",
+        "libexec",
         "etc",
         "pytests",
         "scripts",
