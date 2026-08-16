@@ -107,15 +107,14 @@ jobs:
             ghr install cataggar/rpmz@v${{ steps.version.outputs.version }}
             ```
 
-            Binary archives contain the normal rpmz install layout, including
-            `bin/`, `lib/`, `libexec/`, and `etc/`, plus COPYING and README.md.
-            SHA-256 sidecars, SPDX SBOMs, and GitHub provenance attestations
-            are published with the archives.
+            ## Highlights
+
+            - Native Zig RPM package manager derived from upstream tdnf.
+            - Linux x64 and ARM64 archives installable with ghr.
+            - GitHub provenance attestations for published archives.
           files: |
             release-assets/rpmz-*.tar.gz
             release-assets/rpmz-*.tar.xz
-            release-assets/rpmz-*.sha256
-            release-assets/rpmz-*.sbom.spdx.json
           prerelease: ${{ steps.version.outputs.prerelease }}
 
   post-release-smoke:

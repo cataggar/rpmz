@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -62,47 +61,11 @@ class CommandRunner:
             env=env,
         )
 
-    def download_assets(
-        self, repo, tag, directory, archive_name, env
-    ):
-        return subprocess.run(
-            [
-                "gh", "release", "download", tag,
-                "--repo", repo,
-                "--dir", str(directory),
-                "--pattern", archive_name,
-                "--pattern", archive_name + ".sha256",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-
-
-def sha256(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def expected_assets(manifest, version):
-    source = manifest["source_archive"].format(version=version)
-    result = {source, source + ".sha256"}
-    for platform_name in manifest["platforms"]:
-        archive = manifest["binary_archive"].format(
-            version=version, platform=platform_name
-        )
-        result.update({
-            archive,
-            archive + ".sha256",
-            manifest["sbom"].format(
-                version=version, platform=platform_name
-            ),
-        })
-    return result
+    return {
+        name.format(version=version)
+        for name in manifest["public_release_assets"]
+    }
 
 
 def validate_arguments(args, manifest):
@@ -120,14 +83,6 @@ def validate_arguments(args, manifest):
         raise SystemExit(f"unsupported release platform: {args.platform}")
 
 
-def verify_checksum(download_dir, archive_name):
-    archive = download_dir / archive_name
-    sidecar = download_dir / (archive_name + ".sha256")
-    fields = sidecar.read_text(encoding="ascii").strip().split()
-    if fields != [sha256(archive), archive_name]:
-        raise SystemExit(f"published checksum is invalid: {sidecar.name}")
-
-
 def run_smoke(args, runner=None):
     if runner is None:
         runner = CommandRunner()
@@ -137,8 +92,7 @@ def run_smoke(args, runner=None):
     tool_dir = prefix / "tools"
     bin_dir = prefix / "bin"
     cache_dir = prefix / "cache"
-    download_dir = prefix / "downloads"
-    for directory in (tool_dir, bin_dir, cache_dir, download_dir):
+    for directory in (tool_dir, bin_dir, cache_dir):
         directory.mkdir(parents=True, exist_ok=False)
 
     env = os.environ.copy()
@@ -194,10 +148,6 @@ def run_smoke(args, runner=None):
             f"expected {sorted(expected)}, got {sorted(actual_assets)}"
         )
 
-    runner.download_assets(
-        args.repo, args.tag, download_dir, archive_name, env
-    )
-    verify_checksum(download_dir, archive_name)
     print(
         f"release smoke passed for {args.repo}@{args.tag} "
         f"({args.platform})"
@@ -211,9 +161,10 @@ class FakeResult:
 
 
 class FakeRunner:
-    def __init__(self, args, manifest):
+    def __init__(self, args, manifest, asset_names=None):
         self.args = args
         self.manifest = manifest
+        self.asset_names = asset_names
         self.commands = []
 
     def ghr_install(self, spec, env):
@@ -250,28 +201,14 @@ class FakeRunner:
     def release_assets(self, repo, tag, env):
         del env
         self.commands.append(["gh", "release", "view", tag, repo])
+        names = self.asset_names
+        if names is None:
+            names = expected_assets(self.manifest, self.args.version)
         assets = [
             {"name": name}
-            for name in sorted(expected_assets(
-                self.manifest, self.args.version
-            ))
+            for name in sorted(names)
         ]
         return FakeResult(stdout=json.dumps({"assets": assets}))
-
-    def download_assets(
-        self, repo, tag, directory, archive_name, env
-    ):
-        del env
-        self.commands.append([
-            "gh", "release", "download", tag, repo, archive_name,
-        ])
-        archive = directory / archive_name
-        archive.write_bytes(b"release archive")
-        (directory / (archive_name + ".sha256")).write_text(
-            f"{sha256(archive)}  {archive_name}\n",
-            encoding="ascii",
-        )
-        return FakeResult()
 
 
 def self_test():
@@ -298,6 +235,25 @@ def self_test():
             raise AssertionError("smoke used ghr download")
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+    expected = expected_assets(manifest, args.version)
+    for suffix in (".sha256", ".sbom.spdx.json"):
+        scratch = ROOT / f".release-smoke-self-test-{uuid.uuid4()}"
+        bad_assets = set(expected)
+        bad_assets.add(f"rpmz-{args.version}-linux-x64{suffix}")
+        try:
+            run_smoke(
+                argparse.Namespace(**{**vars(args), "prefix": str(scratch)}),
+                FakeRunner(args, manifest, bad_assets),
+            )
+        except SystemExit as error:
+            if "published release assets differ" not in str(error):
+                raise
+        else:
+            raise AssertionError(
+                f"smoke accepted published metadata asset {suffix}"
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
     print("release smoke self-test passed")
 
 

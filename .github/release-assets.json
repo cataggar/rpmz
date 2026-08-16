@@ -3,6 +3,11 @@
   "platforms": ["linux-x64", "linux-arm64"],
   "binary_archive": "rpmz-{version}-{platform}.tar.gz",
   "source_archive": "rpmz-{version}.tar.xz",
-  "sbom": "rpmz-{version}-{platform}.sbom.spdx.json",
+  "internal_sbom": "rpmz-{version}-{platform}.sbom.spdx.json",
+  "public_release_assets": [
+    "rpmz-{version}-linux-x64.tar.gz",
+    "rpmz-{version}-linux-arm64.tar.gz",
+    "rpmz-{version}.tar.xz"
+  ],
   "install_command": "ghr install cataggar/rpmz@v{version}"
 }
