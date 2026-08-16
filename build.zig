@@ -2702,7 +2702,7 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
-    // jsondumptest
+    // jsondump unit tests
     const jsondump_test_mod = b.createModule(.{
         .root_source_file = b.path("jsondump/test.zig"),
         .target = target,
@@ -2711,12 +2711,6 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     jsondump_test_mod.addImport("jsondump", jsondump_lib.root_module);
-    const jsondump_test_exe = b.addExecutable(.{
-        .name = "jsondumptest",
-        .root_module = jsondump_test_mod,
-    });
-    hardenExe(jsondump_test_exe);
-    b.installArtifact(jsondump_test_exe);
     {
         const tests = b.addTest(.{ .root_module = jsondump_test_mod });
         const run_tests = b.addRunArtifact(tests);

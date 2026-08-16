@@ -158,18 +158,6 @@ fn emitAll(writer: *std.Io.Writer) !void {
     }
 }
 
-pub fn main(init: std.process.Init) u8 {
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout = std.Io.File.stdout().writerStreaming(init.io, &stdout_buffer);
-
-    emitAll(&stdout.interface) catch |err| {
-        std.debug.print("FAIL: {t}\n", .{err});
-        return 1;
-    };
-    stdout.flush() catch return 1;
-    return 0;
-}
-
 test "flat map preserves strings, formatting, null, and boolean values" {
     const jd = try buildFlatMap();
     defer jsondump.jd_destroy(jd);
@@ -218,7 +206,7 @@ test "all JSON string escapes survive buffer growth" {
     );
 }
 
-test "executable output remains byte-for-byte compatible" {
+test "json dump output remains byte-for-byte compatible" {
     var output = std.Io.Writer.Allocating.init(testing.allocator);
     defer output.deinit();
     try emitAll(&output.writer);
