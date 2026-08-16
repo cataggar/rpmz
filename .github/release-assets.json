@@ -1,0 +1,8 @@
+{
+  "repository": "cataggar/rpmz",
+  "platforms": ["linux-x64", "linux-arm64"],
+  "binary_archive": "rpmz-{version}-{platform}.tar.gz",
+  "source_archive": "rpmz-{version}.tar.xz",
+  "sbom": "rpmz-{version}-{platform}.sbom.spdx.json",
+  "install_command": "ghr install cataggar/rpmz@v{version}"
+}
