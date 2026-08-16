@@ -12,6 +12,7 @@ const client = @import("rpmz_client");
 const cli = @import("rpmz_cli");
 const replay_options = @import("replay_options.zig");
 const abi = @import("tdnf_internal_abi");
+const dispatcher = @import("dispatcher.zig");
 const c = @cImport({
     @cInclude("errno.h");
     @cInclude("stdio.h");
@@ -29,6 +30,16 @@ comptime {
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
+const top_level_help =
+    \\Usage: rpmz COMMAND
+    \\
+    \\Commands:
+    \\  replay   Apply an offline transaction bundle
+    \\  tdnf     Run the tdnf-compatible package manager
+    \\
+    \\Run 'rpmz COMMAND --help' for command help.
+    \\
+;
 
 const replay_usage =
     \\Usage: rpmz replay --installroot <absolute-path> --rpmdb-path <absolute-path> --forcearch <arch> <bundle-directory>
@@ -914,12 +925,8 @@ fn TDNFCliInvokeMark(
     return abi.TDNFMark(cliHandle(pContext), ppszPkgNameSpecs, nValue);
 }
 
-pub fn main(init: std.process.Init.Minimal) u8 {
-    const argv = init.args.vector;
+fn runTdnf(argv: []const [*:0]const u8) u8 {
     const requested_json = jsonOutputRequested(argv);
-    if (isReplayInvocation(argv))
-        return dispatchReplay(argv, requested_json);
-
     const argc: c_int = @intCast(argv.len);
     const argv_ptr: [*c]?[*:0]u8 = @ptrCast(@constCast(argv.ptr));
 
@@ -1005,4 +1012,62 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     }
 
     return @truncate(dwError);
+}
+
+fn showTopLevelHelp() void {
+    common.log(LOG_CRIT, "%.*s", .{
+        @as(c_int, @intCast(top_level_help.len)),
+        top_level_help.ptr,
+    });
+}
+
+fn showTopLevelVersion() void {
+    common.log(LOG_INFO, "rpmz: %s\n", .{abi.TDNFGetVersion()});
+}
+
+fn runCompatibility(argv: []const [*:0]const u8, argument_start: usize) u8 {
+    const normalized_len = argv.len - argument_start + 1;
+    const normalized_argv = std.heap.page_allocator.alloc([*:0]u8, normalized_len) catch {
+        common.log(LOG_CRIT, "Unable to allocate compatibility arguments\n", .{});
+        return 1;
+    };
+    defer std.heap.page_allocator.free(normalized_argv);
+
+    normalized_argv[0] = @constCast("tdnf");
+    for (argv[argument_start..], 1..) |arg, index| {
+        normalized_argv[index] = @constCast(arg);
+    }
+
+    return runTdnf(normalized_argv);
+}
+
+pub fn main(init: std.process.Init.Minimal) u8 {
+    const argv = init.args.vector;
+    const first_arg = if (argv.len > 1) std.mem.span(argv[1]) else null;
+    const action = dispatcher.classify(std.mem.span(argv[0]), first_arg);
+
+    switch (action) {
+        .tdnf => |argument_start| return runCompatibility(argv, argument_start),
+        else => {},
+    }
+
+    const requested_json = jsonOutputRequested(argv);
+    if (isReplayInvocation(argv))
+        return dispatchReplay(argv, requested_json);
+
+    switch (action) {
+        .help, .missing => {
+            showTopLevelHelp();
+            return 0;
+        },
+        .version => {
+            showTopLevelVersion();
+            return 0;
+        },
+        .unknown => {
+            common.log(LOG_CRIT, "Unknown rpmz command: %s. Please use 'rpmz --help'.\n", .{argv[1]});
+            return 1;
+        },
+        .tdnf => unreachable,
+    }
 }
