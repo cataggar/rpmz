@@ -1,6 +1,7 @@
 {
   "argv": [
-    "rpmz-config",
+    "rpmz",
+    "repo-config",
     "frobnicate"
   ],
   "stdout": "",

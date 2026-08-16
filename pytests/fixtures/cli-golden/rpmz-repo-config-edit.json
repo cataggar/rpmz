@@ -1,9 +1,10 @@
 {
   "argv": [
-    "rpmz-config",
-    "remove",
+    "rpmz",
+    "repo-config",
+    "edit",
     "foo",
-    "gpgcheck"
+    "enabled=true"
   ],
   "stdout": "",
   "stderr": "",

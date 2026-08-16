@@ -11,6 +11,7 @@ const common = @import("rpmz_common");
 const client = @import("rpmz_client");
 const cli = @import("rpmz_cli");
 const replay_options = @import("replay_options.zig");
+const repo_config = @import("repo_config");
 const abi = @import("tdnf_internal_abi");
 const dispatcher = @import("dispatcher.zig");
 const c = @cImport({
@@ -38,6 +39,7 @@ const top_level_help =
     \\
     \\Commands:
     \\  auto     Run the automatic updater
+    \\  repo-config Configure repository files
     \\  replay   Apply an offline transaction bundle
     \\  tdnf     Run the compatibility package manager
     \\
@@ -1105,6 +1107,21 @@ fn runAutomatic(argv: []const [*:0]const u8) u8 {
     return 1;
 }
 
+fn runRepoConfig(argv: []const [*:0]const u8) u8 {
+    const normalized_len = argv.len - 1;
+    const normalized_argv = std.heap.page_allocator.alloc([*:0]const u8, normalized_len) catch {
+        common.log(LOG_CRIT, "Unable to allocate repository configuration arguments\n", .{});
+        return 1;
+    };
+    defer std.heap.page_allocator.free(normalized_argv);
+
+    normalized_argv[0] = "repo-config";
+    for (argv[2..], 1..) |arg, index| {
+        normalized_argv[index] = arg;
+    }
+    return repo_config.run(normalized_argv);
+}
+
 pub fn main(init: std.process.Init.Minimal) u8 {
     const argv = init.args.vector;
     const first_arg = if (argv.len > 1) std.mem.span(argv[1]) else null;
@@ -1113,6 +1130,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     switch (action) {
         .compatibility => |argument_start| return runCompatibility(argv, argument_start),
         .auto => return runAutomatic(argv),
+        .repo_config => return runRepoConfig(argv),
         else => {},
     }
 
@@ -1133,7 +1151,6 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             common.log(LOG_CRIT, "Unknown rpmz command: %s. Please use 'rpmz --help'.\n", .{argv[1]});
             return 1;
         },
-        .compatibility => unreachable,
-        .auto => unreachable,
+        .compatibility, .auto, .repo_config => unreachable,
     }
 }

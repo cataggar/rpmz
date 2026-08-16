@@ -1,9 +1,9 @@
 {
   "argv": [
-    "rpmz-config",
-    "edit",
-    "foo",
-    "enabled=true"
+    "rpmz",
+    "repo-config",
+    "removerepo",
+    "foo"
   ],
   "stdout": "",
   "stderr": "",

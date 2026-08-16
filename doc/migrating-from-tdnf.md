@@ -6,7 +6,7 @@ product-facing names changed as follows:
 | tdnf name | rpmz name |
 |---|---|
 | `tdnf` | `rpmz` |
-| `tdnf-config` | `rpmz-config` |
+| `tdnf-config` | `rpmz repo-config` |
 | `tdnf-automatic` | `rpmz-automatic` |
 | `tdnfmetalink` | `rpmzmetalink` |
 | `tdnfrepogpgcheck` | `rpmzrepogpgcheck` |

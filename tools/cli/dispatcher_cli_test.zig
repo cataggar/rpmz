@@ -30,6 +30,19 @@ fn runWithPath(
     });
 }
 
+fn exitCode(result: std.process.RunResult) u8 {
+    return switch (result.term) {
+        .exited => |code| code,
+        else => 255,
+    };
+}
+
+fn realPathAlloc(allocator: std.mem.Allocator, dir: std.Io.Dir) ![]u8 {
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try dir.realPath(io, &buffer);
+    return allocator.dupe(u8, buffer[0..len]);
+}
+
 fn expectTermEqual(actual: std.process.Child.Term, expected: std.process.Child.Term) !void {
     switch (expected) {
         .exited => |expected_code| switch (actual) {
@@ -128,6 +141,11 @@ test "rpmz reserves top-level help and version" {
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, bare.term);
     try std.testing.expect(std.mem.startsWith(u8, bare.stdout, "Usage: rpmz COMMAND\n"));
     try std.testing.expect(std.mem.indexOf(u8, bare.stdout, "  auto     Run the automatic updater") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        bare.stdout,
+        "  repo-config Configure repository files",
+    ) != null);
 
     const help = try run(allocator, &.{ rpmz, "--help" });
     defer allocator.free(help.stdout);
@@ -196,4 +214,118 @@ test "rpmz auto is private and does not need a compatibility executable in PATH"
         try std.testing.expectEqual(std.process.Child.Term{ .exited = 13 }, result.term);
         try std.testing.expect(std.mem.indexOf(u8, result.stderr, "must be run as root") != null);
     }
+}
+
+test "rpmz dispatches repo-config arguments" {
+    const allocator = std.testing.allocator;
+    const prefix = std.testing.environ.getAlloc(
+        allocator,
+        "RPMZ_DISPATCHER_TEST_PREFIX",
+    ) catch try allocator.dupe(u8, "zig-out");
+    defer allocator.free(prefix);
+
+    const rpmz = try std.fs.path.join(allocator, &.{ prefix, "bin", "rpmz" });
+    defer allocator.free(rpmz);
+    const retired_config = try std.fs.path.join(
+        allocator,
+        &.{ prefix, "bin", "rpmz-config" },
+    );
+    defer allocator.free(retired_config);
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(io, retired_config, .{}),
+    );
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try realPathAlloc(allocator, tmp.dir);
+    defer allocator.free(root);
+    try tmp.dir.createDirPath(io, "repos");
+
+    const config = try std.fs.path.join(allocator, &.{ root, "rpmz.conf" });
+    defer allocator.free(config);
+    const config_contents = try std.fmt.allocPrint(
+        allocator,
+        "[main]\nrepodir={s}/repos\n",
+        .{root},
+    );
+    defer allocator.free(config_contents);
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "rpmz.conf",
+        .data = config_contents,
+    });
+
+    const create = try run(allocator, &.{
+        rpmz,
+        "repo-config",
+        "--config",
+        config,
+        "create",
+        "foo",
+        "name=Foo",
+        "baseurl=http://foo.bar.com",
+        "enabled=1",
+    });
+    defer allocator.free(create.stdout);
+    defer allocator.free(create.stderr);
+    try std.testing.expectEqual(@as(u8, 0), exitCode(create));
+
+    const dump = try run(allocator, &.{
+        rpmz,
+        "repo-config",
+        "--config",
+        config,
+        "--json",
+        "dump",
+        "foo",
+    });
+    defer allocator.free(dump.stdout);
+    defer allocator.free(dump.stderr);
+    try std.testing.expectEqual(@as(u8, 0), exitCode(dump));
+    try std.testing.expectEqualStrings(
+        "{\"foo\":{\"name\":\"Foo\",\"baseurl\":\"http://foo.bar.com\",\"enabled\":\"1\"}}",
+        dump.stdout,
+    );
+
+    const override = try std.fs.path.join(allocator, &.{ root, "override.repo" });
+    defer allocator.free(override);
+    const file_override = try run(allocator, &.{
+        rpmz,
+        "repo-config",
+        "--config",
+        config,
+        "--file",
+        override,
+        "create",
+        "bar",
+        "name=Bar",
+    });
+    defer allocator.free(file_override.stdout);
+    defer allocator.free(file_override.stderr);
+    try std.testing.expectEqual(@as(u8, 0), exitCode(file_override));
+    try std.Io.Dir.cwd().access(io, override, .{});
+
+    const invalid_option = try run(
+        allocator,
+        &.{ rpmz, "repo-config", "--bad-option" },
+    );
+    defer allocator.free(invalid_option.stdout);
+    defer allocator.free(invalid_option.stderr);
+    try std.testing.expectEqual(@as(u8, 1), exitCode(invalid_option));
+    try std.testing.expectEqualStrings(
+        "repo-config: unrecognized option '--bad-option'\n",
+        invalid_option.stderr,
+    );
+
+    const invalid_action = try run(
+        allocator,
+        &.{ rpmz, "repo-config", "-c", config, "frobnicate", "foo" },
+    );
+    defer allocator.free(invalid_action.stdout);
+    defer allocator.free(invalid_action.stderr);
+    try std.testing.expectEqual(@as(u8, 1), exitCode(invalid_action));
+    try std.testing.expectEqualStrings(
+        "Unknown command 'frobnicate'\n",
+        invalid_action.stderr,
+    );
 }

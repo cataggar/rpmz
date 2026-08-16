@@ -20,7 +20,7 @@ The public package boundary is the `rpmz` module registered with
 The remaining tracked headers are private and intentionally narrow:
 
 - `llconf/*.h` describe C-shaped exports that are still called by converted
-  Zig modules and `rpmz-config`.
+  Zig modules and the `rpmz repo-config` subcommand.
 - `rpmzig/rpmdb.h` is the private wide rpmzig bridge still imported by the
   repository/query/transaction modules.
 

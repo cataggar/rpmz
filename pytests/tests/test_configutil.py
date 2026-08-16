@@ -13,8 +13,8 @@ import pytest
 import json
 
 
-def remove_repofile(utils):
-    repofile = os.path.join(utils.config['repo_path'], "yum.repos.d", "foo.repo")
+def remove_repofile(utils, filename="foo.repo"):
+    repofile = os.path.join(utils.config['repo_path'], "yum.repos.d", filename)
     if os.path.isfile(repofile):
         os.remove(repofile)
 
@@ -22,35 +22,41 @@ def remove_repofile(utils):
 @pytest.fixture(scope='function', autouse=True)
 def setup_test(utils):
     remove_repofile(utils)
+    remove_repofile(utils, "test.repo")
     yield
     teardown_test(utils)
 
 
 def teardown_test(utils):
     remove_repofile(utils)
+    remove_repofile(utils, "test.repo")
 
 
 def test_create(utils):
-    ret = utils.run(['rpmz-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=1'])
+    ret = utils.run(['rpmz', 'repo-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=1'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz', 'repolist'])
+    ret = utils.run(['rpmz', 'tdnf', 'repolist'])
     assert 'Foo' in "\n".join(ret['stdout'])
 
 
 def test_fileoption(utils):
-    ret = utils.run(['rpmz-config', '-f', '/tmp/test.repo', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com'])
-    assert ret['retval'] == 0
-    assert os.path.exists("/tmp/test.repo")
+    test_repo = os.path.join(
+        utils.config['repo_path'], "yum.repos.d", "test.repo",
+    )
 
-    ret = utils.run(['rpmz-config', '-f', '/tmp/test.repo', 'edit', 'foo', 'enabled=true'])
+    ret = utils.run(['rpmz', 'repo-config', '-f', test_repo, 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com'])
+    assert ret['retval'] == 0
+    assert os.path.exists(test_repo)
+
+    ret = utils.run(['rpmz', 'repo-config', '-f', test_repo, 'edit', 'foo', 'enabled=true'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz-config', '-f', '/tmp/test.repo', 'get', 'foo', 'enabled'])
+    ret = utils.run(['rpmz', 'repo-config', '-f', test_repo, 'get', 'foo', 'enabled'])
     assert ret['retval'] == 0
     assert ret['stdout'][0].strip() == "true"
 
-    ret = utils.run(['rpmz-config', '-f', '/tmp/test.repo', '-j', 'dump', 'foo'])
+    ret = utils.run(['rpmz', 'repo-config', '-f', test_repo, '-j', 'dump', 'foo'])
     assert ret['retval'] == 0
 
     repomap = json.loads("\n".join(ret['stdout']))
@@ -58,26 +64,26 @@ def test_fileoption(utils):
     assert 'enabled' in repomap['foo']
     assert repomap['foo']['enabled'] == "true"
 
-    ret = utils.run(['rpmz-config', '-f', '/tmp/test.repo', 'remove', 'foo', 'enabled'])
+    ret = utils.run(['rpmz', 'repo-config', '-f', test_repo, 'remove', 'foo', 'enabled'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz-config', '-f', '/tmp/test.repo', '-j', 'dump', 'foo'])
+    ret = utils.run(['rpmz', 'repo-config', '-f', test_repo, '-j', 'dump', 'foo'])
     assert ret['retval'] == 0
 
     repomap = json.loads("\n".join(ret['stdout']))
     assert 'foo' in repomap
     assert 'enabled' not in repomap['foo']
 
-    ret = utils.run(['rpmz-config', '-f', '/tmp/test.repo', 'removerepo', 'foo'])
+    ret = utils.run(['rpmz', 'repo-config', '-f', test_repo, 'removerepo', 'foo'])
     assert ret['retval'] == 0
-    assert not os.path.exists("/tmp/test.repo")
+    assert not os.path.exists(test_repo)
 
 
 def test_edit(utils):
-    ret = utils.run(['rpmz-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=0'])
+    ret = utils.run(['rpmz', 'repo-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=0'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz-config', 'edit', 'foo', 'enabled=1'])
+    ret = utils.run(['rpmz', 'repo-config', 'edit', 'foo', 'enabled=1'])
     assert ret['retval'] == 0
 
     repo_config = configparser.ConfigParser()
@@ -88,10 +94,10 @@ def test_edit(utils):
 
 
 def test_remove(utils):
-    ret = utils.run(['rpmz-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'gpgcheck=0'])
+    ret = utils.run(['rpmz', 'repo-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'gpgcheck=0'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz-config', 'remove', 'foo', 'gpgcheck'])
+    ret = utils.run(['rpmz', 'repo-config', 'remove', 'foo', 'gpgcheck'])
     assert ret['retval'] == 0
 
     repo_config = configparser.ConfigParser()
@@ -102,10 +108,10 @@ def test_remove(utils):
 
 
 def test_edit_multiple(utils):
-    ret = utils.run(['rpmz-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=0'])
+    ret = utils.run(['rpmz', 'repo-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=0'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz-config', 'edit', 'foo', 'enabled=1', 'gpgcheck=0'])
+    ret = utils.run(['rpmz', 'repo-config', 'edit', 'foo', 'enabled=1', 'gpgcheck=0'])
     assert ret['retval'] == 0
 
     repo_config = configparser.ConfigParser()
@@ -119,31 +125,31 @@ def test_edit_multiple(utils):
 
 
 def test_get(utils):
-    ret = utils.run(['rpmz-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=0'])
+    ret = utils.run(['rpmz', 'repo-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=0'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz-config', 'get', 'foo', 'baseurl'])
+    ret = utils.run(['rpmz', 'repo-config', 'get', 'foo', 'baseurl'])
     assert ret['retval'] == 0
 
     assert 'foo.bar.com' in "\n".join(ret['stdout'])
 
 
 def test_removerepo(utils):
-    ret = utils.run(['rpmz-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=1'])
+    ret = utils.run(['rpmz', 'repo-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=1'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz-config', 'removerepo', 'foo'])
+    ret = utils.run(['rpmz', 'repo-config', 'removerepo', 'foo'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz', 'repolist'])
+    ret = utils.run(['rpmz', 'tdnf', 'repolist'])
     assert 'Foo' not in "\n".join(ret['stdout'])
 
 
 def test_json(utils):
-    ret = utils.run(['rpmz-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=0'])
+    ret = utils.run(['rpmz', 'repo-config', 'create', 'foo', 'name=Foo', 'baseurl=http://foo.bar.com', 'enabled=0'])
     assert ret['retval'] == 0
 
-    ret = utils.run(['rpmz-config', '-j', 'dump', 'foo'])
+    ret = utils.run(['rpmz', 'repo-config', '-j', 'dump', 'foo'])
     assert ret['retval'] == 0
 
     repomap = json.loads("\n".join(ret['stdout']))

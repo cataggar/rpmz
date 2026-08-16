@@ -1,6 +1,7 @@
 {
   "argv": [
     "rpmz",
+    "tdnf",
     "repoquery",
     "--help"
   ],

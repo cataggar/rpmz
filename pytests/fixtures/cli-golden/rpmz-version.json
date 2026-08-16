@@ -3,7 +3,7 @@
     "rpmz",
     "--version"
   ],
-  "stdout": "rpmz: 0.1.0",
+  "stdout": "Unknown rpmz command: -c. Please use 'rpmz --help'.",
   "stderr": "",
-  "retval": 0
+  "retval": 1
 }

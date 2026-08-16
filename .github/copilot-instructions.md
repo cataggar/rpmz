@@ -26,10 +26,11 @@ The full pytest suite needs an rpm-aware host with `rpmbuild`,
 cd pytests && pytest -v tests/test_install.py::test_install_no_arg
 ```
 
-The pytest `utils` fixture rewrites `rpmz`/`rpmz-config` commands to the
-build tree and injects the test configuration. Use `utils.run([...])` rather
-than invoking those commands directly. Tests must remove packages they
-install because the consistency fixture checks host state.
+The pytest `utils` fixture rewrites `rpmz` commands, including
+`rpmz repo-config`, to the build tree and injects the test configuration. Use
+`utils.run([...])` rather than invoking those commands directly. Tests must
+remove packages they install because the consistency fixture checks host
+state.
 
 CI builds without RPM development files, runs Debug and ReleaseSafe Zig
 tests, lint, migration and dependency audits, the external public Zig
@@ -50,7 +51,7 @@ is `main`.
 | `rpmzig/` | RPM parsing, rpmdb, verification, transactions, scriptlets |
 | `client/` | package-manager orchestration |
 | `tools/cli/` | CLI parsing, output, and subcommand dispatch |
-| `tools/config/` | `rpmz-config` |
+| `tools/config/` | `rpmz repo-config` |
 | `plugins/` | built-in metalink and repository-signature modules |
 
 Dependency direction is `tools/cli` → `client` → `repomd`/`rpmzig` →
