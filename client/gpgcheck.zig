@@ -5,10 +5,10 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const abi = @import("client_abi");
 const options = @import("client_gpgcheck_options");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const rpm = @import("rpm_gpgcheck");
 const txn_config = @import("rpm_txn_config");
 const transaction_lock = @import("transaction_lock");
@@ -51,7 +51,7 @@ extern fn TDNFFileReadAllText(
     size: *c_int,
 ) callconv(.c) u32;
 extern fn TDNFGetGPGKeys(
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     repo: ?*Repo,
     keys: *?[*]?[*:0]u8,
 ) callconv(.c) u32;
@@ -65,14 +65,14 @@ extern fn TDNFPathFromUri(
     path: *?[*:0]u8,
 ) callconv(.c) u32;
 extern fn TDNFGetCachePath(
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     repo: ?*Repo,
     subdir: ?[*:0]const u8,
     file: ?[*:0]const u8,
     path: *?[*:0]u8,
 ) callconv(.c) u32;
 extern fn TDNFDownloadFileAt(
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     repo: ?*Repo,
     url: ?[*:0]const u8,
     directory_fd: c_int,
@@ -82,24 +82,24 @@ extern fn TDNFDownloadFileAt(
     output_fd: ?*c_int,
 ) callconv(.c) u32;
 extern fn __errno_location() callconv(.c) *c_int;
-extern fn tdnf_rpmdb_import_pubkeys_config(
+extern fn rpmz_rpmdb_import_pubkeys_config(
     config: ?*const TxnConfig,
     data: ?*const anyopaque,
     len: usize,
     imported: ?*usize,
 ) callconv(.c) c_int;
-extern fn tdnf_rpmdb_pubkeys_open_config(
+extern fn rpmz_rpmdb_pubkeys_open_config(
     config: ?*const TxnConfig,
 ) callconv(.c) ?*PubkeyIter;
-extern fn tdnf_rpmdb_pubkeys_close(iter: ?*PubkeyIter) callconv(.c) void;
-extern fn tdnf_rpmdb_pubkeys_next(
+extern fn rpmz_rpmdb_pubkeys_close(iter: ?*PubkeyIter) callconv(.c) void;
+extern fn rpmz_rpmdb_pubkeys_next(
     iter: ?*PubkeyIter,
     key: ?*[*:0]u8,
     key_len: ?*usize,
     keyid: ?*[*:0]u8,
 ) callconv(.c) c_int;
-extern fn tdnf_rpmdb_string_free(value: ?*anyopaque) callconv(.c) void;
-extern fn tdnf_rpmdb_last_error() callconv(.c) [*:0]const u8;
+extern fn rpmz_rpmdb_string_free(value: ?*anyopaque) callconv(.c) void;
+extern fn rpmz_rpmdb_last_error() callconv(.c) [*:0]const u8;
 
 threadlocal var direct_error: [160]u8 = [_]u8{0} ** 160;
 
@@ -121,7 +121,7 @@ fn setDirectError(comptime format: []const u8, args: anytype) void {
 
 fn lastVerifierError() [*:0]const u8 {
     if (direct_error[0] != 0) return @ptrCast(&direct_error);
-    return tdnf_rpmdb_last_error();
+    return rpmz_rpmdb_last_error();
 }
 
 const Ops = struct {
@@ -208,11 +208,11 @@ fn productionReadAll(
 
 fn productionGetKeys(
     _: ?*anyopaque,
-    tdnf: *Tdnf,
+    rpmz: *Tdnf,
     repo: *Repo,
     keys: *?[*]?[*:0]u8,
 ) u32 {
-    return TDNFGetGPGKeys(tdnf, repo, keys);
+    return TDNFGetGPGKeys(rpmz, repo, keys);
 }
 
 fn productionYesNo(
@@ -234,12 +234,12 @@ fn productionPathFromUri(
 
 fn productionFetchRemote(
     _: ?*anyopaque,
-    tdnf: *Tdnf,
+    rpmz: *Tdnf,
     repo: *Repo,
     uri: [*:0]const u8,
     remote: *RemoteKey,
 ) u32 {
-    return fetchRemoteGpgKeyPinned(tdnf, repo, uri, remote);
+    return fetchRemoteGpgKeyPinned(rpmz, repo, uri, remote);
 }
 
 fn productionReadRemote(
@@ -300,13 +300,13 @@ fn importKeyMutation(
     data: []const u8,
 ) u32 {
     var imported: usize = 0;
-    if (tdnf_rpmdb_import_pubkeys_config(
+    if (rpmz_rpmdb_import_pubkeys_config(
         config,
         data.ptr,
         data.len,
         &imported,
     ) != 0 or imported == 0) {
-        common.log(LOG_ERR, "Unable to import repository key: %s\n", .{tdnf_rpmdb_last_error()});
+        common.log(LOG_ERR, "Unable to import repository key: %s\n", .{rpmz_rpmdb_last_error()});
         return ERROR_TDNF_INVALID_PUBKEY_FILE;
     }
     return 0;
@@ -391,7 +391,7 @@ fn productionVerifySignatures(
     defer blobs.deinit(std.heap.c_allocator);
     var owned = std.ArrayList([*:0]u8).empty;
     defer {
-        for (owned.items) |key| tdnf_rpmdb_string_free(@ptrCast(key));
+        for (owned.items) |key| rpmz_rpmdb_string_free(@ptrCast(key));
         owned.deinit(std.heap.c_allocator);
     }
 
@@ -415,16 +415,16 @@ fn productionVerifySignatures(
         }
     }
 
-    const iter = tdnf_rpmdb_pubkeys_open_config(config) orelse return -1;
-    defer tdnf_rpmdb_pubkeys_close(iter);
+    const iter = rpmz_rpmdb_pubkeys_open_config(config) orelse return -1;
+    defer rpmz_rpmdb_pubkeys_close(iter);
     while (true) {
         var key: [*:0]u8 = undefined;
         var key_len: usize = 0;
-        const next = tdnf_rpmdb_pubkeys_next(iter, &key, &key_len, null);
+        const next = rpmz_rpmdb_pubkeys_next(iter, &key, &key_len, null);
         if (next == 0) break;
         if (next < 0) return -1;
         owned.append(std.heap.c_allocator, key) catch {
-            tdnf_rpmdb_string_free(@ptrCast(key));
+            rpmz_rpmdb_string_free(@ptrCast(key));
             setDirectError("out of memory collecting rpmdb keys", .{});
             return -1;
         };
@@ -572,16 +572,16 @@ fn openDirectoryPathNoFollow(
 }
 
 fn openRemoteKeyDirectory(
-    tdnf: *Tdnf,
+    rpmz: *Tdnf,
     repo: *Repo,
     output: *c_int,
 ) u32 {
     output.* = -1;
-    const conf = tdnf.pConf orelse
+    const conf = rpmz.pConf orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     const cache_z = conf.pszCacheDir orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const raw_config = tdnf.pRpmConfig orelse
+    const raw_config = rpmz.pRpmConfig orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     const config: *const TxnConfig = @ptrCast(@alignCast(raw_config));
     var cache_fd: c_int = -1;
@@ -621,7 +621,7 @@ fn openRemoteKeyDirectory(
 }
 
 fn fetchRemoteGpgKeyPinned(
-    tdnf: *Tdnf,
+    rpmz: *Tdnf,
     repo: *Repo,
     url: [*:0]const u8,
     remote: *RemoteKey,
@@ -633,7 +633,7 @@ fn fetchRemoteGpgKeyPinned(
         return fetchError(url, ERROR_TDNF_KEYURL_INVALID);
 
     var directory_fd: c_int = -1;
-    var result = openRemoteKeyDirectory(tdnf, repo, &directory_fd);
+    var result = openRemoteKeyDirectory(rpmz, repo, &directory_fd);
     if (result != 0) return fetchError(url, result);
     var keep_directory = false;
     defer {
@@ -644,7 +644,7 @@ fn fetchRemoteGpgKeyPinned(
 
     var file_fd: c_int = -1;
     result = TDNFDownloadFileAt(
-        tdnf,
+        rpmz,
         repo,
         url,
         directory_fd,
@@ -949,19 +949,19 @@ fn classifyKeyLocation(value: [*:0]const u8) error{InvalidKeyLocation}!KeyLocati
 
 fn gpgCheckPackage(
     ops: *const Ops,
-    tdnf_opt: ?*Tdnf,
+    rpmz_opt: ?*Tdnf,
     repo_opt: ?*Repo,
     file_path: ?[*:0]const u8,
     rpm_file_opt: ?*FileHandle,
     policy_rejected: ?*c_int,
 ) u32 {
     if (policy_rejected) |out| out.* = 0;
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const repo = repo_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const path = file_path orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const file = rpm_file_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const conf = tdnf.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const raw_config = tdnf.pRpmConfig orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const conf = rpmz.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const raw_config = rpmz.pRpmConfig orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (path[0] == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
     const config: *TxnConfig = @ptrCast(@alignCast(raw_config));
 
@@ -1016,7 +1016,7 @@ fn gpgCheckPackage(
 
     var keys: ?[*]?[*:0]u8 = null;
     defer ops.free_strings(ops.context, keys);
-    var result = ops.get_keys(ops.context, tdnf, repo, &keys);
+    var result = ops.get_keys(ops.context, rpmz, repo, &keys);
     if (result != 0) return result;
 
     var configured_count: usize = 0;
@@ -1061,7 +1061,7 @@ fn gpgCheckPackage(
         if (location == .https) {
             result = ops.fetch_remote(
                 ops.context,
-                tdnf,
+                rpmz,
                 repo,
                 key_uri,
                 &remote_key,
@@ -1071,7 +1071,7 @@ fn gpgCheckPackage(
 
         common.log(LOG_INFO, "importing key from %s\n", .{key_uri});
         var answer: c_int = 0;
-        result = ops.yes_no(ops.context, tdnf.pArgs, "Is this ok [y/N]: ", &answer);
+        result = ops.yes_no(ops.context, rpmz.pArgs, "Is this ok [y/N]: ", &answer);
         if (result != 0) return result;
         if (answer == 0) return errors.ERROR_TDNF_OPERATION_ABORTED;
 
@@ -1150,29 +1150,29 @@ fn gpgCheckPackage(
 }
 
 fn fetchRemoteGpgKey(
-    tdnf_opt: ?*Tdnf,
+    rpmz_opt: ?*Tdnf,
     repo_opt: ?*Repo,
     url_opt: ?[*:0]const u8,
     location_out: ?*?[*:0]u8,
 ) u32 {
     if (location_out) |out| out.* = null;
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const repo = repo_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const url = url_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out = location_out orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (url[0] == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const raw_config = tdnf.pRpmConfig orelse
+    const raw_config = rpmz.pRpmConfig orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     const config: *const TxnConfig = @ptrCast(@alignCast(raw_config));
     if (config.pinnedInstallRootFd() != null)
         return errors.ERROR_TDNF_CALL_NOT_SUPPORTED;
 
     var remote = RemoteKey{};
-    var result = fetchRemoteGpgKeyPinned(tdnf, repo, url, &remote);
+    var result = fetchRemoteGpgKeyPinned(rpmz, repo, url, &remote);
     if (result != 0) return result;
     defer releaseRemoteGpgKey(&remote);
     result = TDNFGetCachePath(
-        tdnf,
+        rpmz,
         repo,
         "keys",
         @ptrCast(&remote.name),
@@ -1190,7 +1190,7 @@ fn fetchError(url: [*:0]const u8, result: u32) u32 {
 
 fn gpgCheckPackageEx(
     ops: *const Ops,
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     repo: ?*Repo,
     file_path: ?[*:0]const u8,
     file_out: ?*?*FileHandle,
@@ -1198,7 +1198,7 @@ fn gpgCheckPackageEx(
 ) u32 {
     if (file_out) |out| out.* = null;
     if (policy_rejected) |out| out.* = 0;
-    if (tdnf == null or tdnf.?.pConf == null or tdnf.?.pRpmConfig == null or
+    if (rpmz == null or rpmz.?.pConf == null or rpmz.?.pRpmConfig == null or
         repo == null or file_path == null or file_path.?[0] == 0)
     {
         return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -1213,7 +1213,7 @@ fn gpgCheckPackageEx(
 
     const result = gpgCheckPackage(
         ops,
-        tdnf,
+        rpmz,
         repo,
         file_path,
         file,
@@ -1237,7 +1237,7 @@ fn readGpgKeyFileExport(
 }
 
 fn gpgCheckPackageWithFileExport(
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     repo: ?*Repo,
     file_path: ?[*:0]const u8,
     file: ?*FileHandle,
@@ -1245,7 +1245,7 @@ fn gpgCheckPackageWithFileExport(
 ) callconv(.c) u32 {
     return gpgCheckPackage(
         &production_ops,
-        tdnf,
+        rpmz,
         repo,
         file_path,
         file,
@@ -1254,7 +1254,7 @@ fn gpgCheckPackageWithFileExport(
 }
 
 fn gpgCheckPackageExExport(
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     repo: ?*Repo,
     file_path: ?[*:0]const u8,
     file_out: ?*?*FileHandle,
@@ -1262,7 +1262,7 @@ fn gpgCheckPackageExExport(
 ) callconv(.c) u32 {
     return gpgCheckPackageEx(
         &production_ops,
-        tdnf,
+        rpmz,
         repo,
         file_path,
         file_out,
@@ -1271,12 +1271,12 @@ fn gpgCheckPackageExExport(
 }
 
 fn fetchRemoteGpgKeyExport(
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     repo: ?*Repo,
     url: ?[*:0]const u8,
     location: ?*?[*:0]u8,
 ) callconv(.c) u32 {
-    return fetchRemoteGpgKey(tdnf, repo, url, location);
+    return fetchRemoteGpgKey(rpmz, repo, url, location);
 }
 
 comptime {
@@ -1567,7 +1567,7 @@ const Mock = struct {
 
 const TestContext = struct {
     conf: abi.Conf = .{},
-    tdnf: Tdnf = .{},
+    rpmz: Tdnf = .{},
     repo: Repo = std.mem.zeroes(Repo),
 
     fn init() TestContext {
@@ -1577,8 +1577,8 @@ const TestContext = struct {
     }
 
     fn bind(self: *TestContext) void {
-        self.tdnf.pConf = &self.conf;
-        self.tdnf.pRpmConfig = @ptrFromInt(0x2000);
+        self.rpmz.pConf = &self.conf;
+        self.rpmz.pRpmConfig = @ptrFromInt(0x2000);
     }
 };
 
@@ -1634,7 +1634,7 @@ fn expectAlternateRootRemoteKey(conflicting_host: bool) !void {
     try config.repinCacheDir(cache, cache_fd);
 
     var conf = abi.Conf{ .pszCacheDir = cache_z.ptr };
-    var tdnf = Tdnf{
+    var rpmz = Tdnf{
         .pConf = &conf,
         .pRpmConfig = @ptrCast(&config),
     };
@@ -1644,7 +1644,7 @@ fn expectAlternateRootRemoteKey(conflicting_host: bool) !void {
     var remote = RemoteKey{};
     try std.testing.expectEqual(
         @as(u32, 0),
-        openRemoteKeyDirectory(&tdnf, &repo, &remote.directory_fd),
+        openRemoteKeyDirectory(&rpmz, &repo, &remote.directory_fd),
     );
     defer releaseRemoteGpgKey(&remote);
     const name = try std.fmt.bufPrintZ(&remote.name, "key-test", .{});
@@ -1862,7 +1862,7 @@ test "gpg policy bypass and typed failures preserve rejection semantics" {
     context.repo.nGPGCheck = 0;
     try std.testing.expectEqual(@as(u32, 0), gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -1875,7 +1875,7 @@ test "gpg policy bypass and typed failures preserve rejection semantics" {
     mock.digest_outcome = @intFromEnum(rpm.Outcome.bad);
     try std.testing.expectEqual(ERROR_TDNF_RPM_CHECK, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -1886,7 +1886,7 @@ test "gpg policy bypass and typed failures preserve rejection semantics" {
     mock.digest_outcome = @intFromEnum(rpm.Outcome.internal);
     try std.testing.expectEqual(ERROR_TDNF_RPM_CHECK, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -1905,7 +1905,7 @@ test "signature policy handles unsigned skip and trusted rpmdb key" {
     mock.signed = 0;
     try std.testing.expectEqual(ERROR_TDNF_RPM_UNSIGNED, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -1916,7 +1916,7 @@ test "signature policy handles unsigned skip and trusted rpmdb key" {
     context.conf.nSkipSignature = 1;
     try std.testing.expectEqual(@as(u32, 0), gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -1928,7 +1928,7 @@ test "signature policy handles unsigned skip and trusted rpmdb key" {
     mock.initial_signature = @intFromEnum(rpm.Outcome.ok);
     try std.testing.expectEqual(@as(u32, 0), gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -2050,7 +2050,7 @@ test "approved keys retain binary lengths duplicates and verify after all import
 
     try std.testing.expectEqual(@as(u32, 0), gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -2073,7 +2073,7 @@ test "key acquisition failures preserve ordering and exact errors" {
     mock.get_keys_result = ERROR_TDNF_NO_GPGKEY_CONF_ENTRY;
     try std.testing.expectEqual(ERROR_TDNF_NO_GPGKEY_CONF_ENTRY, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -2086,7 +2086,7 @@ test "key acquisition failures preserve ordering and exact errors" {
     mock.signature_calls = 0;
     try std.testing.expectEqual(errors.ERROR_TDNF_OPERATION_ABORTED, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -2099,7 +2099,7 @@ test "key acquisition failures preserve ordering and exact errors" {
     mock.signature_calls = 0;
     try std.testing.expectEqual(ERROR_TDNF_INVALID_PUBKEY_FILE, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -2113,7 +2113,7 @@ test "key acquisition failures preserve ordering and exact errors" {
     const prompts_before_fetch = mock.prompt_calls;
     try std.testing.expectEqual(errors.ERROR_TDNF_REPO_PERFORM, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -2129,7 +2129,7 @@ test "key acquisition failures preserve ordering and exact errors" {
     ops = mock.ops();
     try std.testing.expectEqual(errors.ERROR_TDNF_OUT_OF_MEMORY, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -2148,7 +2148,7 @@ test "key URL policy rejects plaintext before prompt fetch or import" {
 
     try std.testing.expectEqual(ERROR_TDNF_KEYURL_INVALID, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -2162,7 +2162,7 @@ test "key URL policy rejects plaintext before prompt fetch or import" {
     mock.signature_calls = 0;
     try std.testing.expectEqual(ERROR_TDNF_KEYURL_INVALID, gpgCheckPackage(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         fakeFile(),
@@ -2233,7 +2233,7 @@ test "both entry points reset outputs and transfer parsed file ownership" {
 
     try std.testing.expectEqual(@as(u32, 0), gpgCheckPackageEx(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         &file,
@@ -2247,7 +2247,7 @@ test "both entry points reset outputs and transfer parsed file ownership" {
     file = @ptrFromInt(0x3000);
     try std.testing.expectEqual(ERROR_TDNF_RPM_GPG_NO_MATCH, gpgCheckPackageEx(
         &ops,
-        &context.tdnf,
+        &context.rpmz,
         &context.repo,
         "/package.rpm",
         &file,

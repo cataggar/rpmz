@@ -14,12 +14,12 @@ A repository's primary.xml may carry an xml:base attribute on each
 
     <location xml:base="file:///some/pool" href="pkg.rpm"/>
 
-libsolv stores this as SOLVABLE_MEDIABASE.  tdnf must use it when
+libsolv stores this as SOLVABLE_MEDIABASE.  rpmz must use it when
 building package URLs for list, repoquery, download, and install.
 
 The test creates a shared RPM pool directory and three separate
 repodata-only directories, each generated with a different xml:base
-variant, then exercises every relevant tdnf command against both a
+variant, then exercises every relevant rpmz command against both a
 file:// and an http:// base URL.
 
 Variants tested
@@ -80,15 +80,15 @@ def _find_rpm(repo_path, pkgname):
     return matches[0]
 
 
-def _tdnf(utils, workdir, args):
-    """Run tdnf via utils.run() with a per-test config in *workdir*."""
-    conf = os.path.join(workdir, 'tdnf.conf')
-    return utils.run(['tdnf', '-c', conf] + args)
+def _rpmz(utils, workdir, args):
+    """Run rpmz via utils.run() with a per-test config in *workdir*."""
+    conf = os.path.join(workdir, 'rpmz.conf')
+    return utils.run(['rpmz', '-c', conf] + args)
 
 
-def _make_tdnf_conf(workdir, cache_dir, reposdir):
-    """Write a minimal tdnf.conf pointing at *reposdir*."""
-    conf = os.path.join(workdir, 'tdnf.conf')
+def _make_rpmz_conf(workdir, cache_dir, reposdir):
+    """Write a minimal rpmz.conf pointing at *reposdir*."""
+    conf = os.path.join(workdir, 'rpmz.conf')
     os.makedirs(cache_dir, exist_ok=True)
     with open(conf, 'w') as f:
         f.write(f'[main]\ngpgcheck=0\nrepodir={reposdir}\ncachedir={cache_dir}\n')
@@ -123,7 +123,7 @@ def xmlbase_repos(utils):
     we put the pool *inside* repo_path so it is reachable over http://.
     """
     repo_path = utils.config['repo_path']
-    workdir = tempfile.mkdtemp(prefix='tdnf-xmlbase-')
+    workdir = tempfile.mkdtemp(prefix='rpmz-xmlbase-')
 
     try:
         # ---- pool: copy the RPM into a shared directory ----
@@ -186,13 +186,13 @@ def xmlbase_repos(utils):
 
 
 # ---------------------------------------------------------------------------
-# Per-test fixture: isolated tdnf config + cleanup
+# Per-test fixture: isolated rpmz config + cleanup
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
 def env(utils, xmlbase_repos):
     """
-    Yield a helper that sets up an isolated tdnf environment pointing at
+    Yield a helper that sets up an isolated rpmz environment pointing at
     one of the repo directories.  Cleans up the installed package after
     each test.
     """
@@ -200,7 +200,7 @@ def env(utils, xmlbase_repos):
 
     def _make_env(repo_dir, base_url):
         """
-        Create per-test tdnf config pointing at *repo_dir* via *base_url*.
+        Create per-test rpmz config pointing at *repo_dir* via *base_url*.
 
         base_url is the repository base URL; the repodata is always in
         *repo_dir* itself, regardless of where the RPMs live (xml:base
@@ -211,7 +211,7 @@ def env(utils, xmlbase_repos):
         test_dirs.append(envdir)
         reposdir = os.path.join(envdir, 'repos.d')
         cache_dir = os.path.join(envdir, 'cache')
-        _make_tdnf_conf(envdir, cache_dir, reposdir)
+        _make_rpmz_conf(envdir, cache_dir, reposdir)
         _make_repo_file(reposdir, 'test-repo', base_url)
         return envdir
 
@@ -227,9 +227,9 @@ def env(utils, xmlbase_repos):
 # ---------------------------------------------------------------------------
 
 def _assert_list(utils, envdir, pkgname=PKGNAME):
-    """tdnf list --available must show the package."""
-    conf = os.path.join(envdir, 'tdnf.conf')
-    ret = utils.run(['tdnf', '-c', conf, '--disablerepo=*',
+    """rpmz list --available must show the package."""
+    conf = os.path.join(envdir, 'rpmz.conf')
+    ret = utils.run(['rpmz', '-c', conf, '--disablerepo=*',
                      '--enablerepo=test-repo', 'list', '--available',
                      pkgname])
     assert ret['retval'] == 0, f'list failed: {ret["stderr"]}'
@@ -239,13 +239,13 @@ def _assert_list(utils, envdir, pkgname=PKGNAME):
 
 def _repoquery_location(utils, envdir, pkgname=PKGNAME):
     """
-    Run tdnf repoquery --location and return the location line.
+    Run rpmz repoquery --location and return the location line.
 
     Filters out informational lines like "Refreshing metadata for: ..."
     so assertions are not confused by those.
     """
-    conf = os.path.join(envdir, 'tdnf.conf')
-    ret = utils.run(['tdnf', '-c', conf, '--disablerepo=*',
+    conf = os.path.join(envdir, 'rpmz.conf')
+    ret = utils.run(['rpmz', '-c', conf, '--disablerepo=*',
                      '--enablerepo=test-repo',
                      'repoquery', '--location', '--available', pkgname])
     assert ret['retval'] == 0, f'repoquery --location failed: {ret["stderr"]}'
@@ -257,7 +257,7 @@ def _repoquery_location(utils, envdir, pkgname=PKGNAME):
 def _assert_repoquery_location(utils, envdir, expected_suffix,
                                pkgname=PKGNAME):
     """
-    tdnf repoquery --location must return a path/URL ending with
+    rpmz repoquery --location must return a path/URL ending with
     *expected_suffix* (the RPM filename).
     """
     location = _repoquery_location(utils, envdir, pkgname)
@@ -268,10 +268,10 @@ def _assert_repoquery_location(utils, envdir, expected_suffix,
 
 
 def _assert_install(utils, envdir, pkgname=PKGNAME):
-    """tdnf install -y must succeed and the package must be installed."""
-    conf = os.path.join(envdir, 'tdnf.conf')
+    """rpmz install -y must succeed and the package must be installed."""
+    conf = os.path.join(envdir, 'rpmz.conf')
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf', '-c', conf, '--disablerepo=*',
+    ret = utils.run(['rpmz', '-c', conf, '--disablerepo=*',
                      '--enablerepo=test-repo',
                      'install', '-y', '--nogpgcheck', pkgname])
     assert ret['retval'] == 0, f'install failed: {ret["stderr"]}'
@@ -280,11 +280,11 @@ def _assert_install(utils, envdir, pkgname=PKGNAME):
 
 
 def _assert_downloadonly(utils, envdir, pkgname=PKGNAME):
-    """tdnf install --downloadonly must download the RPM without installing."""
-    conf = os.path.join(envdir, 'tdnf.conf')
+    """rpmz install --downloadonly must download the RPM without installing."""
+    conf = os.path.join(envdir, 'rpmz.conf')
     utils.erase_package(pkgname)
     dldir = tempfile.mkdtemp(dir=envdir, prefix='dl-')
-    ret = utils.run(['tdnf', '-c', conf, '--disablerepo=*',
+    ret = utils.run(['rpmz', '-c', conf, '--disablerepo=*',
                      '--enablerepo=test-repo',
                      'install', '-y', '--nogpgcheck',
                      '--downloadonly', '--downloaddir', dldir,
@@ -344,7 +344,7 @@ class TestNoBase:
 class TestRelativeBase:
     """
     Repodata carries xml:base="../pool" (relative).
-    The base URL points at the rel-base directory; tdnf must resolve
+    The base URL points at the rel-base directory; rpmz must resolve
     pool/ relative to that base URL.
     """
 
@@ -400,7 +400,7 @@ class TestRelativeBase:
 class TestAbsoluteFileBase:
     """
     Repodata carries xml:base="file:///…/pool" (absolute file:// URL).
-    The base URL used by tdnf can point anywhere; the xml:base fully
+    The base URL used by rpmz can point anywhere; the xml:base fully
     determines the package location.
     """
 

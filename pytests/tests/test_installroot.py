@@ -38,13 +38,13 @@ def teardown_test(utils):
 
 def install_root(utils, no_reposd=False, installroot=INSTALLROOT):
     os.makedirs(installroot, exist_ok=True)
-    os.makedirs(os.path.join(installroot, 'etc/tdnf'), exist_ok=True)
-    conffile = os.path.join(utils.config['repo_path'], 'tdnf.conf')
+    os.makedirs(os.path.join(installroot, 'etc/rpmz'), exist_ok=True)
+    conffile = os.path.join(utils.config['repo_path'], 'rpmz.conf')
 
     # remove special settings for repodir and cachedir
     with open(conffile, 'r') as fin:
         with open(os.path.join(
-                installroot, 'etc/tdnf', 'tdnf.conf'), 'w') as fout:
+                installroot, 'etc/rpmz', 'rpmz.conf'), 'w') as fout:
             for line in fin:
                 if not line.startswith('repodir') and \
                    not line.startswith('cachedir'):
@@ -64,7 +64,7 @@ def install_root(utils, no_reposd=False, installroot=INSTALLROOT):
 # local version of check_package with install root
 def check_package(utils, package, installroot=INSTALLROOT, version=None):
     """ Check if a package exists """
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--installroot', installroot,
                      '--releasever=4.0',
                      'list', package])
@@ -80,7 +80,7 @@ def erase_package(utils, pkgname, installroot=INSTALLROOT, pkgversion=None):
         pkg = pkgname + '-' + pkgversion
     else:
         pkg = pkgname
-    utils.run(['tdnf',
+    utils.run(['rpmz',
                '--installroot', installroot,
                '--releasever=4.0',
                'erase', '-y', pkg])
@@ -105,7 +105,7 @@ def test_install(utils):
     pkgname = utils.config["mulversion_pkgname"]
     erase_package(utils, pkgname)
 
-    ret = utils.run(['tdnf', 'install',
+    ret = utils.run(['rpmz', 'install',
                      '-y', '--nogpgcheck',
                      '--installroot', INSTALLROOT,
                      '--releasever=4.0', pkgname], noconfig=True)
@@ -121,10 +121,10 @@ def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
     source = glob.glob(os.path.join(
         repository, "RPMS", "*", "{}-*.rpm".format(pkgname)))[0]
     relative = os.path.relpath(source, repository)
-    cache_suffix = "tdnf-pinned-{}".format(uuid.uuid4().hex)
+    cache_suffix = "rpmz-pinned-{}".format(uuid.uuid4().hex)
     host_cache = os.path.join("/var/cache", cache_suffix)
     configured_cache = os.path.join(
-        "/var/cache", "tdnf-configured-{}".format(uuid.uuid4().hex))
+        "/var/cache", "rpmz-configured-{}".format(uuid.uuid4().hex))
     installroot = os.path.join(
         os.path.realpath(utils.config["build_dir"]),
         "pinned-root-{}".format(uuid.uuid4().hex))
@@ -133,7 +133,7 @@ def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
         "photon-test", "rpms", relative)
     install_root(utils, installroot=installroot)
 
-    config_path = os.path.join(installroot, "etc/tdnf/tdnf.conf")
+    config_path = os.path.join(installroot, "etc/rpmz/rpmz.conf")
     with open(config_path, "a") as config:
         config.write("\ncachedir={}\n".format(configured_cache))
 
@@ -142,7 +142,7 @@ def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
 
     try:
         ret = utils.run([
-            "tdnf", "install", "-y", "--nogpgcheck",
+            "rpmz", "install", "-y", "--nogpgcheck",
             "--setopt=keepcache=1",
             "--setopt=cachedir={}".format(host_cache),
             "--installroot", installroot,
@@ -161,7 +161,7 @@ def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
         erase_package(utils, pkgname, installroot=installroot)
         os.remove(target_rpm)
         ret = utils.run([
-            "tdnf", "install", "-y", "--nogpgcheck",
+            "rpmz", "install", "-y", "--nogpgcheck",
             "--setopt=keepcache=0",
             "--setopt=cachedir={}".format(host_cache),
             "--installroot", installroot,
@@ -180,7 +180,7 @@ def test_remote_install_uses_pinned_installroot_cache_bytes(utils):
 
 def test_makecache(utils):
     install_root(utils)
-    ret = utils.run(['tdnf', 'makecache',
+    ret = utils.run(['rpmz', 'makecache',
                      '-y', '--nogpgcheck',
                      '--installroot', INSTALLROOT,
                      '--releasever=4.0'], noconfig=True)
@@ -197,7 +197,7 @@ def test_setopt_reposdir_with_installroot(utils):
     utils.create_repoconf(os.path.join(REPODIR, REPOFILENAME),
                           "http://foo.bar.com/packages",
                           REPONAME)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--installroot', INSTALLROOT,
                      '--releasever=4.0',
                      '--setopt=reposdir={}'.format(REPODIR),
@@ -209,7 +209,7 @@ def test_setopt_reposdir_with_installroot(utils):
 
 def test_installroot_local_rpms_disablerepo_after_download(utils):
 
-    workdir = tempfile.mkdtemp(prefix='test-tdnf-')
+    workdir = tempfile.mkdtemp(prefix='test-rpmz-')
     try:
         installroot = os.path.join(workdir, 'installroot')
         rpm_repo = os.path.join(workdir, 'rpm-repo')
@@ -219,7 +219,7 @@ def test_installroot_local_rpms_disablerepo_after_download(utils):
         repo_url = "http://localhost:8080/photon-test"
 
         ret = utils.run(
-            ['tdnf', 'install', '-y', 'tdnf-test3', 'tdnf-test4',
+            ['rpmz', 'install', '-y', 'tdnf-test3', 'tdnf-test4',
              '--refresh', '--downloadonly',
              '--releasever', RELEASE_VER,
              '--installroot', installroot,
@@ -235,7 +235,7 @@ def test_installroot_local_rpms_disablerepo_after_download(utils):
         assert len(rpms) >= 1, 'no RPMs downloaded into rpm-repo'
 
         ret = utils.run(
-            ['tdnf', 'install', '-y', '--refresh', '--releasever', RELEASE_VER,
+            ['rpmz', 'install', '-y', '--refresh', '--releasever', RELEASE_VER,
              '--installroot', installroot, '--disablerepo=*', '--nogpgcheck'] + rpms,
             cwd=workdir
         )

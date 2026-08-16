@@ -14,25 +14,25 @@ def setup_test(utils):
     # remove sglversion_pkgname at the beginning of tests
     pkgname = utils.config['sglversion_pkgname']
     if utils.check_package(pkgname):
-        utils.run(['tdnf', 'erase', '-y', pkgname])
+        utils.run(['rpmz', 'erase', '-y', pkgname])
     yield
     teardown_test(utils)
 
 
 def teardown_test(utils):
     pkgname = utils.config['sglversion_pkgname']
-    utils.run(['tdnf', 'erase', '-y', pkgname])
+    utils.run(['rpmz', 'erase', '-y', pkgname])
 
 
 def test_assumeno_install(utils):
     pkgname = utils.config['sglversion_pkgname']
-    utils.run(['tdnf', '--assumeno', 'install', pkgname])
+    utils.run(['rpmz', '--assumeno', 'install', pkgname])
     assert not utils.check_package(pkgname)
 
 
 def test_assumeno_erase(utils):
     pkgname = utils.config['sglversion_pkgname']
-    utils.run(['tdnf', 'install', '-y', pkgname])
+    utils.run(['rpmz', 'install', '-y', pkgname])
     assert utils.check_package(pkgname)
-    utils.run(['tdnf', '--assumeno', 'erase', pkgname])
+    utils.run(['rpmz', '--assumeno', 'erase', pkgname])
     assert utils.check_package(pkgname)

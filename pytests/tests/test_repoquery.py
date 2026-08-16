@@ -20,13 +20,13 @@ def setup_test(utils):
 
 
 def teardown_test(utils):
-    utils.run(['tdnf', 'remove', '-y', BASE_PKG])
+    utils.run(['rpmz', 'remove', '-y', BASE_PKG])
 
 
 # repoquery should list all packages that depend on BASE_PKG
 # (one of 'enhances', 'recommends', 'requires', 'suggests', 'supplements')
 def test_whatdepends(utils):
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--whatdepends',
                      BASE_PKG])
@@ -43,7 +43,7 @@ def test_what_alldeps(utils):
                  'recommends', 'requires', 'suggests', 'supplements']
 
     for dep in dep_types:
-        ret = utils.run(['tdnf',
+        ret = utils.run(['rpmz',
                          'repoquery',
                          '--what{}'.format(dep),
                          BASE_PKG
@@ -57,7 +57,7 @@ def test_what_alldeps(utils):
 # args to --whatrequires separated by a comma
 def test_what_2(utils):
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--whatrequires',
                      "{},{}".format('doesnotexist', BASE_PKG)
@@ -72,7 +72,7 @@ def test_alldeps(utils):
                  'recommends', 'requires', 'suggests', 'supplements']
 
     for dep in dep_types:
-        ret = utils.run(['tdnf',
+        ret = utils.run(['rpmz',
                          'repoquery',
                          '--{}'.format(dep),
                          'tdnf-repoquery-{}'.format(dep)
@@ -84,7 +84,7 @@ def test_alldeps(utils):
 # all these packages depend on BASE_PKG
 def test_depends(utils):
     for dep in ['enhances', 'recommends', 'requires', 'suggests', 'supplements']:
-        ret = utils.run(['tdnf',
+        ret = utils.run(['rpmz',
                          'repoquery',
                          '--depends',
                          'tdnf-repoquery-{}'.format(dep)])
@@ -98,7 +98,7 @@ def test_list(utils):
                  'recommends', 'requires', 'suggests', 'supplements']
 
     for dep in dep_types:
-        ret = utils.run(['tdnf',
+        ret = utils.run(['rpmz',
                          'repoquery',
                          '--list',
                          'tdnf-repoquery-{}'.format(dep)
@@ -113,7 +113,7 @@ def test_file(utils):
                  'recommends', 'requires', 'suggests', 'supplements']
 
     for dep in dep_types:
-        ret = utils.run(['tdnf',
+        ret = utils.run(['rpmz',
                          'repoquery',
                          '--file',
                          '/usr/lib/repoquery/tdnf-repoquery-{}'.format(dep)
@@ -123,7 +123,7 @@ def test_file(utils):
 
 
 def test_available(utils):
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--available'])
     assert ret['retval'] == 0
@@ -131,12 +131,12 @@ def test_available(utils):
 
 
 def test_installed(utils):
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'install', '-y', '--nogpgcheck',
                      BASE_PKG])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--installed'])
     assert ret['retval'] == 0
@@ -144,7 +144,7 @@ def test_installed(utils):
 
 
 def test_extras(utils):
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--extras'])
     assert ret['retval'] == 0
@@ -154,7 +154,7 @@ def test_extras(utils):
 
 
 def test_location(utils):
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--location',
                      BASE_PKG])
@@ -168,12 +168,12 @@ def test_upgrades(utils):
     pkg_low = "{}-{}".format(utils.config["mulversion_pkgname"], utils.config["mulversion_lower"])
     pkg_high = "{}-{}".format(utils.config["mulversion_pkgname"], utils.config["mulversion_higher"])
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'install', '-y', '--nogpgcheck',
                      pkg_low])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--upgrades'])
     assert ret['retval'] == 0
@@ -186,12 +186,12 @@ def test_downgrades(utils):
     pkg_low = "{}-{}".format(utils.config["mulversion_pkgname"], utils.config["mulversion_lower"])
     pkg_high = "{}-{}".format(utils.config["mulversion_pkgname"], utils.config["mulversion_higher"])
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'install', '-y', '--nogpgcheck',
                      pkg_high])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--downgrades'])
     assert ret['retval'] == 0
@@ -201,7 +201,7 @@ def test_downgrades(utils):
 
 
 def test_changelog(utils):
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--changelogs',
                      'tdnf-repoquery-changelog'])
@@ -219,7 +219,7 @@ def test_source(utils):
     # the same name as the source
     pkgname = 'tdnf-repoquery-base'
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--source',
                      pkgname])
@@ -233,7 +233,7 @@ def test_source(utils):
 # each package has a file with its name
 def test_list1(utils):
     dep = 'requires'
-    ret = utils.run_memcheck(['tdnf',
+    ret = utils.run_memcheck(['rpmz',
                               'repoquery',
                               '--list',
                               'tdnf-repoquery-{}'.format(dep)
@@ -243,7 +243,7 @@ def test_list1(utils):
 
 # fail with ore than one pkg spec
 def test_two_args(utils):
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      'foo',
                      'bar'])
@@ -254,22 +254,22 @@ def test_userinstalled(utils):
     pkgname = BASE_PKG
     utils.install_package(pkgname)
 
-    ret = utils.run(['tdnf', 'repoquery', '--userinstalled', pkgname])
+    ret = utils.run(['rpmz', 'repoquery', '--userinstalled', pkgname])
     assert pkgname in "\n".join(ret['stdout'])
 
-    ret = utils.run(['tdnf', 'mark', 'remove', pkgname])
+    ret = utils.run(['rpmz', 'mark', 'remove', pkgname])
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', 'repoquery', '--userinstalled', pkgname])
+    ret = utils.run(['rpmz', 'repoquery', '--userinstalled', pkgname])
     assert pkgname not in "\n".join(ret['stdout'])
 
 
 def test_arch(utils):
-    ret = utils.run(['tdnf', 'repoquery', '--arch', ARCH])
+    ret = utils.run(['rpmz', 'repoquery', '--arch', ARCH])
     assert 'noarch' not in "\n".join(ret['stdout'])
     assert ARCH in "\n".join(ret['stdout'])
 
-    ret = utils.run(['tdnf', 'repoquery', '--arch', 'noarch'])
+    ret = utils.run(['rpmz', 'repoquery', '--arch', 'noarch'])
     assert 'noarch' in "\n".join(ret['stdout'])
     assert ARCH not in "\n".join(ret['stdout'])
 
@@ -283,7 +283,7 @@ def test_queryformat(utils):
                  'recommends', 'requires', 'suggests', 'supplements']
 
     for tag in querytags:
-        ret = utils.run(['tdnf',
+        ret = utils.run(['rpmz',
                          'repoquery',
                          '--qf',
                          f"%{{{tag}}}",
@@ -291,7 +291,7 @@ def test_queryformat(utils):
                          ])
         assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--qf',
                      '%{name} : %{requires}',
@@ -301,7 +301,7 @@ def test_queryformat(utils):
     assert 'tdnf-repoquery-queryformat' in '\n'.join(ret['stdout'])
     assert 'tdnf-test-cleanreq1-required' in '\n'.join(ret['stdout'])
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--qf',
                      '%{provides}\t%{conflicts}',
@@ -311,7 +311,7 @@ def test_queryformat(utils):
     assert 'tdnf-repoquery-queryformat' in '\n'.join(ret['stdout'])
     assert 'tdnf-test-conflicts-0' in '\n'.join(ret['stdout'])
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--qf',
                      '%{obsoletes}\n%{version}',
@@ -321,7 +321,7 @@ def test_queryformat(utils):
     assert 'tdnf-test-obsoleted' in '\n'.join(ret['stdout'])
     assert '1.0.1' in '\n'.join(ret['stdout'])
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--qf',
                      '%{arch}',
@@ -330,7 +330,7 @@ def test_queryformat(utils):
     assert ret['retval'] == 0
     assert 'noarch' in '\n'.join(ret['stdout'])
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--qf',
                      'Requires:\n%{requires}\nConficts:\n%{conflicts}\n',
@@ -342,7 +342,7 @@ def test_queryformat(utils):
     assert 'Conficts:' in '\n'.join(ret['stdout'])
     assert 'tdnf-test-conflicts-0' in '\n'.join(ret['stdout'])
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      'repoquery',
                      '--qf',
                      '%{location}',

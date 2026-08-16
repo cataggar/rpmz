@@ -9,8 +9,8 @@ const std = @import("std");
 const harness = @import("harness.zig");
 
 const io = std.testing.io;
-const metalink_plugin = "tdnfmetalink";
-const repogpgcheck_plugin = "tdnfrepogpgcheck";
+const metalink_plugin = "rpmzmetalink";
+const repogpgcheck_plugin = "rpmzrepogpgcheck";
 const signature_check_code: u8 = 2004 % 256;
 const metalink_validation_code: u8 = 2501 % 256;
 
@@ -214,7 +214,7 @@ test "plugin contract: global, per-plugin, and CLI glob controls select built-in
         var root = try h.root();
         defer root.deinit();
         try configurePlugins(&root, true, false, false);
-        try expectPluginSet(&root, &.{ "repolist", "--enableplugin=tdnf*" }, true, true);
+        try expectPluginSet(&root, &.{ "repolist", "--enableplugin=rpmz*" }, true, true);
     }
     {
         var root = try h.root();
@@ -223,7 +223,7 @@ test "plugin contract: global, per-plugin, and CLI glob controls select built-in
         try expectPluginSet(&root, &.{ "repolist", "--disableplugin=*" }, false, false);
         try expectPluginSet(
             &root,
-            &.{ "repolist", "--disableplugin=*", "--enableplugin=tdnfrepo*" },
+            &.{ "repolist", "--disableplugin=*", "--enableplugin=rpmzrepo*" },
             false,
             true,
         );

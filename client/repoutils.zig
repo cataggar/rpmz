@@ -5,10 +5,10 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const txn_config = @import("rpm_txn_config");
 
 const Conf = abi.Conf;
@@ -608,13 +608,13 @@ fn removeCacheChildWithOps(
     name: [*:0]const u8,
     ops: RemoveOps,
 ) u32 {
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const repo_data = repo orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
 
     var root_fd: c_int = -1;
     var repo_fd: c_int = -1;
     const result = openCacheRepository(
-        tdnf,
+        rpmz,
         repo_data,
         basis,
         &root_fd,
@@ -632,13 +632,13 @@ fn removeRepoCacheFile(
     repo: ?*RepoData,
     filename: [*:0]const u8,
 ) u32 {
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const repo_data = repo orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
 
     var root_fd: c_int = -1;
     var repo_fd: c_int = -1;
     const result = openCacheRepository(
-        tdnf,
+        rpmz,
         repo_data,
         .cache_name,
         &root_fd,
@@ -655,13 +655,13 @@ pub export fn TDNFRepoRemoveCacheDir(
     handle: ?*Tdnf,
     repo: ?*RepoData,
 ) u32 {
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const repo_data = repo orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const component = checkedRepositoryComponent(repo_data, .cache_name) orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER;
 
     var root_fd: c_int = -1;
-    const result = openCacheRoot(tdnf, &root_fd);
+    const result = openCacheRoot(rpmz, &root_fd);
     if (result == systemError(ENOENT)) return 0;
     if (result != 0) return result;
     defer _ = c.close(root_fd);
@@ -737,12 +737,12 @@ pub export fn TDNFRemoveSnapshot(
     handle: ?*Tdnf,
     repo: ?*RepoData,
 ) u32 {
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const repo_data = repo orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var root_fd: c_int = -1;
     var repo_fd: c_int = -1;
     const result = openCacheRepository(
-        tdnf,
+        rpmz,
         repo_data,
         .cache_name,
         &root_fd,
@@ -825,9 +825,9 @@ pub export fn TDNFGetCachePath(
     output: ?*?[*:0]u8,
 ) u32 {
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const repo_data = repo orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    return getCachePath(tdnf, repo_data, subdir, filename, out);
+    return getCachePath(rpmz, repo_data, subdir, filename, out);
 }
 
 pub export fn RepoutilsGetRpmCachePath(
@@ -836,11 +836,11 @@ pub export fn RepoutilsGetRpmCachePath(
     output: ?*?[*:0]u8,
 ) u32 {
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const repo_data = repo orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     // The downloader has always stored RPMs under pszId, not pszCacheName.
     return getCachePathWithBasis(
-        tdnf,
+        rpmz,
         repo_data,
         .id,
         rpm_cache_dir_name,
@@ -854,12 +854,12 @@ pub export fn TDNFFindRepoById(
     repo_id: ?[*:0]const u8,
     output: ?*?*RepoData,
 ) u32 {
-    const tdnf = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = handle orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const id = repo_id orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (id[0] == 0 or output == null) return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf.pRepos == null) return errors.ERROR_TDNF_NO_REPOS;
+    if (rpmz.pRepos == null) return errors.ERROR_TDNF_NO_REPOS;
 
-    var current = tdnf.pRepos;
+    var current = rpmz.pRepos;
     while (current) |repo| : (current = repo.pNext) {
         const current_id = cString(repo.pszId) orelse continue;
         if (std.mem.eql(u8, std.mem.span(id), std.mem.span(current_id))) {

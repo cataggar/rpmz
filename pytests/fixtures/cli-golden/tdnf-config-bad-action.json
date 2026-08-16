@@ -1,9 +1,0 @@
-{
-  "argv": [
-    "tdnf-config",
-    "frobnicate"
-  ],
-  "stdout": "",
-  "stderr": "expected main or repo name",
-  "retval": 1
-}

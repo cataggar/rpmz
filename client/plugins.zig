@@ -5,10 +5,10 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const backend = @import("builtin_plugins");
 const plugin_metadata = @import("plugin_metadata");
 const txn_config = @import("rpm_txn_config");
@@ -39,8 +39,8 @@ const PluginDesc = struct {
 };
 
 const builtins = [_]PluginDesc{
-    .{ .name = "tdnfmetalink", .kind = metalink_kind },
-    .{ .name = "tdnfrepogpgcheck", .kind = repogpgcheck_kind },
+    .{ .name = "rpmzmetalink", .kind = metalink_kind },
+    .{ .name = "rpmzrepogpgcheck", .kind = repogpgcheck_kind },
 };
 
 pub const DownloadPinnedFn = *const fn (
@@ -95,15 +95,15 @@ extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8;
 
 const Production = if (builtin.is_test) struct {
     fn findRepo(
-        tdnf_opt: ?*Tdnf,
+        rpmz_opt: ?*Tdnf,
         id_opt: ?[*:0]const u8,
         output: *?*RepoData,
     ) u32 {
         output.* = null;
-        const tdnf = tdnf_opt orelse
+        const rpmz = rpmz_opt orelse
             return errors.ERROR_TDNF_INVALID_PARAMETER;
         const id = id_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-        var repo = tdnf.pRepos;
+        var repo = rpmz.pRepos;
         while (repo) |current| : (repo = current.pNext) {
             if (current.pszId) |candidate| {
                 if (std.mem.eql(
@@ -120,7 +120,7 @@ const Production = if (builtin.is_test) struct {
     }
 
     fn downloadFilePinned(
-        tdnf: ?*Tdnf,
+        rpmz: ?*Tdnf,
         repo: ?*RepoData,
         source: ?[*:0]const u8,
         destination: ?*const PinnedDirectory,
@@ -132,7 +132,7 @@ const Production = if (builtin.is_test) struct {
         if (output) |value| value.* = .{};
         if (test_download_pinned) |callback| {
             return callback(
-                tdnf,
+                rpmz,
                 repo,
                 source,
                 destination,
@@ -146,12 +146,12 @@ const Production = if (builtin.is_test) struct {
     }
 } else struct {
     extern fn TDNFFindRepoById(
-        tdnf: ?*Tdnf,
+        rpmz: ?*Tdnf,
         id: ?[*:0]const u8,
         output: *?*RepoData,
     ) callconv(.c) u32;
     extern fn TDNFDownloadFilePinned(
-        tdnf: ?*Tdnf,
+        rpmz: ?*Tdnf,
         repo: ?*RepoData,
         source: ?[*:0]const u8,
         destination: ?*const PinnedDirectory,
@@ -162,15 +162,15 @@ const Production = if (builtin.is_test) struct {
     ) callconv(.c) u32;
 
     fn findRepo(
-        tdnf: ?*Tdnf,
+        rpmz: ?*Tdnf,
         id: ?[*:0]const u8,
         output: *?*RepoData,
     ) u32 {
-        return TDNFFindRepoById(tdnf, id, output);
+        return TDNFFindRepoById(rpmz, id, output);
     }
 
     fn downloadFilePinned(
-        tdnf: ?*Tdnf,
+        rpmz: ?*Tdnf,
         repo: ?*RepoData,
         source: ?[*:0]const u8,
         destination: ?*const PinnedDirectory,
@@ -180,7 +180,7 @@ const Production = if (builtin.is_test) struct {
         output: ?*PinnedFile,
     ) u32 {
         return TDNFDownloadFilePinned(
-            tdnf,
+            rpmz,
             repo,
             source,
             destination,
@@ -213,7 +213,7 @@ const Ops = struct {
     ) u32,
     create_metalink: *const fn (
         context: ?*anyopaque,
-        tdnf: ?*Tdnf,
+        rpmz: ?*Tdnf,
         output: *?*anyopaque,
     ) u32,
     destroy_metalink: *const fn (
@@ -239,7 +239,7 @@ const Ops = struct {
     ) u32,
     create_repogpgcheck: *const fn (
         context: ?*anyopaque,
-        tdnf: ?*Tdnf,
+        rpmz: ?*Tdnf,
         output: *?*anyopaque,
     ) u32,
     destroy_repogpgcheck: *const fn (
@@ -287,10 +287,10 @@ fn productionAllocatePath(
 
 fn productionCreateMetalink(
     _: ?*anyopaque,
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     output: *?*anyopaque,
 ) u32 {
-    return backend.BuiltinMetalinkCreate(tdnf, output);
+    return backend.BuiltinMetalinkCreate(rpmz, output);
 }
 
 fn productionDestroyMetalink(_: ?*anyopaque, handle: ?*anyopaque) void {
@@ -333,10 +333,10 @@ fn productionMetalinkRepoMDEnd(
 
 fn productionCreateRepoGPGCheck(
     _: ?*anyopaque,
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     output: *?*anyopaque,
 ) u32 {
-    return backend.BuiltinRepoGPGCheckCreate(tdnf, output);
+    return backend.BuiltinRepoGPGCheckCreate(rpmz, output);
 }
 
 fn productionDestroyRepoGPGCheck(_: ?*anyopaque, handle: ?*anyopaque) void {
@@ -535,19 +535,19 @@ fn freePlugins(plugins_opt: ?*Plugin, ops: Ops) void {
 }
 
 fn loadPluginConfigs(
-    tdnf_opt: ?*Tdnf,
+    rpmz_opt: ?*Tdnf,
     output: ?*?*Plugin,
     ops: Ops,
 ) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const out = output orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const conf = tdnf.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const conf = rpmz.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
 
     var pinned_directory: c_int = -1;
     defer {
         if (pinned_directory >= 0) _ = std.c.close(pinned_directory);
     }
-    if (tdnf.pRpmConfig) |raw| {
+    if (rpmz.pRpmConfig) |raw| {
         const config: *const txn_config.TxnConfig =
             @ptrCast(@alignCast(raw));
         const path = std.mem.span(conf.pszPluginConfPath.?);
@@ -659,8 +659,8 @@ fn alterPluginState(
     return 0;
 }
 
-fn applyPluginOverrides(tdnf: *Tdnf, plugins: *Plugin) u32 {
-    const args = tdnf.pArgs orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+fn applyPluginOverrides(rpmz: *Tdnf, plugins: *Plugin) u32 {
+    const args = rpmz.pArgs orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const setopts = args.cn_setopts orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     var node = setopts.first_child;
     while (node) |current| : (node = current.next) {
@@ -710,11 +710,11 @@ fn showPluginError(plugin_opt: ?*Plugin, result: u32) void {
     common.log(LOG_ERR, "Plugin error: %s: %s\n", .{ prefix, pluginErrorDescription(plugin, result) });
 }
 
-fn initPlugin(tdnf: *Tdnf, plugin: *Plugin, ops: Ops) u32 {
+fn initPlugin(rpmz: *Tdnf, plugin: *Plugin, ops: Ops) u32 {
     const result = if (plugin.nKind == metalink_kind)
-        ops.create_metalink(ops.context, tdnf, &plugin.pHandle)
+        ops.create_metalink(ops.context, rpmz, &plugin.pHandle)
     else
-        ops.create_repogpgcheck(ops.context, tdnf, &plugin.pHandle);
+        ops.create_repogpgcheck(ops.context, rpmz, &plugin.pHandle);
     if (result != 0) {
         showPluginError(plugin, result);
         return result;
@@ -723,10 +723,10 @@ fn initPlugin(tdnf: *Tdnf, plugin: *Plugin, ops: Ops) u32 {
     return 0;
 }
 
-fn loadPlugins(tdnf_opt: ?*Tdnf, ops: Ops) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const args = tdnf.pArgs orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const conf = tdnf.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+fn loadPlugins(rpmz_opt: ?*Tdnf, ops: Ops) u32 {
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const args = rpmz.pArgs orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const conf = rpmz.pConf orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (conf.nPluginsEnabled == 0) return 0;
 
     const setopts = args.cn_setopts orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
@@ -738,12 +738,12 @@ fn loadPlugins(tdnf_opt: ?*Tdnf, ops: Ops) u32 {
     }
 
     var plugins: ?*Plugin = null;
-    var result = loadPluginConfigs(tdnf, &plugins, ops);
+    var result = loadPluginConfigs(rpmz, &plugins, ops);
     if (result == ERROR_TDNF_NO_PLUGIN_CONF_DIR) return 0;
     if (result != 0) return result;
 
     if (plugins) |head| {
-        result = applyPluginOverrides(tdnf, head);
+        result = applyPluginOverrides(rpmz, head);
         if (result != 0) {
             freePlugins(plugins, ops);
             return result;
@@ -752,25 +752,25 @@ fn loadPlugins(tdnf_opt: ?*Tdnf, ops: Ops) u32 {
     var plugin = plugins;
     while (plugin) |current| : (plugin = current.pNext) {
         if (current.nEnabled == 0) continue;
-        result = initPlugin(tdnf, current, ops);
+        result = initPlugin(rpmz, current, ops);
         if (result != 0) {
             freePlugins(plugins, ops);
             return result;
         }
     }
 
-    tdnf.pPlugins = plugins;
+    rpmz.pPlugins = plugins;
     return 0;
 }
 
 fn pluginsRepoConfig(
-    tdnf_opt: ?*Tdnf,
+    rpmz_opt: ?*Tdnf,
     section_opt: ?*const CnfNode,
     ops: Ops,
 ) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     const section = section_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
-    var plugin = tdnf.pPlugins;
+    var plugin = rpmz.pPlugins;
     while (plugin) |current| : (plugin = current.pNext) {
         if (current.nEnabled == 0) continue;
         const result = if (current.nKind == metalink_kind)
@@ -786,15 +786,15 @@ fn pluginsRepoConfig(
 }
 
 fn pluginsRepoMDDownloadStart(
-    tdnf_opt: ?*Tdnf,
+    rpmz_opt: ?*Tdnf,
     repo_id: ?[*:0]const u8,
     repo_data_dir: ?*const PinnedDirectory,
     ops: Ops,
 ) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (isNullOrEmpty(repo_id) or !validPinnedDirectory(repo_data_dir))
         return errors.ERROR_TDNF_INVALID_PARAMETER;
-    var plugin = tdnf.pPlugins;
+    var plugin = rpmz.pPlugins;
     while (plugin) |current| : (plugin = current.pNext) {
         if (current.nEnabled == 0 or current.nKind != metalink_kind) continue;
         const result = ops.metalink_repo_md_start(
@@ -812,15 +812,15 @@ fn pluginsRepoMDDownloadStart(
 }
 
 fn pluginsRepoMDDownloadEnd(
-    tdnf_opt: ?*Tdnf,
+    rpmz_opt: ?*Tdnf,
     repo_id: ?[*:0]const u8,
     repomd_file: ?*const PinnedFile,
     ops: Ops,
 ) u32 {
-    const tdnf = tdnf_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
+    const rpmz = rpmz_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (isNullOrEmpty(repo_id) or !validPinnedFile(repomd_file))
         return errors.ERROR_TDNF_INVALID_PARAMETER;
-    var plugin = tdnf.pPlugins;
+    var plugin = rpmz.pPlugins;
     while (plugin) |current| : (plugin = current.pNext) {
         if (current.nEnabled == 0) continue;
         const result = if (current.nKind == metalink_kind)
@@ -845,8 +845,8 @@ fn pluginsRepoMDDownloadEnd(
     return 0;
 }
 
-export fn TDNFLoadPlugins(tdnf: ?*Tdnf) callconv(.c) u32 {
-    return loadPlugins(tdnf, production_ops);
+export fn TDNFLoadPlugins(rpmz: ?*Tdnf) callconv(.c) u32 {
+    return loadPlugins(rpmz, production_ops);
 }
 
 export fn TDNFFreePlugins(plugins: ?*Plugin) callconv(.c) void {
@@ -854,19 +854,19 @@ export fn TDNFFreePlugins(plugins: ?*Plugin) callconv(.c) void {
 }
 
 export fn BuiltinPluginsRepoConfig(
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     section: ?*const CnfNode,
 ) callconv(.c) u32 {
-    return pluginsRepoConfig(tdnf, section, production_ops);
+    return pluginsRepoConfig(rpmz, section, production_ops);
 }
 
 export fn BuiltinPluginsRepoMDDownloadStart(
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     repo_id: ?[*:0]const u8,
     repo_data_dir: ?*const PinnedDirectory,
 ) callconv(.c) u32 {
     return pluginsRepoMDDownloadStart(
-        tdnf,
+        rpmz,
         repo_id,
         repo_data_dir,
         production_ops,
@@ -874,12 +874,12 @@ export fn BuiltinPluginsRepoMDDownloadStart(
 }
 
 export fn BuiltinPluginsRepoMDDownloadEnd(
-    tdnf: ?*Tdnf,
+    rpmz: ?*Tdnf,
     repo_id: ?[*:0]const u8,
     repomd_file: ?*const PinnedFile,
 ) callconv(.c) u32 {
     return pluginsRepoMDDownloadEnd(
-        tdnf,
+        rpmz,
         repo_id,
         repomd_file,
         production_ops,
@@ -887,8 +887,8 @@ export fn BuiltinPluginsRepoMDDownloadEnd(
 }
 
 export fn BuiltinRefreshRequested(handle: ?*anyopaque) callconv(.c) c_int {
-    const tdnf: *Tdnf = @ptrCast(@alignCast(handle orelse return 0));
-    const args = tdnf.pArgs orelse return 0;
+    const rpmz: *Tdnf = @ptrCast(@alignCast(handle orelse return 0));
+    const args = rpmz.pArgs orelse return 0;
     return args.nRefresh;
 }
 
@@ -922,7 +922,7 @@ export fn BuiltinDownloadMetalink(
     output: ?*PinnedFile,
 ) callconv(.c) u32 {
     if (output) |value| value.* = .{};
-    const tdnf: *Tdnf = @ptrCast(@alignCast(handle orelse
+    const rpmz: *Tdnf = @ptrCast(@alignCast(handle orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER));
     const repo: *RepoData = @ptrCast(@alignCast(repo_handle orelse
         return errors.ERROR_TDNF_INVALID_PARAMETER));
@@ -933,7 +933,7 @@ export fn BuiltinDownloadMetalink(
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
     return Production.downloadFilePinned(
-        tdnf,
+        rpmz,
         repo,
         repo.pszMetaLink,
         destination,
@@ -1212,11 +1212,11 @@ fn writePluginConfigs(
     }
     try tmp.dir.createDirPath(testing.io, "pluginconf.d");
     try tmp.dir.writeFile(testing.io, .{
-        .sub_path = "pluginconf.d/tdnfmetalink.conf",
+        .sub_path = "pluginconf.d/rpmzmetalink.conf",
         .data = if (metalink_enabled) "[main]\nenabled=true\n" else "[main]\nenabled=false\n",
     });
     try tmp.dir.writeFile(testing.io, .{
-        .sub_path = "pluginconf.d/tdnfrepogpgcheck.conf",
+        .sub_path = "pluginconf.d/rpmzrepogpgcheck.conf",
         .data = if (repogpgcheck_enabled) "[main]\nenabled=1\n" else "[main]\nenabled=0\n",
     });
 }
@@ -1229,9 +1229,9 @@ test "plugin ABI layouts match the private canonical definitions" {
 }
 
 test "plugin overrides preserve command order and glob precedence" {
-    var metalink = testPlugin(@constCast("tdnfmetalink"), 1, metalink_kind, null);
+    var metalink = testPlugin(@constCast("rpmzmetalink"), 1, metalink_kind, null);
     var repogpgcheck = testPlugin(
-        @constCast("tdnfrepogpgcheck"),
+        @constCast("rpmzrepogpgcheck"),
         1,
         repogpgcheck_kind,
         null,
@@ -1239,7 +1239,7 @@ test "plugin overrides preserve command order and glob precedence" {
     metalink.pNext = &repogpgcheck;
     var enable = CnfNode{
         .name = @constCast("enableplugin"),
-        .value = @constCast("tdnfrepo*"),
+        .value = @constCast("rpmzrepo*"),
     };
     var disable = CnfNode{
         .next = &enable,
@@ -1248,9 +1248,9 @@ test "plugin overrides preserve command order and glob precedence" {
     };
     var setopts = CnfNode{ .first_child = &disable };
     var args = CmdArgs{ .cn_setopts = &setopts };
-    var tdnf = Tdnf{ .pArgs = &args };
+    var rpmz = Tdnf{ .pArgs = &args };
 
-    try testing.expectEqual(@as(u32, 0), applyPluginOverrides(&tdnf, &metalink));
+    try testing.expectEqual(@as(u32, 0), applyPluginOverrides(&rpmz, &metalink));
     try testing.expectEqual(@as(c_int, 0), metalink.nEnabled);
     try testing.expectEqual(@as(c_int, 1), repogpgcheck.nEnabled);
     try testing.expectEqual(
@@ -1276,20 +1276,20 @@ test "plugin lifecycle initializes, cleans up, and repeats safely" {
         .nPluginsEnabled = 1,
         .pszPluginConfPath = path.ptr,
     };
-    var tdnf = Tdnf{ .pArgs = &args, .pConf = &conf };
+    var rpmz = Tdnf{ .pArgs = &args, .pConf = &conf };
 
     var state = TestState{};
     const ops = testOps(&state);
-    try testing.expectEqual(@as(u32, 0), loadPlugins(&tdnf, ops));
-    try testing.expect(tdnf.pPlugins != null);
+    try testing.expectEqual(@as(u32, 0), loadPlugins(&rpmz, ops));
+    try testing.expect(rpmz.pPlugins != null);
     try testing.expectEqual([2]usize{ 1, 1 }, state.creates);
-    freePlugins(tdnf.pPlugins, ops);
-    tdnf.pPlugins = null;
+    freePlugins(rpmz.pPlugins, ops);
+    rpmz.pPlugins = null;
     try testing.expectEqual([2]usize{ 1, 1 }, state.destroys);
 
-    try testing.expectEqual(@as(u32, 0), loadPlugins(&tdnf, ops));
-    freePlugins(tdnf.pPlugins, ops);
-    tdnf.pPlugins = null;
+    try testing.expectEqual(@as(u32, 0), loadPlugins(&rpmz, ops));
+    freePlugins(rpmz.pPlugins, ops);
+    rpmz.pPlugins = null;
     freePlugins(null, ops);
     try testing.expectEqual([2]usize{ 2, 2 }, state.creates);
     try testing.expectEqual([2]usize{ 2, 2 }, state.destroys);
@@ -1308,18 +1308,18 @@ test "per-plugin configuration retains disabled entries without initializing the
         .nPluginsEnabled = 1,
         .pszPluginConfPath = path.ptr,
     };
-    var tdnf = Tdnf{ .pArgs = &args, .pConf = &conf };
+    var rpmz = Tdnf{ .pArgs = &args, .pConf = &conf };
     var state = TestState{};
     const ops = testOps(&state);
 
-    try testing.expectEqual(@as(u32, 0), loadPlugins(&tdnf, ops));
-    const metalink = tdnf.pPlugins.?;
+    try testing.expectEqual(@as(u32, 0), loadPlugins(&rpmz, ops));
+    const metalink = rpmz.pPlugins.?;
     const repogpgcheck = metalink.pNext.?;
     try testing.expectEqual(@as(c_int, 0), metalink.nEnabled);
     try testing.expectEqual(@as(c_int, 1), repogpgcheck.nEnabled);
     try testing.expectEqual([2]usize{ 0, 1 }, state.creates);
-    freePlugins(tdnf.pPlugins, ops);
-    tdnf.pPlugins = null;
+    freePlugins(rpmz.pPlugins, ops);
+    rpmz.pPlugins = null;
     try testing.expectEqual([2]usize{ 0, 1 }, state.destroys);
 }
 
@@ -1327,26 +1327,26 @@ test "plugin events preserve registration, payload, order, and failures" {
     var state = TestState{};
     const ops = testOps(&state);
     var metalink = testPlugin(
-        @constCast("tdnfmetalink"),
+        @constCast("rpmzmetalink"),
         1,
         metalink_kind,
         @ptrFromInt(1),
     );
     var disabled = testPlugin(
-        @constCast("tdnfmetalink-disabled"),
+        @constCast("rpmzmetalink-disabled"),
         0,
         metalink_kind,
         @ptrFromInt(1),
     );
     var repogpgcheck = testPlugin(
-        @constCast("tdnfrepogpgcheck"),
+        @constCast("rpmzrepogpgcheck"),
         1,
         repogpgcheck_kind,
         @ptrFromInt(2),
     );
     metalink.pNext = &disabled;
     disabled.pNext = &repogpgcheck;
-    var tdnf = Tdnf{ .pPlugins = &metalink };
+    var rpmz = Tdnf{ .pPlugins = &metalink };
     var section = CnfNode{ .name = @constCast("repo-id") };
     const directory = PinnedDirectory{ .fd = 10 };
     const repomd = PinnedFile{
@@ -1357,15 +1357,15 @@ test "plugin events preserve registration, payload, order, and failures" {
 
     try testing.expectEqual(
         @as(u32, 0),
-        pluginsRepoConfig(&tdnf, &section, ops),
+        pluginsRepoConfig(&rpmz, &section, ops),
     );
     try testing.expectEqual(
         @as(u32, 0),
-        pluginsRepoMDDownloadStart(&tdnf, "repo-id", &directory, ops),
+        pluginsRepoMDDownloadStart(&rpmz, "repo-id", &directory, ops),
     );
     try testing.expectEqual(
         @as(u32, 0),
-        pluginsRepoMDDownloadEnd(&tdnf, "repo-id", &repomd, ops),
+        pluginsRepoMDDownloadEnd(&rpmz, "repo-id", &repomd, ops),
     );
     try testing.expectEqualSlices(
         u8,
@@ -1389,15 +1389,15 @@ test "plugin events preserve registration, payload, order, and failures" {
         state.fail_event = failure.code;
         state.sequence_len = 0;
         const result = switch (failure.event) {
-            .config => pluginsRepoConfig(&tdnf, &section, ops),
+            .config => pluginsRepoConfig(&rpmz, &section, ops),
             .start => pluginsRepoMDDownloadStart(
-                &tdnf,
+                &rpmz,
                 "repo-id",
                 &directory,
                 ops,
             ),
             .end => pluginsRepoMDDownloadEnd(
-                &tdnf,
+                &rpmz,
                 "repo-id",
                 &repomd,
                 ops,
@@ -1415,7 +1415,7 @@ test "plugin events preserve registration, payload, order, and failures" {
 test "plugin entry points reject invalid payloads and accept empty lists" {
     var state = TestState{};
     const ops = testOps(&state);
-    var tdnf = Tdnf{};
+    var rpmz = Tdnf{};
     var section = CnfNode{};
     const directory = PinnedDirectory{ .fd = 10 };
 
@@ -1425,16 +1425,16 @@ test "plugin entry points reject invalid payloads and accept empty lists" {
     );
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,
-        pluginsRepoConfig(&tdnf, null, ops),
+        pluginsRepoConfig(&rpmz, null, ops),
     );
-    try testing.expectEqual(@as(u32, 0), pluginsRepoConfig(&tdnf, &section, ops));
+    try testing.expectEqual(@as(u32, 0), pluginsRepoConfig(&rpmz, &section, ops));
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,
-        pluginsRepoMDDownloadStart(&tdnf, "", &directory, ops),
+        pluginsRepoMDDownloadStart(&rpmz, "", &directory, ops),
     );
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,
-        pluginsRepoMDDownloadEnd(&tdnf, "repo", null, ops),
+        pluginsRepoMDDownloadEnd(&rpmz, "repo", null, ops),
     );
 }
 
@@ -1451,11 +1451,11 @@ test "plugin initialization failure frees every partial resource" {
         .nPluginsEnabled = 1,
         .pszPluginConfPath = path.ptr,
     };
-    var tdnf = Tdnf{ .pArgs = &args, .pConf = &conf };
+    var rpmz = Tdnf{ .pArgs = &args, .pConf = &conf };
     var state = TestState{ .fail_create_kind = repogpgcheck_kind };
 
-    try testing.expectEqual(@as(u32, 2004), loadPlugins(&tdnf, testOps(&state)));
-    try testing.expect(tdnf.pPlugins == null);
+    try testing.expectEqual(@as(u32, 2004), loadPlugins(&rpmz, testOps(&state)));
+    try testing.expect(rpmz.pPlugins == null);
     try testing.expectEqual([2]usize{ 1, 1 }, state.creates);
     try testing.expectEqual([2]usize{ 1, 0 }, state.destroys);
 }
@@ -1473,21 +1473,21 @@ test "plugin allocation failures leave no list or initialized handle" {
         .nPluginsEnabled = 1,
         .pszPluginConfPath = path.ptr,
     };
-    var tdnf = Tdnf{ .pArgs = &args, .pConf = &conf };
+    var rpmz = Tdnf{ .pArgs = &args, .pConf = &conf };
 
     var count = TestState{};
-    try testing.expectEqual(@as(u32, 0), loadPlugins(&tdnf, testOps(&count)));
-    freePlugins(tdnf.pPlugins, testOps(&count));
-    tdnf.pPlugins = null;
+    try testing.expectEqual(@as(u32, 0), loadPlugins(&rpmz, testOps(&count)));
+    freePlugins(rpmz.pPlugins, testOps(&count));
+    rpmz.pPlugins = null;
 
     var fail_at: usize = 1;
     while (fail_at <= count.allocations) : (fail_at += 1) {
         var state = TestState{ .fail_allocation_at = fail_at };
         try testing.expectEqual(
             errors.ERROR_TDNF_OUT_OF_MEMORY,
-            loadPlugins(&tdnf, testOps(&state)),
+            loadPlugins(&rpmz, testOps(&state)),
         );
-        try testing.expect(tdnf.pPlugins == null);
+        try testing.expect(rpmz.pPlugins == null);
         try testing.expectEqual([2]usize{ 0, 0 }, state.creates);
         try testing.expectEqual([2]usize{ 0, 0 }, state.destroys);
     }
@@ -1497,23 +1497,23 @@ test "global disable, noplugins, and missing config directory skip plugins" {
     var setopts = CnfNode{};
     var args = CmdArgs{ .cn_setopts = &setopts };
     var conf = Conf{ .pszPluginConfPath = @constCast("missing-plugin-dir") };
-    var tdnf = Tdnf{ .pArgs = &args, .pConf = &conf };
+    var rpmz = Tdnf{ .pArgs = &args, .pConf = &conf };
     var state = TestState{};
     const ops = testOps(&state);
 
-    try testing.expectEqual(@as(u32, 0), loadPlugins(&tdnf, ops));
+    try testing.expectEqual(@as(u32, 0), loadPlugins(&rpmz, ops));
     conf.nPluginsEnabled = 1;
-    try testing.expectEqual(@as(u32, 0), loadPlugins(&tdnf, ops));
+    try testing.expectEqual(@as(u32, 0), loadPlugins(&rpmz, ops));
     var no_plugins = CnfNode{ .name = @constCast("noplugins") };
     setopts.first_child = &no_plugins;
-    try testing.expectEqual(@as(u32, 0), loadPlugins(&tdnf, ops));
+    try testing.expectEqual(@as(u32, 0), loadPlugins(&rpmz, ops));
     try testing.expectEqual([2]usize{ 0, 0 }, state.creates);
 }
 
 test "built-in bridge helpers preserve null and ownership behavior" {
     var args = CmdArgs{ .nRefresh = 1 };
-    var tdnf = Tdnf{ .pArgs = &args };
-    try testing.expectEqual(@as(c_int, 1), BuiltinRefreshRequested(&tdnf));
+    var rpmz = Tdnf{ .pArgs = &args };
+    try testing.expectEqual(@as(c_int, 1), BuiltinRefreshRequested(&rpmz));
     try testing.expectEqual(@as(c_int, 0), BuiltinRefreshRequested(null));
     try testing.expect(BuiltinGetEnv(null) == null);
 

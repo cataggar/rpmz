@@ -45,7 +45,7 @@ def test_locks_conf_erase(utils):
     assert utils.check_package(pkgname)
 
     # test - uninstalling should fail
-    utils.run(['tdnf', '-y', '--nogpgcheck', 'remove', pkgname])
+    utils.run(['rpmz', '-y', '--nogpgcheck', 'remove', pkgname])
     assert utils.check_package(pkgname)
 
 
@@ -58,5 +58,5 @@ def test_locks_conf_update(utils):
     assert utils.check_package(pkgname)
 
     # test - update should fail
-    utils.run(['tdnf', '-y', '--nogpgcheck', 'update', pkgname])
+    utils.run(['rpmz', '-y', '--nogpgcheck', 'update', pkgname])
     assert utils.check_package(pkgname, version=version_low)

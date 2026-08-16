@@ -32,7 +32,7 @@ def cleanup_installroot():
 
 
 def run_install(utils, pkgname, dbpath, define_args):
-    ret = utils.run(['tdnf', 'install',
+    ret = utils.run(['rpmz', 'install',
                      '-y', '--nogpgcheck',
                      '--installroot', INSTALLROOT,
                      '--releasever=5.0',
@@ -43,7 +43,7 @@ def run_install(utils, pkgname, dbpath, define_args):
     assert os.path.isdir(os.path.join(INSTALLROOT, dbpath.lstrip("/")))
     assert os.path.isfile(os.path.join(INSTALLROOT, dbpath.lstrip("/"), "rpmdb.sqlite"))
 
-    ret = utils.run(['tdnf', 'list', 'installed',
+    ret = utils.run(['rpmz', 'list', 'installed',
                      '--installroot', INSTALLROOT,
                      '--releasever=5.0'] + define_args)
     assert ret['retval'] == 0

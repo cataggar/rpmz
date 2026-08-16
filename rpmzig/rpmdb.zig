@@ -1,11 +1,11 @@
-//! tdnf rpmdb (Zig).
+//! rpmz rpmdb (Zig).
 //!
 //! T1 of the librpm-replacement plan (see
 //! ../plan-replace-librpm.md). This module owns the read-only
 //! interface to /var/lib/rpm/rpmdb.sqlite.
 //!
 //! T1 PR #1 (committed): the minimum viable surface —
-//! `tdnf_rpmdb_count_packages` validates the FFI shape and build
+//! `rpmz_rpmdb_count_packages` validates the FFI shape and build
 //! wiring.
 //!
 //! T1 PR #2 (this file): iterator over the Packages table that
@@ -13,7 +13,7 @@
 //! `header.zig` decodes the binary header v3 blob. Header storage
 //! is owned by the iterator (one row buffered at a time); NEVRA
 //! strings are heap-allocated and freed by the caller via
-//! `tdnf_rpmdb_string_free`.
+//! `rpmz_rpmdb_string_free`.
 
 const std = @import("std");
 const sqlite = @import("sqlite");
@@ -221,12 +221,12 @@ pub fn lastErrorMessage() []const u8 {
 
 /// Count rows in the rpmdb's Packages table.
 /// See rpmdb.h for the full contract.
-export fn tdnf_rpmdb_count_packages(root: ?[*:0]const u8) i64 {
+export fn rpmz_rpmdb_count_packages(root: ?[*:0]const u8) i64 {
     const root_slice: []const u8 = if (root) |p| std.mem.span(p) else "";
     return countPackages(root_slice) catch -1;
 }
 
-export fn tdnf_rpmdb_count_packages_config(config: ?*const TxnConfig) i64 {
+export fn rpmz_rpmdb_count_packages_config(config: ?*const TxnConfig) i64 {
     clearError();
     const cfg = config orelse {
         setError("null rpm config", .{});
@@ -308,18 +308,18 @@ fn countPackagesDb(db: ?*c.sqlite3) CountPackagesError!i64 {
 }
 
 /// Returns the last error message produced by this thread.
-export fn tdnf_rpmdb_last_error() [*:0]const u8 {
+export fn rpmz_rpmdb_last_error() [*:0]const u8 {
     if (last_error_len >= last_error_buf.len) last_error_len = last_error_buf.len - 1;
     last_error_buf[last_error_len] = 0;
     return @ptrCast(&last_error_buf);
 }
 
-export fn tdnf_rpm_config_last_error() [*:0]const u8 {
-    return tdnf_rpmdb_last_error();
+export fn rpmz_rpm_config_last_error() [*:0]const u8 {
+    return rpmz_rpmdb_last_error();
 }
 
 /// Create one handle-scoped native rpm configuration.
-export fn tdnf_rpm_config_create(root: ?[*:0]const u8) ?*TxnConfig {
+export fn rpmz_rpm_config_create(root: ?[*:0]const u8) ?*TxnConfig {
     clearError();
     const config = std.heap.c_allocator.create(TxnConfig) catch {
         setError("out of memory", .{});
@@ -341,13 +341,13 @@ export fn tdnf_rpm_config_create(root: ?[*:0]const u8) ?*TxnConfig {
 }
 
 /// Destroy a native rpm configuration.
-export fn tdnf_rpm_config_destroy(config: ?*TxnConfig) void {
+export fn rpmz_rpm_config_destroy(config: ?*TxnConfig) void {
     const cfg = config orelse return;
     cfg.deinit();
     std.heap.c_allocator.destroy(cfg);
 }
 
-export fn tdnf_rpm_config_duplicate_cache_dir_fd(
+export fn rpmz_rpm_config_duplicate_cache_dir_fd(
     config: ?*const TxnConfig,
 ) c_int {
     const fd = (config orelse return -1).pinnedCacheDirFd() orelse
@@ -359,7 +359,7 @@ export fn tdnf_rpm_config_duplicate_cache_dir_fd(
     );
 }
 
-export fn tdnf_rpm_config_finalize_rpmdb_pin(
+export fn rpmz_rpm_config_finalize_rpmdb_pin(
     config: ?*TxnConfig,
 ) c_int {
     clearError();
@@ -399,17 +399,17 @@ fn rpmConfigOpenRootFd(
 
 comptime {
     @export(&rpmConfigInstallRoot, .{
-        .name = "tdnf_rpm_config_install_root",
+        .name = "rpmz_rpm_config_install_root",
         .visibility = .hidden,
     });
     @export(&rpmConfigOpenRootFd, .{
-        .name = "tdnf_rpm_config_open_root_fd",
+        .name = "rpmz_rpm_config_open_root_fd",
         .visibility = .hidden,
     });
 }
 
 /// Apply one command-line rpmdefine to a native configuration.
-export fn tdnf_rpm_config_apply_define(
+export fn rpmz_rpm_config_apply_define(
     config: ?*TxnConfig,
     definition: ?[*:0]const u8,
 ) i32 {
@@ -430,7 +430,7 @@ export fn tdnf_rpm_config_apply_define(
 }
 
 /// Expand one macro and return a libc-owned C string.
-export fn tdnf_rpm_config_expand(
+export fn rpmz_rpm_config_expand(
     config: ?*const TxnConfig,
     name: ?[*:0]const u8,
 ) ?[*:0]u8 {
@@ -455,7 +455,7 @@ export fn tdnf_rpm_config_expand(
 }
 
 /// Resolve one known path macro under the configuration's install root.
-export fn tdnf_rpm_config_resolve_path(
+export fn rpmz_rpm_config_resolve_path(
     config: ?*const TxnConfig,
     name: ?[*:0]const u8,
 ) ?[*:0]u8 {
@@ -487,7 +487,7 @@ export fn tdnf_rpm_config_resolve_path(
     return dupZ(path);
 }
 
-export fn tdnf_rpm_config_string_free(value: ?[*:0]u8) void {
+export fn rpmz_rpm_config_string_free(value: ?[*:0]u8) void {
     if (value) |ptr| libc.free(@ptrCast(ptr));
 }
 
@@ -505,8 +505,8 @@ export fn tdnf_rpm_config_string_free(value: ?[*:0]u8) void {
 /// format differs; subsequent syncs match.
 ///
 /// Caller owns the returned string and must free it with
-/// `tdnf_rpmdb_string_free`. Returns NULL on error.
-export fn tdnf_rpmdb_cookie(root: ?[*:0]const u8) ?[*:0]u8 {
+/// `rpmz_rpmdb_string_free`. Returns NULL on error.
+export fn rpmz_rpmdb_cookie(root: ?[*:0]const u8) ?[*:0]u8 {
     clearError();
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const root_slice: []const u8 = if (root) |p| std.mem.span(p) else "";
@@ -517,7 +517,7 @@ export fn tdnf_rpmdb_cookie(root: ?[*:0]const u8) ?[*:0]u8 {
     return cookieAtPath(db_path);
 }
 
-export fn tdnf_rpmdb_cookie_config(config: ?*const TxnConfig) ?[*:0]u8 {
+export fn rpmz_rpmdb_cookie_config(config: ?*const TxnConfig) ?[*:0]u8 {
     clearError();
     const cfg = config orelse {
         setError("null rpm config", .{});
@@ -800,8 +800,8 @@ pub const Iter = struct {
 };
 
 /// Open a forward iterator over the rpmdb Packages table.
-/// Returns NULL on error (use tdnf_rpmdb_last_error for details).
-export fn tdnf_rpmdb_iter_open(root: ?[*:0]const u8) ?*Iter {
+/// Returns NULL on error (use rpmz_rpmdb_last_error for details).
+export fn rpmz_rpmdb_iter_open(root: ?[*:0]const u8) ?*Iter {
     clearError();
     const root_slice: []const u8 = if (root) |p| std.mem.span(p) else "";
     return Iter.openRoot(root_slice) catch |err| {
@@ -810,7 +810,7 @@ export fn tdnf_rpmdb_iter_open(root: ?[*:0]const u8) ?*Iter {
     };
 }
 
-export fn tdnf_rpmdb_iter_open_config(config: ?*const TxnConfig) ?*Iter {
+export fn rpmz_rpmdb_iter_open_config(config: ?*const TxnConfig) ?*Iter {
     clearError();
     const cfg = config orelse {
         setError("null rpm config", .{});
@@ -1060,18 +1060,18 @@ comptime {
     });
 }
 
-/// Close and free an iterator opened by tdnf_rpmdb_iter_open.
-export fn tdnf_rpmdb_iter_close(it: ?*Iter) void {
+/// Close and free an iterator opened by rpmz_rpmdb_iter_open.
+export fn rpmz_rpmdb_iter_close(it: ?*Iter) void {
     const iter = it orelse return;
     iter.close();
 }
 
 /// Advance the iterator and write the next package's NEVRA string into
 /// `*nevra_out`. Caller owns the string and must free it with
-/// tdnf_rpmdb_string_free.
+/// rpmz_rpmdb_string_free.
 ///
 /// Returns 1 on hit, 0 on end-of-iteration, -1 on error.
-export fn tdnf_rpmdb_iter_next_nevra(it: ?*Iter, nevra_out: ?*[*:0]u8) i32 {
+export fn rpmz_rpmdb_iter_next_nevra(it: ?*Iter, nevra_out: ?*[*:0]u8) i32 {
     clearError();
     const iter = it orelse {
         setError("null iterator", .{});
@@ -1112,7 +1112,7 @@ export fn tdnf_rpmdb_iter_next_nevra(it: ?*Iter, nevra_out: ?*[*:0]u8) i32 {
 /// Advance the iterator and return the next raw header blob.
 /// The blob aliases sqlite-owned row memory and remains valid until
 /// the next iterator advance or `close`.
-export fn tdnf_rpmdb_iter_next_header_blob(
+export fn rpmz_rpmdb_iter_next_header_blob(
     it: ?*Iter,
     blob_out: ?*?[*]const u8,
     blob_len_out: ?*usize,
@@ -1145,7 +1145,7 @@ export fn tdnf_rpmdb_iter_next_header_blob(
     return 1;
 }
 
-export fn tdnf_rpmdb_iter_next_header_blob_hnum(
+export fn rpmz_rpmdb_iter_next_header_blob_hnum(
     it: ?*Iter,
     hnum_out: ?*u32,
     blob_out: ?*?[*]const u8,
@@ -1187,7 +1187,7 @@ export fn tdnf_rpmdb_iter_next_header_blob_hnum(
 
 /// Free a string returned by an iterator. (Wraps `free(3)` so callers
 /// don't have to think about which allocator we used.)
-export fn tdnf_rpmdb_string_free(s: ?[*:0]u8) void {
+export fn rpmz_rpmdb_string_free(s: ?[*:0]u8) void {
     if (s) |p| libc.free(@ptrCast(p));
 }
 
@@ -1339,7 +1339,7 @@ fn resolveProviderVersionDb(
 }
 
 /// Resolve distrover-style provider versions through the configured rpmdb.
-export fn tdnf_rpmdb_resolve_provider_version_config(
+export fn rpmz_rpmdb_resolve_provider_version_config(
     config: ?*const TxnConfig,
     provide_name: ?[*:0]const u8,
     version_out: ?*?[*:0]u8,
@@ -1388,7 +1388,7 @@ export fn tdnf_rpmdb_resolve_provider_version_config(
 // Native sqlite write path
 // -------------------------------------------------------------------
 
-export fn tdnf_rpmdb_write_install(
+export fn rpmz_rpmdb_write_install(
     root: ?[*:0]const u8,
     rpm_path: ?[*:0]const u8,
     install_tid: u32,
@@ -1439,7 +1439,7 @@ export fn tdnf_rpmdb_write_install(
     return 0;
 }
 
-export fn tdnf_rpmdb_write_install_config(
+export fn rpmz_rpmdb_write_install_config(
     config: ?*const TxnConfig,
     rpm_path: ?[*:0]const u8,
     install_tid: u32,
@@ -1490,7 +1490,7 @@ export fn tdnf_rpmdb_write_install_config(
     return 0;
 }
 
-export fn tdnf_rpmdb_write_install_file_config(
+export fn rpmz_rpmdb_write_install_file_config(
     config: ?*const TxnConfig,
     fh: ?*FileHandle,
     install_tid: u32,
@@ -1535,7 +1535,7 @@ export fn tdnf_rpmdb_write_install_file_config(
     return 0;
 }
 
-export fn tdnf_rpmdb_write_replace(
+export fn rpmz_rpmdb_write_replace(
     root: ?[*:0]const u8,
     old_hnum: u32,
     rpm_path: ?[*:0]const u8,
@@ -1593,7 +1593,7 @@ export fn tdnf_rpmdb_write_replace(
     return 0;
 }
 
-export fn tdnf_rpmdb_write_replace_file_config(
+export fn rpmz_rpmdb_write_replace_file_config(
     config: ?*const TxnConfig,
     old_hnum: u32,
     fh: ?*FileHandle,
@@ -1639,7 +1639,7 @@ export fn tdnf_rpmdb_write_replace_file_config(
     return 0;
 }
 
-export fn tdnf_rpmdb_write_replace_config(
+export fn rpmz_rpmdb_write_replace_config(
     config: ?*const TxnConfig,
     old_hnum: u32,
     rpm_path: ?[*:0]const u8,
@@ -1696,7 +1696,7 @@ export fn tdnf_rpmdb_write_replace_config(
     return 0;
 }
 
-export fn tdnf_rpmdb_write_erase_hnum(root: ?[*:0]const u8, hnum: u32) i32 {
+export fn rpmz_rpmdb_write_erase_hnum(root: ?[*:0]const u8, hnum: u32) i32 {
     clearError();
     const root_slice: []const u8 = if (root) |p| std.mem.span(p) else "";
     var writer = rpmdb_write.Writer.openRoot(root_slice) catch |err| {
@@ -1712,7 +1712,7 @@ export fn tdnf_rpmdb_write_erase_hnum(root: ?[*:0]const u8, hnum: u32) i32 {
     return 0;
 }
 
-export fn tdnf_rpmdb_write_erase_hnum_config(config: ?*const TxnConfig, hnum: u32) i32 {
+export fn rpmz_rpmdb_write_erase_hnum_config(config: ?*const TxnConfig, hnum: u32) i32 {
     clearError();
     const cfg = config orelse {
         setError("null rpm config", .{});
@@ -1730,7 +1730,7 @@ export fn tdnf_rpmdb_write_erase_hnum_config(config: ?*const TxnConfig, hnum: u3
     return 0;
 }
 
-export fn tdnf_rpmdb_find_hnum_by_nevra(
+export fn rpmz_rpmdb_find_hnum_by_nevra(
     root: ?[*:0]const u8,
     nevra: ?[*:0]const u8,
     hnum_out: ?*u32,
@@ -1755,7 +1755,7 @@ export fn tdnf_rpmdb_find_hnum_by_nevra(
     return findHnumByNevra(&writer, nevra_ptr, out);
 }
 
-export fn tdnf_rpmdb_find_hnum_by_nevra_config(
+export fn rpmz_rpmdb_find_hnum_by_nevra_config(
     config: ?*const TxnConfig,
     nevra: ?[*:0]const u8,
     hnum_out: ?*u32,
@@ -1822,12 +1822,12 @@ fn findHnumByNevra(
 
 /// Look up every installed package hnum whose main-header NAME
 /// matches `name`. On success writes a heap-allocated array of hnums
-/// into `*hnums_out` (free via tdnf_rpmdb_hnums_free) and the count
+/// into `*hnums_out` (free via rpmz_rpmdb_hnums_free) and the count
 /// into `*count_out`.
 ///
 /// Returns 0 on success (including "no matches" — in which case
 /// `*hnums_out` is NULL and `*count_out` is 0), -1 on error.
-export fn tdnf_rpmdb_find_hnums_by_name(
+export fn rpmz_rpmdb_find_hnums_by_name(
     root: ?[*:0]const u8,
     name: ?[*:0]const u8,
     hnums_out: ?*?[*]u32,
@@ -1866,7 +1866,7 @@ export fn tdnf_rpmdb_find_hnums_by_name(
     }
 
     // Copy into a libc-malloc'd buffer so the caller can free with
-    // tdnf_rpmdb_hnums_free (i.e. plain free(3)).
+    // rpmz_rpmdb_hnums_free (i.e. plain free(3)).
     const bytes = found.len * @sizeOf(u32);
     const buf_ptr = libc.malloc(bytes) orelse {
         std.heap.c_allocator.free(found);
@@ -1881,7 +1881,7 @@ export fn tdnf_rpmdb_find_hnums_by_name(
     return 0;
 }
 
-export fn tdnf_rpmdb_find_hnums_by_name_config(
+export fn rpmz_rpmdb_find_hnums_by_name_config(
     config: ?*const TxnConfig,
     name: ?[*:0]const u8,
     hnums_out: ?*?[*]u32,
@@ -1960,7 +1960,7 @@ const OwnedLabelMatch = struct {
     arch: [:0]u8,
 };
 
-export fn tdnf_rpmdb_find_label_matches_config(
+export fn rpmz_rpmdb_find_label_matches_config(
     config: ?*const TxnConfig,
     name: ?[*:0]const u8,
     evr: ?[*:0]const u8,
@@ -2101,7 +2101,7 @@ export fn tdnf_rpmdb_find_label_matches_config(
     return 0;
 }
 
-export fn tdnf_rpmdb_label_matches_free(
+export fn rpmz_rpmdb_label_matches_free(
     matches: ?[*]LabelMatch,
     count: usize,
 ) void {
@@ -2114,18 +2114,18 @@ export fn tdnf_rpmdb_label_matches_free(
     libc.free(@ptrCast(values));
 }
 
-/// Free an hnum array returned by tdnf_rpmdb_find_hnums_by_name.
-export fn tdnf_rpmdb_hnums_free(hnums: ?[*]u32) void {
+/// Free an hnum array returned by rpmz_rpmdb_find_hnums_by_name.
+export fn rpmz_rpmdb_hnums_free(hnums: ?[*]u32) void {
     if (hnums) |p| libc.free(@ptrCast(p));
 }
 
 /// Read the raw main-header blob for the installed package with
 /// `hnum` under `root`. On success writes a heap-allocated blob
-/// pointer into `*blob_out` (free via tdnf_rpmdb_blob_free) and its
+/// pointer into `*blob_out` (free via rpmz_rpmdb_blob_free) and its
 /// length into `*len_out`.
 ///
-/// Returns 0 on success, -1 on error (use tdnf_rpmdb_last_error()).
-export fn tdnf_rpmdb_read_header_blob(
+/// Returns 0 on success, -1 on error (use rpmz_rpmdb_last_error()).
+export fn rpmz_rpmdb_read_header_blob(
     root: ?[*:0]const u8,
     hnum: u32,
     blob_out: ?*?[*]u8,
@@ -2167,7 +2167,7 @@ export fn tdnf_rpmdb_read_header_blob(
     return 0;
 }
 
-export fn tdnf_rpmdb_read_header_blob_config(
+export fn rpmz_rpmdb_read_header_blob_config(
     config: ?*const TxnConfig,
     hnum: u32,
     blob_out: ?*?[*]u8,
@@ -2213,8 +2213,8 @@ export fn tdnf_rpmdb_read_header_blob_config(
     return -1;
 }
 
-/// Free a blob returned by tdnf_rpmdb_read_header_blob.
-export fn tdnf_rpmdb_blob_free(blob: ?[*]u8) void {
+/// Free a blob returned by rpmz_rpmdb_read_header_blob.
+export fn rpmz_rpmdb_blob_free(blob: ?[*]u8) void {
     if (blob) |p| libc.free(@ptrCast(p));
 }
 
@@ -2277,12 +2277,12 @@ pub fn openPubkeysRoot(root: []const u8) error{OpenFailed}!*PubkeyIter {
 }
 
 pub fn closePubkeys(iter: *PubkeyIter) void {
-    tdnf_rpmdb_pubkeys_close(iter);
+    rpmz_rpmdb_pubkeys_close(iter);
 }
 
 /// Import every armored or binary certificate and replace matching primary
 /// fingerprints atomically. Returns 0 on success and -1 on error.
-export fn tdnf_rpmdb_import_pubkeys(
+export fn rpmz_rpmdb_import_pubkeys(
     root: ?[*:0]const u8,
     data: ?*const anyopaque,
     len: usize,
@@ -2308,7 +2308,7 @@ export fn tdnf_rpmdb_import_pubkeys(
     return 0;
 }
 
-export fn tdnf_rpmdb_import_pubkeys_config(
+export fn rpmz_rpmdb_import_pubkeys_config(
     config: ?*const TxnConfig,
     data: ?*const anyopaque,
     len: usize,
@@ -2353,13 +2353,13 @@ fn importTimestamp() ?u32 {
 
 /// Open a forward iterator over rpmdb rows whose RPMTAG_NAME is
 /// "gpg-pubkey".
-export fn tdnf_rpmdb_pubkeys_open(root: ?[*:0]const u8) ?*PubkeyIter {
+export fn rpmz_rpmdb_pubkeys_open(root: ?[*:0]const u8) ?*PubkeyIter {
     const root_slice: []const u8 = if (root) |p| std.mem.span(p) else "";
     return openPubkeysRoot(root_slice) catch null;
 }
 
-/// Config-aware form of `tdnf_rpmdb_pubkeys_open`.
-export fn tdnf_rpmdb_pubkeys_open_config(
+/// Config-aware form of `rpmz_rpmdb_pubkeys_open`.
+export fn rpmz_rpmdb_pubkeys_open_config(
     config: ?*const TxnConfig,
 ) ?*PubkeyIter {
     clearError();
@@ -2467,7 +2467,7 @@ fn databaseHasNoTables(db: ?*c.sqlite3) bool {
 }
 
 /// Close and free a pubkey iterator.
-export fn tdnf_rpmdb_pubkeys_close(it: ?*PubkeyIter) void {
+export fn rpmz_rpmdb_pubkeys_close(it: ?*PubkeyIter) void {
     const iter = it orelse return;
     if (iter.stmt) |s| _ = c.sqlite3_finalize(s);
     if (iter.pinned) |*pinned| {
@@ -2483,15 +2483,15 @@ export fn tdnf_rpmdb_pubkeys_close(it: ?*PubkeyIter) void {
 ///
 /// On hit, writes:
 ///   *key_out      → malloc'd NUL-terminated C string with the
-///                   armored key (free with tdnf_rpmdb_string_free)
+///                   armored key (free with rpmz_rpmdb_string_free)
 ///   *key_len_out  → byte length of the armored key, not counting
 ///                   the trailing NUL (may be NULL if uninterested)
 ///   *keyid_out    → malloc'd lowercase hex 8-character key id
 ///                   (= RPMTAG_VERSION); free with
-///                   tdnf_rpmdb_string_free (may be NULL)
+///                   rpmz_rpmdb_string_free (may be NULL)
 ///
 /// Returns 1 on hit, 0 on end-of-iteration, -1 on error.
-export fn tdnf_rpmdb_pubkeys_next(
+export fn rpmz_rpmdb_pubkeys_next(
     it: ?*PubkeyIter,
     key_out: ?*[*:0]u8,
     key_len_out: ?*usize,
@@ -2839,8 +2839,8 @@ const FileMetadata = extern struct {
 };
 
 /// Open and parse a `.rpm` file. Returns NULL on error (consult
-/// tdnf_rpmdb_last_error()).
-export fn tdnf_rpm_file_open(path: ?[*:0]const u8) ?*FileHandle {
+/// rpmz_rpmdb_last_error()).
+export fn rpmz_rpm_file_open(path: ?[*:0]const u8) ?*FileHandle {
     clearError();
     const p = path orelse {
         setError("null path", .{});
@@ -2868,7 +2868,7 @@ export fn tdnf_rpm_file_open(path: ?[*:0]const u8) ?*FileHandle {
 
 /// Open and parse a `.rpm` from an already pinned descriptor. The descriptor
 /// remains owned by the caller.
-export fn tdnf_rpm_file_open_fd(fd: c_int) ?*FileHandle {
+export fn rpmz_rpm_file_open_fd(fd: c_int) ?*FileHandle {
     clearError();
     const fh = std.heap.c_allocator.create(FileHandle) catch {
         setError("out of memory", .{});
@@ -2883,15 +2883,15 @@ export fn tdnf_rpm_file_open_fd(fd: c_int) ?*FileHandle {
 }
 
 /// Free a file handle. Accepts NULL.
-export fn tdnf_rpm_file_close(fh: ?*FileHandle) void {
+export fn rpmz_rpm_file_close(fh: ?*FileHandle) void {
     const f = fh orelse return;
     f.file.close(std.heap.c_allocator);
     std.heap.c_allocator.destroy(f);
 }
 
 /// Returns a heap-allocated NEVRA string for this rpm file. Caller
-/// frees with tdnf_rpmdb_string_free.
-export fn tdnf_rpm_file_nevra(fh: ?*FileHandle) ?[*:0]u8 {
+/// frees with rpmz_rpmdb_string_free.
+export fn rpmz_rpm_file_nevra(fh: ?*FileHandle) ?[*:0]u8 {
     clearError();
     const f = fh orelse {
         setError("null file handle", .{});
@@ -2917,7 +2917,7 @@ export fn tdnf_rpm_file_nevra(fh: ?*FileHandle) ?[*:0]u8 {
     return @ptrCast(out_bytes);
 }
 
-export fn tdnf_rpm_file_package_kind(fh: ?*FileHandle) i32 {
+export fn rpmz_rpm_file_package_kind(fh: ?*FileHandle) i32 {
     const f = fh orelse return -1;
     return switch (f.file.packageKind()) {
         .binary => 0,
@@ -2926,7 +2926,7 @@ export fn tdnf_rpm_file_package_kind(fh: ?*FileHandle) i32 {
     };
 }
 
-export fn tdnf_rpm_file_get_metadata(
+export fn rpmz_rpm_file_get_metadata(
     fh: ?*FileHandle,
     metadata_out: ?*FileMetadata,
 ) i32 {
@@ -2994,7 +2994,7 @@ export fn tdnf_rpm_file_get_metadata(
     return 0;
 }
 
-export fn tdnf_rpm_header_name_equals(
+export fn rpmz_rpm_header_name_equals(
     header_blob: ?[*]const u8,
     header_len: usize,
     name: ?[*:0]const u8,
@@ -3028,7 +3028,7 @@ export fn tdnf_rpm_header_name_equals(
     return if (std.mem.eql(u8, actual, std.mem.span(name_ptr))) 1 else 0;
 }
 
-export fn tdnf_rpm_header_owns_path(
+export fn rpmz_rpm_header_owns_path(
     header_blob: ?[*]const u8,
     header_len: usize,
     path: ?[*:0]const u8,
@@ -3143,11 +3143,11 @@ fn rpmHeaderOwnsPathConfig(
 
 comptime {
     @export(&rpmCanonicalPathConfig, .{
-        .name = "tdnf_rpm_canonical_path_config",
+        .name = "rpmz_rpm_canonical_path_config",
         .visibility = .hidden,
     });
     @export(&rpmHeaderOwnsPathConfig, .{
-        .name = "tdnf_rpm_header_owns_path_config",
+        .name = "rpmz_rpm_header_owns_path_config",
         .visibility = .hidden,
     });
 }
@@ -3155,11 +3155,11 @@ comptime {
 /// Returns the raw main-header blob for this rpm file.
 ///
 /// The returned bytes alias the file handle's owned buffer and stay
-/// valid until tdnf_rpm_file_close(). The blob is the header-v3 body
+/// valid until rpmz_rpm_file_close(). The blob is the header-v3 body
 /// without the 8-byte standalone magic prefix, matching rpmdb.sqlite's
-/// Packages.blob format and suitable for tdnf_rpm_file_install()'s
+/// Packages.blob format and suitable for rpmz_rpm_file_install()'s
 /// prior_headers input.
-export fn tdnf_rpm_file_main_header_blob(
+export fn rpmz_rpm_file_main_header_blob(
     fh: ?*FileHandle,
     out: ?*[*]const u8,
     out_len: ?*usize,
@@ -3183,7 +3183,7 @@ export fn tdnf_rpm_file_main_header_blob(
     return 0;
 }
 
-export fn tdnf_rpm_file_bytes(
+export fn rpmz_rpm_file_bytes(
     fh: ?*FileHandle,
     out: ?*[*]const u8,
     out_len: ?*usize,
@@ -3207,7 +3207,7 @@ export fn tdnf_rpm_file_bytes(
     return 0;
 }
 
-export fn tdnf_rpm_file_digest(
+export fn rpmz_rpm_file_digest(
     fh: ?*FileHandle,
     kind: c_int,
     out_digest: ?[*]u8,
@@ -3222,13 +3222,13 @@ export fn tdnf_rpm_file_digest(
         setError("null digest output", .{});
         return -1;
     };
-    const ctx = checksum.tdnf_rpmzig_digest_open(kind) orelse {
+    const ctx = checksum.rpmz_rpmzig_digest_open(kind) orelse {
         setError("unable to open digest context", .{});
         return -1;
     };
-    defer checksum.tdnf_rpmzig_digest_close(ctx);
+    defer checksum.rpmz_rpmzig_digest_close(ctx);
 
-    if (checksum.tdnf_rpmzig_digest_update(
+    if (checksum.rpmz_rpmzig_digest_update(
         ctx,
         f.file.bytes.ptr,
         f.file.bytes.len,
@@ -3236,7 +3236,7 @@ export fn tdnf_rpm_file_digest(
         setError("unable to update digest context", .{});
         return -1;
     }
-    if (checksum.tdnf_rpmzig_digest_final(ctx, out, out_len) != 0) {
+    if (checksum.rpmz_rpmzig_digest_final(ctx, out, out_len) != 0) {
         setError("unable to finalize digest context", .{});
         return -1;
     }
@@ -3246,7 +3246,7 @@ export fn tdnf_rpm_file_digest(
 /// Returns the payload compressor name as a static C string.
 /// One of: "none", "gzip", "bzip2", "xz", "lzma", "zstd", "lz4",
 /// "unknown".
-export fn tdnf_rpm_file_compressor(fh: ?*FileHandle) [*:0]const u8 {
+export fn rpmz_rpm_file_compressor(fh: ?*FileHandle) [*:0]const u8 {
     const f = fh orelse return "unknown";
     return switch (f.file.compressor) {
         .none => "none",
@@ -3263,7 +3263,7 @@ export fn tdnf_rpm_file_compressor(fh: ?*FileHandle) [*:0]const u8 {
 /// Returns the byte offset of the payload (cpio archive) within the
 /// underlying file. Useful for callers that want to stream the
 /// payload through a decompressor.
-export fn tdnf_rpm_file_payload_offset(fh: ?*FileHandle) i64 {
+export fn rpmz_rpm_file_payload_offset(fh: ?*FileHandle) i64 {
     const f = fh orelse return -1;
     return @intCast(f.file.payload_offset);
 }
@@ -3272,7 +3272,7 @@ export fn tdnf_rpm_file_payload_offset(fh: ?*FileHandle) i64 {
 /// (RSA/DSA/PGP/GPG/OpenPGP) in its signature header, 0 otherwise.
 /// Returns -1 on a NULL handle. This is *presence* only — real
 /// verification is T3.
-export fn tdnf_rpm_file_is_signed(fh: ?*FileHandle) i32 {
+export fn rpmz_rpm_file_is_signed(fh: ?*FileHandle) i32 {
     const f = fh orelse return -1;
     return if (f.file.isSigned()) 1 else 0;
 }
@@ -3372,7 +3372,7 @@ fn verifyFileDigests(
 /// Verify every internal package digest on this parsed file.  The caller
 /// chooses whether to enforce this result, so --skipdigest can bypass this
 /// call without weakening parser validation.
-export fn tdnf_rpm_file_verify_digests(
+export fn rpmz_rpm_file_verify_digests(
     fh: ?*FileHandle,
     outcome_out: ?*i32,
 ) i32 {
@@ -3447,7 +3447,7 @@ fn verifyFileSignatures(
 
 /// Verify package signatures against the caller's key set and nothing else.
 ///
-/// This is deliberately not `tdnf_rpm_file_verify_signatures_config` with an
+/// This is deliberately not `rpmz_rpm_file_verify_signatures_config` with an
 /// empty config. That entry point always opens the rpmdb keyring and adds it
 /// to the trust set, which makes the result depend on ambient state of the
 /// install root. An exporter recording *which key vouched for this package*
@@ -3462,7 +3462,7 @@ fn verifyFileSignatures(
 /// receive its fingerprint bytes; otherwise the index is set to -1 and the
 /// fingerprint length to 0. The fingerprint is written into the caller's
 /// buffer, which must be at least 32 bytes, so nothing needs freeing.
-export fn tdnf_rpm_file_verify_signatures_keys(
+export fn rpmz_rpm_file_verify_signatures_keys(
     fh: ?*FileHandle,
     key_blobs: ?[*]const ?*const anyopaque,
     key_lens: ?[*]const usize,
@@ -3539,7 +3539,7 @@ export fn tdnf_rpm_file_verify_signatures_keys(
 /// Verify all package signatures with the complete configured rpmdb trust
 /// set plus the newly approved repository keys.  This intentionally gathers
 /// every key before invoking integrity.verifySignatures exactly once.
-export fn tdnf_rpm_file_verify_signatures_config(
+export fn rpmz_rpm_file_verify_signatures_config(
     fh: ?*FileHandle,
     config: ?*const TxnConfig,
     fresh_key_blobs: ?[*]const ?*const anyopaque,
@@ -3594,12 +3594,12 @@ export fn tdnf_rpm_file_verify_signatures_config(
         }
     }
 
-    const iter = tdnf_rpmdb_pubkeys_open_config(cfg) orelse return -1;
-    defer tdnf_rpmdb_pubkeys_close(iter);
+    const iter = rpmz_rpmdb_pubkeys_open_config(cfg) orelse return -1;
+    defer rpmz_rpmdb_pubkeys_close(iter);
     while (true) {
         var key: [*:0]u8 = undefined;
         var key_len: usize = 0;
-        const next = tdnf_rpmdb_pubkeys_next(iter, &key, &key_len, null);
+        const next = rpmz_rpmdb_pubkeys_next(iter, &key, &key_len, null);
         if (next == 0) break;
         if (next < 0) return -1;
         rpmdb_keys.append(std.heap.c_allocator, key) catch {
@@ -3687,7 +3687,7 @@ test "digest ABI suppresses bad legacy MD5 for RPM6 coverage" {
     var outcome: i32 = @intFromEnum(IntegrityOutcome.internal);
     try std.testing.expectEqual(
         @as(i32, 0),
-        tdnf_rpm_file_verify_digests(&file, &outcome),
+        rpmz_rpm_file_verify_digests(&file, &outcome),
     );
     try std.testing.expectEqual(
         @intFromEnum(IntegrityOutcome.ok),
@@ -3706,7 +3706,7 @@ test "digest ABI accepts verified compressed digest with unsupported alternate" 
     var outcome: i32 = @intFromEnum(IntegrityOutcome.internal);
     try std.testing.expectEqual(
         @as(i32, 0),
-        tdnf_rpm_file_verify_digests(&file, &outcome),
+        rpmz_rpm_file_verify_digests(&file, &outcome),
     );
     try std.testing.expectEqual(
         @intFromEnum(IntegrityOutcome.ok),
@@ -3736,7 +3736,7 @@ test "integrity ABI reports verifier allocation failures" {
     try std.testing.expect(
         std.mem.indexOf(
             u8,
-            std.mem.span(tdnf_rpmdb_last_error()),
+            std.mem.span(rpmz_rpmdb_last_error()),
             "OutOfMemory",
         ) != null,
     );
@@ -3760,7 +3760,7 @@ test "integrity ABI reports verifier allocation failures" {
     try std.testing.expect(
         std.mem.indexOf(
             u8,
-            std.mem.span(tdnf_rpmdb_last_error()),
+            std.mem.span(rpmz_rpmdb_last_error()),
             "OutOfMemory",
         ) != null,
     );
@@ -3862,7 +3862,7 @@ test "integrity ABI signature outcomes retain typed policy failures" {
 /// Returns a static C string naming the kind of signature on this
 /// rpm: "none", "rsa", "dsa", "pgp", "gpg", or "openpgp". Returns
 /// "none" on a NULL handle.
-export fn tdnf_rpm_file_signature_kind(fh: ?*FileHandle) [*:0]const u8 {
+export fn rpmz_rpm_file_signature_kind(fh: ?*FileHandle) [*:0]const u8 {
     const f = fh orelse return "none";
     return switch (f.file.signatureKind()) {
         .none => "none",
@@ -3878,7 +3878,7 @@ export fn tdnf_rpm_file_signature_kind(fh: ?*FileHandle) [*:0]const u8 {
 /// alias into the file's owned buffer (do NOT free them).
 ///
 /// Returns 0 on success, -1 on NULL handle or no signature.
-export fn tdnf_rpm_file_signed_range(
+export fn rpmz_rpm_file_signed_range(
     fh: ?*FileHandle,
     sig_out: ?*[*]const u8,
     sig_len_out: ?*usize,
@@ -3903,11 +3903,11 @@ export fn tdnf_rpm_file_signed_range(
 
 /// Decompress the payload (cpio archive) into a fresh malloc'd
 /// buffer. On success, writes the pointer to `*out` and the byte
-/// count to `*out_size`. Caller frees with tdnf_rpmdb_string_free
+/// count to `*out_size`. Caller frees with rpmz_rpmdb_string_free
 /// (it wraps `free(3)`).
 ///
-/// Returns 0 on success, -1 on error (use tdnf_rpmdb_last_error).
-export fn tdnf_rpm_file_decompress_payload(
+/// Returns 0 on success, -1 on error (use rpmz_rpmdb_last_error).
+export fn rpmz_rpm_file_decompress_payload(
     fh: ?*FileHandle,
     out: ?*[*]u8,
     out_size: ?*usize,
@@ -3942,7 +3942,7 @@ export fn tdnf_rpm_file_decompress_payload(
     return 0;
 }
 
-export fn tdnf_rpm_file_extract_source_config(
+export fn rpmz_rpm_file_extract_source_config(
     fh: ?*FileHandle,
     config: ?*const TxnConfig,
     trans_flags: u32,
@@ -3970,7 +3970,7 @@ export fn tdnf_rpm_file_extract_source_config(
 
 /// Install this rpm file's payload into install_root using the native
 /// rpmzig file-installation engine.
-export fn tdnf_rpm_file_install(
+export fn rpmz_rpm_file_install(
     fh: ?*FileHandle,
     options: ?*const CInstallOptions,
 ) i32 {
@@ -4057,7 +4057,7 @@ export fn tdnf_rpm_file_install(
 
 /// Run one package/transaction scriptlet extracted from a raw
 /// RPM main-header blob.
-export fn tdnf_rpm_header_run_scriptlet(
+export fn rpmz_rpm_header_run_scriptlet(
     header_blob: ?[*]const u8,
     header_len: usize,
     phase: c_int,
@@ -4147,7 +4147,7 @@ export fn tdnf_rpm_header_run_scriptlet(
 
 /// Run every installed-package trigger matching the given package
 /// header and trigger phase.
-export fn tdnf_rpm_header_run_triggers(
+export fn rpmz_rpm_header_run_triggers(
     header_blob: ?[*]const u8,
     header_len: usize,
     phase: c_int,
@@ -4312,7 +4312,7 @@ export fn tdnf_rpm_header_run_triggers(
     return 0;
 }
 
-export fn tdnf_rpm_header_validate_trigger_metadata(
+export fn rpmz_rpm_header_validate_trigger_metadata(
     header_blob: ?[*]const u8,
     header_len: usize,
 ) i32 {
@@ -4332,7 +4332,7 @@ export fn tdnf_rpm_header_validate_trigger_metadata(
     return 0;
 }
 
-export fn tdnf_rpm_header_validate_trigger_scripts_config(
+export fn rpmz_rpm_header_validate_trigger_scripts_config(
     header_blob: ?[*]const u8,
     header_len: usize,
     config: ?*const TxnConfig,
@@ -4361,7 +4361,7 @@ export fn tdnf_rpm_header_validate_trigger_scripts_config(
     return 0;
 }
 
-export fn tdnf_rpm_header_has_file_trigger_metadata(
+export fn rpmz_rpm_header_has_file_trigger_metadata(
     header_blob: ?[*]const u8,
     header_len: usize,
     kind: c_int,
@@ -4391,7 +4391,7 @@ export fn tdnf_rpm_header_has_file_trigger_metadata(
     ));
 }
 
-export fn tdnf_rpm_header_foreach_trigger_file(
+export fn rpmz_rpm_header_foreach_trigger_file(
     header_blob: ?[*]const u8,
     header_len: usize,
     trans_flags: u32,
@@ -4428,7 +4428,7 @@ export fn tdnf_rpm_header_foreach_trigger_file(
     return 0;
 }
 
-export fn tdnf_rpm_run_file_triggers(
+export fn rpmz_rpm_run_file_triggers(
     raw_owners: ?[*]const CFileTriggerOwner,
     owner_count: usize,
     phase: c_int,
@@ -4628,7 +4628,7 @@ export fn tdnf_rpm_run_file_triggers(
 
 /// Erase one installed package's on-disk files, identified by its
 /// rpmdb sqlite `hnum`, without removing the rpmdb row itself.
-export fn tdnf_rpm_erase_hnum(
+export fn rpmz_rpm_erase_hnum(
     root: ?[*:0]const u8,
     hnum: u32,
     options: ?*const CEraseOptions,
@@ -4712,9 +4712,9 @@ export fn tdnf_rpm_erase_hnum(
 /// Erase on-disk files listed in a raw stored header blob, under
 /// `root`, without touching the rpmdb rows themselves.
 ///
-/// Unlike `tdnf_rpm_erase_hnum` (which looks up an existing rpmdb row
+/// Unlike `rpmz_rpm_erase_hnum` (which looks up an existing rpmdb row
 /// by hnum), this variant takes the header blob directly. It is used
-/// on the UPGRADE path: after `tdnf_rpmdb_write_replace` has
+/// on the UPGRADE path: after `rpmz_rpmdb_write_replace` has
 /// atomically overwritten the OLD package's rpmdb row with the NEW
 /// blob, we still need to clean up any files unique to the OLD
 /// version (files that the NEW version does not ship). We call this
@@ -4727,7 +4727,7 @@ export fn tdnf_rpm_erase_hnum(
 /// (or renamed-into) the NEW version are naturally preserved, and
 /// paths owned by unrelated packages are preserved too.
 /// With a caller-supplied keep-path callback, no rpmdb writer is opened.
-export fn tdnf_rpm_erase_header_blob(
+export fn rpmz_rpm_erase_header_blob(
     root: ?[*:0]const u8,
     blob: ?[*]const u8,
     blob_len: usize,
@@ -4816,7 +4816,7 @@ export fn tdnf_rpm_erase_header_blob(
 }
 
 /// Files-in-package iterator state. Each call to
-/// `tdnf_rpm_file_next_filename` returns the next file path or 0 at
+/// `rpmz_rpm_file_next_filename` returns the next file path or 0 at
 /// end-of-archive.
 pub const FilesIter = struct {
     /// Decompressed cpio payload owned by this iterator.
@@ -4831,7 +4831,7 @@ pub const FilesIter = struct {
 /// Open a files-in-package iterator. Decompresses the payload up
 /// front; large packages briefly hold the full cpio archive in
 /// memory.
-export fn tdnf_rpm_file_files_open(fh: ?*FileHandle) ?*FilesIter {
+export fn rpmz_rpm_file_files_open(fh: ?*FileHandle) ?*FilesIter {
     clearError();
     const f = fh orelse {
         setError("null file handle", .{});
@@ -4854,7 +4854,7 @@ export fn tdnf_rpm_file_files_open(fh: ?*FileHandle) ?*FilesIter {
 }
 
 /// Free a files iterator. Accepts NULL.
-export fn tdnf_rpm_file_files_close(it: ?*FilesIter) void {
+export fn rpmz_rpm_file_files_close(it: ?*FilesIter) void {
     const i = it orelse return;
     std.heap.c_allocator.free(i.cpio_bytes);
     if (i.name_scratch) |p| libc.free(@ptrCast(p));
@@ -4864,7 +4864,7 @@ export fn tdnf_rpm_file_files_close(it: ?*FilesIter) void {
 /// Advance the iterator and write the next entry's name into
 /// `*name_out` (stable until the next call; do NOT free) and its
 /// mode into `*mode_out`. Returns 1 on hit, 0 on end, -1 on error.
-export fn tdnf_rpm_file_files_next(
+export fn rpmz_rpm_file_files_next(
     it: ?*FilesIter,
     name_out: ?*[*:0]const u8,
     mode_out: ?*u32,
@@ -5068,7 +5068,7 @@ test "buildDbPath strips trailing slash" {
 
 test "missing rpmdb is an empty installed-package iterator" {
     var iter = try Iter.openAtPath(
-        ".zig-cache/tdnf-rpmdb-missing-test-does-not-exist/rpmdb.sqlite",
+        ".zig-cache/rpmz-rpmdb-missing-test-does-not-exist/rpmdb.sqlite",
     );
     defer iter.close();
     try std.testing.expectEqual(null, try iter.nextHeaderBlob());
@@ -5251,13 +5251,13 @@ test "configured provider query honors rooted recursive dbpath" {
     var version: ?[*:0]u8 = null;
     try std.testing.expectEqual(
         @as(i32, 1),
-        tdnf_rpmdb_resolve_provider_version_config(
+        rpmz_rpmdb_resolve_provider_version_config(
             &config,
             provide_name,
             &version,
         ),
     );
-    defer tdnf_rpmdb_string_free(version);
+    defer rpmz_rpmdb_string_free(version);
     try std.testing.expect(version != null);
     try std.testing.expectEqualStrings("12.3", std.mem.span(version.?));
 }
@@ -5307,15 +5307,15 @@ test "configured readers reject symlinked db parents and preserve absence" {
     defer config.deinit();
     try std.testing.expectEqual(
         @as(i64, -1),
-        tdnf_rpmdb_count_packages_config(&config),
+        rpmz_rpmdb_count_packages_config(&config),
     );
-    try std.testing.expect(tdnf_rpmdb_cookie_config(&config) == null);
-    try std.testing.expect(tdnf_rpmdb_iter_open_config(&config) == null);
-    try std.testing.expect(tdnf_rpmdb_pubkeys_open_config(&config) == null);
+    try std.testing.expect(rpmz_rpmdb_cookie_config(&config) == null);
+    try std.testing.expect(rpmz_rpmdb_iter_open_config(&config) == null);
+    try std.testing.expect(rpmz_rpmdb_pubkeys_open_config(&config) == null);
     var version: ?[*:0]u8 = null;
     try std.testing.expectEqual(
         @as(i32, -1),
-        tdnf_rpmdb_resolve_provider_version_config(
+        rpmz_rpmdb_resolve_provider_version_config(
             &config,
             "test-distrover",
             &version,
@@ -5328,28 +5328,28 @@ test "configured readers reject symlinked db parents and preserve absence" {
     );
     try std.testing.expectEqual(
         @as(i64, 0),
-        tdnf_rpmdb_count_packages_config(&config),
+        rpmz_rpmdb_count_packages_config(&config),
     );
-    const cookie = tdnf_rpmdb_cookie_config(&config) orelse
+    const cookie = rpmz_rpmdb_cookie_config(&config) orelse
         return error.TestUnexpectedResult;
-    defer tdnf_rpmdb_string_free(cookie);
+    defer rpmz_rpmdb_string_free(cookie);
     try std.testing.expectEqualStrings("0:0", std.mem.span(cookie));
-    const iter = tdnf_rpmdb_iter_open_config(&config) orelse
+    const iter = rpmz_rpmdb_iter_open_config(&config) orelse
         return error.TestUnexpectedResult;
-    defer tdnf_rpmdb_iter_close(iter);
+    defer rpmz_rpmdb_iter_close(iter);
     var blob: ?[*]const u8 = null;
     var blob_len: usize = 0;
     try std.testing.expectEqual(
         @as(i32, 0),
-        tdnf_rpmdb_iter_next_header_blob(iter, &blob, &blob_len),
+        rpmz_rpmdb_iter_next_header_blob(iter, &blob, &blob_len),
     );
-    const pubkeys = tdnf_rpmdb_pubkeys_open_config(&config) orelse
+    const pubkeys = rpmz_rpmdb_pubkeys_open_config(&config) orelse
         return error.TestUnexpectedResult;
-    defer tdnf_rpmdb_pubkeys_close(pubkeys);
+    defer rpmz_rpmdb_pubkeys_close(pubkeys);
     var key: [*:0]u8 = undefined;
     try std.testing.expectEqual(
         @as(i32, 0),
-        tdnf_rpmdb_pubkeys_next(pubkeys, &key, null, null),
+        rpmz_rpmdb_pubkeys_next(pubkeys, &key, null, null),
     );
 }
 
@@ -5361,11 +5361,11 @@ test "pubkey reader distinguishes empty rpmdb from corruption" {
 
     const missing = pubkeysOpenAtPath(path) orelse
         return error.TestUnexpectedResult;
-    defer tdnf_rpmdb_pubkeys_close(missing);
+    defer rpmz_rpmdb_pubkeys_close(missing);
     var key: [*:0]u8 = undefined;
     try std.testing.expectEqual(
         @as(i32, 0),
-        tdnf_rpmdb_pubkeys_next(missing, &key, null, null),
+        rpmz_rpmdb_pubkeys_next(missing, &key, null, null),
     );
 
     try std.Io.Dir.cwd().createDirPath(std.testing.io, dir);
@@ -5376,10 +5376,10 @@ test "pubkey reader distinguishes empty rpmdb from corruption" {
 
     const empty = pubkeysOpenAtPath(path) orelse
         return error.TestUnexpectedResult;
-    defer tdnf_rpmdb_pubkeys_close(empty);
+    defer rpmz_rpmdb_pubkeys_close(empty);
     try std.testing.expectEqual(
         @as(i32, 0),
-        tdnf_rpmdb_pubkeys_next(empty, &key, null, null),
+        rpmz_rpmdb_pubkeys_next(empty, &key, null, null),
     );
 
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{
@@ -5454,11 +5454,11 @@ test "pubkey iterator rejects malformed required fields and certificates" {
         );
         const iter = pubkeysOpenAtPath(path) orelse
             return error.TestUnexpectedResult;
-        defer tdnf_rpmdb_pubkeys_close(iter);
+        defer rpmz_rpmdb_pubkeys_close(iter);
         var key: [*:0]u8 = undefined;
         try std.testing.expectEqual(
             @as(i32, -1),
-            tdnf_rpmdb_pubkeys_next(iter, &key, null, null),
+            rpmz_rpmdb_pubkeys_next(iter, &key, null, null),
         );
         try std.testing.expect(last_error_len != 0);
     }
@@ -5583,7 +5583,7 @@ test "key-set signature ABI names the signer and consults no rpmdb" {
     var signer_index: isize = -99;
     var fingerprint: [32]u8 = @splat(0);
     var fingerprint_len: usize = 99;
-    try std.testing.expectEqual(@as(i32, 0), tdnf_rpm_file_verify_signatures_keys(
+    try std.testing.expectEqual(@as(i32, 0), rpmz_rpm_file_verify_signatures_keys(
         &file,
         &blobs,
         &lens,
@@ -5613,7 +5613,7 @@ test "key-set signature ABI grants no ambient trust" {
     var outcome: i32 = -1;
     var signer_index: isize = -99;
     var fingerprint_len: usize = 99;
-    try std.testing.expectEqual(@as(i32, 0), tdnf_rpm_file_verify_signatures_keys(
+    try std.testing.expectEqual(@as(i32, 0), rpmz_rpm_file_verify_signatures_keys(
         &file,
         null,
         null,
@@ -5634,7 +5634,7 @@ test "key-set signature ABI rejects malformed arguments" {
     defer file.file.close(std.testing.allocator);
 
     var outcome: i32 = -1;
-    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+    try std.testing.expectEqual(@as(i32, -1), rpmz_rpm_file_verify_signatures_keys(
         null,
         null,
         null,
@@ -5644,7 +5644,7 @@ test "key-set signature ABI rejects malformed arguments" {
         null,
         null,
     ));
-    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+    try std.testing.expectEqual(@as(i32, -1), rpmz_rpm_file_verify_signatures_keys(
         &file,
         null,
         null,
@@ -5655,7 +5655,7 @@ test "key-set signature ABI rejects malformed arguments" {
         null,
     ));
     // A non-zero count with no key array must not be read as an empty set.
-    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+    try std.testing.expectEqual(@as(i32, -1), rpmz_rpm_file_verify_signatures_keys(
         &file,
         null,
         null,
@@ -5668,7 +5668,7 @@ test "key-set signature ABI rejects malformed arguments" {
 
     var blobs = [_]?*const anyopaque{null};
     var lens = [_]usize{4};
-    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+    try std.testing.expectEqual(@as(i32, -1), rpmz_rpm_file_verify_signatures_keys(
         &file,
         &blobs,
         &lens,
@@ -5681,7 +5681,7 @@ test "key-set signature ABI rejects malformed arguments" {
 
     blobs[0] = &lens;
     lens[0] = 0;
-    try std.testing.expectEqual(@as(i32, -1), tdnf_rpm_file_verify_signatures_keys(
+    try std.testing.expectEqual(@as(i32, -1), rpmz_rpm_file_verify_signatures_keys(
         &file,
         &blobs,
         &lens,

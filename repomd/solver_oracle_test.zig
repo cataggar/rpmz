@@ -1053,7 +1053,7 @@ test "skip broken resolves independent conflicting job cores" {
     try testing.expectEqual(@as(usize, 0), observation.outcome.problems.len);
 }
 
-test "oracle rejects repository cost until tdnf implements it" {
+test "oracle rejects repository cost until rpmz implements it" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     var builder = GraphBuilder.init(arena_state.allocator());
     const available = try builder.addRepo("available", .available, 50);
@@ -1857,7 +1857,7 @@ test "clean deps without allow erasing leaves protection to the transaction chec
     var graph = try builder.finish(&arena_state);
     defer graph.deinit();
 
-    // `TDNFSolvAddProtectPkgs` only runs when tdnf allows erasing, so without
+    // `TDNFSolvAddProtectPkgs` only runs when rpmz allows erasing, so without
     // it libsolv never hears that `protected` is special and the clean-deps
     // walk removes it. `TDNFSolvCheckProtectPkgsInTrans` rejects the finished
     // transaction instead, which both solvers report as a protected problem.
@@ -3405,7 +3405,7 @@ test "oracle co-ranks noarch with the best machine architecture" {
     try testing.expectEqualStrings("2", selected.source.nevra.version);
 }
 
-test "oracle applies tdnf repository priority semantics" {
+test "oracle applies rpmz repository priority semantics" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     var builder = GraphBuilder.init(arena_state.allocator());
     const lower_priority_value = try builder.addRepo("preferred", .available, 10);

@@ -13,6 +13,7 @@ const lock_nonblocking: c_int = 4;
 const lock_unlock: c_int = 8;
 // Root targets lock directly here. Non-root target owners use a private
 // uid-scoped child created by a privileged caller.
+// New and legacy processes must contend in the same upgrade namespace.
 const default_lock_parent = "/var/lib/tdnf/locks";
 
 extern fn flock(fd: c_int, operation: c_int) callconv(.c) c_int;
@@ -218,7 +219,7 @@ fn testLockDirectoryAlloc(
         return error.LockFailed;
     return std.fmt.allocPrint(
         allocator,
-        "{s}/.zig-cache/tdnf-test-locks-{d}",
+        "{s}/.zig-cache/rpmz-test-locks-{d}",
         .{ cwd_buffer[0..cwd_length], owner_uid },
     ) catch error.OutOfMemory;
 }
@@ -881,7 +882,7 @@ fn fdIdentity(fd: c_int) Error!TargetIdentity {
     return (try fdTarget(fd)).identity;
 }
 
-test "global fallback lock namespace is environment independent" {
+test "rpmz shares the stable legacy transaction lock namespace" {
     const first = try defaultLockDirectoryAlloc(std.testing.allocator, 42);
     defer std.testing.allocator.free(first);
     const second = try defaultLockDirectoryAlloc(std.testing.allocator, 42);
@@ -1546,7 +1547,7 @@ test "root target lock blocks unprivileged opens and precreation" {
             _ = std.c.close(existing);
             _exit(3);
         }
-        const attack_name = ".tdnf-unprivileged-precreate";
+        const attack_name = ".rpmz-unprivileged-precreate";
         const attack_fd = std.c.openat(parent_fd, attack_name, .{
             .ACCMODE = .RDWR,
             .CREAT = true,

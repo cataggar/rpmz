@@ -2,12 +2,12 @@
 //!
 //! The pytest replay acceptance suite invokes the installed copy of this
 //! program so export and replay meet at the same boundary a real caller uses:
-//! `@import("tdnf")` and the installed `tdnf` executable.
+//! `@import("rpmz")` and the installed `rpmz` executable.
 
 const std = @import("std");
-const tdnf = @import("tdnf");
+const rpmz = @import("rpmz");
 
-const resolver = tdnf.resolver;
+const resolver = rpmz.resolver;
 
 const Arguments = struct {
     operation: resolver.Operation,
@@ -46,7 +46,7 @@ pub fn main(init: std.process.Init) !void {
             break :blk &installonly_names;
         } else &.{};
 
-    var result = try tdnf.bundle_export.exportBundle(allocator, init.io, .{
+    var result = try rpmz.bundle_export.exportBundle(allocator, init.io, .{
         .resolve = .{
             .operation = arguments.operation,
             .subjects = arguments.subjects,
@@ -181,7 +181,7 @@ fn parseOperation(value: []const u8) ?resolver.Operation {
 
 fn printUsage() void {
     std.debug.print(
-        \\usage: tdnf-replay-export
+        \\usage: rpmz-replay-export
         \\  --operation <operation> --repo-id <id> --base-url <url>
         \\  --install-root <path> --cache-dir <path> --scratch-dir <path>
         \\  --destination <path> --architecture <arch>

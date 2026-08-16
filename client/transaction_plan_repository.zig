@@ -13,6 +13,7 @@ const transaction_plan = @import("transaction_plan");
 ///
 /// repomd.xml binds every advertised sidecar checksum, so this identifies the
 /// exact loaded metadata snapshot without retaining a cache path or URL.
+// Serialized snapshot IDs retain this legacy v2 domain for compatibility.
 pub const snapshot_identity_domain = "tdnf.repository-snapshot/v2";
 pub const snapshot_id_prefix = "snapshot-v2-";
 
@@ -1069,6 +1070,10 @@ test "snapshot identity binds selected metadata mask" {
     const digest = sha256("fixed-repomd");
     const baseline = try snapshotId(std.testing.allocator, digest, .{});
     defer std.testing.allocator.free(baseline);
+    try std.testing.expectEqualStrings(
+        "snapshot-v2-61a8086aeb7945a5cd3af277d50aa0737f1278d92bd4e91fc84ab11cd541de96",
+        baseline,
+    );
     inline for (.{
         available_loader.CacheOptions{ .include_filelists = false },
         available_loader.CacheOptions{ .include_updateinfo = true },

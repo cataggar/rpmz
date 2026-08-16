@@ -260,10 +260,10 @@ fn runRetainedSource(
     );
     defer allocator.free(parked_z);
 
-    const file = abi.tdnf_rpm_file_open(path_z.ptr) orelse return 1;
-    defer abi.tdnf_rpm_file_close(file);
-    const config = abi.tdnf_rpm_config_create("/") orelse return 1;
-    defer abi.tdnf_rpm_config_destroy(config);
+    const file = abi.rpmz_rpm_file_open(path_z.ptr) orelse return 1;
+    defer abi.rpmz_rpm_file_close(file);
+    const config = abi.rpmz_rpm_config_create("/") orelse return 1;
+    defer abi.rpmz_rpm_config_destroy(config);
     const define = try std.fmt.allocPrintSentinel(
         allocator,
         "_topdir {s}",
@@ -271,7 +271,7 @@ fn runRetainedSource(
         0,
     );
     defer allocator.free(define);
-    if (abi.tdnf_rpm_config_apply_define(config, define.ptr) != 0) return 1;
+    if (abi.rpmz_rpm_config_apply_define(config, define.ptr) != 0) return 1;
     if (std.c.rename(path_z.ptr, parked_z.ptr) != 0) return 1;
 
     const replacement = c.fopen(path_z.ptr, "wb") orelse return 1;
@@ -280,7 +280,7 @@ fn runRetainedSource(
     if (c.fwrite(contents.ptr, 1, contents.len, replacement) != contents.len) {
         return 1;
     }
-    return if (abi.tdnf_rpm_file_extract_source_config(
+    return if (abi.rpmz_rpm_file_extract_source_config(
         file,
         config,
         0,

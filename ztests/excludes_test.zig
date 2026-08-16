@@ -1,7 +1,7 @@
 //! Exclude policy behaviour, ported from `pytests/tests/test_excludes.py`.
 //!
 //! `test_with_minversion_existing` is not ported yet: the pytest command uses
-//! `--exclude=` with no value, which tdnf rejects during argument parsing
+//! `--exclude=` with no value, which rpmz rejects during argument parsing
 //! before the minversion setup can matter, and pytest masks that by never
 //! asserting the exit code.
 

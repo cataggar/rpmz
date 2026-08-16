@@ -31,6 +31,6 @@ def test_setopt_reposdir(utils):
     utils.create_repoconf(os.path.join(REPODIR, REPOFILENAME),
                           "http://foo.bar.com/packages",
                           REPONAME)
-    ret = utils.run(['tdnf', '--setopt=reposdir={}'.format(REPODIR), 'repolist'])
+    ret = utils.run(['rpmz', '--setopt=reposdir={}'.format(REPODIR), 'repolist'])
     assert ret['retval'] == 0
     assert REPONAME in "\n".join(ret['stdout'])

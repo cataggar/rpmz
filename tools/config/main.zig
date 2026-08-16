@@ -29,7 +29,7 @@ const ERR_NO_SETTING: u8 = 4;
 const ERR_REPO_EXISTS: u8 = 5;
 const ERR_JSON: u8 = 6;
 const ERR_INTERNAL: u8 = 7;
-const tdnf_conf_file = "/etc/tdnf/tdnf.conf";
+const rpmz_conf_file = "/etc/rpmz/rpmz.conf";
 const repo_dir_key = "repodir";
 const default_repo_dir = "/etc/yum.repos.d";
 
@@ -306,7 +306,7 @@ fn printRemoveError(psz_filename: [*c]const u8) u8 {
 }
 
 pub fn main(init: std.process.Init.Minimal) u8 {
-    var psz_main_config: [*c]const u8 = tdnf_conf_file;
+    var psz_main_config: [*c]const u8 = rpmz_conf_file;
     var psz_repo_config: [*c]const u8 = null;
     var do_json = false;
 

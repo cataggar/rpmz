@@ -65,7 +65,7 @@ def repo_file_path(utils, repo_name):
 
 def repo_cache_dir(utils, repo_name):
     return os.path.join(
-        utils.tdnf_config.get('main', 'cachedir'),
+        utils.rpmz_config.get('main', 'cachedir'),
         repo_name,
     )
 
@@ -128,7 +128,7 @@ def configure_repo(utils, repo_name, baseurl, extra=None):
 
 def makecache(utils, repo_name, workdir):
     return utils.run([
-        'tdnf',
+        'rpmz',
         '--disablerepo=*',
         f'--enablerepo={repo_name}',
         'makecache',
@@ -137,7 +137,7 @@ def makecache(utils, repo_name, workdir):
 
 def downloadonly(utils, repo_name, workdir, package_name, downloaddir):
     return utils.run([
-        'tdnf',
+        'rpmz',
         'install',
         '-y',
         '--nogpgcheck',
@@ -182,7 +182,7 @@ def AuthProxyServer(
         def do_GET(self):
             if self.headers.get('Proxy-Authorization') != expected:
                 self.send_response(407, 'Proxy Authentication Required')
-                self.send_header('Proxy-Authenticate', 'Basic realm="tdnf-test"')
+                self.send_header('Proxy-Authenticate', 'Basic realm="rpmz-test"')
                 self.end_headers()
                 return
 

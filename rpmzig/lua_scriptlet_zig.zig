@@ -202,7 +202,7 @@ fn installHostModules(lua: *zlua.State) !void {
         \\    return entries[index]
         \\  end
         \\end
-    , .{ .name = "=tdnf lua host wrappers" });
+    , .{ .name = "=rpmz lua host wrappers" });
 }
 
 fn addFunction(

@@ -164,10 +164,10 @@ class ConnectionTrap:
         assert not self._thread.is_alive()
 
 
-def _write_invalid_tdnf_config(root):
-    (root / "etc" / "tdnf").mkdir(parents=True)
-    (root / "etc" / "tdnf" / "tdnf.conf").write_text(
-        "this is intentionally not valid tdnf configuration\n",
+def _write_invalid_rpmz_config(root):
+    (root / "etc" / "rpmz").mkdir(parents=True)
+    (root / "etc" / "rpmz" / "rpmz.conf").write_text(
+        "this is intentionally not valid rpmz configuration\n",
         encoding="utf-8",
     )
 
@@ -563,7 +563,7 @@ def replay_environment(utils):
 
         closed_root = roots / "closed-replay"
         closed_root.mkdir()
-        _write_invalid_tdnf_config(closed_root)
+        _write_invalid_rpmz_config(closed_root)
         env.closed_root = closed_root
         env.closed_result = _replay(
             utils,
@@ -606,7 +606,7 @@ def _load_plan(bundle):
 
 def _replay(utils, env, bundle, root, architecture=ARCH):
     return utils.run([
-        "tdnf",
+        "rpmz",
         "replay",
         "--installroot", str(root),
         "--rpmdb-path", "/var/lib/rpm",
@@ -761,7 +761,7 @@ def test_http_export_replays_offline_deterministically(
 
     trap_root = env.workspace / "roots" / "trap-replay"
     trap_root.mkdir()
-    _write_invalid_tdnf_config(trap_root)
+    _write_invalid_rpmz_config(trap_root)
     before_requests = env.guard.snapshot()
     trap_run = _replay(utils, env, env.bundles["install"], trap_root)
     trapped = _assert_success(

@@ -18,7 +18,7 @@ extern fn fwrite(
 ) usize;
 extern fn fputc(ch: c_int, stream: *File) c_int;
 
-const usage = "usage: tdnf-rpmdb-pubkeys [--dump] [root]\n";
+const usage = "usage: rpmz-rpmdb-pubkeys [--dump] [root]\n";
 
 pub fn main(init: std.process.Init.Minimal) u8 {
     const argv = init.args.vector;
@@ -39,7 +39,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
 
     const iter = rpmdb.openPubkeysRoot(root) catch {
         std.debug.print(
-            "tdnf-rpmdb-pubkeys: open: {s}\n",
+            "rpmz-rpmdb-pubkeys: open: {s}\n",
             .{rpmdb.lastErrorMessage()},
         );
         return 1;
@@ -53,7 +53,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             iter,
         ) catch {
             std.debug.print(
-                "tdnf-rpmdb-pubkeys: {s}\n",
+                "rpmz-rpmdb-pubkeys: {s}\n",
                 .{rpmdb.lastErrorMessage()},
             );
             return 1;
@@ -79,7 +79,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
 
     if (count == 0) {
         std.debug.print(
-            "tdnf-rpmdb-pubkeys: no gpg-pubkey-* entries found " ++
+            "rpmz-rpmdb-pubkeys: no gpg-pubkey-* entries found " ++
                 "in rpmdb under {s}\n",
             .{root},
         );

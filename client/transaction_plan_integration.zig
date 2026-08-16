@@ -1,11 +1,11 @@
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const Allocator = std.mem.Allocator;
 
 const integration_options = @import("transaction_plan_integration_options");
 const abi = @import("transaction_plan_capture_abi");
 const capture_adapter = @import("transaction_plan_capture");
-const error_codes = @import("tdnf_error");
+const error_codes = @import("rpmz_error");
 const native_capture = @import("transaction_plan_native");
 const repository_capture = @import("transaction_plan_repository");
 const repository_metadata = @import("repository_metadata");
@@ -35,10 +35,14 @@ const IntegrationError = native_capture.CaptureError ||
         UnsupportedResult,
     };
 
+// These domains are persisted in plans and repository identities. Their
+// legacy prefix is part of the versioned hash contract.
 const rpmdb_package_set_domain = "tdnf.rpmdb-package-set/v1";
 const default_repository_cost: u32 = 1000;
 const visible_snapshot_identity_domain =
     "tdnf.repository-visible-snapshot/v2";
+const repository_load_record_domain = "tdnf.repository-load-record/v1";
+const test_sack_snapshot_domain = "tdnf.test-sack-snapshot/v1";
 
 const RpmdbIterator = opaque {};
 
@@ -52,13 +56,13 @@ const RepoMetadata = extern struct {
     other: ?[*:0]u8 = null,
 };
 
-extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
+extern fn rpmz_rpmdb_string_free(value: ?[*:0]u8) void;
 extern fn TDNFTransactionPlanRpmdbSnapshotOpenConfig(
     config: ?*const anyopaque,
     cookie: ?*?[*:0]u8,
 ) ?*RpmdbIterator;
-extern fn tdnf_rpmdb_iter_close(iterator: ?*RpmdbIterator) void;
-extern fn tdnf_rpmdb_iter_next_header_blob_hnum(
+extern fn rpmz_rpmdb_iter_close(iterator: ?*RpmdbIterator) void;
+extern fn rpmz_rpmdb_iter_next_header_blob_hnum(
     iterator: ?*RpmdbIterator,
     hnum: ?*u32,
     blob: ?*?[*]const u8,
@@ -67,7 +71,7 @@ extern fn tdnf_rpmdb_iter_next_header_blob_hnum(
 
 pub const Input = struct {
     context: *package_context.Context,
-    /// The native solve that produced the transaction tdnf is about to run.
+    /// The native solve that produced the transaction rpmz is about to run.
     native_solve: *const repository_metadata.RetainedSolve,
     trace: *const abi.RequestTraceView,
     problems_accepted: bool,
@@ -584,8 +588,8 @@ test "metadata cache boundaries normalize trailing separators and root" {
 
     const trailing = try openCacheMetadataFile(
         cache_fd,
-        "/var/cache/tdnf/",
-        "/var/cache/tdnf/repo/repomd.xml",
+        "/var/cache/rpmz/",
+        "/var/cache/rpmz/repo/repomd.xml",
     );
     _ = std.c.close(trailing);
     const root = try openCacheMetadataFile(
@@ -604,8 +608,8 @@ test "metadata cache boundaries normalize trailing separators and root" {
         error.InvalidPath,
         openCacheMetadataFile(
             cache_fd,
-            "/var/cache/tdnf/",
-            "/var/cache/tdnf-other/repo/repomd.xml",
+            "/var/cache/rpmz/",
+            "/var/cache/rpmz-other/repo/repomd.xml",
         ),
     );
 }
@@ -664,7 +668,7 @@ fn loadRepository(
     var cache_dir: ?[*:0]u8 = null;
     var metadata: ?*RepoMetadata = null;
     var result = callbacks.get_cache_path.?(
-        input.tdnf_handle,
+        input.rpmz_handle,
         input.repo_data,
         null,
         null,
@@ -688,13 +692,13 @@ fn loadRepository(
             callbacks.make_dirs.?(repo_data_dir.ptr)
         else
             TDNFEnsureRepoCacheDir(
-                input.tdnf_handle,
+                input.rpmz_handle,
                 input.repo_data,
                 "repodata",
             );
         if (result != 0 and result != error_codes.fromErrno(.EXIST)) return result;
         result = callbacks.get_repo_md.?(
-            input.tdnf_handle,
+            input.rpmz_handle,
             input.repo_data,
             repo_data_dir.ptr,
             @ptrCast(&metadata),
@@ -747,7 +751,7 @@ fn loadRepository(
         var snapshot_fd: c_int = -1;
         if (!comptime integration_options.standalone_test) {
             snapshot_fd = TDNFOpenSnapshotFd(
-                input.tdnf_handle,
+                input.rpmz_handle,
                 input.repo_data,
             );
             if (snapshot_fd == -1 and input.repo_data != null)
@@ -810,7 +814,7 @@ fn loadRepository(
     var snapshot_fd: c_int = -1;
     if (!comptime integration_options.standalone_test) {
         snapshot_fd = TDNFOpenSnapshotFd(
-            input.tdnf_handle,
+            input.rpmz_handle,
             input.repo_data,
         );
         if (snapshot_fd == -1 and input.repo_data != null)
@@ -846,7 +850,7 @@ fn initRepository(
         callbacks.get_cache_path == null or callbacks.get_repo_md == null or
         callbacks.free_repo_metadata == null or callbacks.calculate_cookie == null or
         input.repository_id == null or input.repo_data == null or
-        input.tdnf_handle == null or input.context == null)
+        input.rpmz_handle == null or input.context == null)
     {
         return error_codes.ERROR_TDNF_INVALID_PARAMETER;
     }
@@ -973,7 +977,7 @@ fn refreshContext(
         var metadata_expired: c_int = 0;
         if (entry.view.metadata_expire >= 0 and input.cache_only == 0) {
             const result = TDNFShouldSyncRepoMetadata(
-                input.tdnf_handle,
+                input.rpmz_handle,
                 entry.data,
                 entry.view.metadata_expire,
                 &metadata_expired,
@@ -981,15 +985,15 @@ fn refreshContext(
             if (result != 0) return result;
         }
         if (metadata_expired != 0) {
-            var result = TDNFRepoRemoveCache(input.tdnf_handle, entry.data);
+            var result = TDNFRepoRemoveCache(input.rpmz_handle, entry.data);
             if (result == error_codes.fromErrno(.NOENT)) result = 0;
             if (result != 0) return result;
-            result = TDNFRemoveSolvCache(input.tdnf_handle, entry.data);
+            result = TDNFRemoveSolvCache(input.rpmz_handle, entry.data);
             if (result == error_codes.fromErrno(.NOENT)) result = 0;
             if (result != 0) return result;
         }
         const init_input = abi.RepositoryInitInput{
-            .tdnf_handle = input.tdnf_handle,
+            .rpmz_handle = input.rpmz_handle,
             .repo_data = entry.data,
             .context = replacement,
             .callbacks = input.repository_init_callbacks,
@@ -1031,7 +1035,7 @@ fn refreshSack(
     clean_metadata: c_int,
 ) callconv(.c) u32 {
     const input = raw_input orelse return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-    if (input.tdnf_handle == null or input.live_sack == null or
+    if (input.rpmz_handle == null or input.live_sack == null or
         input.repository_head == null or input.command_line_repository_slot == null or
         input.state_slot == null or input.failure_stage == null or
         input.refresh_flag == null or input.cache_dir == null or
@@ -1078,7 +1082,7 @@ fn initRepoFromHandle(
     if (result != 0) return result;
     const view = describeRepository(&refresh, data);
     const input = abi.RepositoryInitInput{
-        .tdnf_handle = handle,
+        .rpmz_handle = handle,
         .repo_data = data,
         .context = context,
         .callbacks = refresh.repository_init_callbacks,
@@ -1810,6 +1814,7 @@ fn visibilitySnapshotId(
         try hashSolverFactKey(&hasher, fact.package);
         hasher.update(&.{@intFromBool(fact.considered)});
     }
+
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
     const hex = try lowerHexAlloc(allocator, digest);
@@ -1818,6 +1823,37 @@ fn visibilitySnapshotId(
         allocator,
         "{s}{s}",
         .{ repository_capture.snapshot_id_prefix, hex },
+    );
+}
+
+test "legacy repository visibility domain remains canonical" {
+    try std.testing.expectEqualStrings(
+        "tdnf.rpmdb-package-set/v1",
+        rpmdb_package_set_domain,
+    );
+    try std.testing.expectEqualStrings(
+        "tdnf.repository-visible-snapshot/v2",
+        visible_snapshot_identity_domain,
+    );
+    try std.testing.expectEqualStrings(
+        "tdnf.repository-load-record/v1",
+        repository_load_record_domain,
+    );
+    try std.testing.expectEqualStrings(
+        "tdnf.test-sack-snapshot/v1",
+        test_sack_snapshot_domain,
+    );
+    const captured_id = "snapshot-v2-" ++ "0" ** 64;
+    var facts: [0]VisibilityFact = .{};
+    const id = try visibilitySnapshotId(
+        std.testing.allocator,
+        captured_id,
+        &facts,
+    );
+    defer std.testing.allocator.free(id);
+    try std.testing.expectEqualStrings(
+        "snapshot-v2-e83c825956f4919618d02bbff60d6ac592e147f648d0a28736ae5c833e19934a",
+        id,
     );
 }
 
@@ -2697,9 +2733,9 @@ fn captureRpmdbIdentity(
         &cookie_raw,
     ) orelse
         return error.RpmdbIdentityFailed;
-    defer tdnf_rpmdb_iter_close(iterator);
+    defer rpmz_rpmdb_iter_close(iterator);
     const cookie_pointer = cookie_raw orelse return error.RpmdbIdentityFailed;
-    defer tdnf_rpmdb_string_free(cookie_pointer);
+    defer rpmz_rpmdb_string_free(cookie_pointer);
     const cookie = std.mem.span(cookie_pointer);
 
     var package_hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -2710,7 +2746,7 @@ fn captureRpmdbIdentity(
         var hnum: u32 = 0;
         var blob_pointer: ?[*]const u8 = null;
         var blob_length: usize = 0;
-        const result = tdnf_rpmdb_iter_next_header_blob_hnum(
+        const result = rpmz_rpmdb_iter_next_header_blob_hnum(
             iterator,
             &hnum,
             &blob_pointer,
@@ -3286,7 +3322,7 @@ fn testRepoRecordDigest(
     const state = handleState(&input) orelse return 0;
     const record = state.repositoryRecord(repository) orelse return 0;
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("tdnf.repository-load-record/v1\x00");
+    hasher.update(repository_load_record_domain ++ "\x00");
     hasher.update(&record.cookie_sha256);
     hasher.update(&.{
         @intFromBool(record.options.include_filelists),
@@ -3369,7 +3405,7 @@ fn testSackSnapshot(
     const output = raw_output orelse return 0;
     var repository_match: ?*package_context.Repository = null;
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("tdnf.test-sack-snapshot/v1\x00");
+    hasher.update(test_sack_snapshot_domain ++ "\x00");
     const repositories = package_context.repositories(context);
     for (repositories) |repository| {
         if (std.mem.eql(u8, repository.id, repository_id)) {

@@ -49,12 +49,12 @@ def setup_test(utils):
 def teardown_test(utils):
     os.remove(NEW_REPO_FN)
     os.rename(ORIG_REPO_FN + '.bak', ORIG_REPO_FN)
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
 
 
 def test_makecache(utils):
-    ret = utils.run(['tdnf', 'makecache'])
+    ret = utils.run(['rpmz', 'makecache'])
     assert ret['retval'] == 0
     for i in ret['stdout']:
         if 'Metadata cache created' in i:
@@ -63,7 +63,7 @@ def test_makecache(utils):
 
 
 def test_repolist(utils):
-    ret = utils.run(['tdnf', 'repolist'])
+    ret = utils.run(['rpmz', 'repolist'])
     assert ret['retval'] == 0
     for i in ret['stdout']:
         if 'cfg-test' in i and 'enabled' in i and 'Test Repo' in i:

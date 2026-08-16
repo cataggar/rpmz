@@ -16,9 +16,9 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO_ROOT / 'out'
 TEST_ROOT = OUT_DIR / 'native-trigger-tests'
-SCRIPTLET_TOOL = OUT_DIR / 'libexec' / 'tdnf' / 'tdnf-rpm-scriptlet'
-TRIGGER_TOOL = OUT_DIR / 'libexec' / 'tdnf' / 'tdnf-rpm-trigger'
-WRITE_TOOL = OUT_DIR / 'libexec' / 'tdnf' / 'tdnf-rpmdb-write'
+SCRIPTLET_TOOL = OUT_DIR / 'libexec' / 'rpmz' / 'rpmz-rpm-scriptlet'
+TRIGGER_TOOL = OUT_DIR / 'libexec' / 'rpmz' / 'rpmz-rpm-trigger'
+WRITE_TOOL = OUT_DIR / 'libexec' / 'rpmz' / 'rpmz-rpmdb-write'
 
 WARNING_EXIT = 40
 

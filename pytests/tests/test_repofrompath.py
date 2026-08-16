@@ -33,7 +33,7 @@ def create_repo(utils):
     os.makedirs(workdir, exist_ok=True)
     reponame = 'photon-test'
 
-    ret = utils.run(['tdnf', '--repo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--repo={}'.format(reponame),
                      '--download-metadata',
                      'reposync'],
                     cwd=workdir)
@@ -58,7 +58,7 @@ def test_repofrompath_created_repo(utils):
 
     create_repo(utils)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--repofrompath=synced-repo,{}'.format(synced_dir),
                      '--repo=synced-repo',
                      'makecache'],
@@ -67,7 +67,7 @@ def test_repofrompath_created_repo(utils):
 
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-y', '--nogpgcheck',
                      '--repofrompath=synced-repo,{}'.format(synced_dir),
                      '--repo=synced-repo',
@@ -92,7 +92,7 @@ def test_repofrompath_cmdline_repo(utils):
 
     path = get_pkg_file_path(utils, pkgname)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-y', '--nogpgcheck',
                      '--repofrompath=synced-repo,{}'.format(synced_dir),
                      '--repo=synced-repo',
@@ -109,7 +109,7 @@ def test_repofromdir_created_repo(utils):
     workdir = WORKDIR
     os.makedirs(workdir, exist_ok=True)
 
-    ret = utils.run(['tdnf', '--repo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--repo={}'.format(reponame),
                      'reposync'],
                     cwd=workdir)
     assert ret['retval'] == 0
@@ -118,7 +118,7 @@ def test_repofromdir_created_repo(utils):
     # repofromdir must work without repodata
     assert not os.path.isdir(os.path.join(synced_dir, 'repodata'))
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--repofromdir=synced-repo,{}'.format(synced_dir),
                      '--repo=synced-repo',
                      'makecache'],
@@ -127,7 +127,7 @@ def test_repofromdir_created_repo(utils):
 
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-y', '--nogpgcheck',
                      '--repofromdir=synced-repo,{}'.format(synced_dir),
                      '--repo=synced-repo',

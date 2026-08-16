@@ -20,7 +20,7 @@ def setup_test(utils):
 def teardown_test(utils):
     for pkg in ("mulversion_pkgname", "requiring_package", "required_package"):
         pkgname = utils.config[pkg]
-        utils.run(['tdnf', 'erase', '-y', pkgname])
+        utils.run(['rpmz', 'erase', '-y', pkgname])
 
     dirname = os.path.join(utils.config['repo_path'], 'minversions.d')
     if os.path.isdir(dirname):
@@ -43,7 +43,7 @@ def test_install_package_with_version_suffix(utils):
     pkgversion = utils.config["mulversion_lower"]
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '--exclude=', pkgname, '-y', '--nogpgcheck', pkgname + '-' + pkgversion])
+    utils.run(['rpmz', 'install', '--exclude=', pkgname, '-y', '--nogpgcheck', pkgname + '-' + pkgversion])
     assert not utils.check_package(pkgname)
 
 
@@ -52,7 +52,7 @@ def test_install_package_without_version_suffix(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '--exclude=', pkgname, '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '--exclude=', pkgname, '-y', '--nogpgcheck', pkgname])
     assert not utils.check_package(pkgname)
 
 
@@ -63,7 +63,7 @@ def test_install_package_with_excluded_dependency(utils):
     utils.erase_package(pkgname)
     utils.erase_package(pkgname_required)
 
-    utils.run(['tdnf', 'install', '--exclude=', pkgname_required, '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '--exclude=', pkgname_required, '-y', '--nogpgcheck', pkgname])
     assert not utils.check_package(pkgname)
 
 
@@ -75,10 +75,10 @@ def test_update_package(utils):
 
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname + '-' + pkgversion1])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname + '-' + pkgversion1])
     assert utils.check_package(pkgname, version=pkgversion1)
 
-    utils.run(['tdnf', 'update', '--exclude=', pkgname, '-y', '--nogpgcheck', pkgname + '-' + pkgversion2])
+    utils.run(['rpmz', 'update', '--exclude=', pkgname, '-y', '--nogpgcheck', pkgname + '-' + pkgversion2])
     assert not utils.check_package(pkgname, version=pkgversion2)
     assert utils.check_package(pkgname, version=pkgversion1)
 
@@ -86,8 +86,8 @@ def test_update_package(utils):
 # removing an excluded package should fail (dnf behavior) (negative test)
 def test_remove_package(utils):
     pkgname = utils.config["mulversion_pkgname"]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
-    utils.run(['tdnf', 'remove', '--exclude=', pkgname, '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'remove', '--exclude=', pkgname, '-y', '--nogpgcheck', pkgname])
     # package should still be there
     assert utils.check_package(pkgname)
 
@@ -103,9 +103,9 @@ def test_with_minversion_existing(utils):
 
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname + '-' + pkgversion1])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname + '-' + pkgversion1])
     assert utils.check_package(pkgname, version=pkgversion1)
 
-    utils.run(['tdnf', 'update', '--exclude=', '-y', '--nogpgcheck', pkgname + '-' + pkgversion2])
+    utils.run(['rpmz', 'update', '--exclude=', '-y', '--nogpgcheck', pkgname + '-' + pkgversion2])
     assert not utils.check_package(pkgname, version=pkgversion2)
     assert utils.check_package(pkgname, version=pkgversion1)

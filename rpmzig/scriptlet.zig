@@ -412,7 +412,7 @@ fn writeTempScript(
         const token = (@as(u64, @intCast(c.time(null))) << 32) ^
             (@as(u64, @intCast(c.getpid())) << 16) ^
             @as(u64, attempts);
-        const filename = try std.fmt.allocPrint(allocator, "tdnf-scriptlet-{x}", .{token});
+        const filename = try std.fmt.allocPrint(allocator, "rpmz-scriptlet-{x}", .{token});
         defer allocator.free(filename);
         const exec_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ exec_dir, filename });
         const fd = (try pinned_root.createExclusiveRegular(
@@ -595,7 +595,7 @@ fn runLuaChild(
 
 fn prepareInputFd(data: ?[]const u8) RunError!c_int {
     const bytes = data orelse return -1;
-    const raw_fd = linux.memfd_create("tdnf-trigger-input", 0);
+    const raw_fd = linux.memfd_create("rpmz-trigger-input", 0);
     if (std.posix.errno(raw_fd) != .SUCCESS) {
         return error.SyscallFailed;
     }
@@ -630,19 +630,19 @@ test "scriptlet config expands recursive tmppath and PATH" {
     const allocator = std.testing.allocator;
     var config = try txn_config.TxnConfig.init(allocator, "/native-root");
     defer config.deinit();
-    _ = try config.applyRpmDefine("_native_tmp /run/tdnf");
+    _ = try config.applyRpmDefine("_native_tmp /run/rpmz");
     _ = try config.applyRpmDefine("_tmppath %{_native_tmp}/scripts");
-    _ = try config.applyRpmDefine("_native_script_path /opt/tdnf/bin");
+    _ = try config.applyRpmDefine("_native_script_path /opt/rpmz/bin");
     _ = try config.applyRpmDefine("_install_script_path %{_native_script_path}:/usr/bin");
 
     var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "/native-root/run/tdnf/scripts",
+        "/native-root/run/rpmz/scripts",
         try config.resolvePath(.tmppath, &tmp_buf),
     );
     const path = try config.expandMacroAlloc(allocator, .install_script_path);
     defer allocator.free(path);
-    try std.testing.expectEqualStrings("/opt/tdnf/bin:/usr/bin", path);
+    try std.testing.expectEqualStrings("/opt/rpmz/bin:/usr/bin", path);
 }
 
 test "scriptlet temp files stay under pinned installroot after path swap" {

@@ -50,8 +50,8 @@ jobs:
       - name: Verify CLI version
         shell: bash
         run: |
-          VERSION_OUTPUT="$(./out/bin/tdnf --version 2>&1)"
-          EXPECTED="tdnf: ${{ steps.version.outputs.version }}"
+          VERSION_OUTPUT="$(./out/bin/rpmz --version 2>&1)"
+          EXPECTED="rpmz: ${{ steps.version.outputs.version }}"
           if [ "$VERSION_OUTPUT" != "$EXPECTED" ]; then
             echo "Expected: $EXPECTED"
             echo "Actual:   $VERSION_OUTPUT"
@@ -61,7 +61,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          PKGNAME="tdnf-${{ steps.version.outputs.version }}-${{ matrix.name }}"
+          PKGNAME="rpmz-${{ steps.version.outputs.version }}-${{ matrix.name }}"
           mkdir -p "$PKGNAME"
           cp -a ./out/. "$PKGNAME/"
           cp COPYING README.md "$PKGNAME/"
@@ -72,7 +72,7 @@ jobs:
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: ./out/
-          output-file: tdnf-${{ steps.version.outputs.version }}-${{ matrix.name }}.sbom.spdx.json
+          output-file: rpmz-${{ steps.version.outputs.version }}-${{ matrix.name }}.sbom.spdx.json
           upload-artifact: false
 
       - name: Upload artifacts
@@ -80,9 +80,9 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: |
-            tdnf-*.tar.gz
-            tdnf-*.sha256
-            tdnf-*.sbom.spdx.json
+            rpmz-*.tar.gz
+            rpmz-*.sha256
+            rpmz-*.sbom.spdx.json
 
   source:
     name: Source tarball
@@ -96,7 +96,7 @@ jobs:
 
       - name: Package source
         run: |
-          PKGNAME="tdnf-${{ steps.version.outputs.version }}"
+          PKGNAME="rpmz-${{ steps.version.outputs.version }}"
           git archive --format=tar --prefix="$PKGNAME/" HEAD | xz > "$PKGNAME.tar.xz"
           sha256sum "$PKGNAME.tar.xz" > "$PKGNAME.tar.xz.sha256"
 
@@ -105,8 +105,8 @@ jobs:
         with:
           name: source
           path: |
-            tdnf-*.tar.xz
-            tdnf-*.sha256
+            rpmz-*.tar.xz
+            rpmz-*.sha256
 
   release:
     name: Create Release
@@ -125,13 +125,13 @@ jobs:
         uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
         with:
           subject-path: |
-            tdnf-*.tar.gz
-            tdnf-*.tar.xz
+            rpmz-*.tar.gz
+            rpmz-*.tar.xz
 
       - name: Create release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
-          name: tdnf ${{ steps.version.outputs.version }}
+          name: rpmz ${{ steps.version.outputs.version }}
           body: |
             **Install:** download the appropriate tarball for your architecture, verify the SHA256, and extract.
 
@@ -140,15 +140,15 @@ jobs:
             `bin/`, `lib/`, `libexec/`, and `etc/`, plus the project
             `COPYING` and `README.md`.
 
-            `libexec/tdnf/tdnf-test-support` is intentionally included so a
+            `libexec/rpmz/rpmz-test-support` is intentionally included so a
             source checkout can use the documented install-then-pytest
             workflow. It is a private command bridge, not a public API.
 
-            See the source tarball (`tdnf-*.tar.xz`) for a reproducible source snapshot.
+            See the source tarball (`rpmz-*.tar.xz`) for a reproducible source snapshot.
           files: |
-            tdnf-*.tar.gz
-            tdnf-*.tar.xz
-            tdnf-*.sha256
-            tdnf-*.sbom.spdx.json
+            rpmz-*.tar.gz
+            rpmz-*.tar.xz
+            rpmz-*.sha256
+            rpmz-*.sbom.spdx.json
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, 'dev') || contains(steps.version.outputs.version, 'rc') }}

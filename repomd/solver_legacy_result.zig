@@ -80,7 +80,7 @@ const buckets = [_]Bucket{
     .{ .kinds = &.{action_downgrade}, .side = .prior },
 };
 
-/// `include_reinstall` mirrors tdnf's `nReInstall`: the legacy path only ever
+/// `include_reinstall` mirrors rpmz's `nReInstall`: the legacy path only ever
 /// asked libsolv for `SOLVER_TRANSACTION_REINSTALL` when the caller had asked
 /// for a reinstall, so without it a reinstalled package is absent from the
 /// plan entirely rather than reported in some other bucket.

@@ -7,13 +7,13 @@
 //! `doc/transaction-plan-api.md` makes.
 
 const std = @import("std");
-const tdnf = @import("tdnf");
+const rpmz = @import("rpmz");
 
-const resolver = tdnf.resolver;
-const transaction_plan = tdnf.transaction_plan;
-const bundle_export = tdnf.bundle_export;
-const bundle_reader = tdnf.bundle_reader;
-const replay = tdnf.replay;
+const resolver = rpmz.resolver;
+const transaction_plan = rpmz.transaction_plan;
+const bundle_export = rpmz.bundle_export;
+const bundle_reader = rpmz.bundle_reader;
+const replay = rpmz.replay;
 
 fn primaryXml(
     allocator: std.mem.Allocator,

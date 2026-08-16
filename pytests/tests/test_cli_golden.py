@@ -22,7 +22,7 @@ from cli_testlib import MinimalCliRuntime  # noqa: E402
 REPO_ROOT = os.path.dirname(PYTESTS_DIR)
 FIXTURE_DIR = os.path.join(PYTESTS_DIR, 'fixtures', 'cli-golden')
 FIXTURE_PATHS = sorted(glob.glob(os.path.join(FIXTURE_DIR, '*.json')))
-BINDIR_ENV = 'TDNF_CLI_GOLDEN_BINDIR'
+BINDIR_ENV = 'RPMZ_CLI_GOLDEN_BINDIR'
 
 pytestmark = pytest.mark.skipif(
     not FIXTURE_PATHS,
@@ -46,7 +46,7 @@ def _resolve_bindir():
 def cli_runtime():
     bindir = _resolve_bindir()
     if bindir is None:
-        pytest.skip('built tdnf bindir not found')
+        pytest.skip('built rpmz bindir not found')
 
     runtime = MinimalCliRuntime(
         bindir,

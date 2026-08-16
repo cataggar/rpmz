@@ -5,10 +5,10 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const options = @import("client_config_options");
 const rpmtrans = @import("rpmtrans_flags");
 const txn_config = @import("rpm_txn_config");
@@ -23,10 +23,10 @@ const OS_REL_FILE = "/etc/os-release";
 
 const DEFAULT_REPO_LOCATION = "/etc/yum.repos.d";
 const DEFAULT_CACHE_LOCATION = "/var/cache/tdnf";
-const DEFAULT_VARS_DIRS = "/etc/tdnf/vars /etc/dnf/vars /etc/yum/vars";
+const DEFAULT_VARS_DIRS = "/etc/rpmz/vars /etc/dnf/vars /etc/yum/vars";
 const DEFAULT_DISTROVERPKGS = "system-release(releasever) system-release redhat-release";
-const DEFAULT_PLUGIN_CONF_PATH = "/etc/tdnf/pluginconf.d";
-const DEFAULT_PLUGIN_PATH = options.system_libdir ++ "/tdnf-plugins";
+const DEFAULT_PLUGIN_CONF_PATH = "/etc/rpmz/pluginconf.d";
+const DEFAULT_PLUGIN_PATH = options.system_libdir ++ "/rpmz-plugins";
 
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
@@ -1044,7 +1044,7 @@ fn readConfigMode(
     }
     result = allocateFormatted(
         &conf.pszUserAgentHeader,
-        "tdnf/{s} {s}/{s}",
+        "rpmz/{s} {s}/{s}",
         .{
             std.mem.span(Production.getVersion()),
             std.mem.span(conf.pszOSName.?),
@@ -1089,7 +1089,7 @@ fn readConfigMode(
     if (conf.pszPluginPath == null) {
         result = allocateFormatted(
             &conf.pszPluginPath,
-            "{s}/tdnf-plugins",
+            "{s}/rpmz-plugins",
             .{options.system_libdir},
             ops,
         );
@@ -1336,7 +1336,7 @@ test "default configuration uses production defaults without host configuration"
     var handle = Tdnf{ .pArgs = &args };
     try testing.expectEqual(
         @as(u32, 0),
-        TDNFReadConfig(&handle, fixturePath("default-root/etc/tdnf/tdnf.conf"), "ignored-group"),
+        TDNFReadConfig(&handle, fixturePath("default-root/etc/rpmz/rpmz.conf"), "ignored-group"),
     );
     defer TDNFFreeConfig(handle.pConf);
     const conf = handle.pConf.?;
@@ -1372,7 +1372,7 @@ test "complete fixture preserves every config field, rooted paths, and conf frag
     var handle = Tdnf{ .pArgs = &args };
     try testing.expectEqual(
         @as(u32, 0),
-        TDNFReadConfig(&handle, fixturePath("complete-root/etc/tdnf/tdnf.conf"), "main"),
+        TDNFReadConfig(&handle, fixturePath("complete-root/etc/rpmz/rpmz.conf"), "main"),
     );
     defer TDNFFreeConfig(handle.pConf);
     const conf = handle.pConf.?;
@@ -1438,7 +1438,7 @@ test "setopts apply after install-root handling and replace owned values" {
     var handle = Tdnf{ .pArgs = &args };
     try testing.expectEqual(
         @as(u32, 0),
-        TDNFReadConfig(&handle, fixturePath("complete-root/etc/tdnf/tdnf.conf"), "main"),
+        TDNFReadConfig(&handle, fixturePath("complete-root/etc/rpmz/rpmz.conf"), "main"),
     );
     defer TDNFFreeConfig(handle.pConf);
     const conf = handle.pConf.?;
@@ -1456,7 +1456,7 @@ test "missing install-root os-release uses UNKNOWN without reading host state" {
         @as(u32, 0),
         TDNFReadConfig(
             &handle,
-            fixturePath("missing-os-root/etc/tdnf/tdnf.conf"),
+            fixturePath("missing-os-root/etc/rpmz/rpmz.conf"),
             "main",
         ),
     );
@@ -1468,10 +1468,10 @@ test "missing install-root os-release uses UNKNOWN without reading host state" {
 test "pinned config and os-release survive root replacement" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, "root/etc/tdnf");
+    try tmp.dir.createDirPath(std.testing.io, "root/etc/rpmz");
     try tmp.dir.createDirPath(std.testing.io, "root/repos");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .sub_path = "root/etc/rpmz/rpmz.conf",
         .data =
         \\[main]
         \\gpgcheck=1
@@ -1529,10 +1529,10 @@ test "pinned config and os-release survive root replacement" {
         @as(c_int, 0),
         std.c.rename(root_z.ptr, parked_z.ptr),
     );
-    try tmp.dir.createDirPath(std.testing.io, "root/etc/tdnf");
+    try tmp.dir.createDirPath(std.testing.io, "root/etc/rpmz");
     try tmp.dir.createDirPath(std.testing.io, "root/repos");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .sub_path = "root/etc/rpmz/rpmz.conf",
         .data = "[main]\ngpgcheck=0\nplugins=0\ncachedir=/cache\n",
     });
     try tmp.dir.writeFile(std.testing.io, .{
@@ -1549,7 +1549,7 @@ test "pinned config and os-release survive root replacement" {
         @as(u32, 0),
         TDNFReadConfigPinned(
             &handle,
-            "/etc/tdnf/tdnf.conf",
+            "/etc/rpmz/rpmz.conf",
             "main",
         ),
     );
@@ -1566,10 +1566,10 @@ test "pinned config and os-release survive root replacement" {
 test "pinned cachedir setopt repins only the final target path" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, "root/etc/tdnf");
+    try tmp.dir.createDirPath(std.testing.io, "root/etc/rpmz");
     try tmp.dir.createDirPath(std.testing.io, "root/repos");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .sub_path = "root/etc/rpmz/rpmz.conf",
         .data =
         \\[main]
         \\plugins=0
@@ -1627,7 +1627,7 @@ test "pinned cachedir setopt repins only the final target path" {
         @as(u32, 0),
         TDNFReadConfigPinned(
             &handle,
-            "/etc/tdnf/tdnf.conf",
+            "/etc/rpmz/rpmz.conf",
             "main",
         ),
     );
@@ -1641,10 +1641,10 @@ test "pinned cachedir setopt repins only the final target path" {
 test "pinned config rejects absolute symlink escapes" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.createDirPath(std.testing.io, "root/etc/tdnf");
+    try tmp.dir.createDirPath(std.testing.io, "root/etc/rpmz");
     try tmp.dir.createDirPath(std.testing.io, "outside");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = "outside/tdnf.conf",
+        .sub_path = "outside/rpmz.conf",
         .data = "[main]\nplugins=0\n",
     });
     try tmp.dir.writeFile(std.testing.io, .{
@@ -1663,13 +1663,13 @@ test "pinned config rejects absolute symlink escapes" {
     defer std.testing.allocator.free(root);
     const outside_config = try std.fs.path.join(
         std.testing.allocator,
-        &.{ base, "outside", "tdnf.conf" },
+        &.{ base, "outside", "rpmz.conf" },
     );
     defer std.testing.allocator.free(outside_config);
     try tmp.dir.symLink(
         std.testing.io,
         outside_config,
-        "root/etc/tdnf/tdnf.conf",
+        "root/etc/rpmz/rpmz.conf",
         .{},
     );
     const root_z = try std.testing.allocator.dupeZ(u8, root);
@@ -1701,15 +1701,15 @@ test "pinned config rejects absolute symlink escapes" {
         errors.ERROR_TDNF_INVALID_PARAMETER,
         TDNFReadConfigPinned(
             &handle,
-            "/etc/tdnf/tdnf.conf",
+            "/etc/rpmz/rpmz.conf",
             "main",
         ),
     );
     try testing.expect(handle.pConf == null);
 
-    try tmp.dir.deleteFile(std.testing.io, "root/etc/tdnf/tdnf.conf");
+    try tmp.dir.deleteFile(std.testing.io, "root/etc/rpmz/rpmz.conf");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .sub_path = "root/etc/rpmz/rpmz.conf",
         .data = "[main]\nplugins=0\ncachedir=/cache\n",
     });
     const outside_os = try std.fs.path.join(
@@ -1727,7 +1727,7 @@ test "pinned config rejects absolute symlink escapes" {
         errors.ERROR_TDNF_INVALID_PARAMETER,
         TDNFReadConfigPinned(
             &handle,
-            "/etc/tdnf/tdnf.conf",
+            "/etc/rpmz/rpmz.conf",
             "main",
         ),
     );
@@ -1754,7 +1754,7 @@ test "pinned config rejects absolute symlink escapes" {
         errors.ERROR_TDNF_INVALID_PARAMETER,
         TDNFReadConfigPinned(
             &handle,
-            "/etc/tdnf/tdnf.conf",
+            "/etc/rpmz/rpmz.conf",
             "main",
         ),
     );
@@ -1769,7 +1769,7 @@ test "pinned config rejects absolute symlink escapes" {
     );
     defer std.testing.allocator.free(outside_repos);
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = "root/etc/tdnf/tdnf.conf",
+        .sub_path = "root/etc/rpmz/rpmz.conf",
         .data = "[main]\nplugins=0\ncachedir=/cache\nrepodir=/repos\n",
     });
     try tmp.dir.symLink(
@@ -1782,7 +1782,7 @@ test "pinned config rejects absolute symlink escapes" {
         errors.ERROR_TDNF_INVALID_PARAMETER,
         TDNFReadConfigPinned(
             &handle,
-            "/etc/tdnf/tdnf.conf",
+            "/etc/rpmz/rpmz.conf",
             "main",
         ),
     );
@@ -1799,12 +1799,12 @@ test "missing files, invalid parameters, and invalid tsflags reset handle output
     try testing.expect(handle.pConf == null);
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,
-        TDNFReadConfig(&handle, fixturePath("default-root/etc/tdnf/tdnf.conf"), ""),
+        TDNFReadConfig(&handle, fixturePath("default-root/etc/rpmz/rpmz.conf"), ""),
     );
     try testing.expect(handle.pConf == null);
     try testing.expectEqual(
         errors.ERROR_TDNF_INVALID_PARAMETER,
-        TDNFReadConfig(&handle, fixturePath("invalid-root/etc/tdnf/tdnf.conf"), "main"),
+        TDNFReadConfig(&handle, fixturePath("invalid-root/etc/rpmz/rpmz.conf"), "main"),
     );
     try testing.expect(handle.pConf == null);
 }
@@ -1896,7 +1896,7 @@ test "allocation failure frees partial config and clears output" {
     var handle = Tdnf{ .pArgs = &args };
     try testing.expectEqual(@as(u32, 0), readConfig(
         &handle,
-        fixturePath("complete-root/etc/tdnf/tdnf.conf"),
+        fixturePath("complete-root/etc/rpmz/rpmz.conf"),
         "main",
         ops,
     ));
@@ -1911,7 +1911,7 @@ test "allocation failure frees partial config and clears output" {
             errors.ERROR_TDNF_OUT_OF_MEMORY,
             readConfig(
                 &handle,
-                fixturePath("complete-root/etc/tdnf/tdnf.conf"),
+                fixturePath("complete-root/etc/rpmz/rpmz.conf"),
                 "main",
                 ops,
             ),
@@ -1925,12 +1925,12 @@ test "successful reload replaces ownership and failed reload clears it" {
     var handle = Tdnf{ .pArgs = &args };
     try testing.expectEqual(
         @as(u32, 0),
-        TDNFReadConfig(&handle, fixturePath("default-root/etc/tdnf/tdnf.conf"), "main"),
+        TDNFReadConfig(&handle, fixturePath("default-root/etc/rpmz/rpmz.conf"), "main"),
     );
     const first = handle.pConf.?;
     try testing.expectEqual(
         @as(u32, 0),
-        TDNFReadConfig(&handle, fixturePath("default-root/etc/tdnf/tdnf.conf"), "main"),
+        TDNFReadConfig(&handle, fixturePath("default-root/etc/rpmz/rpmz.conf"), "main"),
     );
     try testing.expect(handle.pConf != first);
     try testing.expectEqual(

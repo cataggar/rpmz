@@ -26,7 +26,7 @@ def setup_test(utils):
 def teardown_test(utils):
     # removing package by name without version will remoe all versions
     pkgname = PKGNAME
-    utils.run(['tdnf', 'erase', '-y', pkgname])
+    utils.run(['rpmz', 'erase', '-y', pkgname])
     utils.edit_config({"installonlypkgs": None, "installonly_limit": "3"})
     shutil.rmtree('debugdata', ignore_errors=True)
 
@@ -36,13 +36,13 @@ def test_install_twice(utils):
     pkgname = PKGNAME
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     # should install latest version
     latest = PKG_VERSIONS[-1]
     assert utils.check_package(pkgname, version=latest)
 
     first = PKG_VERSIONS[0]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
     assert utils.check_package(pkgname, version=first)
 
     # test that the other version is still there
@@ -55,11 +55,11 @@ def test_installonly_limit_and_evict(utils):
     latest = PKG_VERSIONS[-1]
     utils.erase_package(pkgname)
     utils.run([
-        'tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}",
+        'rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}",
     ])
 
     ret = utils.run([
-        'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
+        'rpmz', 'upgrade', '-y', '--nogpgcheck', '--testonly',
         '--debugsolver', '--noautoremove', pkgname,
     ])
     assert ret['retval'] == 0, ret
@@ -67,7 +67,7 @@ def test_installonly_limit_and_evict(utils):
     assert not utils.check_package(pkgname, version=latest)
 
     ret = utils.run([
-        'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
+        'rpmz', 'upgrade', '-y', '--nogpgcheck', '--testonly',
         '--debugsolver', '--noautoremove',
     ])
     assert ret['retval'] == 0, ret
@@ -78,7 +78,7 @@ def test_installonly_limit_and_evict(utils):
     # versions; the solver derives those evictions from installonly_limit.
     utils.edit_config({"installonly_limit": "1"})
     ret = utils.run([
-        'tdnf', 'upgrade', '-y', '--nogpgcheck', '--testonly',
+        'rpmz', 'upgrade', '-y', '--nogpgcheck', '--testonly',
         '--debugsolver', '--noautoremove', pkgname,
     ])
     assert ret['retval'] == 0, ret
@@ -91,17 +91,17 @@ def test_install_thrice(utils):
     pkgname = PKGNAME
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     # should install latest version
     latest = PKG_VERSIONS[-1]
     assert utils.check_package(pkgname, version=latest)
 
     first = PKG_VERSIONS[0]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
     assert utils.check_package(pkgname, version=first)
 
     second = PKG_VERSIONS[1]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
     assert utils.check_package(pkgname, version=second)
 
     # test that the other version is still there
@@ -114,21 +114,21 @@ def test_install_fourth(utils):
     pkgname = PKGNAME
     utils.erase_package(pkgname)
 
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', pkgname])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', pkgname])
     # should install latest version
     latest = PKG_VERSIONS[-1]
     assert utils.check_package(pkgname, version=latest)
 
     first = PKG_VERSIONS[0]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
     assert utils.check_package(pkgname, version=first)
 
     second = PKG_VERSIONS[1]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
     assert utils.check_package(pkgname, version=second)
 
     third = PKG_VERSIONS[2]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={third}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={third}"])
     assert utils.check_package(pkgname, version=third)
 
     # the first installed should be gone (default installonly_limit=3)
@@ -141,14 +141,14 @@ def test_install_remove_no_version(utils):
     utils.erase_package(pkgname)
 
     first = PKG_VERSIONS[0]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
     assert utils.check_package(pkgname, version=first)
 
     second = PKG_VERSIONS[1]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
     assert utils.check_package(pkgname, version=second)
 
-    utils.run(['tdnf', 'remove', '-y', pkgname])
+    utils.run(['rpmz', 'remove', '-y', pkgname])
     assert not utils.check_package(pkgname, version=first)
     assert not utils.check_package(pkgname, version=second)
 
@@ -159,14 +159,14 @@ def test_install_remove_with_version(utils):
     utils.erase_package(pkgname)
 
     first = PKG_VERSIONS[0]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
     assert utils.check_package(pkgname, version=first)
 
     second = PKG_VERSIONS[1]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
     assert utils.check_package(pkgname, version=second)
 
-    utils.run(['tdnf', 'remove', '-y', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'remove', '-y', f"{pkgname}={first}"])
     assert not utils.check_package(pkgname, version=first)
     # other pkgs should remain installed:
     assert utils.check_package(pkgname, version=second)
@@ -178,14 +178,14 @@ def test_install_reinstall(utils):
     utils.erase_package(pkgname)
 
     first = PKG_VERSIONS[0]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
     assert utils.check_package(pkgname, version=first)
 
     second = PKG_VERSIONS[1]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={second}"])
     assert utils.check_package(pkgname, version=second)
 
-    utils.run(['tdnf', 'reinstall', '-y', '--nogpgcheck', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'reinstall', '-y', '--nogpgcheck', f"{pkgname}={first}"])
     # both pkgs should remain installed:
     assert utils.check_package(pkgname, version=first)
     assert utils.check_package(pkgname, version=second)
@@ -197,15 +197,15 @@ def test_autoremove_after_upgrade_user_installed(utils):
 
     # install first version
     first = PKG_VERSIONS[0]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
     assert utils.check_package(pkgname, version=first)
 
     # upgrade to latest
     upgrade_version = PKG_VERSIONS[3]
-    utils.run(['tdnf', 'upgrade', '-y', '--nogpgcheck'])
+    utils.run(['rpmz', 'upgrade', '-y', '--nogpgcheck'])
     assert utils.check_package(pkgname, version=upgrade_version)
 
-    utils.run(['tdnf', 'autoremove', '-y'])
+    utils.run(['rpmz', 'autoremove', '-y'])
     # check both packages remain installed after autoremove
     assert utils.check_package(pkgname, version=upgrade_version)
     assert utils.check_package(pkgname, version=first)
@@ -217,19 +217,19 @@ def test_autoremove_after_upgrade_auto_installed(utils):
 
     # install first version
     first = PKG_VERSIONS[0]
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', f"{pkgname}={first}"])
     assert utils.check_package(pkgname, version=first)
 
     # mark package as autoinstalled
-    ret = utils.run(['tdnf', 'mark', 'remove', pkgname])
+    ret = utils.run(['rpmz', 'mark', 'remove', pkgname])
     assert ret['retval'] == 0
 
     # upgrade to latest
     upgrade_version = PKG_VERSIONS[3]
-    utils.run(['tdnf', 'upgrade', '-y', '--nogpgcheck'])
+    utils.run(['rpmz', 'upgrade', '-y', '--nogpgcheck'])
     assert utils.check_package(pkgname, version=upgrade_version)
 
-    utils.run(['tdnf', 'autoremove', '-y'])
+    utils.run(['rpmz', 'autoremove', '-y'])
     # check both packages remain installed after autoremove
     assert not utils.check_package(pkgname, version=upgrade_version)
     assert not utils.check_package(pkgname, version=first)

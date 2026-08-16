@@ -5,7 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 
 const File = opaque {};
 const default_max_string_len = 16_384_000;
@@ -588,7 +588,7 @@ test "typed formatting preserves dynamic alignment and C integer lengths" {
     );
 }
 
-test "allocPrint uses TDNF ownership and preserves null output on errors" {
+test "allocPrint uses RPMZ ownership and preserves null output on errors" {
     var output: ?[*:0]u8 = null;
     try std.testing.expectEqual(
         @as(u32, 0),
@@ -631,11 +631,11 @@ test "typed path joining canonicalizes separators and preserves ownership" {
     var output: ?[*:0]u8 = null;
     try std.testing.expectEqual(
         @as(u32, 0),
-        joinPath(&output, &.{ "/var/", "/lib/", "tdnf/" }),
+        joinPath(&output, &.{ "/var/", "/lib/", "rpmz/" }),
     );
     defer TDNFFreeMemory(@ptrCast(output.?));
     try std.testing.expectEqualStrings(
-        "/var/lib/tdnf",
+        "/var/lib/rpmz",
         std.mem.span(output.?),
     );
 

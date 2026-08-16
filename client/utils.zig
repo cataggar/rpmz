@@ -5,10 +5,10 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const rpmdb_test = if (builtin.is_test) @import("rpmdb_test") else struct {};
 
 const HistoryInfo = abi.HistoryInfo;
@@ -67,16 +67,16 @@ extern fn TDNFAllocateString(
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
 extern fn GlobalSetJson(nValue: c_int) void;
 extern fn GlobalSetQuiet(nValue: c_int) void;
-extern fn tdnf_rpm_config_create(root: ?[*:0]const u8) ?*anyopaque;
-extern fn tdnf_rpm_config_destroy(config: ?*anyopaque) void;
-extern fn tdnf_rpm_config_last_error() [*:0]const u8;
-extern fn tdnf_rpmdb_last_error() [*:0]const u8;
-extern fn tdnf_rpmdb_resolve_provider_version_config(
+extern fn rpmz_rpm_config_create(root: ?[*:0]const u8) ?*anyopaque;
+extern fn rpmz_rpm_config_destroy(config: ?*anyopaque) void;
+extern fn rpmz_rpm_config_last_error() [*:0]const u8;
+extern fn rpmz_rpmdb_last_error() [*:0]const u8;
+extern fn rpmz_rpmdb_resolve_provider_version_config(
     config: ?*const anyopaque,
     provide_name: ?[*:0]const u8,
     version_out: ?*?[*:0]u8,
 ) c_int;
-extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
+extern fn rpmz_rpmdb_string_free(value: ?[*:0]u8) void;
 
 const MemoryOps = struct {
     context: ?*anyopaque = null,
@@ -143,11 +143,11 @@ fn productionRpmCreate(
     _: ?*anyopaque,
     root: [*:0]const u8,
 ) ?*anyopaque {
-    return tdnf_rpm_config_create(root);
+    return rpmz_rpm_config_create(root);
 }
 
 fn productionRpmDestroy(_: ?*anyopaque, config: ?*anyopaque) void {
-    tdnf_rpm_config_destroy(config);
+    rpmz_rpm_config_destroy(config);
 }
 
 fn productionRpmResolve(
@@ -156,19 +156,19 @@ fn productionRpmResolve(
     name: [*:0]const u8,
     output: *?[*:0]u8,
 ) c_int {
-    return tdnf_rpmdb_resolve_provider_version_config(config, name, output);
+    return rpmz_rpmdb_resolve_provider_version_config(config, name, output);
 }
 
 fn productionRpmFreeString(_: ?*anyopaque, value: ?[*:0]u8) void {
-    tdnf_rpmdb_string_free(value);
+    rpmz_rpmdb_string_free(value);
 }
 
 fn productionRpmConfigError(_: ?*anyopaque) [*:0]const u8 {
-    return tdnf_rpm_config_last_error();
+    return rpmz_rpm_config_last_error();
 }
 
 fn productionRpmDbError(_: ?*anyopaque) [*:0]const u8 {
-    return tdnf_rpmdb_last_error();
+    return rpmz_rpmdb_last_error();
 }
 
 const production_rpm_ops = RpmOps{
@@ -205,18 +205,18 @@ const ErrorDescription = struct {
 const error_descriptions = [_]ErrorDescription{
     .{ .code = 1000, .description = "Generic base error" },
     .{ .code = 1001, .description = "Package name expected but was not provided" },
-    .{ .code = 1002, .description = "Error loading tdnf conf (/etc/tdnf/tdnf.conf)" },
-    .{ .code = 1003, .description = "Error loading tdnf repo (normally under /etc/yum.repos.d/)" },
+    .{ .code = 1002, .description = "Error loading rpmz conf (/etc/rpmz/rpmz.conf)" },
+    .{ .code = 1003, .description = "Error loading rpmz repo (normally under /etc/yum.repos.d/)" },
     .{ .code = 1004, .description = "Encountered an invalid repo file" },
-    .{ .code = 1005, .description = "Error opening repo dir. Check if the repodir configured in tdnf.conf exists (usually /etc/yum.repos.d)" },
+    .{ .code = 1005, .description = "Error opening repo dir. Check if the repodir configured in rpmz.conf exists (usually /etc/yum.repos.d)" },
     .{ .code = 1011, .description = "No matching packages" },
     .{ .code = 1020, .description = "There was an error setting the proxy server." },
     .{ .code = 1021, .description = "There was an error setting the proxy server user and pass" },
-    .{ .code = 1022, .description = "distroverpkg config entry is set to a package that is not installed. Check /etc/tdnf/tdnf.conf" },
+    .{ .code = 1022, .description = "distroverpkg config entry is set to a package that is not installed. Check /etc/rpmz/rpmz.conf" },
     .{ .code = 1023, .description = "There was an error reading version of distroverpkg" },
     .{ .code = 1024, .description = "A memory allocation was requested with an invalid size" },
     .{ .code = 1025, .description = "Requested string allocation size was too long." },
-    .{ .code = 1012, .description = "There are no enabled repos.\n Run \"tdnf repolist all\" to see the repos you have.\n You can enable repos by\n 1. by passing in --enablerepo <reponame>\n 2. editing repo files in your repodir(usually /etc/yum.repos.d)" },
+    .{ .code = 1012, .description = "There are no enabled repos.\n Run \"rpmz repolist all\" to see the repos you have.\n You can enable repos by\n 1. by passing in --enablerepo <reponame>\n 2. editing repo files in your repodir(usually /etc/yum.repos.d)" },
     .{ .code = 1013, .description = "Packagelist was empty" },
     .{ .code = 1014, .description = "Error creating goal" },
     .{ .code = 1015, .description = "Invalid argument in resolve" },
@@ -1018,14 +1018,14 @@ fn testReleaseVersionFixture(macro_override: bool) !void {
         });
     }
 
-    const config_raw = tdnf_rpm_config_create(root.ptr) orelse {
+    const config_raw = rpmz_rpm_config_create(root.ptr) orelse {
         std.debug.print(
             "production rpm config creation failed: {s}\n",
-            .{std.mem.span(tdnf_rpm_config_last_error())},
+            .{std.mem.span(rpmz_rpm_config_last_error())},
         );
         return error.TestUnexpectedResult;
     };
-    defer tdnf_rpm_config_destroy(config_raw);
+    defer rpmz_rpm_config_destroy(config_raw);
     const config: *rpmdb_test.TxnConfig = @ptrCast(@alignCast(config_raw));
     var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
     const database_path = try config.resolveRpmDbSqlitePath(&path_buffer);

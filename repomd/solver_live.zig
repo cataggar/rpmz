@@ -561,7 +561,7 @@ pub const DirectoryCheckInput = struct {
     native_arch: []const u8,
 };
 
-/// Builds the universe `tdnf check-local <dir>` checks and the request it
+/// Builds the universe `rpmz check-local <dir>` checks and the request it
 /// makes of it.
 ///
 /// The command is deliberately **directory-only**: libsolv built a fresh

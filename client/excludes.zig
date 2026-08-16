@@ -5,8 +5,8 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
-const errors = @import("tdnf_error");
+const common = @import("rpmz_common");
+const errors = @import("rpmz_error");
 const abi = @import("client_abi");
 const CnfNode = abi.CnfNode;
 const CmdArgs = abi.CmdArgs;
@@ -75,7 +75,7 @@ fn productionFreeStringArray(
 }
 
 fn productionLogConfiguredHeader(_: ?*anyopaque) void {
-    common.log(LOG_INFO, "Warning: The following packages are excluded from tdnf.conf:\n", .{});
+    common.log(LOG_INFO, "Warning: The following packages are excluded from rpmz.conf:\n", .{});
 }
 
 fn productionLogConfiguredValue(_: ?*anyopaque, value: [*:0]const u8) void {

@@ -640,3 +640,32 @@ test "history config stays under pinned root and rejects database symlinks" {
     defer allocator.free(outside_bytes);
     try std.testing.expectEqualStrings("outside", outside_bytes);
 }
+
+test "rpmz defaults reopen an existing legacy history database" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "root/var/lib/tdnf");
+    var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buffer[0..try tmp.dir.realPath(
+        std.testing.io,
+        &root_buffer,
+    )];
+    const rooted = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, "root" },
+    );
+    defer std.testing.allocator.free(rooted);
+    var config = try txn_config.TxnConfig.init(std.testing.allocator, rooted);
+    defer config.deinit();
+
+    var existing = try Database.initConfig(&config, "/var/lib/tdnf", false);
+    try existing.exec("CREATE TABLE legacy_marker(value INTEGER);", .{});
+    existing.close();
+
+    var reopened = try Database.initConfig(&config, "/var/lib/tdnf", true);
+    defer reopened.close();
+    try reopened.exec(
+        "INSERT INTO legacy_marker(value) VALUES (1);",
+        .{},
+    );
+}

@@ -21,7 +21,7 @@ INCLUDED_PKGS = ["tdnf-multi=1.0.1-3"]
 def create_snapshot_repo(utils, reponame):
     snapshot_file = os.path.join(utils.config['repo_path'], "yum.repos.d", f"{reponame}.list")
 
-    ret = utils.run(["tdnf", "repoquery", "--available", "--qf", "%{name}=%{evr}"])
+    ret = utils.run(["rpmz", "repoquery", "--available", "--qf", "%{name}=%{evr}"])
     snapshot_list = ret['stdout']
 
     with open(snapshot_file, "wt") as f:
@@ -56,12 +56,12 @@ def test_install(utils):
 
     # expect failure to install excluded package
     for pkg in EXCLUDED_PKGS:
-        ret = utils.run(["tdnf", "-y", "install", "--disablerepo=*", "--repoid", REPONAME, pkg])
+        ret = utils.run(["rpmz", "-y", "install", "--disablerepo=*", "--repoid", REPONAME, pkg])
         assert ret['retval'] != 0
 
     # expect succes to install included package
     for pkg in INCLUDED_PKGS:
-        ret = utils.run(["tdnf", "-y", "install", "--repoid", REPONAME, pkg])
+        ret = utils.run(["rpmz", "-y", "install", "--repoid", REPONAME, pkg])
         assert ret['retval'] == 0
 
 
@@ -71,13 +71,13 @@ def test_update(utils):
         utils.erase_package(pkg)
 
     # install from non-snapshot repo
-    ret = utils.run(["tdnf", "-y", "install", "tdnf-multi=1.0.1-1"])
+    ret = utils.run(["rpmz", "-y", "install", "tdnf-multi=1.0.1-1"])
     assert ret['retval'] == 0
 
-    ret = utils.run(["tdnf", "-y", "--repoid", REPONAME, "update", "tdnf-multi"])
+    ret = utils.run(["rpmz", "-y", "--repoid", REPONAME, "update", "tdnf-multi"])
     assert ret['retval'] == 0
 
-    ret = utils.run(["tdnf", "-j", "--installed", "list"])
+    ret = utils.run(["rpmz", "-j", "--installed", "list"])
     infolist = json.loads("\n".join(ret['stdout']))
     print(f"infolist={infolist}\n")
 
@@ -93,7 +93,7 @@ def test_update(utils):
 
 
 def test_list(utils):
-    ret = utils.run(["tdnf", "-j", "--repoid", REPONAME, "--available", "list"])
+    ret = utils.run(["rpmz", "-j", "--repoid", REPONAME, "--available", "list"])
     infolist = json.loads("\n".join(ret['stdout']))
 
     # excluded packages should not be listed
@@ -105,7 +105,7 @@ def test_list(utils):
 def test_list_file_absolute(utils):
     snapshot_file = os.path.join(utils.config['repo_path'], "yum.repos.d", f"{REPONAME}.list")
 
-    ret = utils.run(["tdnf", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}={snapshot_file}", "list"])
+    ret = utils.run(["rpmz", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}={snapshot_file}", "list"])
     infolist = json.loads("\n".join(ret['stdout']))
 
     # excluded packages should not be listed
@@ -117,14 +117,14 @@ def test_list_file_absolute(utils):
 def test_list_file_notfound(utils):
     snapshot_file = os.path.join(utils.config['repo_path'], "yum.repos.d", f"{REPONAME}.list.invalid")
 
-    ret = utils.run(["tdnf", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}={snapshot_file}", "list"])
+    ret = utils.run(["rpmz", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}={snapshot_file}", "list"])
     assert ret['retval'] != 0
 
 
 def test_list_file_url(utils):
     snapshot_file = os.path.join(utils.config['repo_path'], "yum.repos.d", f"{REPONAME}.list")
 
-    ret = utils.run(["tdnf", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}=file://{snapshot_file}", "list"])
+    ret = utils.run(["rpmz", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}=file://{snapshot_file}", "list"])
     infolist = json.loads("\n".join(ret['stdout']))
 
     # excluded packages should not be listed
@@ -136,7 +136,7 @@ def test_list_file_url(utils):
 def test_list_http(utils):
     snapshot_url = f"http://localhost:8080/yum.repos.d/{REPONAME}.list"
 
-    ret = utils.run(["tdnf", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}={snapshot_url}", "list"])
+    ret = utils.run(["rpmz", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}={snapshot_url}", "list"])
     infolist = json.loads("\n".join(ret['stdout']))
 
     # excluded packages should not be listed
@@ -148,12 +148,12 @@ def test_list_http(utils):
 def test_list_http_404(utils):
     snapshot_url = f"http://localhost:8080/yum.repos.d/{REPONAME}.list.invalid"
 
-    ret = utils.run(["tdnf", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}={snapshot_url}", "list"])
+    ret = utils.run(["rpmz", "-j", "--repoid", REPONAME, "--available", f"--setopt=snapshot.{REPONAME}={snapshot_url}", "list"])
     assert ret['retval'] != 0
 
 
 def test_info(utils):
-    ret = utils.run(["tdnf", "-j", "--repoid", REPONAME, "--available", "info"])
+    ret = utils.run(["rpmz", "-j", "--repoid", REPONAME, "--available", "info"])
     infolist = json.loads("\n".join(ret['stdout']))
 
     # excluded packages should not be listed
@@ -163,7 +163,7 @@ def test_info(utils):
 
 
 def test_repoquery(utils):
-    ret = utils.run(["tdnf", "-j", "--repoid", REPONAME, "--available", "repoquery"])
+    ret = utils.run(["rpmz", "-j", "--repoid", REPONAME, "--available", "repoquery"])
     infolist = json.loads("\n".join(ret['stdout']))
 
     # excluded packages should not be listed

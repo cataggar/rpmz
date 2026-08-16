@@ -31,7 +31,7 @@ fn isNullOrEmptyString(pszValueOpt: ?[*:0]const u8) bool {
     return pszValueOpt == null or pszValueOpt.?[0] == 0;
 }
 
-fn tdnfCreateLockFile(pszLockPath: [*:0]const u8) c_int {
+fn rpmzCreateLockFile(pszLockPath: [*:0]const u8) c_int {
     const oflag: std.c.O = .{
         .ACCMODE = .RDWR,
         .CREAT = true,
@@ -43,14 +43,14 @@ fn tdnfCreateLockFile(pszLockPath: [*:0]const u8) c_int {
 
     if (nLockFd < 0) {
         const nErrNo = c.__errno_location().*;
-        common.log(LOG_ERR, "%s: open failed for %s (%s)\n", .{ "tdnfCreateLockFile", pszLockPath, c.strerror(nErrNo) });
+        common.log(LOG_ERR, "%s: open failed for %s (%s)\n", .{ "rpmzCreateLockFile", pszLockPath, c.strerror(nErrNo) });
         return -1;
     }
 
     return nLockFd;
 }
 
-fn tdnfCreateSafeLockFile(pszLockPath: [*:0]const u8) c_int {
+fn rpmzCreateSafeLockFile(pszLockPath: [*:0]const u8) c_int {
     const oflag: std.c.O = .{
         .ACCMODE = .RDWR,
         .CREAT = true,
@@ -114,18 +114,18 @@ fn lockPathMatchesFd(
         fd_stat.ino == path_stat.ino;
 }
 
-export fn tdnfLockAcquire(pszLockPathOpt: ?[*:0]const u8) c_int {
+export fn rpmzLockAcquire(pszLockPathOpt: ?[*:0]const u8) c_int {
     var nLockFd: c_int = -1;
     const pszLockPath = pszLockPathOpt orelse "";
 
     if (isNullOrEmptyString(pszLockPathOpt)) {
-        common.log(LOG_ERR, "%s: lockPath is empty\n", .{"tdnfLockAcquire"});
+        common.log(LOG_ERR, "%s: lockPath is empty\n", .{"rpmzLockAcquire"});
         return -1;
     }
 
-    nLockFd = tdnfCreateLockFile(pszLockPath);
+    nLockFd = rpmzCreateLockFile(pszLockPath);
     if (nLockFd < 0) {
-        common.log(LOG_ERR, "%s: tdnfCreateLockFile failed\n", .{"tdnfLockAcquire"});
+        common.log(LOG_ERR, "%s: rpmzCreateLockFile failed\n", .{"rpmzLockAcquire"});
         return -1;
     }
 
@@ -160,14 +160,14 @@ export fn tdnfLockAcquire(pszLockPathOpt: ?[*:0]const u8) c_int {
     return nLockFd;
 }
 
-fn tdnfLockAcquireSafeMode(
+fn rpmzLockAcquireSafeMode(
     pszLockPathOpt: ?[*:0]const u8,
     wait: bool,
 ) c_int {
     const pszLockPath = pszLockPathOpt orelse "";
     if (isNullOrEmptyString(pszLockPathOpt)) return -1;
 
-    const nLockFd = tdnfCreateSafeLockFile(pszLockPath);
+    const nLockFd = rpmzCreateSafeLockFile(pszLockPath);
     if (nLockFd < 0) return -1;
 
     if (wait) {
@@ -193,16 +193,16 @@ fn tdnfLockAcquireSafeMode(
 ///
 /// The caller must place the lock in a directory whose namespace is trusted;
 /// the post-flock identity check then closes replacement races.
-export fn tdnfLockAcquireSafe(pszLockPathOpt: ?[*:0]const u8) c_int {
-    return tdnfLockAcquireSafeMode(pszLockPathOpt, true);
+export fn rpmzLockAcquireSafe(pszLockPathOpt: ?[*:0]const u8) c_int {
+    return rpmzLockAcquireSafeMode(pszLockPathOpt, true);
 }
 
 /// Non-blocking safe acquisition. `-2` means another process owns the lock.
-export fn tdnfLockTryAcquireSafe(pszLockPathOpt: ?[*:0]const u8) c_int {
-    return tdnfLockAcquireSafeMode(pszLockPathOpt, false);
+export fn rpmzLockTryAcquireSafe(pszLockPathOpt: ?[*:0]const u8) c_int {
+    return rpmzLockAcquireSafeMode(pszLockPathOpt, false);
 }
 
-export fn tdnfLockFree(pszLockPathOpt: ?[*:0]const u8, nLockFd: c_int) void {
+export fn rpmzLockFree(pszLockPathOpt: ?[*:0]const u8, nLockFd: c_int) void {
     const pszLockPath = pszLockPathOpt orelse "";
 
     if (nLockFd >= 0) {
@@ -213,7 +213,7 @@ export fn tdnfLockFree(pszLockPathOpt: ?[*:0]const u8, nLockFd: c_int) void {
     }
 }
 
-test "tdnfLockAcquire writes the pid and keeps a stable lock inode" {
+test "rpmzLockAcquire writes the pid and keeps a stable lock inode" {
     var szLockPath = [_]u8{0} ** 128;
     const pszLockPath = try std.fmt.bufPrintZ(
         &szLockPath,
@@ -223,7 +223,7 @@ test "tdnfLockAcquire writes the pid and keeps a stable lock inode" {
 
     _ = c.remove(pszLockPath);
 
-    const nLockFd = tdnfLockAcquire(pszLockPath);
+    const nLockFd = rpmzLockAcquire(pszLockPath);
     try std.testing.expect(nLockFd >= 0);
     defer _ = c.remove(pszLockPath);
 
@@ -239,7 +239,7 @@ test "tdnfLockAcquire writes the pid and keeps a stable lock inode" {
     const pszExpectedPid = try std.fmt.bufPrint(&szExpectedPid, "{d}\n", .{std.c.getpid()});
     try std.testing.expectEqualStrings(pszExpectedPid, pszContents);
 
-    tdnfLockFree(pszLockPath, nLockFd);
+    rpmzLockFree(pszLockPath, nLockFd);
     try std.testing.expect(std.c.access(pszLockPath, 0) == 0);
 }
 
@@ -253,9 +253,9 @@ test "safe lock creates an empty stable lock inode" {
         ".zig-cache/tmp/{s}/lock",
         .{tmp.sub_path},
     );
-    const fd = tdnfLockAcquireSafe(path);
+    const fd = rpmzLockAcquireSafe(path);
     try std.testing.expect(fd >= 0);
-    defer tdnfLockFree(path, fd);
+    defer rpmzLockFree(path, fd);
 
     const contents = try tmp.dir.readFileAlloc(
         std.testing.io,
@@ -282,7 +282,7 @@ test "safe lock rejects symlinks without altering their target" {
         ".zig-cache/tmp/{s}/lock",
         .{tmp.sub_path},
     );
-    try std.testing.expect(tdnfLockAcquireSafe(path) < 0);
+    try std.testing.expect(rpmzLockAcquireSafe(path) < 0);
 
     const contents = try tmp.dir.readFileAlloc(
         std.testing.io,
@@ -308,14 +308,14 @@ test "safe lock rejects non-regular and foreign entries" {
         @as(c_int, 0),
         mkfifo(path, @as(std.c.mode_t, 0o600)),
     );
-    try std.testing.expect(tdnfLockAcquireSafe(path) < 0);
+    try std.testing.expect(rpmzLockAcquireSafe(path) < 0);
 
     try tmp.dir.deleteFile(std.testing.io, "lock");
     try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "lock",
         .data = "foreign",
     });
-    try std.testing.expect(tdnfLockAcquireSafe(path) < 0);
+    try std.testing.expect(rpmzLockAcquireSafe(path) < 0);
     const contents = try tmp.dir.readFileAlloc(
         std.testing.io,
         "lock",

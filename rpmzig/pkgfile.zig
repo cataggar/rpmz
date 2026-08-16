@@ -357,7 +357,7 @@ pub const RpmFile = struct {
     /// Supports gzip, xz, zstd, and lzma. bzip2 and lz4 are returned
     /// as `error.UnsupportedCompressor` — neither is part of Zig
     /// std's decompressor set, and neither is the default on any rpm
-    /// distro tdnf targets.
+    /// distro rpmz targets.
     pub fn decompressPayload(self: RpmFile, alloc: std.mem.Allocator) Error![]u8 {
         const payload = self.bytes[self.payload_offset..];
         return decompressSlice(alloc, payload, self.compressor);

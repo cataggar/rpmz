@@ -46,16 +46,16 @@ pub const basearch = switch (@import("builtin").cpu.arch) {
 /// writes the same values into `pytests/config.json`, but the harness resolves
 /// them from the environment so a run never depends on that file.
 pub const Layout = struct {
-    /// `<prefix>/bin/tdnf`.
-    tdnf: []const u8,
-    /// `<prefix>/lib/tdnf-plugins`.
+    /// `<prefix>/bin/rpmz`.
+    rpmz: []const u8,
+    /// `<prefix>/lib/rpmz-plugins`.
     plugin_dir: []const u8,
     /// Absolute path to the repository seed `setup-repo.sh` produced. It has to
     /// be absolute because it becomes a `file://` URL.
     repo_dir: []const u8,
 
     pub fn deinit(self: Layout, allocator: std.mem.Allocator) void {
-        allocator.free(self.tdnf);
+        allocator.free(self.rpmz);
         allocator.free(self.plugin_dir);
         allocator.free(self.repo_dir);
     }
@@ -75,14 +75,14 @@ pub fn resolveLayout(allocator: std.mem.Allocator) !Layout {
 
     const cwd = std.Io.Dir.cwd();
 
-    const tdnf = try std.fs.path.join(allocator, &.{ prefix, "bin", "tdnf" });
-    errdefer allocator.free(tdnf);
-    cwd.access(io, tdnf, .{}) catch return Error.MissingBuildTree;
+    const rpmz = try std.fs.path.join(allocator, &.{ prefix, "bin", "rpmz" });
+    errdefer allocator.free(rpmz);
+    cwd.access(io, rpmz, .{}) catch return Error.MissingBuildTree;
 
     const plugin_dir = std.testing.environ.getAlloc(
         allocator,
         "TDNF_ZTEST_PLUGIN_DIR",
-    ) catch try std.fs.path.join(allocator, &.{ prefix, "lib", "tdnf-plugins" });
+    ) catch try std.fs.path.join(allocator, &.{ prefix, "lib", "rpmz-plugins" });
     errdefer allocator.free(plugin_dir);
 
     // `photon-test/repodata/repomd.xml` is what `setup-repo.sh` publishes last,
@@ -98,7 +98,7 @@ pub fn resolveLayout(allocator: std.mem.Allocator) !Layout {
     errdefer allocator.free(repo_dir);
 
     return .{
-        .tdnf = tdnf,
+        .rpmz = rpmz,
         .plugin_dir = plugin_dir,
         .repo_dir = repo_dir,
     };
@@ -117,7 +117,7 @@ fn realPathAlloc(
     return allocator.dupe(u8, buffer[0..len]);
 }
 
-/// The outcome of one `tdnf` invocation.
+/// The outcome of one `rpmz` invocation.
 pub const Result = struct {
     allocator: std.mem.Allocator,
     code: u8,
@@ -163,7 +163,7 @@ pub const Result = struct {
         return error.TestUnexpectedResult;
     }
 
-    /// Note that tdnf's error-code descriptions ("Nothing to do.", and the rest
+    /// Note that rpmz's error-code descriptions ("Nothing to do.", and the rest
     /// of the table in `tools/cli/lib/apimisc.zig`) are written to stderr even
     /// when the command exits 0, so assertions about them belong here.
     pub fn expectStderrContains(self: *const Result, needle: []const u8) !void {
@@ -190,7 +190,7 @@ pub const Result = struct {
         return error.TestUnexpectedResult;
     }
 
-    /// One row of `tdnf list` output: `<name>.<arch>  <evr>  <repo>`.
+    /// One row of `rpmz list` output: `<name>.<arch>  <evr>  <repo>`.
     pub const PackageLine = struct {
         name: []const u8,
         arch: []const u8,
@@ -207,7 +207,7 @@ pub const Result = struct {
         }
     };
 
-    /// Parses `tdnf list`'s three-column output.
+    /// Parses `rpmz list`'s three-column output.
     ///
     /// The returned strings borrow `stdout`, so they live as long as the
     /// `Result`. A line that does not have exactly three columns, or whose
@@ -313,7 +313,7 @@ fn lessThanString(_: void, a: []const u8, b: []const u8) bool {
 }
 
 /// One test's private install root: a throwaway directory holding its own
-/// `tdnf.conf`, repo definition, cache and rpmdb.
+/// `rpmz.conf`, repo definition, cache and rpmdb.
 ///
 /// Nothing here touches the host rpmdb, which is what makes these tests
 /// parallel-safe and lets them skip the snapshot/restore dance
@@ -344,7 +344,7 @@ pub const Root = struct {
         self.* = undefined;
     }
 
-    /// Sets a `[main]` option and rewrites `tdnf.conf`.
+    /// Sets a `[main]` option and rewrites `rpmz.conf`.
     pub fn setMainOption(self: *Root, key: []const u8, value: []const u8) !void {
         const owned_value = try self.allocator.dupe(u8, value);
         errdefer self.allocator.free(owned_value);
@@ -373,10 +373,10 @@ pub const Root = struct {
                 .{ entry.key_ptr.*, entry.value_ptr.* },
             );
         }
-        try self.tmp.dir.writeFile(io, .{ .sub_path = "tdnf.conf", .data = body.items });
+        try self.tmp.dir.writeFile(io, .{ .sub_path = "rpmz.conf", .data = body.items });
     }
 
-    /// Runs `tdnf` against this root. `-c <conf>`, `--installroot <root>` and
+    /// Runs `rpmz` against this root. `-c <conf>`, `--installroot <root>` and
     /// `--releasever` are injected, mirroring what the pytest `utils.run`
     /// fixture does, so a test body reads like the command a user would type.
     pub fn run(self: *Root, args: []const []const u8) !Result {
@@ -384,7 +384,7 @@ pub const Root = struct {
         defer argv.deinit(self.allocator);
         try argv.ensureTotalCapacity(self.allocator, args.len + 6);
 
-        argv.appendAssumeCapacity(self.layout.tdnf);
+        argv.appendAssumeCapacity(self.layout.rpmz);
         argv.appendAssumeCapacity("-c");
         argv.appendAssumeCapacity(self.conf);
         argv.appendAssumeCapacity("--installroot");
@@ -408,7 +408,7 @@ pub const Root = struct {
         };
     }
 
-    /// True when `name` is installed in this root. It asks `tdnf`, so the
+    /// True when `name` is installed in this root. It asks `rpmz`, so the
     /// assertion exercises the same code path the test is about.
     pub fn isInstalled(self: *Root, name: []const u8) !bool {
         return self.isInstalledVersion(name, null);
@@ -469,7 +469,7 @@ pub const Harness = struct {
         errdefer self.allocator.free(path);
 
         try tmp.dir.createDirPath(io, "etc/yum.repos.d");
-        try tmp.dir.createDirPath(io, "var/cache/tdnf");
+        try tmp.dir.createDirPath(io, "var/cache/rpmz");
 
         const repo_file = try std.fmt.allocPrint(self.allocator,
             \\[photon-test]
@@ -485,7 +485,7 @@ pub const Harness = struct {
             .data = repo_file,
         });
 
-        const conf_file = try std.fs.path.join(self.allocator, &.{ path, "tdnf.conf" });
+        const conf_file = try std.fs.path.join(self.allocator, &.{ path, "rpmz.conf" });
         errdefer self.allocator.free(conf_file);
 
         var environ: std.process.Environ.Map = .init(self.allocator);
@@ -540,7 +540,7 @@ test "the harness reaches the repository seed it was pointed at" {
 }
 
 /// Builds a `Result` over literal output, so the parsing helpers can be tested
-/// without spawning `tdnf`.
+/// without spawning `rpmz`.
 fn resultFromStdout(allocator: std.mem.Allocator, stdout: []const u8) !Result {
     return .{
         .allocator = allocator,

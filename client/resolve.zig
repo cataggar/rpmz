@@ -3,7 +3,7 @@
 // Licensed under the GNU Lesser General Public License v2.1.
 
 const __root = @This();
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const canonical_abi = @import("client_abi");
 const transaction_plan_abi = @import("transaction_plan_capture_abi");
 pub const __builtin = @import("std").zig.c_translation.builtins;
@@ -1601,40 +1601,40 @@ pub const struct__TDNF_CONF = extern struct {
     pub const TDNFFreeConfig = __root.TDNFFreeConfig;
 };
 pub const PTDNF_CONF = [*c]struct__TDNF_CONF;
-pub const struct_tdnf_rpm_config = opaque {
-    pub const tdnf_rpm_config_destroy = __root.tdnf_rpm_config_destroy;
-    pub const tdnf_rpm_config_apply_define = __root.tdnf_rpm_config_apply_define;
-    pub const tdnf_rpm_config_expand = __root.tdnf_rpm_config_expand;
-    pub const tdnf_rpm_config_resolve_path = __root.tdnf_rpm_config_resolve_path;
+pub const struct_rpmz_rpm_config = opaque {
+    pub const rpmz_rpm_config_destroy = __root.rpmz_rpm_config_destroy;
+    pub const rpmz_rpm_config_apply_define = __root.rpmz_rpm_config_apply_define;
+    pub const rpmz_rpm_config_expand = __root.rpmz_rpm_config_expand;
+    pub const rpmz_rpm_config_resolve_path = __root.rpmz_rpm_config_resolve_path;
     pub const TDNFRepoMdNativeAutoInstalledOrphanLinesConfig = __root.TDNFRepoMdNativeAutoInstalledOrphanLinesConfig;
-    pub const tdnf_rpmdb_count_packages_config = __root.tdnf_rpmdb_count_packages_config;
-    pub const tdnf_rpm_config_install_root = __root.tdnf_rpm_config_install_root;
-    pub const tdnf_rpm_config_open_root_fd = __root.tdnf_rpm_config_open_root_fd;
-    pub const tdnf_rpmdb_cookie_config = __root.tdnf_rpmdb_cookie_config;
-    pub const tdnf_rpmdb_iter_open_config = __root.tdnf_rpmdb_iter_open_config;
-    pub const tdnf_rpmdb_resolve_provider_version_config = __root.tdnf_rpmdb_resolve_provider_version_config;
-    pub const tdnf_rpmdb_write_install_config = __root.tdnf_rpmdb_write_install_config;
-    pub const tdnf_rpmdb_write_install_file_config = __root.tdnf_rpmdb_write_install_file_config;
-    pub const tdnf_rpmdb_write_replace_config = __root.tdnf_rpmdb_write_replace_config;
-    pub const tdnf_rpmdb_write_replace_file_config = __root.tdnf_rpmdb_write_replace_file_config;
-    pub const tdnf_rpmdb_write_erase_hnum_config = __root.tdnf_rpmdb_write_erase_hnum_config;
-    pub const tdnf_rpmdb_find_hnum_by_nevra_config = __root.tdnf_rpmdb_find_hnum_by_nevra_config;
-    pub const tdnf_rpmdb_find_hnums_by_name_config = __root.tdnf_rpmdb_find_hnums_by_name_config;
-    pub const tdnf_rpmdb_find_label_matches_config = __root.tdnf_rpmdb_find_label_matches_config;
-    pub const tdnf_rpmdb_read_header_blob_config = __root.tdnf_rpmdb_read_header_blob_config;
-    pub const tdnf_rpmdb_import_pubkeys_config = __root.tdnf_rpmdb_import_pubkeys_config;
-    pub const tdnf_rpmdb_pubkeys_open_config = __root.tdnf_rpmdb_pubkeys_open_config;
-    pub const tdnf_rpm_canonical_path_config = __root.tdnf_rpm_canonical_path_config;
+    pub const rpmz_rpmdb_count_packages_config = __root.rpmz_rpmdb_count_packages_config;
+    pub const rpmz_rpm_config_install_root = __root.rpmz_rpm_config_install_root;
+    pub const rpmz_rpm_config_open_root_fd = __root.rpmz_rpm_config_open_root_fd;
+    pub const rpmz_rpmdb_cookie_config = __root.rpmz_rpmdb_cookie_config;
+    pub const rpmz_rpmdb_iter_open_config = __root.rpmz_rpmdb_iter_open_config;
+    pub const rpmz_rpmdb_resolve_provider_version_config = __root.rpmz_rpmdb_resolve_provider_version_config;
+    pub const rpmz_rpmdb_write_install_config = __root.rpmz_rpmdb_write_install_config;
+    pub const rpmz_rpmdb_write_install_file_config = __root.rpmz_rpmdb_write_install_file_config;
+    pub const rpmz_rpmdb_write_replace_config = __root.rpmz_rpmdb_write_replace_config;
+    pub const rpmz_rpmdb_write_replace_file_config = __root.rpmz_rpmdb_write_replace_file_config;
+    pub const rpmz_rpmdb_write_erase_hnum_config = __root.rpmz_rpmdb_write_erase_hnum_config;
+    pub const rpmz_rpmdb_find_hnum_by_nevra_config = __root.rpmz_rpmdb_find_hnum_by_nevra_config;
+    pub const rpmz_rpmdb_find_hnums_by_name_config = __root.rpmz_rpmdb_find_hnums_by_name_config;
+    pub const rpmz_rpmdb_find_label_matches_config = __root.rpmz_rpmdb_find_label_matches_config;
+    pub const rpmz_rpmdb_read_header_blob_config = __root.rpmz_rpmdb_read_header_blob_config;
+    pub const rpmz_rpmdb_import_pubkeys_config = __root.rpmz_rpmdb_import_pubkeys_config;
+    pub const rpmz_rpmdb_pubkeys_open_config = __root.rpmz_rpmdb_pubkeys_open_config;
+    pub const rpmz_rpm_canonical_path_config = __root.rpmz_rpm_canonical_path_config;
     pub const TdnfGetReleaseVersionConfig = __root.TdnfGetReleaseVersionConfig;
-    pub const destroy = __root.tdnf_rpm_config_destroy;
-    pub const apply_define = __root.tdnf_rpm_config_apply_define;
-    pub const expand = __root.tdnf_rpm_config_expand;
-    pub const resolve_path = __root.tdnf_rpm_config_resolve_path;
-    pub const config = __root.tdnf_rpmdb_count_packages_config;
-    pub const install_root = __root.tdnf_rpm_config_install_root;
-    pub const open_root_fd = __root.tdnf_rpm_config_open_root_fd;
+    pub const destroy = __root.rpmz_rpm_config_destroy;
+    pub const apply_define = __root.rpmz_rpm_config_apply_define;
+    pub const expand = __root.rpmz_rpm_config_expand;
+    pub const resolve_path = __root.rpmz_rpm_config_resolve_path;
+    pub const config = __root.rpmz_rpmdb_count_packages_config;
+    pub const install_root = __root.rpmz_rpm_config_install_root;
+    pub const open_root_fd = __root.rpmz_rpm_config_open_root_fd;
 };
-pub const tdnf_rpm_config = struct_tdnf_rpm_config;
+pub const rpmz_rpm_config = struct_rpmz_rpm_config;
 pub const struct_s_Repo = opaque {
     pub const TDNFRepoMdNativeLoadSolvRepo = __root.TDNFRepoMdNativeLoadSolvRepo;
     pub const TDNFRepoMdNativeLoadInstalledSolvRepo = __root.TDNFRepoMdNativeLoadInstalledSolvRepo;
@@ -1730,7 +1730,7 @@ pub const struct__TDNF_ = extern struct {
     pSack: PTDNF_PACKAGE_CONTEXT = null,
     pArgs: PTDNF_CMD_ARGS = null,
     pConf: PTDNF_CONF = null,
-    pRpmConfig: ?*tdnf_rpm_config = null,
+    pRpmConfig: ?*rpmz_rpm_config = null,
     pRepos: PTDNF_REPO_DATA = null,
     pCmdLineRepo: PTDNF_REPOSITORY_CONTEXT = null,
     pPlugins: PTDNF_PLUGIN = null,
@@ -2124,20 +2124,20 @@ pub const struct__TDNF_ZIG_DOWNLOAD_REQUEST = extern struct {
 pub const TDNF_ZIG_DOWNLOAD_REQUEST = struct__TDNF_ZIG_DOWNLOAD_REQUEST;
 pub extern fn TDNFZigDownloadFile(pRequest: [*c]const TDNF_ZIG_DOWNLOAD_REQUEST, pnResponseCode: [*c]c_long) u32;
 pub extern fn TDNFZigDownloadLastError() [*c]const u8;
-pub extern fn tdnf_rpm_config_last_error() [*c]const u8;
-pub extern fn tdnf_rpm_config_create(pszInstallRoot: [*c]const u8) ?*tdnf_rpm_config;
-pub extern fn tdnf_rpm_config_destroy(pConfig: ?*tdnf_rpm_config) void;
-pub extern fn tdnf_rpm_config_apply_define(pConfig: ?*tdnf_rpm_config, pszDefinition: [*c]const u8) c_int;
-pub extern fn tdnf_rpm_config_expand(pConfig: ?*const tdnf_rpm_config, pszName: [*c]const u8) [*c]u8;
-pub extern fn tdnf_rpm_config_resolve_path(pConfig: ?*const tdnf_rpm_config, pszName: [*c]const u8) [*c]u8;
-pub extern fn tdnf_rpm_config_string_free(pszValue: [*c]u8) void;
-pub const struct_tdnf_repomd_doc = opaque {
+pub extern fn rpmz_rpm_config_last_error() [*c]const u8;
+pub extern fn rpmz_rpm_config_create(pszInstallRoot: [*c]const u8) ?*rpmz_rpm_config;
+pub extern fn rpmz_rpm_config_destroy(pConfig: ?*rpmz_rpm_config) void;
+pub extern fn rpmz_rpm_config_apply_define(pConfig: ?*rpmz_rpm_config, pszDefinition: [*c]const u8) c_int;
+pub extern fn rpmz_rpm_config_expand(pConfig: ?*const rpmz_rpm_config, pszName: [*c]const u8) [*c]u8;
+pub extern fn rpmz_rpm_config_resolve_path(pConfig: ?*const rpmz_rpm_config, pszName: [*c]const u8) [*c]u8;
+pub extern fn rpmz_rpm_config_string_free(pszValue: [*c]u8) void;
+pub const struct_rpmz_repomd_doc = opaque {
     pub const TDNFRepoMdFree = __root.TDNFRepoMdFree;
     pub const TDNFRepoMdGetRevision = __root.TDNFRepoMdGetRevision;
     pub const TDNFRepoMdGetRecordCount = __root.TDNFRepoMdGetRecordCount;
     pub const TDNFRepoMdGetRecord = __root.TDNFRepoMdGetRecord;
 };
-pub const TDNF_REPOMD_DOC = struct_tdnf_repomd_doc;
+pub const TDNF_REPOMD_DOC = struct_rpmz_repomd_doc;
 pub const TDNF_REPOMD_RECORD_KIND_UNKNOWN: c_int = 0;
 pub const TDNF_REPOMD_RECORD_KIND_PRIMARY: c_int = 1;
 pub const TDNF_REPOMD_RECORD_KIND_FILELISTS: c_int = 2;
@@ -2230,8 +2230,8 @@ pub const struct__TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2 = extern struct {
     pub const TDNFRepoMdNativeTransactionPlanSolveV2 = __root.TDNFRepoMdNativeTransactionPlanSolveV2;
     pub const TDNFRepoMdNativeTransactionSolveConfigV2 = __root.TDNFRepoMdNativeTransactionSolveConfigV2;
     pub const TDNFRepoMdNativeTransactionPlanSolveConfigV2 = __root.TDNFRepoMdNativeTransactionPlanSolveConfigV2;
-    pub const tdnf_repomd_native_verified_transaction_solve_config = __root.tdnf_repomd_native_verified_transaction_solve_config;
-    pub const config = __root.tdnf_repomd_native_verified_transaction_solve_config;
+    pub const rpmz_repomd_native_verified_transaction_solve_config = __root.rpmz_repomd_native_verified_transaction_solve_config;
+    pub const config = __root.rpmz_repomd_native_verified_transaction_solve_config;
 };
 pub const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2 = struct__TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2;
 pub const PTDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2 = [*c]struct__TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2;
@@ -2432,7 +2432,7 @@ pub extern fn TDNFRepoMdNativeQueryLastError() [*c]const u8;
 pub extern fn TDNFRepoMdNativeTransactionLastError() [*c]const u8;
 pub extern fn TDNFRepoMdNativeLoadSolvRepo(pRepo: ?*Repo, pszRepomd: [*c]const u8, pszPrimary: [*c]const u8, pszFilelists: [*c]const u8, pszUpdateinfo: [*c]const u8, pszOther: [*c]const u8) u32;
 pub extern fn TDNFRepoMdNativeLoadInstalledSolvRepo(pRepo: ?*Repo, pszRootDir: [*c]const u8, nFlags: c_int) u32;
-pub extern fn TDNFRepoMdNativeLoadInstalledSolvRepoConfig(pRepo: ?*Repo, pConfig: ?*const tdnf_rpm_config, nFlags: c_int) u32;
+pub extern fn TDNFRepoMdNativeLoadInstalledSolvRepoConfig(pRepo: ?*Repo, pConfig: ?*const rpmz_rpm_config, nFlags: c_int) u32;
 pub extern fn TDNFRepoMdNativeAddRpm(pRepo: ?*Repo, pszPath: [*c]const u8, nFlags: c_int, pdwSolvableId: [*c]u32) u32;
 pub extern fn TDNFRepoMdNativeList(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pszInstallRoot: [*c]const u8, nScope: c_int, ppszPackageNameSpecs: [*c][*c]u8, nDetail: c_int, ppPkgInfo: [*c]PTDNF_PKG_INFO, pdwCount: [*c]u32) u32;
 pub extern fn TDNFRepoMdNativeSearch(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pszInstallRoot: [*c]const u8, ppszSearchStrings: [*c][*c]u8, nStartIndex: c_int, nEndIndex: c_int, ppPkgInfo: [*c]PTDNF_PKG_INFO, punCount: [*c]u32) u32;
@@ -2443,7 +2443,7 @@ pub extern fn TDNFRepoMdNativeTransactionPlanSolve(pItems: [*c]const TDNF_REPOMD
 pub extern fn TDNFRepoMdNativeTransactionPlanSolveV2(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2, dwItemCount: u32, pszInstallRoot: [*c]const u8, ppPlan: [*c][*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) u32;
 pub extern fn TDNFRepoMdNativeTransactionPlanFree(pPlan: [*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) void;
 pub extern fn TDNFRepoMdNativeSolverResultFree(pResult: [*c]TDNF_REPOMD_NATIVE_SOLVER_RESULT) void;
-pub extern fn TDNFRepoMdNativeSolverLiveSolve(pRepositories: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16, dwRepositoryCount: u32, pJobs: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwJobCount: u32, pEraseJobs: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwEraseJobCount: u32, pHiddenAvailable: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwHiddenAvailableCount: u32, nAllDeps: c_int, nBest: c_int, nCleanDeps: c_int, nSkipBroken: c_int, nAllowErasing: c_int, nUpdateAll: c_int, nDistSyncAll: c_int, ppszLockedPackages: [*c]const [*c]const u8, pdwLockedQueuePairs: [*c]const u32, dwGlobalQueuePair: u32, nHasGlobalQueuePair: c_int, ppszInstallOnlyPackages: [*c]const [*c]const u8, dwInstallOnlyLimit: u32, ppszProtectedPackages: [*c]const [*c]const u8, ppszUserInstalledPackages: [*c]const [*c]const u8, pdwUserInstalledQueuePairs: [*c]const u32, ppszCmdLineRpmPaths: [*c]const [*c]const u8, nReInstall: c_int, pRpmConfig: ?*const tdnf_rpm_config, pszNativeArch: [*c]const u8, nPrepareOnly: c_int, nRefuteUnsat: c_int, ppSolved: [*c]PTDNF_SOLVED_PKG_INFO, ppHandle: [*c]?*anyopaque) u32;
+pub extern fn TDNFRepoMdNativeSolverLiveSolve(pRepositories: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_REPOSITORY_V16, dwRepositoryCount: u32, pJobs: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwJobCount: u32, pEraseJobs: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwEraseJobCount: u32, pHiddenAvailable: [*c]const TDNF_REPOMD_NATIVE_SOLVER_LIVE_JOB, dwHiddenAvailableCount: u32, nAllDeps: c_int, nBest: c_int, nCleanDeps: c_int, nSkipBroken: c_int, nAllowErasing: c_int, nUpdateAll: c_int, nDistSyncAll: c_int, ppszLockedPackages: [*c]const [*c]const u8, pdwLockedQueuePairs: [*c]const u32, dwGlobalQueuePair: u32, nHasGlobalQueuePair: c_int, ppszInstallOnlyPackages: [*c]const [*c]const u8, dwInstallOnlyLimit: u32, ppszProtectedPackages: [*c]const [*c]const u8, ppszUserInstalledPackages: [*c]const [*c]const u8, pdwUserInstalledQueuePairs: [*c]const u32, ppszCmdLineRpmPaths: [*c]const [*c]const u8, nReInstall: c_int, pRpmConfig: ?*const rpmz_rpm_config, pszNativeArch: [*c]const u8, nPrepareOnly: c_int, nRefuteUnsat: c_int, ppSolved: [*c]PTDNF_SOLVED_PKG_INFO, ppHandle: [*c]?*anyopaque) u32;
 pub extern fn TDNFRepoMdNativeSolverLiveSolveRelease(pHandle: ?*anyopaque) void;
 pub extern fn TDNFRepoMdNativeSolverCheckLocal(pszDirectory: [*c]const u8, pszNativeArch: [*c]const u8, pdwPackageCount: [*c]u32, ppHandle: [*c]?*anyopaque, ppszErrorPath: [*c][*c]const u8) u32;
 pub extern fn TDNFRepoMdNativeSolverRefutedProblemCount(pHandle: ?*anyopaque, pdwCount: [*c]u32) u32;
@@ -2461,134 +2461,134 @@ pub extern fn TDNFRepoMdNativePackageInfoForRefs(pRepos: [*c]const TDNF_REPOMD_N
 pub extern fn TDNFRepoMdNativeRequiresForCmdLineRpmPaths(ppszCmdLineRpmPaths: [*c]const [*c]const u8, dwPathCount: u32, pppszDeps: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
 pub extern fn TDNFRepoMdNativeCompareEvr(pszLeftEvr: [*c]const u8, pszRightEvr: [*c]const u8, pnResult: [*c]c_int) u32;
 pub extern fn TDNFRepoMdNativeAutoInstalledOrphanLines(pszInstallRoot: [*c]const u8, ppszAutoInstalledRefs: [*c][*c]u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeListConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, nScope: c_int, ppszPackageNameSpecs: [*c][*c]u8, nDetail: c_int, ppPkgInfo: [*c]PTDNF_PKG_INFO, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeSearchConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, ppszSearchStrings: [*c][*c]u8, nStartIndex: c_int, nEndIndex: c_int, ppPkgInfo: [*c]PTDNF_PKG_INFO, punCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeProvidesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, pszSpec: [*c]const u8, ppPkgInfo: [*c]PTDNF_PKG_INFO) u32;
-pub extern fn TDNFRepoMdNativeTransactionSolveConfig(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM, dwItemCount: u32, pConfig: ?*const tdnf_rpm_config, pppszOrderLines: [*c][*c][*c]u8, pdwOrderCount: [*c]u32, pppszProblemLines: [*c][*c][*c]u8, pdwProblemCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeTransactionSolveConfigV2(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2, dwItemCount: u32, pConfig: ?*const tdnf_rpm_config, pppszOrderLines: [*c][*c][*c]u8, pdwOrderCount: [*c]u32, pppszProblemLines: [*c][*c][*c]u8, pdwProblemCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeTransactionPlanSolveConfig(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM, dwItemCount: u32, pConfig: ?*const tdnf_rpm_config, ppPlan: [*c][*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) u32;
-pub extern fn TDNFRepoMdNativeTransactionPlanSolveConfigV2(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2, dwItemCount: u32, pConfig: ?*const tdnf_rpm_config, ppPlan: [*c][*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) u32;
-pub extern fn TDNFRepoMdNativeRepoQueryConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, pRepoqueryArgs: [*c]const TDNF_REPOQUERY_ARGS, ppPkgInfo: [*c]PTDNF_PKG_INFO, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeFindNevraMatchesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, pszNevra: [*c]const u8, nInstalled: c_int, pppszMatches: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativePackageRefLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, nScope: c_int, pszSpec: [*c]const u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeBestPackageRefConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, nScope: c_int, pszSpec: [*c]const u8, nSourceOnly: c_int, nHighest: c_int, ppszLine: [*c][*c]u8) u32;
-pub extern fn TDNFRepoMdNativeUpdateInfoSummaryLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, ppszPackageNameSpecs: [*c][*c]u8, dwSecurity: u32, pszSeverity: [*c]const u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeUpdateInfoLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, ppszPackageNameSpecs: [*c][*c]u8, dwSecurity: u32, pszSeverity: [*c]const u8, dwRebootRequired: u32, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeMinVersionExcludeLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, ppszMinVersions: [*c][*c]u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeExcludeLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, ppszExcludes: [*c][*c]u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeRequiresForPackageRefsConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, ppszPackageRefs: [*c][*c]u8, pppszDeps: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativePackageInfoForRefsConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const tdnf_rpm_config, ppszPackageRefs: [*c][*c]u8, nDetail: c_int, nQueryFormat: c_int, dwDependencyMask: u32, nFileList: c_int, nChecksum: c_int, ppPkgInfo: [*c]PTDNF_PKG_INFO, pdwCount: [*c]u32) u32;
-pub extern fn TDNFRepoMdNativeAutoInstalledOrphanLinesConfig(pConfig: ?*const tdnf_rpm_config, ppszAutoInstalledRefs: [*c][*c]u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
-pub const struct_tdnf_rpm_file = opaque {
-    pub const tdnf_rpm_file_close = __root.tdnf_rpm_file_close;
-    pub const tdnf_rpm_file_nevra = __root.tdnf_rpm_file_nevra;
-    pub const tdnf_rpm_file_package_kind = __root.tdnf_rpm_file_package_kind;
-    pub const tdnf_rpm_file_get_metadata = __root.tdnf_rpm_file_get_metadata;
-    pub const tdnf_rpm_file_main_header_blob = __root.tdnf_rpm_file_main_header_blob;
-    pub const tdnf_rpm_file_bytes = __root.tdnf_rpm_file_bytes;
-    pub const tdnf_rpm_file_digest = __root.tdnf_rpm_file_digest;
-    pub const tdnf_rpm_file_compressor = __root.tdnf_rpm_file_compressor;
-    pub const tdnf_rpm_file_payload_offset = __root.tdnf_rpm_file_payload_offset;
-    pub const tdnf_rpm_file_is_signed = __root.tdnf_rpm_file_is_signed;
-    pub const tdnf_rpm_file_signature_kind = __root.tdnf_rpm_file_signature_kind;
-    pub const tdnf_rpm_file_verify_digests = __root.tdnf_rpm_file_verify_digests;
-    pub const tdnf_rpm_file_verify_signatures_config = __root.tdnf_rpm_file_verify_signatures_config;
-    pub const tdnf_rpm_file_decompress_payload = __root.tdnf_rpm_file_decompress_payload;
-    pub const tdnf_rpm_file_extract_source_config = __root.tdnf_rpm_file_extract_source_config;
-    pub const tdnf_rpm_file_install = __root.tdnf_rpm_file_install;
-    pub const tdnf_rpm_file_files_open = __root.tdnf_rpm_file_files_open;
-    pub const tdnf_rpm_file_signed_range = __root.tdnf_rpm_file_signed_range;
-    pub const nevra = __root.tdnf_rpm_file_nevra;
-    pub const package_kind = __root.tdnf_rpm_file_package_kind;
-    pub const get_metadata = __root.tdnf_rpm_file_get_metadata;
-    pub const main_header_blob = __root.tdnf_rpm_file_main_header_blob;
-    pub const bytes = __root.tdnf_rpm_file_bytes;
-    pub const digest = __root.tdnf_rpm_file_digest;
-    pub const compressor = __root.tdnf_rpm_file_compressor;
-    pub const payload_offset = __root.tdnf_rpm_file_payload_offset;
-    pub const is_signed = __root.tdnf_rpm_file_is_signed;
-    pub const signature_kind = __root.tdnf_rpm_file_signature_kind;
-    pub const verify_digests = __root.tdnf_rpm_file_verify_digests;
-    pub const verify_signatures_config = __root.tdnf_rpm_file_verify_signatures_config;
-    pub const decompress_payload = __root.tdnf_rpm_file_decompress_payload;
-    pub const extract_source_config = __root.tdnf_rpm_file_extract_source_config;
-    pub const install = __root.tdnf_rpm_file_install;
-    pub const files_open = __root.tdnf_rpm_file_files_open;
-    pub const signed_range = __root.tdnf_rpm_file_signed_range;
+pub extern fn TDNFRepoMdNativeListConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, nScope: c_int, ppszPackageNameSpecs: [*c][*c]u8, nDetail: c_int, ppPkgInfo: [*c]PTDNF_PKG_INFO, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeSearchConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, ppszSearchStrings: [*c][*c]u8, nStartIndex: c_int, nEndIndex: c_int, ppPkgInfo: [*c]PTDNF_PKG_INFO, punCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeProvidesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, pszSpec: [*c]const u8, ppPkgInfo: [*c]PTDNF_PKG_INFO) u32;
+pub extern fn TDNFRepoMdNativeTransactionSolveConfig(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM, dwItemCount: u32, pConfig: ?*const rpmz_rpm_config, pppszOrderLines: [*c][*c][*c]u8, pdwOrderCount: [*c]u32, pppszProblemLines: [*c][*c][*c]u8, pdwProblemCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeTransactionSolveConfigV2(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2, dwItemCount: u32, pConfig: ?*const rpmz_rpm_config, pppszOrderLines: [*c][*c][*c]u8, pdwOrderCount: [*c]u32, pppszProblemLines: [*c][*c][*c]u8, pdwProblemCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeTransactionPlanSolveConfig(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM, dwItemCount: u32, pConfig: ?*const rpmz_rpm_config, ppPlan: [*c][*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) u32;
+pub extern fn TDNFRepoMdNativeTransactionPlanSolveConfigV2(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2, dwItemCount: u32, pConfig: ?*const rpmz_rpm_config, ppPlan: [*c][*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) u32;
+pub extern fn TDNFRepoMdNativeRepoQueryConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, pRepoqueryArgs: [*c]const TDNF_REPOQUERY_ARGS, ppPkgInfo: [*c]PTDNF_PKG_INFO, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeFindNevraMatchesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, pszNevra: [*c]const u8, nInstalled: c_int, pppszMatches: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativePackageRefLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, nScope: c_int, pszSpec: [*c]const u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeBestPackageRefConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, nScope: c_int, pszSpec: [*c]const u8, nSourceOnly: c_int, nHighest: c_int, ppszLine: [*c][*c]u8) u32;
+pub extern fn TDNFRepoMdNativeUpdateInfoSummaryLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, ppszPackageNameSpecs: [*c][*c]u8, dwSecurity: u32, pszSeverity: [*c]const u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeUpdateInfoLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, ppszPackageNameSpecs: [*c][*c]u8, dwSecurity: u32, pszSeverity: [*c]const u8, dwRebootRequired: u32, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeMinVersionExcludeLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, ppszMinVersions: [*c][*c]u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeExcludeLinesConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, ppszExcludes: [*c][*c]u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeRequiresForPackageRefsConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, ppszPackageRefs: [*c][*c]u8, pppszDeps: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativePackageInfoForRefsConfig(pRepos: [*c]const TDNF_REPOMD_NATIVE_REPO_INPUT, dwRepoCount: u32, pConfig: ?*const rpmz_rpm_config, ppszPackageRefs: [*c][*c]u8, nDetail: c_int, nQueryFormat: c_int, dwDependencyMask: u32, nFileList: c_int, nChecksum: c_int, ppPkgInfo: [*c]PTDNF_PKG_INFO, pdwCount: [*c]u32) u32;
+pub extern fn TDNFRepoMdNativeAutoInstalledOrphanLinesConfig(pConfig: ?*const rpmz_rpm_config, ppszAutoInstalledRefs: [*c][*c]u8, pppszLines: [*c][*c][*c]u8, pdwCount: [*c]u32) u32;
+pub const struct_rpmz_rpm_file = opaque {
+    pub const rpmz_rpm_file_close = __root.rpmz_rpm_file_close;
+    pub const rpmz_rpm_file_nevra = __root.rpmz_rpm_file_nevra;
+    pub const rpmz_rpm_file_package_kind = __root.rpmz_rpm_file_package_kind;
+    pub const rpmz_rpm_file_get_metadata = __root.rpmz_rpm_file_get_metadata;
+    pub const rpmz_rpm_file_main_header_blob = __root.rpmz_rpm_file_main_header_blob;
+    pub const rpmz_rpm_file_bytes = __root.rpmz_rpm_file_bytes;
+    pub const rpmz_rpm_file_digest = __root.rpmz_rpm_file_digest;
+    pub const rpmz_rpm_file_compressor = __root.rpmz_rpm_file_compressor;
+    pub const rpmz_rpm_file_payload_offset = __root.rpmz_rpm_file_payload_offset;
+    pub const rpmz_rpm_file_is_signed = __root.rpmz_rpm_file_is_signed;
+    pub const rpmz_rpm_file_signature_kind = __root.rpmz_rpm_file_signature_kind;
+    pub const rpmz_rpm_file_verify_digests = __root.rpmz_rpm_file_verify_digests;
+    pub const rpmz_rpm_file_verify_signatures_config = __root.rpmz_rpm_file_verify_signatures_config;
+    pub const rpmz_rpm_file_decompress_payload = __root.rpmz_rpm_file_decompress_payload;
+    pub const rpmz_rpm_file_extract_source_config = __root.rpmz_rpm_file_extract_source_config;
+    pub const rpmz_rpm_file_install = __root.rpmz_rpm_file_install;
+    pub const rpmz_rpm_file_files_open = __root.rpmz_rpm_file_files_open;
+    pub const rpmz_rpm_file_signed_range = __root.rpmz_rpm_file_signed_range;
+    pub const nevra = __root.rpmz_rpm_file_nevra;
+    pub const package_kind = __root.rpmz_rpm_file_package_kind;
+    pub const get_metadata = __root.rpmz_rpm_file_get_metadata;
+    pub const main_header_blob = __root.rpmz_rpm_file_main_header_blob;
+    pub const bytes = __root.rpmz_rpm_file_bytes;
+    pub const digest = __root.rpmz_rpm_file_digest;
+    pub const compressor = __root.rpmz_rpm_file_compressor;
+    pub const payload_offset = __root.rpmz_rpm_file_payload_offset;
+    pub const is_signed = __root.rpmz_rpm_file_is_signed;
+    pub const signature_kind = __root.rpmz_rpm_file_signature_kind;
+    pub const verify_digests = __root.rpmz_rpm_file_verify_digests;
+    pub const verify_signatures_config = __root.rpmz_rpm_file_verify_signatures_config;
+    pub const decompress_payload = __root.rpmz_rpm_file_decompress_payload;
+    pub const extract_source_config = __root.rpmz_rpm_file_extract_source_config;
+    pub const install = __root.rpmz_rpm_file_install;
+    pub const files_open = __root.rpmz_rpm_file_files_open;
+    pub const signed_range = __root.rpmz_rpm_file_signed_range;
 };
-pub const tdnf_rpm_file = struct_tdnf_rpm_file;
-pub extern fn tdnf_rpmdb_count_packages(root: [*c]const u8) i64;
-pub extern fn tdnf_rpmdb_count_packages_config(config: ?*const tdnf_rpm_config) i64;
-pub extern fn tdnf_rpmdb_last_error() [*c]const u8;
-pub extern fn tdnf_rpm_config_install_root(config: ?*const tdnf_rpm_config) [*c]u8;
-pub extern fn tdnf_rpm_config_open_root_fd(config: ?*const tdnf_rpm_config) c_int;
-pub extern fn tdnf_rpmdb_cookie(root: [*c]const u8) [*c]u8;
-pub extern fn tdnf_rpmdb_cookie_config(config: ?*const tdnf_rpm_config) [*c]u8;
-pub const struct_tdnf_rpmdb_iter = opaque {
-    pub const tdnf_rpmdb_iter_close = __root.tdnf_rpmdb_iter_close;
-    pub const tdnf_rpmdb_iter_next_nevra = __root.tdnf_rpmdb_iter_next_nevra;
-    pub const tdnf_rpmdb_iter_next_header_blob = __root.tdnf_rpmdb_iter_next_header_blob;
-    pub const tdnf_rpmdb_iter_next_header_blob_hnum = __root.tdnf_rpmdb_iter_next_header_blob_hnum;
-    pub const next_nevra = __root.tdnf_rpmdb_iter_next_nevra;
-    pub const next_header_blob = __root.tdnf_rpmdb_iter_next_header_blob;
-    pub const next_header_blob_hnum = __root.tdnf_rpmdb_iter_next_header_blob_hnum;
+pub const rpmz_rpm_file = struct_rpmz_rpm_file;
+pub extern fn rpmz_rpmdb_count_packages(root: [*c]const u8) i64;
+pub extern fn rpmz_rpmdb_count_packages_config(config: ?*const rpmz_rpm_config) i64;
+pub extern fn rpmz_rpmdb_last_error() [*c]const u8;
+pub extern fn rpmz_rpm_config_install_root(config: ?*const rpmz_rpm_config) [*c]u8;
+pub extern fn rpmz_rpm_config_open_root_fd(config: ?*const rpmz_rpm_config) c_int;
+pub extern fn rpmz_rpmdb_cookie(root: [*c]const u8) [*c]u8;
+pub extern fn rpmz_rpmdb_cookie_config(config: ?*const rpmz_rpm_config) [*c]u8;
+pub const struct_rpmz_rpmdb_iter = opaque {
+    pub const rpmz_rpmdb_iter_close = __root.rpmz_rpmdb_iter_close;
+    pub const rpmz_rpmdb_iter_next_nevra = __root.rpmz_rpmdb_iter_next_nevra;
+    pub const rpmz_rpmdb_iter_next_header_blob = __root.rpmz_rpmdb_iter_next_header_blob;
+    pub const rpmz_rpmdb_iter_next_header_blob_hnum = __root.rpmz_rpmdb_iter_next_header_blob_hnum;
+    pub const next_nevra = __root.rpmz_rpmdb_iter_next_nevra;
+    pub const next_header_blob = __root.rpmz_rpmdb_iter_next_header_blob;
+    pub const next_header_blob_hnum = __root.rpmz_rpmdb_iter_next_header_blob_hnum;
 };
-pub const tdnf_rpmdb_iter = struct_tdnf_rpmdb_iter;
-pub extern fn tdnf_rpmdb_iter_open(root: [*c]const u8) ?*tdnf_rpmdb_iter;
-pub extern fn tdnf_rpmdb_iter_open_config(config: ?*const tdnf_rpm_config) ?*tdnf_rpmdb_iter;
-pub extern fn tdnf_rpmdb_iter_close(it: ?*tdnf_rpmdb_iter) void;
-pub extern fn tdnf_rpmdb_iter_next_nevra(it: ?*tdnf_rpmdb_iter, nevra_out: [*c][*c]u8) c_int;
-pub extern fn tdnf_rpmdb_iter_next_header_blob(it: ?*tdnf_rpmdb_iter, blob_out: [*c][*c]const u8, blob_len_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_iter_next_header_blob_hnum(it: ?*tdnf_rpmdb_iter, hnum_out: [*c]u32, blob_out: [*c][*c]const u8, blob_len_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_string_free(s: [*c]u8) void;
-pub extern fn tdnf_rpmdb_resolve_provider_version_config(config: ?*const tdnf_rpm_config, provide_name: [*c]const u8, version_out: [*c][*c]u8) c_int;
-pub extern fn tdnf_rpmdb_write_install(root: [*c]const u8, rpm_path: [*c]const u8, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_write_install_config(config: ?*const tdnf_rpm_config, rpm_path: [*c]const u8, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_write_install_file_config(config: ?*const tdnf_rpm_config, fh: ?*tdnf_rpm_file, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_write_replace(root: [*c]const u8, old_hnum: u32, rpm_path: [*c]const u8, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, new_hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_write_replace_config(config: ?*const tdnf_rpm_config, old_hnum: u32, rpm_path: [*c]const u8, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, new_hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_write_replace_file_config(config: ?*const tdnf_rpm_config, old_hnum: u32, fh: ?*tdnf_rpm_file, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, new_hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_write_erase_hnum(root: [*c]const u8, hnum: u32) c_int;
-pub extern fn tdnf_rpmdb_write_erase_hnum_config(config: ?*const tdnf_rpm_config, hnum: u32) c_int;
-pub extern fn tdnf_rpmdb_find_hnum_by_nevra(root: [*c]const u8, nevra: [*c]const u8, hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_find_hnum_by_nevra_config(config: ?*const tdnf_rpm_config, nevra: [*c]const u8, hnum_out: [*c]u32) c_int;
-pub extern fn tdnf_rpmdb_find_hnums_by_name(root: [*c]const u8, name: [*c]const u8, hnums_out: [*c][*c]u32, count_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_find_hnums_by_name_config(config: ?*const tdnf_rpm_config, name: [*c]const u8, hnums_out: [*c][*c]u32, count_out: [*c]usize) c_int;
-pub const struct_tdnf_rpmdb_label_match = extern struct {
+pub const rpmz_rpmdb_iter = struct_rpmz_rpmdb_iter;
+pub extern fn rpmz_rpmdb_iter_open(root: [*c]const u8) ?*rpmz_rpmdb_iter;
+pub extern fn rpmz_rpmdb_iter_open_config(config: ?*const rpmz_rpm_config) ?*rpmz_rpmdb_iter;
+pub extern fn rpmz_rpmdb_iter_close(it: ?*rpmz_rpmdb_iter) void;
+pub extern fn rpmz_rpmdb_iter_next_nevra(it: ?*rpmz_rpmdb_iter, nevra_out: [*c][*c]u8) c_int;
+pub extern fn rpmz_rpmdb_iter_next_header_blob(it: ?*rpmz_rpmdb_iter, blob_out: [*c][*c]const u8, blob_len_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_iter_next_header_blob_hnum(it: ?*rpmz_rpmdb_iter, hnum_out: [*c]u32, blob_out: [*c][*c]const u8, blob_len_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_string_free(s: [*c]u8) void;
+pub extern fn rpmz_rpmdb_resolve_provider_version_config(config: ?*const rpmz_rpm_config, provide_name: [*c]const u8, version_out: [*c][*c]u8) c_int;
+pub extern fn rpmz_rpmdb_write_install(root: [*c]const u8, rpm_path: [*c]const u8, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_write_install_config(config: ?*const rpmz_rpm_config, rpm_path: [*c]const u8, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_write_install_file_config(config: ?*const rpmz_rpm_config, fh: ?*rpmz_rpm_file, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_write_replace(root: [*c]const u8, old_hnum: u32, rpm_path: [*c]const u8, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, new_hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_write_replace_config(config: ?*const rpmz_rpm_config, old_hnum: u32, rpm_path: [*c]const u8, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, new_hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_write_replace_file_config(config: ?*const rpmz_rpm_config, old_hnum: u32, fh: ?*rpmz_rpm_file, install_tid: u32, install_time: u32, install_color: u32, file_states: [*c]const u8, file_state_count: usize, new_hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_write_erase_hnum(root: [*c]const u8, hnum: u32) c_int;
+pub extern fn rpmz_rpmdb_write_erase_hnum_config(config: ?*const rpmz_rpm_config, hnum: u32) c_int;
+pub extern fn rpmz_rpmdb_find_hnum_by_nevra(root: [*c]const u8, nevra: [*c]const u8, hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_find_hnum_by_nevra_config(config: ?*const rpmz_rpm_config, nevra: [*c]const u8, hnum_out: [*c]u32) c_int;
+pub extern fn rpmz_rpmdb_find_hnums_by_name(root: [*c]const u8, name: [*c]const u8, hnums_out: [*c][*c]u32, count_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_find_hnums_by_name_config(config: ?*const rpmz_rpm_config, name: [*c]const u8, hnums_out: [*c][*c]u32, count_out: [*c]usize) c_int;
+pub const struct_rpmz_rpmdb_label_match = extern struct {
     hnum: u32 = 0,
     name: [*c]u8 = null,
     evr: [*c]u8 = null,
     arch: [*c]u8 = null,
-    pub const tdnf_rpmdb_label_matches_free = __root.tdnf_rpmdb_label_matches_free;
+    pub const rpmz_rpmdb_label_matches_free = __root.rpmz_rpmdb_label_matches_free;
 };
-pub const tdnf_rpmdb_label_match = struct_tdnf_rpmdb_label_match;
-pub extern fn tdnf_rpmdb_find_label_matches_config(config: ?*const tdnf_rpm_config, name: [*c]const u8, evr: [*c]const u8, matches_out: [*c][*c]tdnf_rpmdb_label_match, count_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_label_matches_free(matches: [*c]tdnf_rpmdb_label_match, count: usize) void;
-pub extern fn tdnf_rpmdb_hnums_free(hnums: [*c]u32) void;
-pub extern fn tdnf_rpmdb_read_header_blob(root: [*c]const u8, hnum: u32, blob_out: [*c][*c]u8, len_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_read_header_blob_config(config: ?*const tdnf_rpm_config, hnum: u32, blob_out: [*c][*c]u8, len_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_blob_free(blob: [*c]u8) void;
-pub const struct_tdnf_rpmdb_pubkeys_iter = opaque {
-    pub const tdnf_rpmdb_pubkeys_close = __root.tdnf_rpmdb_pubkeys_close;
-    pub const tdnf_rpmdb_pubkeys_next = __root.tdnf_rpmdb_pubkeys_next;
-    pub const next = __root.tdnf_rpmdb_pubkeys_next;
+pub const rpmz_rpmdb_label_match = struct_rpmz_rpmdb_label_match;
+pub extern fn rpmz_rpmdb_find_label_matches_config(config: ?*const rpmz_rpm_config, name: [*c]const u8, evr: [*c]const u8, matches_out: [*c][*c]rpmz_rpmdb_label_match, count_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_label_matches_free(matches: [*c]rpmz_rpmdb_label_match, count: usize) void;
+pub extern fn rpmz_rpmdb_hnums_free(hnums: [*c]u32) void;
+pub extern fn rpmz_rpmdb_read_header_blob(root: [*c]const u8, hnum: u32, blob_out: [*c][*c]u8, len_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_read_header_blob_config(config: ?*const rpmz_rpm_config, hnum: u32, blob_out: [*c][*c]u8, len_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_blob_free(blob: [*c]u8) void;
+pub const struct_rpmz_rpmdb_pubkeys_iter = opaque {
+    pub const rpmz_rpmdb_pubkeys_close = __root.rpmz_rpmdb_pubkeys_close;
+    pub const rpmz_rpmdb_pubkeys_next = __root.rpmz_rpmdb_pubkeys_next;
+    pub const next = __root.rpmz_rpmdb_pubkeys_next;
 };
-pub const tdnf_rpmdb_pubkeys_iter = struct_tdnf_rpmdb_pubkeys_iter;
-pub extern fn tdnf_rpmdb_import_pubkeys(root: [*c]const u8, data: ?*const anyopaque, len: usize, imported_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_import_pubkeys_config(config: ?*const tdnf_rpm_config, data: ?*const anyopaque, len: usize, imported_out: [*c]usize) c_int;
-pub extern fn tdnf_rpmdb_pubkeys_open(root: [*c]const u8) ?*tdnf_rpmdb_pubkeys_iter;
-pub extern fn tdnf_rpmdb_pubkeys_open_config(config: ?*const tdnf_rpm_config) ?*tdnf_rpmdb_pubkeys_iter;
-pub extern fn tdnf_rpmdb_pubkeys_close(it: ?*tdnf_rpmdb_pubkeys_iter) void;
-pub extern fn tdnf_rpmdb_pubkeys_next(it: ?*tdnf_rpmdb_pubkeys_iter, key_out: [*c][*c]u8, key_len_out: [*c]usize, keyid_out: [*c][*c]u8) c_int;
-pub extern fn tdnf_rpm_file_open(path: [*c]const u8) ?*tdnf_rpm_file;
-pub extern fn tdnf_rpm_file_close(fh: ?*tdnf_rpm_file) void;
-pub extern fn tdnf_rpm_file_nevra(fh: ?*tdnf_rpm_file) [*c]u8;
+pub const rpmz_rpmdb_pubkeys_iter = struct_rpmz_rpmdb_pubkeys_iter;
+pub extern fn rpmz_rpmdb_import_pubkeys(root: [*c]const u8, data: ?*const anyopaque, len: usize, imported_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_import_pubkeys_config(config: ?*const rpmz_rpm_config, data: ?*const anyopaque, len: usize, imported_out: [*c]usize) c_int;
+pub extern fn rpmz_rpmdb_pubkeys_open(root: [*c]const u8) ?*rpmz_rpmdb_pubkeys_iter;
+pub extern fn rpmz_rpmdb_pubkeys_open_config(config: ?*const rpmz_rpm_config) ?*rpmz_rpmdb_pubkeys_iter;
+pub extern fn rpmz_rpmdb_pubkeys_close(it: ?*rpmz_rpmdb_pubkeys_iter) void;
+pub extern fn rpmz_rpmdb_pubkeys_next(it: ?*rpmz_rpmdb_pubkeys_iter, key_out: [*c][*c]u8, key_len_out: [*c]usize, keyid_out: [*c][*c]u8) c_int;
+pub extern fn rpmz_rpm_file_open(path: [*c]const u8) ?*rpmz_rpm_file;
+pub extern fn rpmz_rpm_file_close(fh: ?*rpmz_rpm_file) void;
+pub extern fn rpmz_rpm_file_nevra(fh: ?*rpmz_rpm_file) [*c]u8;
 pub const TDNF_RPM_PACKAGE_KIND_BINARY: c_int = 0;
 pub const TDNF_RPM_PACKAGE_KIND_SOURCE: c_int = 1;
 pub const TDNF_RPM_PACKAGE_KIND_NOSRC: c_int = 2;
 const enum_unnamed_15 = c_uint;
-pub extern fn tdnf_rpm_file_package_kind(fh: ?*tdnf_rpm_file) c_int;
-pub const struct_tdnf_rpm_file_metadata = extern struct {
+pub extern fn rpmz_rpm_file_package_kind(fh: ?*rpmz_rpm_file) c_int;
+pub const struct_rpmz_rpm_file_metadata = extern struct {
     name: [*c]const u8 = null,
     version: [*c]const u8 = null,
     release: [*c]const u8 = null,
@@ -2599,24 +2599,24 @@ pub const struct_tdnf_rpm_file_metadata = extern struct {
     main_header_blob: [*c]const u8 = null,
     main_header_blob_len: usize = 0,
 };
-pub const tdnf_rpm_file_metadata = struct_tdnf_rpm_file_metadata;
-pub const struct_tdnf_rpm_header_view = extern struct {
+pub const rpmz_rpm_file_metadata = struct_rpmz_rpm_file_metadata;
+pub const struct_rpmz_rpm_header_view = extern struct {
     blob: [*c]const u8 = null,
     len: usize = 0,
 };
-pub const tdnf_rpm_header_view = struct_tdnf_rpm_header_view;
-pub extern fn tdnf_rpm_header_name_equals(header_blob: [*c]const u8, header_len: usize, name: [*c]const u8) c_int;
-pub extern fn tdnf_rpm_header_owns_path(header_blob: [*c]const u8, header_len: usize, path: [*c]const u8) c_int;
-pub extern fn tdnf_rpm_canonical_path_config(config: ?*const tdnf_rpm_config, path: [*c]const u8, output: [*c]u8, output_len: usize) c_int;
-pub extern fn tdnf_rpm_header_owns_path_config(header_blob: [*c]const u8, header_len: usize, path: [*c]const u8, config: ?*const tdnf_rpm_config) c_int;
-pub extern fn tdnf_rpm_file_get_metadata(fh: ?*tdnf_rpm_file, metadata_out: [*c]tdnf_rpm_file_metadata) c_int;
-pub extern fn tdnf_rpm_file_main_header_blob(fh: ?*tdnf_rpm_file, out: [*c][*c]const u8, out_len: [*c]usize) c_int;
-pub extern fn tdnf_rpm_file_bytes(fh: ?*tdnf_rpm_file, out: [*c][*c]const u8, out_len: [*c]usize) c_int;
-pub extern fn tdnf_rpm_file_digest(fh: ?*tdnf_rpm_file, kind: c_int, out_digest: [*c]u8, out_len: usize) c_int;
-pub extern fn tdnf_rpm_file_compressor(fh: ?*tdnf_rpm_file) [*c]const u8;
-pub extern fn tdnf_rpm_file_payload_offset(fh: ?*tdnf_rpm_file) i64;
-pub extern fn tdnf_rpm_file_is_signed(fh: ?*tdnf_rpm_file) c_int;
-pub extern fn tdnf_rpm_file_signature_kind(fh: ?*tdnf_rpm_file) [*c]const u8;
+pub const rpmz_rpm_header_view = struct_rpmz_rpm_header_view;
+pub extern fn rpmz_rpm_header_name_equals(header_blob: [*c]const u8, header_len: usize, name: [*c]const u8) c_int;
+pub extern fn rpmz_rpm_header_owns_path(header_blob: [*c]const u8, header_len: usize, path: [*c]const u8) c_int;
+pub extern fn rpmz_rpm_canonical_path_config(config: ?*const rpmz_rpm_config, path: [*c]const u8, output: [*c]u8, output_len: usize) c_int;
+pub extern fn rpmz_rpm_header_owns_path_config(header_blob: [*c]const u8, header_len: usize, path: [*c]const u8, config: ?*const rpmz_rpm_config) c_int;
+pub extern fn rpmz_rpm_file_get_metadata(fh: ?*rpmz_rpm_file, metadata_out: [*c]rpmz_rpm_file_metadata) c_int;
+pub extern fn rpmz_rpm_file_main_header_blob(fh: ?*rpmz_rpm_file, out: [*c][*c]const u8, out_len: [*c]usize) c_int;
+pub extern fn rpmz_rpm_file_bytes(fh: ?*rpmz_rpm_file, out: [*c][*c]const u8, out_len: [*c]usize) c_int;
+pub extern fn rpmz_rpm_file_digest(fh: ?*rpmz_rpm_file, kind: c_int, out_digest: [*c]u8, out_len: usize) c_int;
+pub extern fn rpmz_rpm_file_compressor(fh: ?*rpmz_rpm_file) [*c]const u8;
+pub extern fn rpmz_rpm_file_payload_offset(fh: ?*rpmz_rpm_file) i64;
+pub extern fn rpmz_rpm_file_is_signed(fh: ?*rpmz_rpm_file) c_int;
+pub extern fn rpmz_rpm_file_signature_kind(fh: ?*rpmz_rpm_file) [*c]const u8;
 pub const TDNF_RPMZIG_INTEGRITY_OK: c_int = 0;
 pub const TDNF_RPMZIG_INTEGRITY_MISSING: c_int = 1;
 pub const TDNF_RPMZIG_INTEGRITY_BAD: c_int = 2;
@@ -2624,53 +2624,53 @@ pub const TDNF_RPMZIG_INTEGRITY_UNSUPPORTED: c_int = 3;
 pub const TDNF_RPMZIG_INTEGRITY_MALFORMED: c_int = 4;
 pub const TDNF_RPMZIG_INTEGRITY_INTERNAL: c_int = 5;
 const enum_unnamed_16 = c_uint;
-pub extern fn tdnf_rpm_file_verify_digests(fh: ?*tdnf_rpm_file, outcome_out: [*c]c_int) c_int;
-pub extern fn tdnf_rpm_file_verify_signatures_config(fh: ?*tdnf_rpm_file, config: ?*const tdnf_rpm_config, fresh_key_blobs: [*c]const ?*const anyopaque, fresh_key_lens: [*c]const usize, fresh_key_count: usize, outcome_out: [*c]c_int) c_int;
-pub extern fn tdnf_rpm_file_decompress_payload(fh: ?*tdnf_rpm_file, out: [*c][*c]u8, out_size: [*c]usize) c_int;
-pub extern fn tdnf_rpm_file_extract_source_config(fh: ?*tdnf_rpm_file, config: ?*const tdnf_rpm_config, trans_flags: u32) c_int;
+pub extern fn rpmz_rpm_file_verify_digests(fh: ?*rpmz_rpm_file, outcome_out: [*c]c_int) c_int;
+pub extern fn rpmz_rpm_file_verify_signatures_config(fh: ?*rpmz_rpm_file, config: ?*const rpmz_rpm_config, fresh_key_blobs: [*c]const ?*const anyopaque, fresh_key_lens: [*c]const usize, fresh_key_count: usize, outcome_out: [*c]c_int) c_int;
+pub extern fn rpmz_rpm_file_decompress_payload(fh: ?*rpmz_rpm_file, out: [*c][*c]u8, out_size: [*c]usize) c_int;
+pub extern fn rpmz_rpm_file_extract_source_config(fh: ?*rpmz_rpm_file, config: ?*const rpmz_rpm_config, trans_flags: u32) c_int;
 pub const TDNF_RPM_INSTALL_KIND_INSTALL: c_int = 0;
 pub const TDNF_RPM_INSTALL_KIND_UPGRADE: c_int = 1;
 pub const TDNF_RPM_INSTALL_KIND_REINSTALL: c_int = 2;
-pub const enum_tdnf_rpm_install_kind = c_uint;
-pub const tdnf_rpm_install_kind = enum_tdnf_rpm_install_kind;
-pub const struct_tdnf_rpm_install_prior_header = extern struct {
+pub const enum_rpmz_rpm_install_kind = c_uint;
+pub const rpmz_rpm_install_kind = enum_rpmz_rpm_install_kind;
+pub const struct_rpmz_rpm_install_prior_header = extern struct {
     blob: [*c]const u8 = null,
     len: usize = 0,
 };
-pub const tdnf_rpm_install_prior_header = struct_tdnf_rpm_install_prior_header;
-pub const tdnf_rpm_install_conflict_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
-pub const tdnf_rpm_changed_path_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
-pub const struct_tdnf_rpm_install_options = extern struct {
+pub const rpmz_rpm_install_prior_header = struct_rpmz_rpm_install_prior_header;
+pub const rpmz_rpm_install_conflict_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
+pub const rpmz_rpm_changed_path_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
+pub const struct_rpmz_rpm_install_options = extern struct {
     install_root: [*c]const u8 = null,
-    config: ?*const tdnf_rpm_config = null,
+    config: ?*const rpmz_rpm_config = null,
     trans_flags: u32 = 0,
-    install_kind: tdnf_rpm_install_kind = @import("std").mem.zeroes(tdnf_rpm_install_kind),
-    prior_headers: [*c]const tdnf_rpm_install_prior_header = null,
+    install_kind: rpmz_rpm_install_kind = @import("std").mem.zeroes(rpmz_rpm_install_kind),
+    prior_headers: [*c]const rpmz_rpm_install_prior_header = null,
     prior_header_count: usize = 0,
-    conflict_fn: tdnf_rpm_install_conflict_fn = null,
+    conflict_fn: rpmz_rpm_install_conflict_fn = null,
     conflict_fn_data: ?*anyopaque = null,
-    changed_path_fn: tdnf_rpm_changed_path_fn = null,
+    changed_path_fn: rpmz_rpm_changed_path_fn = null,
     changed_path_fn_data: ?*anyopaque = null,
 };
-pub const tdnf_rpm_install_options = struct_tdnf_rpm_install_options;
-pub extern fn tdnf_rpm_file_install(fh: ?*tdnf_rpm_file, options: [*c]const tdnf_rpm_install_options) c_int;
+pub const rpmz_rpm_install_options = struct_rpmz_rpm_install_options;
+pub extern fn rpmz_rpm_file_install(fh: ?*rpmz_rpm_file, options: [*c]const rpmz_rpm_install_options) c_int;
 pub const TDNF_RPM_SCRIPTLET_PHASE_PRE: c_int = 0;
 pub const TDNF_RPM_SCRIPTLET_PHASE_POST: c_int = 1;
 pub const TDNF_RPM_SCRIPTLET_PHASE_PREUN: c_int = 2;
 pub const TDNF_RPM_SCRIPTLET_PHASE_POSTUN: c_int = 3;
 pub const TDNF_RPM_SCRIPTLET_PHASE_PRETRANS: c_int = 4;
 pub const TDNF_RPM_SCRIPTLET_PHASE_POSTTRANS: c_int = 5;
-pub const enum_tdnf_rpm_scriptlet_phase = c_uint;
-pub const tdnf_rpm_scriptlet_phase = enum_tdnf_rpm_scriptlet_phase;
+pub const enum_rpmz_rpm_scriptlet_phase = c_uint;
+pub const rpmz_rpm_scriptlet_phase = enum_rpmz_rpm_scriptlet_phase;
 pub const TDNF_RPM_SCRIPTLET_OUTCOME_NOT_RUN: c_int = 0;
 pub const TDNF_RPM_SCRIPTLET_OUTCOME_OK: c_int = 1;
 pub const TDNF_RPM_SCRIPTLET_OUTCOME_EXITED: c_int = 2;
 pub const TDNF_RPM_SCRIPTLET_OUTCOME_SIGNALED: c_int = 3;
-pub const enum_tdnf_rpm_scriptlet_outcome = c_uint;
-pub const tdnf_rpm_scriptlet_outcome = enum_tdnf_rpm_scriptlet_outcome;
-pub const struct_tdnf_rpm_scriptlet_options = extern struct {
+pub const enum_rpmz_rpm_scriptlet_outcome = c_uint;
+pub const rpmz_rpm_scriptlet_outcome = enum_rpmz_rpm_scriptlet_outcome;
+pub const struct_rpmz_rpm_scriptlet_options = extern struct {
     install_root: [*c]const u8 = null,
-    config: ?*const tdnf_rpm_config = null,
+    config: ?*const rpmz_rpm_config = null,
     install_root_fd: c_int = 0,
     trans_flags: u32 = 0,
     rpmdefines: [*c]const [*c]const u8 = null,
@@ -2680,25 +2680,25 @@ pub const struct_tdnf_rpm_scriptlet_options = extern struct {
     script_fd: c_int = 0,
     redirect_stdout_to_stderr: c_int = 0,
 };
-pub const tdnf_rpm_scriptlet_options = struct_tdnf_rpm_scriptlet_options;
-pub const struct_tdnf_rpm_scriptlet_result = extern struct {
+pub const rpmz_rpm_scriptlet_options = struct_rpmz_rpm_scriptlet_options;
+pub const struct_rpmz_rpm_scriptlet_result = extern struct {
     ran: c_int = 0,
     critical: c_int = 0,
-    outcome: tdnf_rpm_scriptlet_outcome = @import("std").mem.zeroes(tdnf_rpm_scriptlet_outcome),
+    outcome: rpmz_rpm_scriptlet_outcome = @import("std").mem.zeroes(rpmz_rpm_scriptlet_outcome),
     exit_status: c_int = 0,
     signal_number: c_int = 0,
 };
-pub const tdnf_rpm_scriptlet_result = struct_tdnf_rpm_scriptlet_result;
-pub extern fn tdnf_rpm_header_run_scriptlet(header_blob: [*c]const u8, header_len: usize, phase: tdnf_rpm_scriptlet_phase, options: [*c]const tdnf_rpm_scriptlet_options, result_out: [*c]tdnf_rpm_scriptlet_result) c_int;
+pub const rpmz_rpm_scriptlet_result = struct_rpmz_rpm_scriptlet_result;
+pub extern fn rpmz_rpm_header_run_scriptlet(header_blob: [*c]const u8, header_len: usize, phase: rpmz_rpm_scriptlet_phase, options: [*c]const rpmz_rpm_scriptlet_options, result_out: [*c]rpmz_rpm_scriptlet_result) c_int;
 pub const TDNF_RPM_TRIGGER_PHASE_TRIGGERIN: c_int = 0;
 pub const TDNF_RPM_TRIGGER_PHASE_TRIGGERUN: c_int = 1;
 pub const TDNF_RPM_TRIGGER_PHASE_TRIGGERPOSTUN: c_int = 2;
-pub const enum_tdnf_rpm_trigger_phase = c_uint;
-pub const tdnf_rpm_trigger_phase = enum_tdnf_rpm_trigger_phase;
-pub const struct_tdnf_rpm_trigger_options = extern struct {
+pub const enum_rpmz_rpm_trigger_phase = c_uint;
+pub const rpmz_rpm_trigger_phase = enum_rpmz_rpm_trigger_phase;
+pub const struct_rpmz_rpm_trigger_options = extern struct {
     db_root: [*c]const u8 = null,
     install_root: [*c]const u8 = null,
-    config: ?*const tdnf_rpm_config = null,
+    config: ?*const rpmz_rpm_config = null,
     install_root_fd: c_int = 0,
     trans_flags: u32 = 0,
     rpmdefines: [*c]const [*c]const u8 = null,
@@ -2707,51 +2707,51 @@ pub const struct_tdnf_rpm_trigger_options = extern struct {
     redirect_stdout_to_stderr: c_int = 0,
     arg2_override_present: c_int = 0,
     arg2_override_value: c_int = 0,
-    transaction_headers: [*c]const tdnf_rpm_header_view = null,
+    transaction_headers: [*c]const rpmz_rpm_header_view = null,
     transaction_header_count: usize = 0,
     transaction_view_present: c_int = 0,
-    trigger_owner_headers: [*c]const tdnf_rpm_header_view = null,
+    trigger_owner_headers: [*c]const rpmz_rpm_header_view = null,
     trigger_owner_header_count: usize = 0,
     trigger_owner_view_present: c_int = 0,
 };
-pub const tdnf_rpm_trigger_options = struct_tdnf_rpm_trigger_options;
-pub const struct_tdnf_rpm_trigger_result = extern struct {
+pub const rpmz_rpm_trigger_options = struct_rpmz_rpm_trigger_options;
+pub const struct_rpmz_rpm_trigger_result = extern struct {
     ran: c_int = 0,
     critical: c_int = 0,
-    outcome: tdnf_rpm_scriptlet_outcome = @import("std").mem.zeroes(tdnf_rpm_scriptlet_outcome),
+    outcome: rpmz_rpm_scriptlet_outcome = @import("std").mem.zeroes(rpmz_rpm_scriptlet_outcome),
     exit_status: c_int = 0,
     signal_number: c_int = 0,
 };
-pub const tdnf_rpm_trigger_result = struct_tdnf_rpm_trigger_result;
-pub extern fn tdnf_rpm_header_run_triggers(header_blob: [*c]const u8, header_len: usize, phase: tdnf_rpm_trigger_phase, options: [*c]const tdnf_rpm_trigger_options, result_out: [*c]tdnf_rpm_trigger_result) c_int;
+pub const rpmz_rpm_trigger_result = struct_rpmz_rpm_trigger_result;
+pub extern fn rpmz_rpm_header_run_triggers(header_blob: [*c]const u8, header_len: usize, phase: rpmz_rpm_trigger_phase, options: [*c]const rpmz_rpm_trigger_options, result_out: [*c]rpmz_rpm_trigger_result) c_int;
 pub const TDNF_RPM_FILE_TRIGGER_KIND_PACKAGE: c_int = 0;
 pub const TDNF_RPM_FILE_TRIGGER_KIND_TRANSACTION: c_int = 1;
-pub const enum_tdnf_rpm_file_trigger_kind = c_uint;
-pub const tdnf_rpm_file_trigger_kind = enum_tdnf_rpm_file_trigger_kind;
+pub const enum_rpmz_rpm_file_trigger_kind = c_uint;
+pub const rpmz_rpm_file_trigger_kind = enum_rpmz_rpm_file_trigger_kind;
 pub const TDNF_RPM_TRIGGER_PRIORITY_ALL: c_int = 0;
 pub const TDNF_RPM_TRIGGER_PRIORITY_HIGH: c_int = 1;
 pub const TDNF_RPM_TRIGGER_PRIORITY_LOW: c_int = 2;
-pub const enum_tdnf_rpm_trigger_priority_class = c_uint;
-pub const tdnf_rpm_trigger_priority_class = enum_tdnf_rpm_trigger_priority_class;
-pub const struct_tdnf_rpm_trigger_path = extern struct {
+pub const enum_rpmz_rpm_trigger_priority_class = c_uint;
+pub const rpmz_rpm_trigger_priority_class = enum_rpmz_rpm_trigger_priority_class;
+pub const struct_rpmz_rpm_trigger_path = extern struct {
     path: [*c]const u8 = null,
     source_header_blob: [*c]const u8 = null,
     source_header_len: usize = 0,
 };
-pub const tdnf_rpm_trigger_path = struct_tdnf_rpm_trigger_path;
-pub const struct_tdnf_rpm_file_trigger_owner = extern struct {
+pub const rpmz_rpm_trigger_path = struct_rpmz_rpm_trigger_path;
+pub const struct_rpmz_rpm_file_trigger_owner = extern struct {
     header_blob: [*c]const u8 = null,
     header_len: usize = 0,
-    paths: [*c]const tdnf_rpm_trigger_path = null,
+    paths: [*c]const rpmz_rpm_trigger_path = null,
     path_count: usize = 0,
     order: u64 = 0,
-    pub const tdnf_rpm_run_file_triggers = __root.tdnf_rpm_run_file_triggers;
-    pub const triggers = __root.tdnf_rpm_run_file_triggers;
+    pub const rpmz_rpm_run_file_triggers = __root.rpmz_rpm_run_file_triggers;
+    pub const triggers = __root.rpmz_rpm_run_file_triggers;
 };
-pub const tdnf_rpm_file_trigger_owner = struct_tdnf_rpm_file_trigger_owner;
-pub const struct_tdnf_rpm_file_trigger_options = extern struct {
+pub const rpmz_rpm_file_trigger_owner = struct_rpmz_rpm_file_trigger_owner;
+pub const struct_rpmz_rpm_file_trigger_options = extern struct {
     install_root: [*c]const u8 = null,
-    config: ?*const tdnf_rpm_config = null,
+    config: ?*const rpmz_rpm_config = null,
     install_root_fd: c_int = 0,
     trans_flags: u32 = 0,
     rpmdefines: [*c]const [*c]const u8 = null,
@@ -2760,32 +2760,32 @@ pub const struct_tdnf_rpm_file_trigger_options = extern struct {
     redirect_stdout_to_stderr: c_int = 0,
     suppress_stdin: c_int = 0,
 };
-pub const tdnf_rpm_file_trigger_options = struct_tdnf_rpm_file_trigger_options;
-pub extern fn tdnf_rpm_header_validate_trigger_metadata(header_blob: [*c]const u8, header_len: usize) c_int;
-pub extern fn tdnf_rpm_header_validate_trigger_scripts_config(header_blob: [*c]const u8, header_len: usize, config: ?*const tdnf_rpm_config) c_int;
-pub extern fn tdnf_rpm_header_has_file_trigger_metadata(header_blob: [*c]const u8, header_len: usize, kind: tdnf_rpm_file_trigger_kind) c_int;
-pub extern fn tdnf_rpm_header_foreach_trigger_file(header_blob: [*c]const u8, header_len: usize, trans_flags: u32, callback: tdnf_rpm_changed_path_fn, callback_data: ?*anyopaque) c_int;
-pub extern fn tdnf_rpm_run_file_triggers(owners: [*c]const tdnf_rpm_file_trigger_owner, owner_count: usize, phase: tdnf_rpm_trigger_phase, kind: tdnf_rpm_file_trigger_kind, priority_class: tdnf_rpm_trigger_priority_class, options: [*c]const tdnf_rpm_file_trigger_options, result_out: [*c]tdnf_rpm_trigger_result) c_int;
-pub const tdnf_rpm_erase_keep_path_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
-pub const struct_tdnf_rpm_erase_options = extern struct {
-    config: ?*const tdnf_rpm_config = null,
+pub const rpmz_rpm_file_trigger_options = struct_rpmz_rpm_file_trigger_options;
+pub extern fn rpmz_rpm_header_validate_trigger_metadata(header_blob: [*c]const u8, header_len: usize) c_int;
+pub extern fn rpmz_rpm_header_validate_trigger_scripts_config(header_blob: [*c]const u8, header_len: usize, config: ?*const rpmz_rpm_config) c_int;
+pub extern fn rpmz_rpm_header_has_file_trigger_metadata(header_blob: [*c]const u8, header_len: usize, kind: rpmz_rpm_file_trigger_kind) c_int;
+pub extern fn rpmz_rpm_header_foreach_trigger_file(header_blob: [*c]const u8, header_len: usize, trans_flags: u32, callback: rpmz_rpm_changed_path_fn, callback_data: ?*anyopaque) c_int;
+pub extern fn rpmz_rpm_run_file_triggers(owners: [*c]const rpmz_rpm_file_trigger_owner, owner_count: usize, phase: rpmz_rpm_trigger_phase, kind: rpmz_rpm_file_trigger_kind, priority_class: rpmz_rpm_trigger_priority_class, options: [*c]const rpmz_rpm_file_trigger_options, result_out: [*c]rpmz_rpm_trigger_result) c_int;
+pub const rpmz_rpm_erase_keep_path_fn = ?*const fn (data: ?*anyopaque, path: [*c]const u8) callconv(.c) c_int;
+pub const struct_rpmz_rpm_erase_options = extern struct {
+    config: ?*const rpmz_rpm_config = null,
     trans_flags: u32 = 0,
-    keep_path_fn: tdnf_rpm_erase_keep_path_fn = null,
+    keep_path_fn: rpmz_rpm_erase_keep_path_fn = null,
     keep_path_fn_data: ?*anyopaque = null,
 };
-pub const tdnf_rpm_erase_options = struct_tdnf_rpm_erase_options;
-pub extern fn tdnf_rpm_erase_hnum(root: [*c]const u8, hnum: u32, options: [*c]const tdnf_rpm_erase_options) c_int;
-pub extern fn tdnf_rpm_erase_header_blob(root: [*c]const u8, blob: [*c]const u8, blob_len: usize, options: [*c]const tdnf_rpm_erase_options) c_int;
-pub const struct_tdnf_rpm_files_iter = opaque {
-    pub const tdnf_rpm_file_files_close = __root.tdnf_rpm_file_files_close;
-    pub const tdnf_rpm_file_files_next = __root.tdnf_rpm_file_files_next;
-    pub const next = __root.tdnf_rpm_file_files_next;
+pub const rpmz_rpm_erase_options = struct_rpmz_rpm_erase_options;
+pub extern fn rpmz_rpm_erase_hnum(root: [*c]const u8, hnum: u32, options: [*c]const rpmz_rpm_erase_options) c_int;
+pub extern fn rpmz_rpm_erase_header_blob(root: [*c]const u8, blob: [*c]const u8, blob_len: usize, options: [*c]const rpmz_rpm_erase_options) c_int;
+pub const struct_rpmz_rpm_files_iter = opaque {
+    pub const rpmz_rpm_file_files_close = __root.rpmz_rpm_file_files_close;
+    pub const rpmz_rpm_file_files_next = __root.rpmz_rpm_file_files_next;
+    pub const next = __root.rpmz_rpm_file_files_next;
 };
-pub const tdnf_rpm_files_iter = struct_tdnf_rpm_files_iter;
-pub extern fn tdnf_rpm_file_files_open(fh: ?*tdnf_rpm_file) ?*tdnf_rpm_files_iter;
-pub extern fn tdnf_rpm_file_files_close(it: ?*tdnf_rpm_files_iter) void;
-pub extern fn tdnf_rpm_file_files_next(it: ?*tdnf_rpm_files_iter, name_out: [*c][*c]const u8, mode_out: [*c]u32) c_int;
-pub extern fn tdnf_rpm_file_signed_range(fh: ?*tdnf_rpm_file, sig_out: [*c][*c]const u8, sig_len_out: [*c]usize, signed_out: [*c][*c]const u8, signed_len_out: [*c]usize) c_int;
+pub const rpmz_rpm_files_iter = struct_rpmz_rpm_files_iter;
+pub extern fn rpmz_rpm_file_files_open(fh: ?*rpmz_rpm_file) ?*rpmz_rpm_files_iter;
+pub extern fn rpmz_rpm_file_files_close(it: ?*rpmz_rpm_files_iter) void;
+pub extern fn rpmz_rpm_file_files_next(it: ?*rpmz_rpm_files_iter, name_out: [*c][*c]const u8, mode_out: [*c]u32) c_int;
+pub extern fn rpmz_rpm_file_signed_range(fh: ?*rpmz_rpm_file, sig_out: [*c][*c]const u8, sig_len_out: [*c]usize, signed_out: [*c][*c]const u8, signed_len_out: [*c]usize) c_int;
 pub extern fn TDNFRepoRemoveCacheDir(pTdnf: PTDNF, pRepo: PTDNF_REPO_DATA) u32;
 pub extern fn TDNFRepoRemoveCache(pTdnf: PTDNF, pRepo: PTDNF_REPO_DATA) u32;
 pub extern fn TDNFRemoveRpmCache(pTdnf: PTDNF, pRepo: PTDNF_REPO_DATA) u32;
@@ -2812,7 +2812,7 @@ pub extern fn TDNFIsGlob(pszString: [*c]const u8) c_int;
 pub extern fn TDNFUtilsMakeDir(pszPath: [*c]const u8) u32;
 pub extern fn TDNFUtilsMakeDirs(pszPath: [*c]const u8) u32;
 pub extern fn TDNFGetReleaseVersion(pszRootDir: [*c]const u8, pszDistroVerPkg: [*c]const u8, ppszVersion: [*c][*c]u8) u32;
-pub extern fn TdnfGetReleaseVersionConfig(pRpmConfig: ?*const tdnf_rpm_config, pszDistroVerPkg: [*c]const u8, ppszVersion: [*c][*c]u8) u32;
+pub extern fn TdnfGetReleaseVersionConfig(pRpmConfig: ?*const rpmz_rpm_config, pszDistroVerPkg: [*c]const u8, ppszVersion: [*c][*c]u8) u32;
 pub extern fn TDNFGetKernelArch(ppszArch: [*c][*c]u8) u32;
 pub extern fn TDNFParseMetadataExpire(pszMetadataExpire: [*c]const u8, plMetadataExpire: [*c]c_long) u32;
 pub extern fn TDNFAppendPath(pszBase: [*c]const u8, pszPart: [*c]const u8, ppszPath: [*c][*c]u8) u32;
@@ -2839,7 +2839,7 @@ pub const struct__TDNF_PKG_FIELDS = extern struct {
 };
 pub const TDNF_PKG_FIELDS = struct__TDNF_PKG_FIELDS;
 pub const PTDNF_PKG_FIELDS = [*c]struct__TDNF_PKG_FIELDS;
-pub extern fn TDNFPackageContextCreate(pszCacheDir: [*c]const u8, pszRootDir: [*c]const u8, pszArch: [*c]const u8, pRpmConfig: ?*const tdnf_rpm_config, nIncludeInstalled: c_int, ppContext: [*c]PTDNF_PACKAGE_CONTEXT) u32;
+pub extern fn TDNFPackageContextCreate(pszCacheDir: [*c]const u8, pszRootDir: [*c]const u8, pszArch: [*c]const u8, pRpmConfig: ?*const rpmz_rpm_config, nIncludeInstalled: c_int, ppContext: [*c]PTDNF_PACKAGE_CONTEXT) u32;
 pub extern fn TDNFPackageContextFree(pContext: PTDNF_PACKAGE_CONTEXT) void;
 pub extern fn TDNFPackageContextCacheDir(pContext: ?*const TDNF_PACKAGE_CONTEXT) [*c]const u8;
 pub extern fn TDNFPackageContextRootDir(pContext: ?*const TDNF_PACKAGE_CONTEXT) [*c]const u8;
@@ -2891,33 +2891,33 @@ pub extern fn TDNFTransactionPlanStateDestroy(state: ?*TDNF_TRANSACTION_PLAN_STA
 pub extern fn TDNFTransactionPlanStateGetCanonicalJson(state: ?*const TDNF_TRANSACTION_PLAN_STATE, data: [*c][*c]const u8, length: [*c]usize) u32;
 pub extern fn TDNFTransactionPlanStateFreeCanonicalJson(data: [*c]const u8, length: usize) void;
 pub extern fn TDNFTransactionPlanIntegrationCapturePending(state: ?*TDNF_TRANSACTION_PLAN_STATE, pool: ?*anyopaque, native_solve: ?*const anyopaque, trace: [*c]const transaction_plan_abi.RequestTraceView, problems_accepted: u32, unresolved_count: u32, terminal_problem_kind: u32, repositories: [*c]const transaction_plan_abi.IntegrationRepository, repository_count: u32, environment: [*c]const transaction_plan_abi.IntegrationEnvironment) u32;
-pub extern fn TDNFTransactionPlanCaptureSetEnabled(tdnf_handle: ?*anyopaque, enabled: u32) u32;
-pub extern fn TDNFTransactionPlanCaptureGetCanonicalJson(tdnf_handle: ?*anyopaque, data: [*c][*c]const u8, length: [*c]usize) u32;
-pub extern fn TDNFTransactionPlanCaptureFailNextRepositoryRecord(tdnf_handle: ?*anyopaque) void;
-pub extern fn TDNFTransactionPlanCaptureFailNextComposition(tdnf_handle: ?*anyopaque) void;
-pub extern fn TDNFTransactionPlanCaptureFailNextIntegrity(tdnf_handle: ?*anyopaque) void;
-pub extern fn TDNFTransactionPlanTestFailNextReload(tdnf_handle: ?*anyopaque, stage: u32) void;
-pub extern fn TDNFTransactionPlanTestPoolIdentity(tdnf_handle: ?*anyopaque) usize;
-pub extern fn TDNFTransactionPlanTestPoolSolvableCount(tdnf_handle: ?*anyopaque) u32;
-pub extern fn TDNFTransactionPlanTestPoolRepoCount(tdnf_handle: ?*anyopaque) u32;
-pub extern fn TDNFTransactionPlanTestVisibleSolvableCount(tdnf_handle: ?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanCaptureSetEnabled(rpmz_handle: ?*anyopaque, enabled: u32) u32;
+pub extern fn TDNFTransactionPlanCaptureGetCanonicalJson(rpmz_handle: ?*anyopaque, data: [*c][*c]const u8, length: [*c]usize) u32;
+pub extern fn TDNFTransactionPlanCaptureFailNextRepositoryRecord(rpmz_handle: ?*anyopaque) void;
+pub extern fn TDNFTransactionPlanCaptureFailNextComposition(rpmz_handle: ?*anyopaque) void;
+pub extern fn TDNFTransactionPlanCaptureFailNextIntegrity(rpmz_handle: ?*anyopaque) void;
+pub extern fn TDNFTransactionPlanTestFailNextReload(rpmz_handle: ?*anyopaque, stage: u32) void;
+pub extern fn TDNFTransactionPlanTestPoolIdentity(rpmz_handle: ?*anyopaque) usize;
+pub extern fn TDNFTransactionPlanTestPoolSolvableCount(rpmz_handle: ?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanTestPoolRepoCount(rpmz_handle: ?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanTestVisibleSolvableCount(rpmz_handle: ?*anyopaque) u32;
 pub extern fn TDNFTransactionPlanTestSackSolvableCount(sack: ?*anyopaque, count: [*c]u32) u32;
-pub extern fn TDNFTransactionPlanTestRepoDataCount(tdnf_handle: ?*anyopaque) u32;
-pub extern fn TDNFTransactionPlanTestRetireNullSack(tdnf_handle: ?*anyopaque) u32;
-pub extern fn TDNFTransactionPlanTestPublicInitRepo(tdnf_handle: ?*anyopaque) u32;
-pub extern fn TDNFTransactionPlanTestReloadRepo(tdnf_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
-pub extern fn TDNFTransactionPlanTestInitRepoInSack(tdnf_handle: ?*anyopaque, sack: ?*anyopaque, repo_id: [*c]const u8) u32;
-pub extern fn TDNFTransactionPlanTestRepoIdentity(tdnf_handle: ?*anyopaque, repo_id: [*c]const u8) usize;
-pub extern fn TDNFTransactionPlanTestRepoId(tdnf_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
-pub extern fn TDNFTransactionPlanTestRepoPackageCount(tdnf_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
-pub extern fn TDNFTransactionPlanTestRepoBindingCount(tdnf_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
-pub extern fn TDNFTransactionPlanTestRepoRecordCount(tdnf_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
-pub extern fn TDNFTransactionPlanTestRepoRecordDigest(tdnf_handle: ?*anyopaque, repo_id: [*c]const u8, digest: [*c]u8) u32;
-pub extern fn TDNFTransactionPlanTestInitRepoValidation(tdnf_handle: ?*anyopaque) u32;
-pub extern fn TDNFTransactionPlanTestPoolIndexesHealthy(tdnf_handle: ?*anyopaque) u32;
-pub extern fn TDNFTransactionPlanTestEnableRepo(tdnf_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
-pub extern fn TDNFHistoryGoalWithUnresolved(tdnf_handle: ?*anyopaque, install_queue: ?*anyopaque, erase_queue: ?*anyopaque, unresolved_count: u32, solved_info: ?*anyopaque) u32;
-pub extern fn TDNFInitRepoWithResult(tdnf_handle: ?*anyopaque, repo_data: ?*anyopaque, sack: ?*anyopaque, loaded_repo: [*c]?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanTestRepoDataCount(rpmz_handle: ?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanTestRetireNullSack(rpmz_handle: ?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanTestPublicInitRepo(rpmz_handle: ?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanTestReloadRepo(rpmz_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
+pub extern fn TDNFTransactionPlanTestInitRepoInSack(rpmz_handle: ?*anyopaque, sack: ?*anyopaque, repo_id: [*c]const u8) u32;
+pub extern fn TDNFTransactionPlanTestRepoIdentity(rpmz_handle: ?*anyopaque, repo_id: [*c]const u8) usize;
+pub extern fn TDNFTransactionPlanTestRepoId(rpmz_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
+pub extern fn TDNFTransactionPlanTestRepoPackageCount(rpmz_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
+pub extern fn TDNFTransactionPlanTestRepoBindingCount(rpmz_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
+pub extern fn TDNFTransactionPlanTestRepoRecordCount(rpmz_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
+pub extern fn TDNFTransactionPlanTestRepoRecordDigest(rpmz_handle: ?*anyopaque, repo_id: [*c]const u8, digest: [*c]u8) u32;
+pub extern fn TDNFTransactionPlanTestInitRepoValidation(rpmz_handle: ?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanTestPoolIndexesHealthy(rpmz_handle: ?*anyopaque) u32;
+pub extern fn TDNFTransactionPlanTestEnableRepo(rpmz_handle: ?*anyopaque, repo_id: [*c]const u8) u32;
+pub extern fn TDNFHistoryGoalWithUnresolved(rpmz_handle: ?*anyopaque, install_queue: ?*anyopaque, erase_queue: ?*anyopaque, unresolved_count: u32, solved_info: ?*anyopaque) u32;
+pub extern fn TDNFInitRepoWithResult(rpmz_handle: ?*anyopaque, repo_data: ?*anyopaque, sack: ?*anyopaque, loaded_repo: [*c]?*anyopaque) u32;
 pub extern fn TDNFTransactionPlanRequestTraceCreate(alter_type: u32, subjects: [*c]const [*c]const u8, subject_count: u32) ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE;
 pub extern fn TDNFTransactionPlanRequestTraceCreateHistory() ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE;
 pub extern fn TDNFTransactionPlanRequestTraceDestroy(trace: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE) void;
@@ -2939,7 +2939,7 @@ pub extern fn TDNFTransactionPlanRequestTraceTestFailNextRecord() void;
 pub extern fn TDNFTransactionPlanRequestTraceCaptureFactsCreate(trace: ?*const TDNF_TRANSACTION_PLAN_REQUEST_TRACE, package_refs: [*c]const transaction_plan_abi.RequestTracePackageRef, package_ref_count: u32, facts: [*c][*c]const transaction_plan_abi.RequestTraceCaptureFacts, owner: [*c]?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER) u32;
 pub extern fn TDNFTransactionPlanRequestTraceCaptureFactsDestroy(owner: ?*TDNF_TRANSACTION_PLAN_REQUEST_TRACE_CAPTURE_OWNER) void;
 pub const TDNF_PLUGIN = struct__TDNF_PLUGIN_;
-pub const TDNF = struct__TDNF_;
+pub const RPMZ = struct__TDNF_;
 pub const struct__TDNF_CACHED_RPM_ENTRY = extern struct {
     pszFilePath: [*c]u8 = null,
     pNext: [*c]struct__TDNF_CACHED_RPM_ENTRY = null,
@@ -2959,7 +2959,7 @@ pub const TDNF_RPM_TS_ITEM_ERASE: c_int = 4;
 pub const TDNF_RPM_TS_ITEM_TYPE = c_uint;
 pub const struct__TDNF_RPM_TS_ITEM = extern struct {
     nType: TDNF_RPM_TS_ITEM_TYPE = @import("std").mem.zeroes(TDNF_RPM_TS_ITEM_TYPE),
-    pRpmFile: ?*tdnf_rpm_file = null,
+    pRpmFile: ?*rpmz_rpm_file = null,
     dwRpmDbHnum: u32 = 0,
     nPackageKind: c_int = 0,
     pszPath: [*c]u8 = null,
@@ -3065,8 +3065,8 @@ pub extern fn TDNFAddPackagesForDowngrade(pTdnf: PTDNF, pSack: PTDNF_PACKAGE_CON
 pub extern fn TDNFGetAvailableCacheBytes(pConf: PTDNF_CONF, pqwAvailCacheBytes: [*c]u64) u32;
 pub extern fn TDNFCheckDownloadCacheBytes(pSolvedPkgInfo: PTDNF_SOLVED_PKG_INFO, qwAvailCacheBytes: u64) u32;
 pub extern fn ReadGPGKeyFile(pszFile: [*c]const u8, ppszKeyData: [*c][*c]u8, pnSize: [*c]c_int) u32;
-pub extern fn TDNFGPGCheckPackageEx(pTdnf: PTDNF, pRepo: PTDNF_REPO_DATA, pszFilePath: [*c]const u8, ppRpmFile: [*c]?*tdnf_rpm_file, pnPolicyRejected: [*c]c_int) u32;
-pub extern fn TDNFGPGCheckPackageWithFile(pTdnf: PTDNF, pRepo: PTDNF_REPO_DATA, pszFilePath: [*c]const u8, pRpmFile: ?*tdnf_rpm_file, pnPolicyRejected: [*c]c_int) u32;
+pub extern fn TDNFGPGCheckPackageEx(pTdnf: PTDNF, pRepo: PTDNF_REPO_DATA, pszFilePath: [*c]const u8, ppRpmFile: [*c]?*rpmz_rpm_file, pnPolicyRejected: [*c]c_int) u32;
+pub extern fn TDNFGPGCheckPackageWithFile(pTdnf: PTDNF, pRepo: PTDNF_REPO_DATA, pszFilePath: [*c]const u8, pRpmFile: ?*rpmz_rpm_file, pnPolicyRejected: [*c]c_int) u32;
 pub extern fn TDNFFetchRemoteGPGKey(pTdnf: PTDNF, pRepo: PTDNF_REPO_DATA, pszUrlGPGKey: [*c]const u8, ppszKeyLocation: [*c][*c]u8) u32;
 pub const struct__KEYVALUE_ = extern struct {
     pszKey: [*c]u8 = null,
@@ -3153,8 +3153,8 @@ pub extern fn GlobalSetQuiet(val: i32) void;
 pub extern fn GlobalSetJson(val: i32) void;
 pub extern fn GlobalSetDnfCheckUpdateCompat(val: i32) void;
 pub extern fn GlobalGetDnfCheckUpdateCompat() bool;
-pub extern fn tdnfLockAcquire(lockPath: [*c]const u8) c_int;
-pub extern fn tdnfLockFree(lockPath: [*c]const u8, lockFd: c_int) void;
+pub extern fn rpmzLockAcquire(lockPath: [*c]const u8) c_int;
+pub extern fn rpmzLockFree(lockPath: [*c]const u8, lockFd: c_int) void;
 pub extern fn strtoi(ptr: [*c]const u8) i32;
 pub extern fn isTrue(str: [*c]const u8) c_int;
 pub extern fn TDNFGetDigestForFile(filename: [*c]const u8, @"type": c_int, digest: [*c]u8) u32;
@@ -3201,7 +3201,7 @@ pub extern fn create_history_ctx(db_filename: [*c]const u8) ?*struct_history_ctx
 pub extern fn destroy_history_ctx(ctx: ?*struct_history_ctx) void;
 pub extern fn history_get_current_transaction_id(ctx: ?*struct_history_ctx) c_int;
 pub extern fn history_sync(ctx: ?*struct_history_ctx, root: [*c]const u8) c_int;
-pub extern fn history_sync_config(ctx: ?*struct_history_ctx, config: ?*const tdnf_rpm_config) c_int;
+pub extern fn history_sync_config(ctx: ?*struct_history_ctx, config: ?*const rpmz_rpm_config) c_int;
 pub extern fn history_nevra_from_id(ctx: ?*struct_history_ctx, id: c_int) [*c]u8;
 pub extern fn history_nevra_map(ctx: ?*struct_history_ctx) [*c]struct_history_nevra_map;
 pub extern fn history_free_nevra_map([*c]struct_history_nevra_map) void;
@@ -3212,7 +3212,7 @@ pub extern fn history_get_delta_range(ctx: ?*struct_history_ctx, trans_id0: c_in
 pub extern fn history_add_transaction(ctx: ?*struct_history_ctx, cmdline: [*c]const u8) c_int;
 pub extern fn history_record_state(ctx: ?*struct_history_ctx) c_int;
 pub extern fn history_update_state(ctx: ?*struct_history_ctx, root: [*c]const u8, cmdline: [*c]const u8) c_int;
-pub extern fn history_update_state_config(ctx: ?*struct_history_ctx, config: ?*const tdnf_rpm_config, cmdline: [*c]const u8) c_int;
+pub extern fn history_update_state_config(ctx: ?*struct_history_ctx, config: ?*const rpmz_rpm_config, cmdline: [*c]const u8) c_int;
 pub extern fn history_get_transactions(ctx: ?*struct_history_ctx, ptas: [*c][*c]struct_history_transaction, pcount: [*c]c_int, reverse: c_int, from: c_int, to: c_int) c_int;
 pub extern fn history_free_transactions(tas: [*c]struct_history_transaction, count: c_int) void;
 pub extern fn history_set_auto_flag(ctx: ?*struct_history_ctx, name: [*c]const u8, value: c_int) c_int;
@@ -3237,7 +3237,7 @@ pub extern fn BuiltinReplaceBaseUrls(pRepo: ?*anyopaque, ppszBaseUrls: [*c][*c]u
 pub extern fn rpmzig_verify_detached_armored(pSig: [*c]const u8, nSig: usize, pData: [*c]const u8, nData: usize, ppKeys: [*c]const [*c]const u8, pnKeyLengths: [*c]const usize, nKeyCount: usize) c_int;
 pub extern fn TDNFGetHistoryCtx(pTdnf: PTDNF, ppCtx: [*c]?*struct_history_ctx, nMustExist: c_int) u32;
 pub extern var gEuid: uid_t;
-pub extern fn tdnf_repomd_native_verified_transaction_solve_config(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2, ppbHeaders: [*c]const [*c]const u8, pnHeaderLengths: [*c]const usize, pqwPackageSizes: [*c]const u64, dwItemCount: u32, pConfig: ?*const tdnf_rpm_config, ppPlan: [*c][*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) u32;
+pub extern fn rpmz_repomd_native_verified_transaction_solve_config(pItems: [*c]const TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2, ppbHeaders: [*c]const [*c]const u8, pnHeaderLengths: [*c]const usize, pqwPackageSizes: [*c]const u64, dwItemCount: u32, pConfig: ?*const rpmz_rpm_config, ppPlan: [*c][*c]TDNF_REPOMD_NATIVE_TRANSACTION_PLAN) u32;
 pub extern fn TDNFRefreshSack(pTdnf: PTDNF, pSack: PTDNF_PACKAGE_CONTEXT, nCleanMetadata: c_int) u32;
 pub extern fn TDNFGoal(pTdnf: PTDNF, pkgList: PTDNF_ID_LIST, ppInfo: [*c]PTDNF_SOLVED_PKG_INFO, nAlterType: TDNF_ALTERTYPE, nUnresolved: c_int) u32;
 pub extern fn TDNFGoalNoDeps(pTdnf: PTDNF, pQueuePkgList: PTDNF_ID_LIST, ppInfo: [*c]PTDNF_SOLVED_PKG_INFO) u32;
@@ -5813,7 +5813,7 @@ pub inline fn STR_IS_TRUE(s: anytype) @TypeOf((s != 0) and (!(strcmp(s, "1") != 
     return (s != 0) and (!(strcmp(s, "1") != 0) or !(strcasecmp(s, "true") != 0));
 }
 pub const TDNF_RPM_EXT = ".rpm";
-pub const TDNF_NAME = "tdnf";
+pub const TDNF_NAME = "rpmz";
 pub const DIR_SEPARATOR = '/';
 pub const SOLV_PATCH_MARKER = "patch:";
 pub const TDNF_REPOMD_TYPE_PRIMARY = "primary";
@@ -5821,7 +5821,7 @@ pub const TDNF_REPOMD_TYPE_FILELISTS = "filelists";
 pub const TDNF_REPOMD_TYPE_UPDATEINFO = "updateinfo";
 pub const TDNF_REPOMD_TYPE_OTHER = "other";
 pub const TDNF_REPO_EXT = ".repo";
-pub const TDNF_CONF_FILE = "/etc/tdnf/tdnf.conf";
+pub const TDNF_CONF_FILE = "/etc/rpmz/rpmz.conf";
 pub const TDNF_CONF_GROUP = "main";
 pub const TDNF_CONF_KEY_GPGCHECK = "gpgcheck";
 pub const TDNF_CONF_KEY_CMDLINEGPGCHECK = "cligpgcheck";
@@ -5889,7 +5889,7 @@ pub const TDNF_HISTORY_DB_FILE = "history.db";
 pub const TDNF_DEFAULT_DATA_LOCATION = "/var/lib/tdnf";
 pub const TDNF_DEFAULT_REPO_LOCATION = "/etc/yum.repos.d";
 pub const TDNF_DEFAULT_CACHE_LOCATION = "/var/cache/tdnf";
-pub const TDNF_DEFAULT_VARS_DIRS = "/etc/tdnf/vars /etc/dnf/vars /etc/yum/vars";
+pub const TDNF_DEFAULT_VARS_DIRS = "/etc/rpmz/vars /etc/dnf/vars /etc/yum/vars";
 pub const TDNF_DEFAULT_DB_LOCATION = HISTORY_DB_DIR;
 pub const TDNF_DEFAULT_DISTROVERPKGS = "system-release(releasever) system-release redhat-release";
 pub const TDNF_DEFAULT_DISTROARCHPKG = "x86_64";
@@ -5917,8 +5917,8 @@ pub const TDNF_VAR_BASEARCH = "basearch";
 pub const TDNF_SETOPT_NAME_DUMMY = "opt.dummy.name";
 pub const TDNF_SETOPT_VALUE_DUMMY = "opt.dummy.value";
 pub const TDNF_DEFAULT_PLUGINS_ENABLED = @as(c_int, 0);
-pub const TDNF_DEFAULT_PLUGIN_PATH = SYSTEM_LIBDIR ++ "/tdnf-plugins";
-pub const TDNF_DEFAULT_PLUGIN_CONF_PATH = "/etc/tdnf/pluginconf.d";
+pub const TDNF_DEFAULT_PLUGIN_PATH = SYSTEM_LIBDIR ++ "/rpmz-plugins";
+pub const TDNF_DEFAULT_PLUGIN_CONF_PATH = "/etc/rpmz/pluginconf.d";
 pub const TDNF_PLUGIN_CONF_EXT = ".conf";
 pub const TDNF_PLUGIN_CONF_EXT_LEN = @as(c_int, 5);
 pub const TDNF_PLUGIN_CONF_MAIN_SECTION = "main";
@@ -5930,7 +5930,7 @@ pub const HISTORY_TRANS_TYPE_DELTA = @as(c_int, 1);
 pub const HISTORY_ITEM_TYPE_SET = @as(c_int, 0);
 pub const HISTORY_ITEM_TYPE_ADD = @as(c_int, 1);
 pub const HISTORY_ITEM_TYPE_REMOVE = @as(c_int, 2);
-pub const PACKAGE_NAME = "tdnf";
+pub const PACKAGE_NAME = "rpmz";
 pub const PACKAGE_VERSION = "4.0.0";
 pub const SYSTEM_LIBDIR = "/usr/local/lib";
 pub const BAIL_ON_TDNF_RPM_ERROR = @compileError("unable to translate macro: undefined identifier `error`"); // client/defines.h:23:9
@@ -5997,7 +5997,7 @@ pub const _TDNF_HISTORY_ARGS = struct__TDNF_HISTORY_ARGS;
 pub const _TDNF_HISTORY_INFO_ITEM = struct__TDNF_HISTORY_INFO_ITEM;
 pub const _TDNF_HISTORY_INFO = struct__TDNF_HISTORY_INFO;
 pub const _TDNF_ZIG_DOWNLOAD_REQUEST = struct__TDNF_ZIG_DOWNLOAD_REQUEST;
-pub const tdnf_repomd_doc = struct_tdnf_repomd_doc;
+pub const rpmz_repomd_doc = struct_rpmz_repomd_doc;
 pub const _TDNF_REPOMD_CHECKSUM = struct__TDNF_REPOMD_CHECKSUM;
 pub const _TDNF_REPOMD_RECORD = struct__TDNF_REPOMD_RECORD;
 pub const _TDNF_REPOMD_NATIVE_REPO_INPUT = struct__TDNF_REPOMD_NATIVE_REPO_INPUT;

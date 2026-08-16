@@ -52,7 +52,7 @@ def test_protected_conf_erase(utils):
     assert utils.check_package(pkgname)
 
     # test - uninstalling should fail
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck', 'remove', pkgname])
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck', 'remove', pkgname])
     assert ret['retval']
     assert utils.check_package(pkgname)
 
@@ -68,7 +68,7 @@ def test_protected_required(utils):
     set_protected_file(utils, pkgname)
 
     # would erase pkgname:
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck', 'remove', pkgname_req])
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck', 'remove', pkgname_req])
     assert ret['retval'] == 1030
     assert utils.check_package(pkgname)
     assert utils.check_package(pkgname_req)
@@ -85,7 +85,7 @@ def test_protected_autoerase(utils):
     set_protected_file(utils, pkgname_req)
 
     # would erase pkgname_req if not protected:
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck', 'autoremove', pkgname])
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck', 'autoremove', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname_req)
 
@@ -94,13 +94,13 @@ def test_protected_autoerase(utils):
 # removed is protected
 def test_protected_obsoleted(utils):
     utils.erase_package(PKGNAME_OBSING)
-    utils.run(['tdnf', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER])
+    utils.run(['rpmz', 'install', '-y', '--nogpgcheck', PKGNAME_OBSED_VER])
     assert utils.check_package(PKGNAME_OBSED)
 
     set_protected_file(utils, PKGNAME_OBSED)
 
     # expected fail
-    ret = utils.run(['tdnf', 'install', '-y', '--nogpgcheck', PKGNAME_OBSING])
+    ret = utils.run(['rpmz', 'install', '-y', '--nogpgcheck', PKGNAME_OBSING])
     assert ret['retval'] == 1030
     assert utils.check_package(PKGNAME_OBSED)
 
@@ -116,13 +116,13 @@ def test_protected_history_rollback_update(utils):
     set_protected_file(utils, mpkg)
 
     # save the history id to roll back to
-    ret = utils.run(['tdnf', 'history'])
+    ret = utils.run(['rpmz', 'history'])
     baseline = ret['stdout'][-1].split()[0]
 
     # perform an upgrade
-    ret = utils.run(['tdnf', 'update', '-y', '--nogpgcheck', mpkg])
+    ret = utils.run(['rpmz', 'update', '-y', '--nogpgcheck', mpkg])
     assert ret['retval'] == 0
 
     # we should be able to roll it back
-    ret = utils.run(['tdnf', 'history', '-y', 'rollback', '--to', baseline])
+    ret = utils.run(['rpmz', 'history', '-y', 'rollback', '--to', baseline])
     assert ret['retval'] == 0

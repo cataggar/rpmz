@@ -20,11 +20,11 @@ def teardown_test(utils):
 
 
 def test_count(utils):
-    ret = utils.run(['tdnf', 'count'])
+    ret = utils.run(['rpmz', 'count'])
     assert ret['retval'] == 0
 
 
 # memcheck
 def test_count_memcheck(utils):
-    ret = utils.run_memcheck(['tdnf', 'count'])
+    ret = utils.run_memcheck(['rpmz', 'count'])
     assert ret['retval'] == 0

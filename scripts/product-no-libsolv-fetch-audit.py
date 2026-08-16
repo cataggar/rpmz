@@ -83,7 +83,7 @@ def main():
 
     root = Path(__file__).resolve().parent.parent
     package_cache_arg = (
-        args.package_cache or os.environ.get("TDNF_ZIG_PACKAGE_CACHE")
+        args.package_cache or os.environ.get("RPMZ_ZIG_PACKAGE_CACHE")
     )
     package_cache = (
         Path(package_cache_arg)

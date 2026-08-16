@@ -21,7 +21,7 @@
 
 const std = @import("std");
 
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 
 /// Private growable list layout shared with the client module.
 pub const IdList = extern struct {

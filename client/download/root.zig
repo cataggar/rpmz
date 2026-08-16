@@ -1,7 +1,7 @@
 const std = @import("std");
 const tls = @import("tls");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
@@ -11,7 +11,7 @@ const RedirectLimit: usize = 10;
 const RequestHeadMaxLen: usize = 8192;
 const StreamBufLen: usize = 8192;
 const MaxThrottleWaitNs: u64 = std.time.ns_per_s;
-const TestScratchDir = ".zig-cache/tdnf-download-tests";
+const TestScratchDir = ".zig-cache/rpmz-download-tests";
 
 pub const TDNF_ZIG_XFERINFOFUNCTION = abi.DownloadProgressFn;
 pub const TDNF_ZIG_DOWNLOAD_REQUEST = abi.DownloadRequest;
@@ -2613,7 +2613,7 @@ fn shippedConnectTimeout(io: Io) !c_long {
     const contents = try readFileAlloc(
         std.testing.allocator,
         io,
-        "etc/tdnf/tdnf.conf",
+        "etc/rpmz/rpmz.conf",
     );
     defer std.testing.allocator.free(contents);
     var lines = std.mem.splitScalar(u8, contents, '\n');

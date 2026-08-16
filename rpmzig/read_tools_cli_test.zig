@@ -218,7 +218,7 @@ test "rpm file tools preserve open diagnostics" {
     defer testing.allocator.free(info_result.stderr);
     const info_error = try std.fmt.allocPrint(
         testing.allocator,
-        "tdnf-rpm-info: rpm_file_open({s}): StatFailed\n",
+        "rpmz-rpm-info: rpm_file_open({s}): StatFailed\n",
         .{missing},
     );
     defer testing.allocator.free(info_error);
@@ -231,7 +231,7 @@ test "rpm file tools preserve open diagnostics" {
     defer testing.allocator.free(files_result.stderr);
     const files_error = try std.fmt.allocPrint(
         testing.allocator,
-        "tdnf-rpm-files: open: rpm_file_open({s}): StatFailed\n",
+        "rpmz-rpm-files: open: rpm_file_open({s}): StatFailed\n",
         .{missing},
     );
     defer testing.allocator.free(files_error);
@@ -261,7 +261,7 @@ test "rpm files rejects embedded NUL names without printing suffix bytes" {
     try testing.expectEqualStrings("", result.stdout);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "VULNERABLE-SUFFIX") == null);
     try testing.expectEqualStrings(
-        "tdnf-rpm-files: cpio walker: BadName\n",
+        "rpmz-rpm-files: cpio walker: BadName\n",
         result.stderr,
     );
 }

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "rpmz-config",
+    "remove",
+    "foo",
+    "gpgcheck"
+  ],
+  "stdout": "",
+  "stderr": "",
+  "retval": 0
+}

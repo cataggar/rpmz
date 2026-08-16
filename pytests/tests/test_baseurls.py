@@ -43,7 +43,7 @@ def test_multiple_baseurls(utils):
     baseurls = "http://localhost:8080/doesntexist http://localhost:8080/photon-test"
     utils.create_repoconf(filename, baseurls, reponame)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'makecache'],
                     cwd=workdir)
@@ -51,7 +51,7 @@ def test_multiple_baseurls(utils):
 
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-y', '--nogpgcheck',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'install', pkgname],
@@ -70,7 +70,7 @@ def test_multiple_baseurls_setopt(utils):
     baseurls = "http://localhost:8080/doesntexist"
     utils.create_repoconf(filename, baseurls, reponame)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      f'--setopt={reponame}.baseurl=http://localhost:8080/photon-test',
                      'makecache'],
@@ -79,7 +79,7 @@ def test_multiple_baseurls_setopt(utils):
 
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-y', '--nogpgcheck',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      f'--setopt={reponame}.baseurl=http://localhost:8080/photon-test',

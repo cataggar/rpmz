@@ -24,6 +24,8 @@ const txn_config = @import("rpm_txn_config");
 const verified_fetch = @import("verified_fetch");
 
 const Allocator = std.mem.Allocator;
+// Persisted in transaction plans; the legacy product prefix is part of the
+// v1 hash contract and cannot change without a schema version change.
 const rpmdb_package_set_domain = "tdnf.rpmdb-package-set/v1";
 
 const RpmdbIterator = opaque {};
@@ -31,14 +33,14 @@ extern fn TDNFTransactionPlanRpmdbSnapshotOpenConfig(
     config: *const anyopaque,
     cookie: *?[*:0]u8,
 ) ?*RpmdbIterator;
-extern fn tdnf_rpmdb_iter_close(iterator: ?*RpmdbIterator) void;
-extern fn tdnf_rpmdb_iter_next_header_blob_hnum(
+extern fn rpmz_rpmdb_iter_close(iterator: ?*RpmdbIterator) void;
+extern fn rpmz_rpmdb_iter_next_header_blob_hnum(
     iterator: ?*RpmdbIterator,
     hnum: *u32,
     blob: *?[*]const u8,
     length: *usize,
 ) i32;
-extern fn tdnf_rpmdb_string_free(value: ?[*:0]u8) void;
+extern fn rpmz_rpmdb_string_free(value: ?[*:0]u8) void;
 const PreparedRpmDbWrite = opaque {};
 extern fn TDNFRpmDbPreparedWriteBegin(
     config: *txn_config.TxnConfig,
@@ -1083,21 +1085,19 @@ fn captureSnapshot(
         config,
         &cookie_raw,
     ) orelse return error.TargetUnreadable;
-    defer tdnf_rpmdb_iter_close(iterator);
+    defer rpmz_rpmdb_iter_close(iterator);
     const cookie_pointer = cookie_raw orelse return error.TargetUnreadable;
-    defer tdnf_rpmdb_string_free(cookie_pointer);
+    defer rpmz_rpmdb_string_free(cookie_pointer);
 
     var rows: std.ArrayList(InstalledPackage) = .empty;
     var inventory: std.ArrayList(InstalledPackage) = .empty;
-    var package_hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    package_hasher.update(rpmdb_package_set_domain);
-    package_hasher.update("\x00");
+    var package_hasher = packageSetHasher();
     var record_count: u64 = 0;
     while (true) {
         var hnum: u32 = 0;
         var blob_pointer: ?[*]const u8 = null;
         var blob_length: usize = 0;
-        const rc = tdnf_rpmdb_iter_next_header_blob_hnum(
+        const rc = rpmz_rpmdb_iter_next_header_blob_hnum(
             iterator,
             &hnum,
             &blob_pointer,
@@ -1129,10 +1129,6 @@ fn captureSnapshot(
         try rows.append(allocator, row);
         try inventory.append(allocator, row);
     }
-    var count_bytes: [8]u8 = undefined;
-    writeBigEndian(&count_bytes, record_count);
-    package_hasher.update(&count_bytes);
-
     std.mem.sort(InstalledPackage, inventory.items, {}, installedPackageLessThan);
     var cookie_digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(
@@ -1140,14 +1136,32 @@ fn captureSnapshot(
         &cookie_digest,
         .{},
     );
-    var package_digest: [32]u8 = undefined;
-    package_hasher.final(&package_digest);
+    const package_digest = finishPackageSetDigest(&package_hasher, record_count);
     return .{
         .cookie_sha256 = std.fmt.bytesToHex(cookie_digest, .lower),
         .package_set_sha256 = std.fmt.bytesToHex(package_digest, .lower),
         .rows = try rows.toOwnedSlice(allocator),
         .inventory = try inventory.toOwnedSlice(allocator),
     };
+}
+
+fn packageSetHasher() std.crypto.hash.sha2.Sha256 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(rpmdb_package_set_domain);
+    hasher.update("\x00");
+    return hasher;
+}
+
+fn finishPackageSetDigest(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    record_count: u64,
+) [32]u8 {
+    var count_bytes: [8]u8 = undefined;
+    writeBigEndian(&count_bytes, record_count);
+    hasher.update(&count_bytes);
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return digest;
 }
 
 fn cloneHeaderIdentity(
@@ -2138,6 +2152,42 @@ test "rpmdb identity and prior validation reject every substitution" {
         error.PriorMismatch,
         verifyInstalledRows(&plan, &.{.{ .hnum = 7, .identity = newer }}),
     );
+}
+
+test "legacy rpmdb package-set domain remains replay compatible" {
+    try std.testing.expectEqualStrings(
+        "tdnf.rpmdb-package-set/v1",
+        rpmdb_package_set_domain,
+    );
+    var hasher = packageSetHasher();
+    const digest = finishPackageSetDigest(&hasher, 0);
+    const digest_hex = std.fmt.bytesToHex(digest, .lower);
+    try std.testing.expectEqualStrings(
+        "b4e73c9b4fa587c4cd5f35ebe7b2bee50563940f31235284ac2019402b73f8b2",
+        &digest_hex,
+    );
+
+    var environment = testEnvironment(true);
+    environment.rpmdb.package_set_sha256 = &digest_hex;
+    const plan = transaction_plan.Data{
+        .actions = &.{},
+        .environment = environment,
+        .hidden_packages = &.{},
+        .jobs = &.{},
+        .packages = &.{},
+        .problems = &.{},
+        .repositories = &.{},
+        .requests = &.{},
+        .selected = &.{},
+        .skipped = &.{},
+    };
+    const snapshot = Snapshot{
+        .cookie_sha256 = @splat('0'),
+        .package_set_sha256 = digest_hex,
+        .rows = &.{},
+        .inventory = &.{},
+    };
+    try verifyRpmdbIdentity(&plan, snapshot);
 }
 
 test "fixed replay items preserve all authoritative action representations" {

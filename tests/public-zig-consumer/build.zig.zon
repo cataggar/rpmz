@@ -1,10 +1,10 @@
 .{
-    .name = .tdnf_public_zig_consumer,
+    .name = .rpmz_public_zig_consumer,
     .version = "0.0.0",
-    .fingerprint = 0x37a22f2202b98ba0,
+    .fingerprint = 0xc326e8cc708ba597,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .tdnf = .{ .path = "../package" },
+        .rpmz = .{ .path = "../package" },
     },
     .paths = .{
         "build.zig",

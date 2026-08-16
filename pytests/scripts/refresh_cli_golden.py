@@ -21,11 +21,11 @@ from cli_testlib import MinimalCliRuntime  # noqa: E402
 
 CMD_RE = re.compile(
     r'^\s*\.{\s*\.pszCmdName\s*=\s*"([^"]+)",'
-    r"\s*\.pFnCmd\s*=\s*(?:c\.)?TDNFCli[^,]+,"
+    r"\s*\.pFnCmd\s*=\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?TDNFCli[^,]+,"
     r"\s*\.ReqRoot\s*=\s*(?:true|false)\s*},\s*$",
     re.MULTILINE,
 )
-BINDIR_ENV = 'TDNF_CLI_GOLDEN_BINDIR'
+BINDIR_ENV = 'RPMZ_CLI_GOLDEN_BINDIR'
 
 
 def parse_args():
@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument(
         '--bindir',
         default=os.environ.get(BINDIR_ENV),
-        help='Directory containing built tdnf binaries.',
+        help='Directory containing built rpmz binaries.',
     )
     parser.add_argument(
         '--fixtures-dir',
@@ -98,77 +98,77 @@ def load_command_names(main_c_path):
 
 def build_cases(commands):
     cases = [
-        {'name': 'tdnf-help-long', 'argv': ['tdnf', '--help']},
-        {'name': 'tdnf-help-command', 'argv': ['tdnf', 'help']},
-        {'name': 'tdnf-no-args', 'argv': ['tdnf']},
+        {'name': 'rpmz-help-long', 'argv': ['rpmz', '--help']},
+        {'name': 'rpmz-help-command', 'argv': ['rpmz', 'help']},
+        {'name': 'rpmz-no-args', 'argv': ['rpmz']},
         {
-            'name': 'tdnf-bad-command',
-            'argv': ['tdnf', 'definitely-not-a-command'],
+            'name': 'rpmz-bad-command',
+            'argv': ['rpmz', 'definitely-not-a-command'],
         },
-        {'name': 'tdnf-bad-option', 'argv': ['tdnf', '--bad-option']},
-        {'name': 'tdnf-missing-config-arg', 'argv': ['tdnf', '--config']},
+        {'name': 'rpmz-bad-option', 'argv': ['rpmz', '--bad-option']},
+        {'name': 'rpmz-missing-config-arg', 'argv': ['rpmz', '--config']},
         {
-            'name': 'tdnf-missing-installroot-arg',
-            'argv': ['tdnf', '--installroot'],
+            'name': 'rpmz-missing-installroot-arg',
+            'argv': ['rpmz', '--installroot'],
         },
-        {'name': 'tdnf-missing-setopt-arg', 'argv': ['tdnf', '--setopt']},
+        {'name': 'rpmz-missing-setopt-arg', 'argv': ['rpmz', '--setopt']},
         {
-            'name': 'tdnf-relative-installroot',
-            'argv': ['tdnf', '--installroot', 'relative-root', 'list'],
+            'name': 'rpmz-relative-installroot',
+            'argv': ['rpmz', '--installroot', 'relative-root', 'list'],
         },
-        {'name': 'tdnf-version', 'argv': ['tdnf', '--version']},
+        {'name': 'rpmz-version', 'argv': ['rpmz', '--version']},
     ]
 
     for command in commands:
         cases.append({
-            'name': 'tdnf-{}-help'.format(command),
-            'argv': ['tdnf', command, '--help'],
+            'name': 'rpmz-{}-help'.format(command),
+            'argv': ['rpmz', command, '--help'],
         })
 
     cases.extend([
-        {'name': 'tdnf-clean-no-arg', 'argv': ['tdnf', 'clean']},
+        {'name': 'rpmz-clean-no-arg', 'argv': ['rpmz', 'clean']},
         {
-            'name': 'tdnf-clean-invalid-arg',
-            'argv': ['tdnf', 'clean', 'abcde'],
+            'name': 'rpmz-clean-invalid-arg',
+            'argv': ['rpmz', 'clean', 'abcde'],
         },
-        {'name': 'tdnf-provides-no-arg', 'argv': ['tdnf', 'provides']},
+        {'name': 'rpmz-provides-no-arg', 'argv': ['rpmz', 'provides']},
         {
-            'name': 'tdnf-whatprovides-no-arg',
-            'argv': ['tdnf', 'whatprovides'],
+            'name': 'rpmz-whatprovides-no-arg',
+            'argv': ['rpmz', 'whatprovides'],
         },
-        {'name': 'tdnf-search-no-arg', 'argv': ['tdnf', 'search']},
+        {'name': 'rpmz-search-no-arg', 'argv': ['rpmz', 'search']},
         {
-            'name': 'tdnf-install-no-arg',
-            'argv': ['tdnf', 'install'],
+            'name': 'rpmz-install-no-arg',
+            'argv': ['rpmz', 'install'],
             'skip_if_nonroot': True,
             'skip_reason': (
                 'requires root to reach the parser-specific no-arg path'
             ),
         },
         {
-            'name': 'tdnf-erase-no-arg',
-            'argv': ['tdnf', 'erase'],
+            'name': 'rpmz-erase-no-arg',
+            'argv': ['rpmz', 'erase'],
             'skip_if_nonroot': True,
             'skip_reason': (
                 'requires root to reach the parser-specific no-arg path'
             ),
         },
         {
-            'name': 'tdnf-list-invalid-package',
-            'argv': ['tdnf', 'list', 'invalid_package'],
+            'name': 'rpmz-list-invalid-package',
+            'argv': ['rpmz', 'list', 'invalid_package'],
         },
         {
-            'name': 'tdnf-updateinfo-invalid-package',
-            'argv': ['tdnf', 'updateinfo', 'invalid_package'],
+            'name': 'rpmz-updateinfo-invalid-package',
+            'argv': ['rpmz', 'updateinfo', 'invalid_package'],
         },
         {
-            'name': 'tdnf-reposync-norepopath-delete',
-            'argv': ['tdnf', 'reposync', '--norepopath', '--delete'],
+            'name': 'rpmz-reposync-norepopath-delete',
+            'argv': ['rpmz', 'reposync', '--norepopath', '--delete'],
         },
         {
-            'name': 'tdnf-config-create',
+            'name': 'rpmz-config-create',
             'argv': [
-                'tdnf-config',
+                'rpmz-config',
                 'create',
                 'foo',
                 'name=Foo',
@@ -177,32 +177,32 @@ def build_cases(commands):
             ],
         },
         {
-            'name': 'tdnf-config-edit',
-            'argv': ['tdnf-config', 'edit', 'foo', 'enabled=true'],
+            'name': 'rpmz-config-edit',
+            'argv': ['rpmz-config', 'edit', 'foo', 'enabled=true'],
         },
         {
-            'name': 'tdnf-config-get',
-            'argv': ['tdnf-config', 'get', 'foo', 'baseurl'],
+            'name': 'rpmz-config-get',
+            'argv': ['rpmz-config', 'get', 'foo', 'baseurl'],
         },
         {
-            'name': 'tdnf-config-dump',
-            'argv': ['tdnf-config', '-j', 'dump', 'foo'],
+            'name': 'rpmz-config-dump',
+            'argv': ['rpmz-config', '-j', 'dump', 'foo'],
         },
         {
-            'name': 'tdnf-config-remove',
-            'argv': ['tdnf-config', 'remove', 'foo', 'gpgcheck'],
+            'name': 'rpmz-config-remove',
+            'argv': ['rpmz-config', 'remove', 'foo', 'gpgcheck'],
         },
         {
-            'name': 'tdnf-config-removerepo',
-            'argv': ['tdnf-config', 'removerepo', 'foo'],
+            'name': 'rpmz-config-removerepo',
+            'argv': ['rpmz-config', 'removerepo', 'foo'],
         },
         {
-            'name': 'tdnf-config-bad-option',
-            'argv': ['tdnf-config', '--bad-option'],
+            'name': 'rpmz-config-bad-option',
+            'argv': ['rpmz-config', '--bad-option'],
         },
         {
-            'name': 'tdnf-config-bad-action',
-            'argv': ['tdnf-config', 'frobnicate'],
+            'name': 'rpmz-config-bad-action',
+            'argv': ['rpmz-config', 'frobnicate'],
         },
     ])
     return cases

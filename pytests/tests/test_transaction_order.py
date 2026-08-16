@@ -169,7 +169,7 @@ def rpmdb_hnums(root, name):
 
 def native_rpmdb_install(build_dir, root, rpm_path):
     run_cmd([
-        os.path.join(build_dir, 'libexec', 'tdnf', 'tdnf-rpmdb-write'),
+        os.path.join(build_dir, 'libexec', 'rpmz', 'rpmz-rpmdb-write'),
         'install',
         root,
         rpm_path,

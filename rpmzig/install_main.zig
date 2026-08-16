@@ -60,21 +60,21 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             const path: [*:0]const u8 = argv[i];
             var prior = common.openRpm(path) catch |err| {
                 std.debug.print(
-                    "tdnf-rpm-install: open prior rpm: rpm_file_open({s}): {t}\n",
+                    "rpmz-rpm-install: open prior rpm: rpm_file_open({s}): {t}\n",
                     .{ std.mem.span(path), err },
                 );
                 return 1;
             };
             prior_files.append(std.heap.c_allocator, prior) catch {
                 prior.close(std.heap.c_allocator);
-                std.debug.print("tdnf-rpm-install: out of memory\n", .{});
+                std.debug.print("rpmz-rpm-install: out of memory\n", .{});
                 return 1;
             };
             prior_headers.append(
                 std.heap.c_allocator,
                 prior_files.items[prior_files.items.len - 1].main,
             ) catch {
-                std.debug.print("tdnf-rpm-install: out of memory\n", .{});
+                std.debug.print("rpmz-rpm-install: out of memory\n", .{});
                 return 1;
             };
         } else if (std.mem.eql(u8, arg, "--tsflag")) {
@@ -105,7 +105,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const path = rpm_path orelse return usage(argv[0]);
     var rpm = common.openRpm(path) catch |err| {
         std.debug.print(
-            "tdnf-rpm-install: open: rpm_file_open({s}): {t}\n",
+            "rpmz-rpm-install: open: rpm_file_open({s}): {t}\n",
             .{ std.mem.span(path), err },
         );
         return 1;
@@ -118,19 +118,19 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         .install_kind = install_kind,
         .prior_headers = prior_headers.items,
     }) catch |err| {
-        std.debug.print("tdnf-rpm-install: install: install init: {t}\n", .{err});
+        std.debug.print("rpmz-rpm-install: install: install init: {t}\n", .{err});
         return 1;
     };
     defer ctx.deinit();
     ctx.install() catch |err| {
         if (ctx.last_path) |last_path| {
             std.debug.print(
-                "tdnf-rpm-install: install: rpm_file_install({s}): {t}\n",
+                "rpmz-rpm-install: install: rpm_file_install({s}): {t}\n",
                 .{ last_path, err },
             );
         } else {
             std.debug.print(
-                "tdnf-rpm-install: install: rpm_file_install: {t}\n",
+                "rpmz-rpm-install: install: rpm_file_install: {t}\n",
                 .{err},
             );
         }

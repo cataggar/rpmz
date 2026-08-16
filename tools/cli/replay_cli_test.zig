@@ -1,14 +1,14 @@
 //! Binary-level offline replay CLI coverage.
 
 const std = @import("std");
-const tdnf = @import("tdnf");
+const rpmz = @import("rpmz");
 const replay_options = @import("replay_options.zig");
 
 const allocator = std.testing.allocator;
 const io = std.testing.io;
-const replay = tdnf.replay;
-const resolver = tdnf.resolver;
-const bundle_export = tdnf.bundle_export;
+const replay = rpmz.replay;
+const resolver = rpmz.resolver;
+const bundle_export = rpmz.bundle_export;
 
 fn appendBe32(list: *std.array_list.Managed(u8), value: u32) !void {
     try list.append(@intCast((value >> 24) & 0xff));
@@ -358,13 +358,13 @@ const Fixture = struct {
     }
 };
 
-fn tdnfPath() ![]u8 {
+fn rpmzPath() ![]u8 {
     const prefix = std.testing.environ.getAlloc(
         allocator,
-        "TDNF_CLI_TEST_PREFIX",
+        "RPMZ_CLI_TEST_PREFIX",
     ) catch try allocator.dupe(u8, "out");
     defer allocator.free(prefix);
-    return std.fs.path.join(allocator, &.{ prefix, "bin", "tdnf" });
+    return std.fs.path.join(allocator, &.{ prefix, "bin", "rpmz" });
 }
 
 fn runCli(binary: []const u8, args: []const []const u8) !std.process.RunResult {
@@ -542,7 +542,7 @@ fn expectLegacyOptionJson(
 }
 
 test "legacy parser JSON failures keep diagnostics off stdout" {
-    const binary = try tdnfPath();
+    const binary = try rpmzPath();
     defer allocator.free(binary);
 
     const cases = [_]struct {
@@ -616,7 +616,7 @@ test "legacy parser JSON failures keep diagnostics off stdout" {
 }
 
 test "legacy parser diagnostics retain non-JSON channels" {
-    const binary = try tdnfPath();
+    const binary = try rpmzPath();
     defer allocator.free(binary);
 
     const cases = [_]struct {
@@ -727,7 +727,7 @@ fn configureNetworkRepository(
 ) !void {
     const config_dir = try std.fmt.allocPrint(
         allocator,
-        "{s}/etc/tdnf",
+        "{s}/etc/rpmz",
         .{root_name},
     );
     defer allocator.free(config_dir);
@@ -741,7 +741,7 @@ fn configureNetworkRepository(
     try fixture.tmp.dir.createDirPath(io, repo_dir);
     const config_path = try std.fmt.allocPrint(
         allocator,
-        "{s}/tdnf.conf",
+        "{s}/rpmz.conf",
         .{config_dir},
     );
     defer allocator.free(config_path);
@@ -752,8 +752,8 @@ fn configureNetworkRepository(
         \\gpgcheck=0
         \\plugins=0
         \\repodir=/etc/yum.repos.d
-        \\cachedir=/var/cache/tdnf
-        \\persistdir=/var/lib/tdnf
+        \\cachedir=/var/cache/rpmz
+        \\persistdir=/var/lib/rpmz
         \\
         ,
     });
@@ -784,14 +784,14 @@ fn configureRepositoryTrap(
 ) !void {
     const config_dir = try std.fmt.allocPrint(
         allocator,
-        "{s}/etc/tdnf",
+        "{s}/etc/rpmz",
         .{root_name},
     );
     defer allocator.free(config_dir);
     try fixture.tmp.dir.createDirPath(io, config_dir);
     const config_path = try std.fmt.allocPrint(
         allocator,
-        "{s}/tdnf.conf",
+        "{s}/rpmz.conf",
         .{config_dir},
     );
     defer allocator.free(config_path);
@@ -802,8 +802,8 @@ fn configureRepositoryTrap(
         \\gpgcheck=0
         \\plugins=0
         \\repodir=/repo-trap
-        \\cachedir=/var/cache/tdnf
-        \\persistdir=/var/lib/tdnf
+        \\cachedir=/var/cache/rpmz
+        \\persistdir=/var/lib/rpmz
         \\
         ,
     });
@@ -828,7 +828,7 @@ fn expectUsage(binary: []const u8, args: []const []const u8) !void {
     try std.testing.expect(std.mem.indexOf(
         u8,
         result.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) != null);
 }
 
@@ -957,7 +957,7 @@ fn expectValueOptionAccepted(
     try std.testing.expect(std.mem.indexOf(
         u8,
         result.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) == null);
 }
 
@@ -1023,12 +1023,12 @@ fn expectJsonUsageArgv0(
     try std.testing.expect(std.mem.indexOf(
         u8,
         result.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) != null);
 }
 
 test "replay CLI accepts every documented option spelling" {
-    const binary = try tdnfPath();
+    const binary = try rpmzPath();
     defer allocator.free(binary);
     const ordinary_styles = [_]ValueOptionStyle{
         .double_separate,
@@ -1099,13 +1099,13 @@ test "replay CLI accepts every documented option spelling" {
         try std.testing.expect(std.mem.indexOf(
             u8,
             help.stderr,
-            "Usage: tdnf replay",
+            "Usage: rpmz replay",
         ) != null);
     }
 }
 
 test "replay-only options preserve legacy JSON and diagnostic channels" {
-    const binary = try tdnfPath();
+    const binary = try rpmzPath();
     defer allocator.free(binary);
 
     try expectLegacyOptionJson(binary, &.{
@@ -1212,7 +1212,7 @@ test "replay CLI success is canonical offline and bypasses normal initialization
         if (!probe_stopped) _ = probe.stop();
     }
     try configureNetworkRepository(&fixture, "network-root", probe.port);
-    const binary = try tdnfPath();
+    const binary = try rpmzPath();
     defer allocator.free(binary);
     const network_result = try runCli(binary, &.{
         "replay",
@@ -1269,10 +1269,10 @@ test "replay CLI success is canonical offline and bypasses normal initialization
         allocator,
     );
     defer allocator.free(binary_absolute);
-    try fixture.tmp.dir.symLink(io, binary_absolute, "tdnfj", .{});
+    try fixture.tmp.dir.symLink(io, binary_absolute, "rpmzj", .{});
     const alias_binary = try std.fs.path.join(
         allocator,
-        &.{ fixture.base, "tdnfj" },
+        &.{ fixture.base, "rpmzj" },
     );
     defer allocator.free(alias_binary);
     const alias_result = try runCli(alias_binary, &.{
@@ -1345,7 +1345,7 @@ test "replay CLI preserves validation and transaction failure contracts" {
     );
     defer validation_parsed.deinit();
 
-    const binary = try tdnfPath();
+    const binary = try rpmzPath();
     defer allocator.free(binary);
     const validation = try runCli(binary, &.{
         "replay",
@@ -1414,7 +1414,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     defer fixture.deinit();
     const bundle = try fixture.exportBundle("arguments");
     const root = try fixture.createDir("argument-root");
-    const binary = try tdnfPath();
+    const binary = try rpmzPath();
     defer allocator.free(binary);
 
     const ordinary_version = try runCli(
@@ -1427,7 +1427,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         ordinary_version.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) == null);
 
     const config_value_replay = try runCli(
@@ -1440,7 +1440,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         config_value_replay.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) == null);
 
     const inline_config_value_replay = try runCli(
@@ -1456,7 +1456,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         inline_config_value_replay.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) == null);
 
     const short_config_value_replay = try runCli(
@@ -1472,7 +1472,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         short_config_value_replay.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) == null);
 
     const attached_short_config_value_replay = try runCli(
@@ -1488,7 +1488,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         attached_short_config_value_replay.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) == null);
 
     try expectUsage(binary, &.{"replay"});
@@ -1602,7 +1602,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         option_like_installroot_value.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) == null);
     try expectUsage(binary, &.{
         "replay",
@@ -1668,7 +1668,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
 
     try expectJsonUsageArgv0(
         binary,
-        "tdnfj",
+        "rpmzj",
         &.{"replay"},
         "missing_bundle",
     );
@@ -1701,7 +1701,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         help.stderr,
-        "Usage: tdnf replay",
+        "Usage: rpmz replay",
     ) != null);
 }
 
@@ -1710,7 +1710,7 @@ test "replay CLI fails without stderr before reserving canonical stdout" {
     defer fixture.deinit();
     const bundle = try fixture.exportBundle("closed-stderr");
     const root = try fixture.createDir("closed-stderr-root");
-    const binary = try tdnfPath();
+    const binary = try rpmzPath();
     defer allocator.free(binary);
 
     const result = try runCliClosedStderr(binary, &.{
@@ -1756,7 +1756,7 @@ test "replay CLI isolates canonical stdout from scriptlet descendants" {
         },
     });
 
-    const binary = try tdnfPath();
+    const binary = try rpmzPath();
     defer allocator.free(binary);
     const started = std.Io.Clock.awake.now(io);
     const result = try runCli(binary, &.{

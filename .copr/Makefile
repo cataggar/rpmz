@@ -3,7 +3,7 @@ THIS_DIR := $(dir $(abspath $(firstword $(MAKEFILE_LIST))))
 project_dir := $(abspath $(THIS_DIR)/..)
 
 outdir ?= $(project_dir)
-name := tdnf
+name := rpmz
 spec_file := $(project_dir)/$(name).spec
 version := $(shell cat $(project_dir)/VERSION)
 tarball := $(name)-$(version).tar.gz

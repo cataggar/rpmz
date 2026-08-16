@@ -270,7 +270,7 @@ def audit_contract(
 
     for spelling in option_spellings(options_source):
         require(document, f"`{spelling}`", f"CLI option spelling {spelling}")
-    require(document, "`tdnfj`", "tdnfj JSON alias")
+    require(document, "`rpmzj`", "rpmzj JSON alias")
 
     for status in range(5):
         require(document, f"| `{status}` |", f"exit status {status}")

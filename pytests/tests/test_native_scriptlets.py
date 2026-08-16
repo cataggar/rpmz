@@ -8,8 +8,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO_ROOT / 'out'
 TEST_ROOT = OUT_DIR / 'native-scriptlet-tests'
-SCRIPTLET_TOOL = OUT_DIR / 'libexec' / 'tdnf' / 'tdnf-rpm-scriptlet'
-WRITE_TOOL = OUT_DIR / 'libexec' / 'tdnf' / 'tdnf-rpmdb-write'
+SCRIPTLET_TOOL = OUT_DIR / 'libexec' / 'rpmz' / 'rpmz-rpm-scriptlet'
+WRITE_TOOL = OUT_DIR / 'libexec' / 'rpmz' / 'rpmz-rpmdb-write'
 
 pytestmark = pytest.mark.skipif(
     not SCRIPTLET_TOOL.exists() or

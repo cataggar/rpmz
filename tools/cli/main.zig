@@ -5,11 +5,11 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const tdnf = @import("tdnf");
+const rpmz = @import("rpmz");
 const jsondump = @import("jsondump_abi");
-const common = @import("tdnf_common");
-const client = @import("tdnf_client");
-const cli = @import("tdnf_cli");
+const common = @import("rpmz_common");
+const client = @import("rpmz_client");
+const cli = @import("rpmz_cli");
 const replay_options = @import("replay_options.zig");
 const abi = @import("tdnf_internal_abi");
 const c = @cImport({
@@ -31,9 +31,9 @@ const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
 
 const replay_usage =
-    \\Usage: tdnf replay --installroot <absolute-path> --rpmdb-path <absolute-path> --forcearch <arch> <bundle-directory>
+    \\Usage: rpmz replay --installroot <absolute-path> --rpmdb-path <absolute-path> --forcearch <arch> <bundle-directory>
     \\
-    \\Replay applies only the exact offline bundle through tdnf.replay.
+    \\Replay applies only the exact offline bundle through rpmz.replay.
     \\All three target options are required exactly once. Paths must already
     \\be canonical absolute paths; the rpmdb path is install-root-relative.
     \\Value options accept --name VALUE, --name=VALUE, -name VALUE, and
@@ -347,7 +347,7 @@ fn optionConsumesNext(arg: []const u8) bool {
 fn jsonOutputRequested(argv: []const [*:0]const u8) bool {
     if (argv.len > 0) {
         const arg0 = std.mem.span(argv[0]);
-        if (arg0.len >= 5 and std.mem.eql(u8, arg0[arg0.len - 5 ..], "tdnfj"))
+        if (arg0.len >= 5 and std.mem.eql(u8, arg0[arg0.len - 5 ..], "rpmzj"))
             return true;
     }
 
@@ -447,7 +447,7 @@ fn replayParseDiagnostic(err: ReplayParseError) ReplayParseDiagnostic {
 fn printReplayUsage(parse_error: ?ReplayParseError) void {
     if (parse_error) |err| {
         const diagnostic = replayParseDiagnostic(err);
-        common.log(LOG_ERR, "tdnf replay: %s\n", .{diagnostic.message});
+        common.log(LOG_ERR, "rpmz replay: %s\n", .{diagnostic.message});
     }
     _ = c.fwrite(replay_usage.ptr, 1, replay_usage.len, c.stderr);
     _ = c.fflush(c.stderr);
@@ -541,12 +541,12 @@ fn runReplay(invocation: ReplayArgs) u8 {
     defer io_state.deinit();
 
     var stdout_guard = ReplayStdoutGuard.begin() catch {
-        common.log(LOG_ERR, "tdnf replay: cannot reserve machine-output channel\n", .{});
+        common.log(LOG_ERR, "rpmz replay: cannot reserve machine-output channel\n", .{});
         return replay_exit.internal;
     };
     defer _ = stdout_guard.restore();
 
-    const result = tdnf.replay.run(allocator, io_state.io(), .{
+    const result = rpmz.replay.run(allocator, io_state.io(), .{
         .bundle_directory = invocation.bundle_directory,
         .target = .{
             .install_root = invocation.install_root,
@@ -555,18 +555,18 @@ fn runReplay(invocation: ReplayArgs) u8 {
         },
     }) catch {
         _ = stdout_guard.restore();
-        common.log(LOG_ERR, "tdnf replay: out of memory\n", .{});
+        common.log(LOG_ERR, "rpmz replay: out of memory\n", .{});
         return replay_exit.internal;
     };
     defer result.deinit();
 
     if (!stdout_guard.restore()) {
-        common.log(LOG_ERR, "tdnf replay: cannot restore machine-output channel\n", .{});
+        common.log(LOG_ERR, "rpmz replay: cannot restore machine-output channel\n", .{});
         return replay_exit.internal;
     }
 
     const canonical = result.canonicalJsonAlloc(allocator) catch {
-        common.log(LOG_ERR, "tdnf replay: out of memory rendering result\n", .{});
+        common.log(LOG_ERR, "rpmz replay: out of memory rendering result\n", .{});
         return replay_exit.internal;
     };
     defer allocator.free(canonical);
@@ -825,7 +825,7 @@ fn TDNFCliPlanCommand(
 
     // Everything that decides what the plan says -- verb mapping, capture
     // lifecycle, problem-plan policy, canonical rendering -- belongs to
-    // libtdnf. The command drops its own `plan` verb and prints the bytes.
+    // librpmz. The command drops its own `plan` verb and prints the bytes.
     var pszJson: [*c]u8 = null;
     const dwError = abi.TDNFTransactionPlanResolveCanonicalJson(
         handle,

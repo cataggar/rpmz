@@ -1,6 +1,6 @@
 //! The single native resolve-only service.
 //!
-//! Every resolve in tdnf funnels through `resolve` below: it owns operation
+//! Every resolve in rpmz funnels through `resolve` below: it owns operation
 //! validation and normalization, request-trace setup, repository refresh,
 //! command-line rpm staging, solver job preparation, the native solve, the
 //! download-cache policy check, and transaction-plan capture/publication.
@@ -11,9 +11,9 @@
 //! canonical plan produced by either caller is identical.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const transaction_plan_abi = @import("transaction_plan_capture_abi");
 const api = @import("api.zig");
 
@@ -304,9 +304,9 @@ fn planEnabled(handle: *Tdnf) bool {
 /// Drops any plan the failed resolve left behind, keeping a structured problem
 /// plan when the solver produced one.
 pub fn handleResolveError(handle: ?*Tdnf) void {
-    const tdnf = handle orelse return;
-    if (TDNFTransactionPlanStatePublishProblem(tdnf.pTransactionPlanState) == 0) {
-        TDNFTransactionPlanStateClear(tdnf.pTransactionPlanState);
+    const rpmz = handle orelse return;
+    if (TDNFTransactionPlanStatePublishProblem(rpmz.pTransactionPlanState) == 0) {
+        TDNFTransactionPlanStateClear(rpmz.pTransactionPlanState);
     }
 }
 

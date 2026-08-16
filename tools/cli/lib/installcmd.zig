@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const jsondump = @import("jsondump_abi");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");
@@ -307,7 +307,7 @@ pub export fn TDNFCliAskForAction(
         }
 
         if (cmd_args.nDownloadOnly != 0) {
-            common.log(LOG_INFO, "tdnf will only download packages needed for the transaction\n", .{});
+            common.log(LOG_INFO, "rpmz will only download packages needed for the transaction\n", .{});
         }
     }
 

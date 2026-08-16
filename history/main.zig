@@ -39,7 +39,7 @@ const default_db_file = history_config.db_dir ++ "/history.db";
 
 fn usage(cmdname: [*:0]const u8) void {
     _ = printf(
-        "tdnf history db utility\n\n" ++
+        "rpmz history db utility\n\n" ++
             "Usage:\n\n" ++
             "%s [-f dbfile] [-r rootdir] init|update\n" ++
             "%s [-f dbfile] mark install|remove [pkg[...]]\n" ++

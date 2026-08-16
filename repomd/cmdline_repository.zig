@@ -1,6 +1,6 @@
 //! Builds a repository model from `.rpm` files named on the command line.
 //!
-//! libsolv models `tdnf install ./pkg.rpm` by adding the file's header to a
+//! libsolv models `rpmz install ./pkg.rpm` by adding the file's header to a
 //! pseudo-repository (`@cmdline`) and issuing a normal install job against the
 //! resulting solvable. The native solver has no such special case: it just
 //! needs a repository whose packages come from those files rather than from a

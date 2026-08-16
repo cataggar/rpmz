@@ -303,7 +303,7 @@ pub fn prepareWithOptions(
     const protected = try allocator.alloc(bool, package_count);
     defer allocator.free(protected);
     try markProtectedPackages(base, options.protected_names, protected);
-    // libsolv only hears about protected packages when tdnf runs with erasing
+    // libsolv only hears about protected packages when rpmz runs with erasing
     // allowed: `TDNFSolv` calls `TDNFSolvAddProtectPkgs` from inside
     // `if (nAllowErasing)` (`client/goal.c`), and that call is what turns
     // protected names into `SOLVER_USERINSTALLED` jobs and every other
@@ -8679,7 +8679,7 @@ test "protected automatic dependencies remain clean-deps roots" {
         testArchitecture(),
     );
     defer base.deinit();
-    // libsolv only learns which packages are protected when tdnf allows
+    // libsolv only learns which packages are protected when rpmz allows
     // erasing (`TDNFSolvAddProtectPkgs` runs inside `if (nAllowErasing)`), so
     // without it the clean-deps walk is free to schedule the protected
     // package. `protectedRemoval` is what rejects the finished transaction.

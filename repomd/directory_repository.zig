@@ -3,7 +3,7 @@
 //! `--repofromdir=<id>,<path>` declares a repository that has no downloaded
 //! metadata: the packages are simply the `.rpm` files living under `<path>`.
 //! libsolv loads it by walking the directory and adding each file's header to
-//! the repository (`readRpmsFromDir` in `solv/tdnfrepo.c`), which is the same
+//! the repository (`readRpmsFromDir` in `solv/rpmzrepo.c`), which is the same
 //! thing `cmdline_repository.loadModel` does for a list of paths. This module
 //! is therefore only the directory walk: collect the paths, then hand them to
 //! the existing loader.

@@ -55,7 +55,7 @@ def test_vars(utils):
     baseurls = "http://localhost:$port/$dir"
     utils.create_repoconf(filename, baseurls, reponame)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'makecache'],
                     cwd=workdir)
@@ -63,7 +63,7 @@ def test_vars(utils):
 
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-y', '--nogpgcheck',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'install', pkgname],

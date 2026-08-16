@@ -20,15 +20,15 @@ def teardown_test(utils):
 
 
 def test_provides_no_arg(utils):
-    ret = utils.run(['tdnf', 'provides'])
+    ret = utils.run(['rpmz', 'provides'])
     assert ret['retval'] == 907
 
 
 def test_provides_valid_pkg_name(utils):
-    ret = utils.run(['tdnf', 'provides', 'tdnf'])
+    ret = utils.run(['rpmz', 'provides', 'tdnf'])
     assert ret['retval'] == 0
 
 
 def test_provides_invalid_pkg_name(utils):
-    ret = utils.run(['tdnf', 'provides', 'invalid_pkg_name'])
+    ret = utils.run(['rpmz', 'provides', 'invalid_pkg_name'])
     assert ret['stderr'][0] == 'No data available'

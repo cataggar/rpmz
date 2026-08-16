@@ -19,10 +19,10 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 OUT_DIR = os.path.join(REPO_ROOT, 'out')
-TDNF_BIN = os.path.join(OUT_DIR, 'bin', 'tdnf')
-TDNF_CONF = os.path.join(OUT_DIR, 'repo', 'tdnf.conf')
+RPMZ_BIN = os.path.join(OUT_DIR, 'bin', 'rpmz')
+RPMZ_CONF = os.path.join(OUT_DIR, 'repo', 'rpmz.conf')
 RPMDB_WRITE = os.path.join(
-    OUT_DIR, 'libexec', 'tdnf', 'tdnf-rpmdb-write')
+    OUT_DIR, 'libexec', 'rpmz', 'rpmz-rpmdb-write')
 CASE_ROOT = os.path.join(OUT_DIR, 'phase7-tsflags')
 
 PKG_ONE = 'tdnf-test-one'
@@ -57,8 +57,8 @@ def _unshare_wrapper():
 
 @pytest.fixture(scope='module', autouse=True)
 def isolated_environment(utils):
-    if not os.path.exists(TDNF_BIN):
-        pytest.skip('tdnf binary is not built')
+    if not os.path.exists(RPMZ_BIN):
+        pytest.skip('rpmz binary is not built')
     if not shutil.which('unshare'):
         pytest.skip('unshare is unavailable')
     probe = subprocess.run(
@@ -109,11 +109,11 @@ def _provision_shell(root):
                 shutil.copy2(token, library, follow_symlinks=True)
 
 
-def _run_tdnf(root, args, check=True):
+def _run_rpmz(root, args, check=True):
     result = subprocess.run(
         _unshare_wrapper() + [
-            TDNF_BIN,
-            '-c', TDNF_CONF,
+            RPMZ_BIN,
+            '-c', RPMZ_CONF,
             '-y',
             '--installroot', root,
             '--releasever=4.0',
@@ -127,7 +127,7 @@ def _run_tdnf(root, args, check=True):
     )
     if check:
         assert result.returncode == 0, (
-            'tdnf {} failed rc={}\nstdout:\n{}\nstderr:\n{}'
+            'rpmz {} failed rc={}\nstdout:\n{}\nstderr:\n{}'
             .format(' '.join(args), result.returncode,
                     result.stdout, result.stderr)
         )
@@ -286,7 +286,7 @@ def _native_rpmdb_install(root, rpm_path):
 
 
 def _seed_shell(root):
-    _run_tdnf(root, ['install', 'tdnf-native-shell-provider'])
+    _run_rpmz(root, ['install', 'tdnf-native-shell-provider'])
 
 
 @pytest.mark.parametrize(
@@ -301,7 +301,7 @@ def test_fresh_install_database_files_and_scripts(
         flags, db_installed, file_installed, scripts_run):
     root = _fresh_root('fresh-' + flags.replace(' ', '-'))
     before = _rpmdb_snapshot(root)
-    result = _run_tdnf(
+    result = _run_rpmz(
         root,
         ['--setopt=tsflags=' + flags, 'install', PKG_VERBOSE],
     )
@@ -319,7 +319,7 @@ def test_fresh_install_database_files_and_scripts(
 def test_justdb_and_noscripts_suppress_failing_pre():
     for flag in ('justdb', 'noscripts'):
         root = _fresh_root('bad-pre-' + flag)
-        result = _run_tdnf(
+        result = _run_rpmz(
             root,
             ['--setopt=tsflags=' + flag, 'install', PKG_BAD_PRE],
         )
@@ -333,7 +333,7 @@ def test_dry_run_validates_without_database_file_or_script_side_effects():
     tracked = [VERBOSE_FILE, '/usr/share/tdnf-native/shell-provider']
     files_before = _snapshot_paths(root, tracked)
 
-    result = _run_tdnf(root, ['--testonly', 'install', PKG_VERBOSE])
+    result = _run_rpmz(root, ['--testonly', 'install', PKG_VERBOSE])
 
     assert _rpmdb_snapshot(root) == db_before
     assert _snapshot_paths(root, tracked) == files_before
@@ -353,7 +353,7 @@ def test_dry_run_validates_without_database_file_or_script_side_effects():
 def test_install_phase_flags_suppress_only_requested_phase(flag, suppressed):
     root = _fresh_root('install-phase-' + flag)
     _seed_shell(root)
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=' + flag, 'install', PKG_SCRIPTS],
     )
@@ -375,9 +375,9 @@ def test_install_phase_flags_suppress_only_requested_phase(flag, suppressed):
 def test_erase_phase_flags_suppress_only_requested_phase(flag, suppressed):
     root = _fresh_root('erase-phase-' + flag)
     _seed_shell(root)
-    _run_tdnf(root, ['install', PKG_SCRIPTS])
+    _run_rpmz(root, ['install', PKG_SCRIPTS])
     _clear_file(root, SCRIPT_LOG)
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=' + flag, 'erase', PKG_SCRIPTS],
     )
@@ -391,12 +391,12 @@ def test_erase_phase_flags_suppress_only_requested_phase(flag, suppressed):
 def test_noscripts_suppresses_package_and_transaction_phases():
     root = _fresh_root('noscripts-all-phases')
     _seed_shell(root)
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=noscripts', 'install', PKG_SCRIPTS],
     )
     assert _read_lines(root, SCRIPT_LOG) == []
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=noscripts', 'erase', PKG_SCRIPTS],
     )
@@ -404,7 +404,7 @@ def test_noscripts_suppresses_package_and_transaction_phases():
 
 
 def _seed_trigger_owner(root):
-    _run_tdnf(root, ['install', PKG_TRIGGER_OWNER])
+    _run_rpmz(root, ['install', PKG_TRIGGER_OWNER])
     _clear_file(root, TRIGGER_LOG)
 
 
@@ -422,7 +422,7 @@ def test_triggerin_flags(flag, expected):
     args = ['install', PKG_TRIGGER_TARGET]
     if flag:
         args.insert(0, '--setopt=tsflags=' + flag)
-    _run_tdnf(root, args)
+    _run_rpmz(root, args)
     assert _read_lines(root, TRIGGER_LOG) == expected
 
 
@@ -438,12 +438,12 @@ def test_triggerin_flags(flag, expected):
 def test_trigger_erase_phase_flags(flag, expected_phases):
     root = _fresh_root('trigger-erase-' + (flag or 'normal'))
     _seed_trigger_owner(root)
-    _run_tdnf(root, ['install', PKG_TRIGGER_TARGET])
+    _run_rpmz(root, ['install', PKG_TRIGGER_TARGET])
     _clear_file(root, TRIGGER_LOG)
     args = ['erase', PKG_TRIGGER_TARGET]
     if flag:
         args.insert(0, '--setopt=tsflags=' + flag)
-    _run_tdnf(root, args)
+    _run_rpmz(root, args)
     phases = {line.split(':', 1)[0] for line in _read_lines(root, TRIGGER_LOG)}
     assert phases == expected_phases
 
@@ -452,7 +452,7 @@ def test_nodb_triggerin_uses_overlay_for_absent_target_row():
     root = _fresh_root('nodb-trigger-transaction-view')
     _seed_trigger_owner(root)
     db_before = _rpmdb_snapshot(root)
-    _run_tdnf(
+    _run_rpmz(
         root,
         [
             '--setopt=tsflags=nodb',
@@ -468,7 +468,7 @@ def test_nodb_triggerin_uses_overlay_for_absent_target_row():
 def test_nodb_new_trigger_owner_is_not_discovered_later():
     root = _fresh_root('nodb-trigger-owner-visibility')
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         [
             '--setopt=tsflags=nodb',
@@ -484,11 +484,11 @@ def test_nodb_new_trigger_owner_is_not_discovered_later():
 def test_nodb_erase_trigger_counts_ignore_unchanged_physical_row():
     root = _fresh_root('nodb-trigger-erase-view')
     _seed_trigger_owner(root)
-    _run_tdnf(root, ['install', PKG_TRIGGER_TARGET])
+    _run_rpmz(root, ['install', PKG_TRIGGER_TARGET])
     _clear_file(root, TRIGGER_LOG)
     db_before = _rpmdb_snapshot(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=nodb', 'erase', PKG_TRIGGER_TARGET],
     )
@@ -511,7 +511,7 @@ def test_nodb_erase_trigger_counts_ignore_unchanged_physical_row():
 )
 def test_upgrade_flag_matrix(flags, db_version, new_file, old_file):
     root = _fresh_root('upgrade-' + flags.replace(' ', '-'))
-    _run_tdnf(root, ['install', PKG_ORPHANS + '-1.0'])
+    _run_rpmz(root, ['install', PKG_ORPHANS + '-1.0'])
     db_before = _rpmdb_snapshot(root)
     tracked = [
         ORPHAN_ROOT + '/shared',
@@ -520,7 +520,7 @@ def test_upgrade_flag_matrix(flags, db_version, new_file, old_file):
     ]
     files_before = _snapshot_paths(root, tracked)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=' + flags, 'upgrade', PKG_ORPHANS],
     )
@@ -540,10 +540,10 @@ def test_upgrade_flag_matrix(flags, db_version, new_file, old_file):
 
 def test_nodb_downgrade_preserves_new_install_during_old_erase():
     root = _fresh_root('nodb-downgrade-order')
-    _run_tdnf(root, ['install', PKG_ORPHANS])
+    _run_rpmz(root, ['install', PKG_ORPHANS])
     db_before = _rpmdb_snapshot(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=nodb', 'downgrade', PKG_ORPHANS],
     )
@@ -568,11 +568,11 @@ def test_nodb_downgrade_preserves_new_install_during_old_erase():
 )
 def test_reinstall_flag_matrix(flags, db_unchanged, file_restored):
     root = _fresh_root('reinstall-' + flags.replace(' ', '-'))
-    _run_tdnf(root, ['install', PKG_ONE])
+    _run_rpmz(root, ['install', PKG_ONE])
     os.remove(_root_path(root, ONE_FILE))
     db_before = _rpmdb_snapshot(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=' + flags, 'reinstall', PKG_ONE],
     )
@@ -586,11 +586,11 @@ def test_reinstall_flag_matrix(flags, db_unchanged, file_restored):
 def test_nodb_reinstall_script_counts_use_transaction_view():
     root = _fresh_root('nodb-reinstall-script-counts')
     _seed_shell(root)
-    _run_tdnf(root, ['install', PKG_SCRIPTS])
+    _run_rpmz(root, ['install', PKG_SCRIPTS])
     _clear_file(root, SCRIPT_LOG)
     db_before = _rpmdb_snapshot(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=nodb', 'reinstall', PKG_SCRIPTS],
     )
@@ -616,10 +616,10 @@ def test_nodb_reinstall_script_counts_use_transaction_view():
 )
 def test_erase_flag_matrix(flags, db_installed, file_installed):
     root = _fresh_root('erase-' + flags.replace(' ', '-'))
-    _run_tdnf(root, ['install', PKG_ONE])
+    _run_rpmz(root, ['install', PKG_ONE])
     db_before = _rpmdb_snapshot(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=' + flags, 'erase', PKG_ONE],
     )
@@ -645,16 +645,16 @@ def test_nodb_erase_and_upgrade_do_not_open_rpmdb_writer(operation, flags):
         'readonly-rpmdb-{}-{}'.format(operation, flags.replace(' ', '-'))
     )
     if operation == 'erase':
-        _run_tdnf(root, ['install', PKG_ONE])
+        _run_rpmz(root, ['install', PKG_ONE])
         transaction = ['erase', PKG_ONE]
     else:
-        _run_tdnf(root, ['install', PKG_ORPHANS + '-1.0'])
+        _run_rpmz(root, ['install', PKG_ORPHANS + '-1.0'])
         transaction = ['upgrade', PKG_ORPHANS]
 
     modes = _make_delete_journal_rpmdb_readonly(root)
     before = _rpmdb_bytes_and_sidecars(root)
     try:
-        result = _run_tdnf(
+        result = _run_rpmz(
             root,
             ['--setopt=tsflags=' + flags] + transaction,
             check=False,
@@ -677,7 +677,7 @@ def test_nodb_shared_file_ownership_uses_transaction_view():
     )
     db_before = _rpmdb_snapshot(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=nodb', 'erase', PKG_SHARED_A],
     )
@@ -701,7 +701,7 @@ def test_nodb_multi_erase_removes_path_after_last_overlay_owner():
     )
     db_before = _rpmdb_snapshot(root)
 
-    _run_tdnf(
+    _run_rpmz(
         root,
         ['--setopt=tsflags=nodb', 'erase', PKG_SHARED_A, PKG_SHARED_B],
     )
@@ -718,12 +718,12 @@ def test_nodb_multi_erase_removes_path_after_last_overlay_owner():
 def test_nodb_installonly_instances_share_one_ordered_overlay():
     root = _fresh_root('nodb-installonly')
     common = ['--setopt=installonlypkgs=tdnf-multi']
-    _run_tdnf(
+    _run_rpmz(
         root,
         common + ['install', 'tdnf-multi=1.0.1-4'],
     )
     db_before = _rpmdb_snapshot(root)
-    _run_tdnf(
+    _run_rpmz(
         root,
         common + [
             '--setopt=tsflags=nodb',
@@ -739,7 +739,7 @@ def test_nodb_installonly_instances_share_one_ordered_overlay():
 
 def test_upgrade_multiplicity_prevalidation_has_no_side_effects():
     root = _fresh_root('prevalidate-multiplicity')
-    _run_tdnf(root, ['install', PKG_ORPHANS + '-1.0'])
+    _run_rpmz(root, ['install', PKG_ORPHANS + '-1.0'])
     _native_rpmdb_install(root, _repo_rpm(PKG_ORPHANS, '1.0-1'))
     tracked = [
         ORPHAN_ROOT + '/shared',
@@ -749,7 +749,7 @@ def test_upgrade_multiplicity_prevalidation_has_no_side_effects():
     db_before = _rpmdb_snapshot(root)
     files_before = _snapshot_paths(root, tracked)
 
-    result = _run_tdnf(root, ['upgrade', PKG_ORPHANS], check=False)
+    result = _run_rpmz(root, ['upgrade', PKG_ORPHANS], check=False)
 
     assert result.returncode != 0
     assert 'installed tdnf-test-upgrade-orphans instances' in (
@@ -763,7 +763,7 @@ def test_upgrade_multiplicity_prevalidation_has_no_side_effects():
 def test_pretrans_problem_guidance_precedes_all_side_effects():
     root = _fresh_root('pretrans-guidance')
     db_before = _rpmdb_snapshot(root)
-    result = _run_tdnf(
+    result = _run_rpmz(
         root,
         ['install', PKG_PRETRANS, PKG_PRETRANS_PROVIDER],
         check=False,
@@ -783,7 +783,7 @@ def test_native_file_conflict_guidance_precedes_all_side_effects():
     root = _fresh_root('file-conflict-guidance')
     db_before = _rpmdb_snapshot(root)
     conflict_path = '/usr/lib/conflict/conflicting-file'
-    result = _run_tdnf(
+    result = _run_rpmz(
         root,
         ['install', 'tdnf-conflict-file0', 'tdnf-conflict-file1'],
         check=False,
@@ -800,7 +800,7 @@ def test_native_file_conflict_guidance_precedes_all_side_effects():
 
 def test_quiet_suppresses_native_progress():
     root = _fresh_root('quiet-progress')
-    result = _run_tdnf(root, ['--quiet', 'install', PKG_ONE])
+    result = _run_rpmz(root, ['--quiet', 'install', PKG_ONE])
     output = result.stdout + result.stderr
     assert 'Running transaction (rpmzig native executor)' not in output
     assert 'Installing:' not in output
@@ -808,7 +808,7 @@ def test_quiet_suppresses_native_progress():
 
 def test_json_keeps_script_output_off_stdout():
     root = _fresh_root('json-script-output')
-    result = _run_tdnf(root, ['-j', 'install', PKG_VERBOSE])
+    result = _run_rpmz(root, ['-j', 'install', PKG_VERBOSE])
     payload = json.loads(result.stdout)
     assert 'Install' in payload
     assert 'echo from pre' not in result.stdout
@@ -819,11 +819,11 @@ def test_json_keeps_script_output_off_stdout():
 
 def test_script_failure_severity():
     root = _fresh_root('script-failure-severity')
-    critical = _run_tdnf(root, ['install', PKG_BAD_PRE], check=False)
+    critical = _run_rpmz(root, ['install', PKG_BAD_PRE], check=False)
     assert critical.returncode != 0
     assert not _installed(root, PKG_BAD_PRE)
 
-    warning = _run_tdnf(root, ['install', PKG_BAD_POST])
+    warning = _run_rpmz(root, ['install', PKG_BAD_POST])
     assert warning.returncode == 0
     assert _installed(root, PKG_BAD_POST)
     assert os.path.exists(_root_path(root, '/usr/share/tdnf-phase7/bad-post'))
@@ -847,7 +847,7 @@ def test_script_failure_severity():
 )
 def test_recognized_compatibility_noop_flags_are_explicit(flag):
     root = _fresh_root('noop-' + flag)
-    result = _run_tdnf(
+    result = _run_rpmz(
         root,
         ['--setopt=tsflags=' + flag, 'list', PKG_ONE],
     )
@@ -858,7 +858,7 @@ def test_recognized_compatibility_noop_flags_are_explicit(flag):
 
 def test_rpmverbosity_is_documented_compatibility_noop():
     result = subprocess.run(
-        [TDNF_BIN, '--help'],
+        [RPMZ_BIN, '--help'],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

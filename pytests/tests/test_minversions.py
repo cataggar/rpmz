@@ -46,7 +46,7 @@ def test_minversions_conf(utils):
     pkgname = utils.config["mulversion_pkgname"]
     set_minversions_conf(utils, "{}={}".format(pkgname, utils.config["mulversion_higher"]))
     utils.install_package(pkgname)
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck', 'downgrade', pkgname])
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck', 'downgrade', pkgname])
     assert ret['retval'] == 1301
     assert 'disabled' in "\n".join(ret['stderr'])
 
@@ -55,7 +55,7 @@ def test_minversions_conf_multiple(utils):
     pkgname = utils.config["mulversion_pkgname"]
     set_minversions_conf(utils, "bogus=1.2.3 {}={}".format(pkgname, utils.config["mulversion_higher"]))
     utils.install_package(pkgname)
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck', 'downgrade', pkgname])
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck', 'downgrade', pkgname])
     assert ret['retval'] == 1301
     assert 'disabled' in "\n".join(ret['stderr'])
 
@@ -64,7 +64,7 @@ def test_minversions_file(utils):
     pkgname = utils.config["mulversion_pkgname"]
     set_minversions_file(utils, "{}={}".format(pkgname, utils.config["mulversion_higher"]))
     utils.install_package(pkgname)
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck', 'downgrade', pkgname])
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck', 'downgrade', pkgname])
     assert ret['retval'] == 1301
     assert 'disabled' in "\n".join(ret['stderr'])
 
@@ -73,5 +73,5 @@ def test_minversions_file_multiple(utils):
     pkgname = utils.config["mulversion_pkgname"]
     set_minversions_file(utils, "bogus=1.2.3\n{}={}".format(pkgname, utils.config["mulversion_higher"]))
     utils.install_package(pkgname)
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck', 'downgrade', pkgname])
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck', 'downgrade', pkgname])
     assert ret['retval'] == 1301

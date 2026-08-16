@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const jsondump = @import("jsondump_abi");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const abi = @import("tdnf_internal_abi");
 const c = @cImport({
     @cInclude("errno.h");

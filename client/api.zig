@@ -5,9 +5,9 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const abi = @import("client_abi");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const options = @import("client_config_options");
 const transaction_plan_abi = @import("transaction_plan_capture_abi");
 const transaction_lock = @import("transaction_lock");
@@ -52,7 +52,7 @@ const FTW_DEPTH: c_int = 8;
 
 const command_line_repo_name: [*:0]const u8 = "@cmdline";
 const system_repo_name: [*:0]const u8 = "@System";
-const config_file: [*:0]const u8 = "/etc/tdnf/tdnf.conf";
+const config_file: [*:0]const u8 = "/etc/rpmz/rpmz.conf";
 const config_group: [*:0]const u8 = "main";
 
 export var gEuid: std.posix.uid_t = 0;
@@ -127,13 +127,13 @@ fn bindTransactionTarget(handle: *Tdnf) u32 {
     handle.pszOriginalInstallRoot = args.pszInstallRoot;
     handle.pRpmConfig = @ptrCast(guard.config());
     args.pszInstallRoot = pinned_root.ptr;
-    tdnf_rpm_config_destroy(original_config);
+    rpmz_rpm_config_destroy(original_config);
     return 0;
 }
 
 fn releaseTransactionTarget(handle: *Tdnf) void {
     const raw_guard = handle.pTransactionTargetLock orelse {
-        tdnf_rpm_config_destroy(handle.pRpmConfig);
+        rpmz_rpm_config_destroy(handle.pRpmConfig);
         handle.pRpmConfig = null;
         return;
     };
@@ -227,18 +227,18 @@ extern fn TDNFCloneRepo(
 extern fn TDNFFreeReposInternal(repos: ?*RepoData) callconv(.c) void;
 extern fn TDNFFreeRepos(repos: ?*RepoData) callconv(.c) void;
 
-extern fn tdnf_rpm_config_create(
+extern fn rpmz_rpm_config_create(
     root: ?[*:0]const u8,
 ) callconv(.c) ?*anyopaque;
-extern fn tdnf_rpm_config_destroy(config: ?*anyopaque) callconv(.c) void;
-extern fn tdnf_rpm_config_apply_define(
+extern fn rpmz_rpm_config_destroy(config: ?*anyopaque) callconv(.c) void;
+extern fn rpmz_rpm_config_apply_define(
     config: ?*anyopaque,
     value: ?[*:0]const u8,
 ) callconv(.c) c_int;
-extern fn tdnf_rpm_config_finalize_rpmdb_pin(
+extern fn rpmz_rpm_config_finalize_rpmdb_pin(
     config: ?*anyopaque,
 ) callconv(.c) c_int;
-extern fn tdnf_rpm_config_last_error() callconv(.c) [*:0]const u8;
+extern fn rpmz_rpm_config_last_error() callconv(.c) [*:0]const u8;
 
 extern fn TDNFPackageContextCreate(
     cache_dir: ?[*:0]const u8,
@@ -446,7 +446,7 @@ extern fn TDNFGPGCheckPackageEx(
     rpm_file: *?*RpmFile,
     policy_rejected: *c_int,
 ) callconv(.c) u32;
-extern fn tdnf_rpm_file_close(file: ?*RpmFile) callconv(.c) void;
+extern fn rpmz_rpm_file_close(file: ?*RpmFile) callconv(.c) void;
 
 extern fn TDNFUtilsMakeDir(path: ?[*:0]const u8) callconv(.c) u32;
 extern fn TDNFIsFileOrSymlink(
@@ -962,9 +962,9 @@ pub export fn TDNFOpenHandle(
     defer freeString(&rooted_conf_path);
     var use_pinned_conf = false;
 
-    handle.pRpmConfig = tdnf_rpm_config_create(args.pszInstallRoot);
+    handle.pRpmConfig = rpmz_rpm_config_create(args.pszInstallRoot);
     if (handle.pRpmConfig == null) {
-        common.log(LOG_ERR, "Failed to initialize native rpm configuration: %s\n", .{tdnf_rpm_config_last_error()});
+        common.log(LOG_ERR, "Failed to initialize native rpm configuration: %s\n", .{rpmz_rpm_config_last_error()});
         result = errors.ERROR_TDNF_RPMRC_FAIL;
     }
     if (result == 0 and commandRequiresTargetLock(args))
@@ -1057,19 +1057,19 @@ fn applyRpmDefine(handle_opt: ?*Tdnf, value: ?[*:0]const u8) u32 {
     const handle = handle_opt orelse return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (handle.pRpmConfig == null or isNullOrEmpty(value))
         return errors.ERROR_TDNF_INVALID_PARAMETER;
-    if (tdnf_rpm_config_apply_define(handle.pRpmConfig, value) != 0) {
-        common.log(LOG_ERR, "Invalid rpmdefine '%s': %s\n", .{ value.?, tdnf_rpm_config_last_error() });
+    if (rpmz_rpm_config_apply_define(handle.pRpmConfig, value) != 0) {
+        common.log(LOG_ERR, "Invalid rpmdefine '%s': %s\n", .{ value.?, rpmz_rpm_config_last_error() });
         return errors.ERROR_TDNF_RPMRC_FAIL;
     }
     return 0;
 }
 
 fn finalizeTransactionRpmDb(handle: *Tdnf) u32 {
-    if (tdnf_rpm_config_finalize_rpmdb_pin(handle.pRpmConfig) != 0) {
+    if (rpmz_rpm_config_finalize_rpmdb_pin(handle.pRpmConfig) != 0) {
         common.log(
             LOG_ERR,
             "Failed to pin native rpm database: %s\n",
-            .{tdnf_rpm_config_last_error()},
+            .{rpmz_rpm_config_last_error()},
         );
         return errors.ERROR_TDNF_RPMRC_FAIL;
     }
@@ -1237,7 +1237,7 @@ fn repoSync(
     var url: ?[*:0]u8 = null;
     defer freeString(&url);
     var rpm_file: ?*RpmFile = null;
-    defer tdnf_rpm_file_close(rpm_file);
+    defer rpmz_rpm_file_close(rpm_file);
 
     var result = TDNFRefresh(handle);
     if (result == 0)
@@ -1328,7 +1328,7 @@ fn repoSync(
                     &rpm_file,
                     &policy_rejected,
                 );
-                tdnf_rpm_file_close(rpm_file);
+                rpmz_rpm_file_close(rpm_file);
                 rpm_file = null;
                 if (policy_rejected != 0) {
                     common.log(LOG_CRIT, "checking package %s failed: %d, deleting\n", .{ file_path.?, result });
@@ -2441,7 +2441,7 @@ test "normal handle target lock spans the handle lifetime" {
     defer std.testing.allocator.free(root_z);
     var args = CmdArgs{ .pszInstallRoot = root_z.ptr };
     const original_root = args.pszInstallRoot;
-    const config = tdnf_rpm_config_create(root_z.ptr) orelse
+    const config = rpmz_rpm_config_create(root_z.ptr) orelse
         return error.TestUnexpectedResult;
     var handle = Tdnf{
         .pArgs = &args,

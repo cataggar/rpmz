@@ -21,12 +21,12 @@ def teardown_test(utils):
 
 
 def test_erase_no_arg(utils):
-    ret = utils.run(['tdnf', 'erase'])
+    ret = utils.run(['rpmz', 'erase'])
     assert ret['retval'] == 1001
 
 
 def test_erase_invalid_package(utils):
-    ret = utils.run(['tdnf', 'erase', 'invalid_package'])
+    ret = utils.run(['rpmz', 'erase', 'invalid_package'])
     assert ret['retval'] == 1011
 
 
@@ -35,7 +35,7 @@ def test_erase_package_with_version_suffix(utils):
     pkgversion = utils.config["mulversion_lower"]
     utils.install_package(pkgname, pkgversion)
 
-    utils.run(['tdnf', 'erase', '-y', pkgname + '-' + pkgversion])
+    utils.run(['rpmz', 'erase', '-y', pkgname + '-' + pkgversion])
     assert not utils.check_package(pkgname)
 
 
@@ -43,7 +43,7 @@ def test_erase_package_without_version_suffix(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.install_package(pkgname)
 
-    utils.run(['tdnf', 'erase', '-y', pkgname])
+    utils.run(['rpmz', 'erase', '-y', pkgname])
     assert not utils.check_package(pkgname)
 
 
@@ -51,5 +51,5 @@ def test_erase_memcheck(utils):
     pkgname = utils.config["mulversion_pkgname"]
     utils.install_package(pkgname)
 
-    utils.run_memcheck(['tdnf', 'erase', '-y', pkgname])
+    utils.run_memcheck(['rpmz', 'erase', '-y', pkgname])
     assert not utils.check_package(pkgname)

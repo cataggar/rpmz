@@ -17,20 +17,20 @@ def setup_test(utils):
 
 def teardown_test(utils):
     mpkg = utils.config["mulversion_pkgname"]
-    utils.run(f"tdnf erase -y {mpkg}")
+    utils.run(f"rpmz erase -y {mpkg}")
 
 
 def test_downgrade_no_arg(utils):
-    ret = utils.run("tdnf downgrade")
+    ret = utils.run("rpmz downgrade")
     assert ret["retval"] == 1011
 
 
 def test_downgrade_with_test_repo(utils):
     mpkg = utils.config["mulversion_pkgname"]
-    ret = utils.run(f"tdnf install -y {mpkg}")
+    ret = utils.run(f"rpmz install -y {mpkg}")
     assert ret["retval"] == 0
 
-    cmd = f"tdnf downgrade {mpkg}"
+    cmd = f"rpmz downgrade {mpkg}"
     ret = utils.run(cmd)
     # invalid response to y/n prompt
     assert ret["retval"] == 1033
@@ -50,39 +50,39 @@ def test_downgrade_with_test_repo(utils):
 
 def test_downgrade_install(utils):
     mpkg = utils.config["mulversion_pkgname"]
-    ret = utils.run(f"tdnf install -y {mpkg}")
+    ret = utils.run(f"rpmz install -y {mpkg}")
     assert ret["retval"] == 0
 
-    ret = utils.run(f"tdnf downgrade -y {mpkg}")
+    ret = utils.run(f"rpmz downgrade -y {mpkg}")
     assert ret["retval"] == 0
 
 
 def test_downgrade_with_lower_version(utils):
     mpkg = utils.config["mulversion_pkgname"]
     mpkg_lower = utils.config["mulversion_lower"]
-    ret = utils.run(f"tdnf install -y {mpkg}-{mpkg_lower}")
+    ret = utils.run(f"rpmz install -y {mpkg}-{mpkg_lower}")
     assert ret["retval"] == 0
 
-    ret = utils.run(f"tdnf downgrade -y {mpkg}")
+    ret = utils.run(f"rpmz downgrade -y {mpkg}")
     assert ret["retval"] == 0
 
 
 def test_downgrade_with_higher_version(utils):
     mpkg = utils.config["mulversion_pkgname"]
-    ret = utils.run(f"tdnf install -y {mpkg}")
+    ret = utils.run(f"rpmz install -y {mpkg}")
     assert ret["retval"] == 0
 
     mpkg_lower = utils.config["mulversion_lower"]
-    ret = utils.run(f"tdnf downgrade -y {mpkg}-{mpkg_lower}")
+    ret = utils.run(f"rpmz downgrade -y {mpkg}-{mpkg_lower}")
     assert ret["retval"] == 0
 
 
 def test_downgrade_with_invalid_version(utils):
     mpkg = utils.config["mulversion_pkgname"]
-    ret = utils.run(f"tdnf downgrade -y {mpkg}-123.123.123")
+    ret = utils.run(f"rpmz downgrade -y {mpkg}-123.123.123")
     assert ret["retval"] == 1011
 
 
 def test_downgrade_invalid_pkg_name(utils):
-    ret = utils.run("tdnf downgrade -y invalid_pkg_name")
+    ret = utils.run("rpmz downgrade -y invalid_pkg_name")
     assert ret["retval"] == 1011

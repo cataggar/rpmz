@@ -67,7 +67,7 @@ def test_install_package_authed(utils):
     utils.edit_config({'password': PASSWORD}, repo='photon-test-auth')
     utils.edit_config({'username': USERNAME}, repo='photon-test-auth')
 
-    ret = utils.run(['tdnf', 'install', '--repoid=photon-test-auth', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '--repoid=photon-test-auth', '-y', '--nogpgcheck', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)
 
@@ -88,6 +88,6 @@ def test_install_package_authed_vars(utils):
     utils.edit_config({'password': "$pass"}, repo='photon-test-auth')
     utils.edit_config({'username': "$user"}, repo='photon-test-auth')
 
-    ret = utils.run(['tdnf', 'install', '--repoid=photon-test-auth', '-y', '--nogpgcheck', pkgname])
+    ret = utils.run(['rpmz', 'install', '--repoid=photon-test-auth', '-y', '--nogpgcheck', pkgname])
     assert ret['retval'] == 0
     assert utils.check_package(pkgname)

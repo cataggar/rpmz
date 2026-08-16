@@ -379,9 +379,9 @@ fn joinUrl(allocator: Allocator, base: []const u8, href: []const u8) Allocator.E
     return std.fmt.allocPrint(allocator, "{s}/{s}", .{ trimmed, href });
 }
 
-extern fn tdnf_rpm_file_open(path: [*:0]const u8) callconv(.c) ?*anyopaque;
-extern fn tdnf_rpm_file_close(handle: ?*anyopaque) callconv(.c) void;
-extern fn tdnf_rpm_file_verify_signatures_keys(
+extern fn rpmz_rpm_file_open(path: [*:0]const u8) callconv(.c) ?*anyopaque;
+extern fn rpmz_rpm_file_close(handle: ?*anyopaque) callconv(.c) void;
+extern fn rpmz_rpm_file_verify_signatures_keys(
     handle: ?*anyopaque,
     key_blobs: ?[*]const ?*const anyopaque,
     key_lens: ?[*]const usize,
@@ -463,8 +463,8 @@ const Attestor = struct {
         const path = try dirFilePathAlloc(self.allocator, self.io, dir, sub_path);
         defer self.allocator.free(path);
 
-        const handle = tdnf_rpm_file_open(path.ptr) orelse return error.PackageUnreadable;
-        defer tdnf_rpm_file_close(handle);
+        const handle = rpmz_rpm_file_open(path.ptr) orelse return error.PackageUnreadable;
+        defer rpmz_rpm_file_close(handle);
 
         var blobs = try self.allocator.alloc(?*const anyopaque, self.keys.len);
         defer self.allocator.free(blobs);
@@ -479,7 +479,7 @@ const Attestor = struct {
         var signer_index: isize = -1;
         var fingerprint_bytes: [32]u8 = undefined;
         var fingerprint_len: usize = 0;
-        if (tdnf_rpm_file_verify_signatures_keys(
+        if (rpmz_rpm_file_verify_signatures_keys(
             handle,
             blobs.ptr,
             lens.ptr,

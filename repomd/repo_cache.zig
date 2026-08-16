@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const error_codes = @import("tdnf_error");
+const error_codes = @import("rpmz_error");
 
 const Io = std.Io;
 const Sha256 = std.crypto.hash.sha2.Sha256;
@@ -9,7 +9,7 @@ const cookie_ident = "tdnf-solv-content-v3";
 const cookie_len = Sha256.digest_length;
 const hex_chars = "0123456789abcdef";
 
-const tdnf_alloc = if (builtin.is_test) struct {} else struct {
+const rpmz_alloc = if (builtin.is_test) struct {} else struct {
     extern fn TDNFAllocateMemory(
         nNumElements: usize,
         nSize: usize,
@@ -141,7 +141,7 @@ fn allocateCStringCapacity(len: usize, ppszOut: *?[*:0]u8) u32 {
     }
 
     var raw: ?*anyopaque = null;
-    const dwError = tdnf_alloc.TDNFAllocateMemory(len + 1, 1, &raw);
+    const dwError = rpmz_alloc.TDNFAllocateMemory(len + 1, 1, &raw);
     if (dwError != 0) {
         ppszOut.* = null;
         return dwError;

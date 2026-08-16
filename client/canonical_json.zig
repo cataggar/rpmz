@@ -1,4 +1,4 @@
-//! Canonical JSON writing shared by every versioned tdnf artifact.
+//! Canonical JSON writing shared by every versioned rpmz artifact.
 //!
 //! The canonical form is deliberately narrow: no insignificant whitespace, no
 //! alternative escapes, and a fixed integer spelling. Two artifacts that share

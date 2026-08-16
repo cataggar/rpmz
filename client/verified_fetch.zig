@@ -1,4 +1,4 @@
-//! The single place where downloaded bytes become bytes tdnf is allowed to
+//! The single place where downloaded bytes become bytes rpmz is allowed to
 //! use, and the single place where a transaction bundle learns what it
 //! captured.
 //!

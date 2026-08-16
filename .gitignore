@@ -34,7 +34,7 @@ ar-lib
 /client/.libs
 /tools/cli/.deps
 /tools/cli/.libs
-/tools/cli/tdnf
+/tools/cli/rpmz
 /tools/cli/lib/.deps
 /tools/cli/lib/.libs
 /tests/atconfig
@@ -83,14 +83,14 @@ __pycache__/
 
 # build directory
 build*/
-bin/tdnf
+bin/rpmz
 
 # zig build outputs
 zig-out/
 .zig-cache/
 out/
 out-rs/
-/bin/tdnf-automatic
+/bin/rpmz-automatic
 /zig-pkg/
 /tests/public-zig-consumer/zig-pkg/
 /.scriptlet-zig-tests/

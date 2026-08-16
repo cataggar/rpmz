@@ -1,5 +1,5 @@
 //! Solver failure-path diagnostics: the text `SolvReportProblems`
-//! (`solv/tdnfpackage.c`) writes when a solve cannot be satisfied.
+//! (`solv/rpmzpackage.c`) writes when a solve cannot be satisfied.
 //!
 //! These assertions exist because `libsolv-oracle-test` **structurally cannot**
 //! cover this output. The oracle crosschecks *successful* solves against
@@ -15,7 +15,7 @@
 //!   * problems are numbered from 1 and **renumbered contiguously after
 //!     skipping**, because the counter is `++total_prblms` over the *reported*
 //!     problems, not the solver's problem index. A port that numbered by
-//!     solver index would print `7. 8. 9.` where tdnf prints `1. 2. 3.`.
+//!     solver index would print `7. 8. 9.` where rpmz prints `1. 2. 3.`.
 //!   * the `Found N problem(s)` summary counts *reported* problems, so it
 //!     agrees with the last number printed.
 //!

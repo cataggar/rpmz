@@ -249,13 +249,13 @@ extern fn TDNFTransactionPlanStateFreeCanonicalJson(
     data: ?[*]const u8,
     length: usize,
 ) void;
-extern fn tdnf_rpm_config_create(root: ?[*:0]const u8) ?*anyopaque;
-extern fn tdnf_rpm_config_destroy(config: ?*anyopaque) void;
-extern fn tdnf_rpm_config_resolve_path(
+extern fn rpmz_rpm_config_create(root: ?[*:0]const u8) ?*anyopaque;
+extern fn rpmz_rpm_config_destroy(config: ?*anyopaque) void;
+extern fn rpmz_rpm_config_resolve_path(
     config: ?*const anyopaque,
     name: ?[*:0]const u8,
 ) ?[*:0]u8;
-extern fn tdnf_rpm_config_string_free(value: ?[*:0]u8) void;
+extern fn rpmz_rpm_config_string_free(value: ?[*:0]u8) void;
 
 /// Resolves the rpmdb file the writer actually uses. The `_dbpath` macro
 /// is host configurable, so the location cannot be assumed to be
@@ -264,9 +264,9 @@ fn resolveRpmDbPath(
     allocator: std.mem.Allocator,
     rpm_config: ?*anyopaque,
 ) ![]u8 {
-    const dbpath = tdnf_rpm_config_resolve_path(rpm_config, "_dbpath") orelse
+    const dbpath = rpmz_rpm_config_resolve_path(rpm_config, "_dbpath") orelse
         return error.TestUnexpectedResult;
-    defer tdnf_rpm_config_string_free(dbpath);
+    defer rpmz_rpm_config_string_free(dbpath);
     return std.fmt.allocPrint(
         allocator,
         "{s}/rpmdb.sqlite",
@@ -436,7 +436,7 @@ const Fixture = struct {
         errdefer allocator.free(root);
         const config = try std.fmt.allocPrintSentinel(
             allocator,
-            "{s}/tdnf.conf",
+            "{s}/rpmz.conf",
             .{root},
             0,
         );
@@ -694,7 +694,7 @@ const Fixture = struct {
             .sub_path = "root/repos/base.repo",
             .data = repo_config,
         });
-        const tdnf_config = try std.fmt.allocPrint(
+        const rpmz_config = try std.fmt.allocPrint(
             allocator,
             \\[main]
             \\gpgcheck=0
@@ -710,10 +710,10 @@ const Fixture = struct {
         ,
             .{},
         );
-        defer allocator.free(tdnf_config);
+        defer allocator.free(rpmz_config);
         try tmp.dir.writeFile(std.testing.io, .{
-            .sub_path = "root/tdnf.conf",
-            .data = tdnf_config,
+            .sub_path = "root/rpmz.conf",
+            .data = rpmz_config,
         });
         return .{
             .tmp = tmp,
@@ -936,9 +936,9 @@ test "resolver cleanup paths are repeatable and reset outputs" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     try fixture.enableBaseSnapshot();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -1031,9 +1031,9 @@ test "resolver cleanup paths are repeatable and reset outputs" {
 test "repo init failures leave pool indexes queryable" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -1093,9 +1093,9 @@ test "targeted repository reload is atomic and does not duplicate packages" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     try fixture.enableBaseSnapshot();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -1369,9 +1369,9 @@ test "repository load failure preserves live sack until successful swap" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     try fixture.requireBaseAvailable();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -1528,9 +1528,9 @@ test "cmdline display name does not make a normal repository synthetic" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     try fixture.useCmdlineDisplayName();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -1638,9 +1638,9 @@ test "public transaction plan API returns versioned JSON and stable digest" {
     const schema = "tdnf.transaction-plan/v1";
     var fixture = try Fixture.create();
     defer fixture.destroy();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -1861,9 +1861,9 @@ fn runFilteredUpdateAllCase(filters: u8) !void {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     try fixture.enableFilteredUpdate();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -2028,9 +2028,9 @@ test "filtered update-all is capture-only unsupported before refresh" {
 test "private handle capture follows production resolve lifecycle" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -2892,9 +2892,9 @@ test "private handle capture follows production resolve lifecycle" {
     var protected_fixture = try Fixture.create();
     defer protected_fixture.destroy();
     const protected_rpm_config =
-        tdnf_rpm_config_create(protected_fixture.root.ptr) orelse
+        rpmz_rpm_config_create(protected_fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(protected_rpm_config);
+    defer rpmz_rpm_config_destroy(protected_rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(protected_rpm_config),
@@ -3295,9 +3295,9 @@ test "private handle capture follows production resolve lifecycle" {
 test "failed skip-if-unavailable refresh retires stale solver repo" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -3387,9 +3387,9 @@ test "disabled capture preserves legacy oversized metadata loading" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     try fixture.advertiseOversizedPrimary();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -3566,9 +3566,9 @@ test "alternate context snapshot remains isolated from live repositories" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     try fixture.enableBaseSnapshot();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),
@@ -3958,9 +3958,9 @@ test "alternate sack repository failure preserves exact state" {
     var fixture = try Fixture.create();
     defer fixture.destroy();
     try fixture.requireBaseAvailable();
-    const rpm_config = tdnf_rpm_config_create(fixture.root.ptr) orelse
+    const rpm_config = rpmz_rpm_config_create(fixture.root.ptr) orelse
         return error.OutOfMemory;
-    defer tdnf_rpm_config_destroy(rpm_config);
+    defer rpmz_rpm_config_destroy(rpm_config);
     try std.testing.expectEqual(
         @as(c_int, 0),
         TDNFTransactionPlanTestWriteFileProvider(rpm_config),

@@ -138,7 +138,7 @@ test "sha256Hex matches published vectors" {
 
 test "every supported algorithm verifies its own digest and rejects others" {
     const testing = std.testing;
-    const bytes = "tdnf transaction bundle";
+    const bytes = "rpmz transaction bundle";
     const names = [_][]const u8{ "md5", "sha1", "sha224", "sha256", "sha384", "sha512" };
     for (names) |name| {
         const kind = kindFromName(name).?;
@@ -151,7 +151,7 @@ test "every supported algorithm verifies its own digest and rejects others" {
             .sha512 => &hexOf(std.crypto.hash.sha2.Sha512, bytes),
         };
         try testing.expect(matchesName(name, hex, bytes));
-        try testing.expect(!matchesName(name, hex, "tdnf transaction bundlf"));
+        try testing.expect(!matchesName(name, hex, "rpmz transaction bundlf"));
     }
 }
 

@@ -69,7 +69,7 @@ def test_mirrrorlist(utils):
                      os.path.join(utils.config['repo_path'], "yum.repos.d"),
                      True)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'makecache'],
                     cwd=workdir)
@@ -77,7 +77,7 @@ def test_mirrrorlist(utils):
 
     pkgname = utils.config["mulversion_pkgname"]
     utils.erase_package(pkgname)
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '-y', '--nogpgcheck',
                      '--disablerepo=*', '--enablerepo={}'.format(reponame),
                      'install', pkgname],

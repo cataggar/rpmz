@@ -7,7 +7,7 @@ const installed_repository = @import("installed_repository.zig");
 const model = @import("model.zig");
 const rpm_pkgfile = @import("rpm_pkgfile");
 
-extern fn tdnf_rpm_config_duplicate_cache_dir_fd(
+extern fn rpmz_rpm_config_duplicate_cache_dir_fd(
     config: ?*const anyopaque,
 ) c_int;
 const rpmpkg = @import("rpmpkg.zig");
@@ -977,7 +977,7 @@ fn TDNFPackageContextCreate(
         error.RpmDbReadFailed => abi.ERROR_TDNF_SOLV_IO,
     };
     if (rpm_config) |config| {
-        const cache_fd = tdnf_rpm_config_duplicate_cache_dir_fd(config);
+        const cache_fd = rpmz_rpm_config_duplicate_cache_dir_fd(config);
         if (cache_fd >= 0) adoptCacheDirFd(context, cache_fd);
     }
     slot.* = context;
@@ -2278,7 +2278,7 @@ test "context creation releases every allocation on installed load failures" {
 
 test "legacy installed loading honors the context install root" {
     const testing = std.testing;
-    const sentinel_name = "tdnf-scratch-root-sentinel-41";
+    const sentinel_name = "rpmz-scratch-root-sentinel-41";
     const package_blob = try rpmpkg.makeMinimalHeaderForTest(
         testing.allocator,
         sentinel_name,

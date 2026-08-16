@@ -33,7 +33,7 @@ def test_repo_no_filelists(utils):
     workdir = WORKDIR
     os.makedirs(workdir, exist_ok=True)
 
-    ret = utils.run(['tdnf', '--repo={}'.format(reponame),
+    ret = utils.run(['rpmz', '--repo={}'.format(reponame),
                      '--download-metadata',
                      'reposync'],
                     cwd=workdir)
@@ -47,7 +47,7 @@ def test_repo_no_filelists(utils):
         ret = utils.run(['modifyrepo', '--remove', file, os.path.join(synced_dir, 'repodata')])
         assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--repofrompath=synced-repo,{}'.format(synced_dir),
                      '--repo=synced-repo',
                      'makecache'],

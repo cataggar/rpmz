@@ -33,7 +33,7 @@ pub const RepositoryInput = struct {
     id: []const u8,
     model: *const metadata.RepositoryModel,
     kind: RepositoryKind = .available,
-    /// Lower values are preferred, matching tdnf repository priority.
+    /// Lower values are preferred, matching rpmz repository priority.
     priority: i32 = default_repository_priority,
     cost: u32 = default_repository_cost,
     installed_states: []const InstalledState = &.{},

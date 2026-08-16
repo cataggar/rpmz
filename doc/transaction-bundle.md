@@ -11,7 +11,7 @@ New exports use `tdnf.transaction-bundle/v2` and reference a
 `tdnf.transaction-plan/v2`. The v1 manifest and plan remain strictly parseable
 for compatibility, but are resolve-only and must not be treated as replayable.
 The module documentation in `client/transaction_bundle.zig` is the reference.
-[`tdnf.replay`](replay-api.md) requires both v2 schemas and rejects v1 rather
+[`rpmz.replay`](replay-api.md) requires both v2 schemas and rejects v1 rather
 than reconstructing a missing execution order.
 
 ## What a bundle is
@@ -97,9 +97,9 @@ different canonical bytes. A reader therefore never accepts a manifest it
 would not itself have written.
 
 ```zig
-const tdnf = @import("tdnf");
+const rpmz = @import("rpmz");
 
-const bundle = try tdnf.transaction_bundle.parse(allocator, manifest_bytes);
+const bundle = try rpmz.transaction_bundle.parse(allocator, manifest_bytes);
 defer bundle.destroy();
 
 for (bundle.model().files) |file| {
@@ -150,7 +150,7 @@ rules in the type system rather than by convention:
    a function that has already compared the content against its expectation.
 
 An unrecognised checksum algorithm is refused (`UnsupportedChecksum`), never
-skipped: naming an algorithm tdnf cannot compute is exactly how an attacker
+skipped: naming an algorithm rpmz cannot compute is exactly how an attacker
 would ask for a file to go unchecked. Hashing and the set of acceptable
 algorithm names live in `repomd/content_digest.zig`, shared with the repomd
 loader, so the two paths cannot come to disagree about what counts as
@@ -199,7 +199,7 @@ manifest even if a future call site forgets.
 
 ## Exporting a bundle
 
-`tdnf.bundle_export.exportBundle` resolves a transaction and publishes the
+`rpmz.bundle_export.exportBundle` resolves a transaction and publishes the
 bundle for it. It takes the same `resolver.ResolveInput` as `resolvePlan`.
 The resolve-only result is v1; after verified RPM headers are staged, export
 passes the captured native transaction inputs through the production native
@@ -207,7 +207,7 @@ transaction planner and records its returned order in the bundled v2 plan.
 That order is captured, not reconstructed from canonical action sorting.
 
 ```zig
-var result = try tdnf.bundle_export.exportBundle(allocator, io, .{
+var result = try rpmz.bundle_export.exportBundle(allocator, io, .{
     .resolve = resolve_input,
     .destination = "/var/tmp/tx-bundle",
     .keys = &.{.{ .path = "/etc/pki/rpm-gpg/RPM-GPG-KEY-example" }},
@@ -268,7 +268,7 @@ about some earlier copy.
 
 ## Replaying a bundle
 
-Pass the published directory to `tdnf.replay.run` or `tdnf replay`. Replay
+Pass the published directory to `rpmz.replay.run` or `rpmz replay`. Replay
 opens it as a closed local input set, rechecks canonical manifest and plan
 bytes, metadata and RPM content, signatures, architecture, rpmdb snapshot, and
 prior rows, then executes the v2 steps in their recorded order.

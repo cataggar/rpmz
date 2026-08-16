@@ -1,7 +1,7 @@
 .{
-    .name = .tdnf,
-    .version = "4.0.0",
-    .fingerprint = 0xd568096fd954d375,
+    .name = .rpmz,
+    .version = "0.1.0",
+    .fingerprint = 0xd40052933730a1e4,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .sqlite = .{
@@ -28,7 +28,7 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "tdnf.zig",
+        "rpmz.zig",
         "COPYING",
         "README.md",
         "abi",

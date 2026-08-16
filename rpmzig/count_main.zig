@@ -11,7 +11,7 @@ pub fn main(init: std.process.Init) u8 {
     const count = rpmdb.countPackages(root) catch {
         const message = rpmdb.lastErrorMessage();
         std.debug.print(
-            "tdnf-rpmdb-count: {s}\n",
+            "rpmz-rpmdb-count: {s}\n",
             .{if (message.len == 0) "unknown error" else message},
         );
         return 1;

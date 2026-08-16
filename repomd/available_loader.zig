@@ -407,6 +407,21 @@ pub fn solvCacheCookie(
     return bindSolvCacheCookie(content_cookie, options);
 }
 
+test "solv cache cookie preserves legacy domains" {
+    try std.testing.expectEqualStrings("tdnf-solv-content-v3", solv_cache_identity_domain);
+    try std.testing.expectEqualStrings("tdnf-solv-cache-options/v1", solv_cache_options_domain);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0xd2, 0xe1, 0xae, 0xdb, 0xe0, 0x67, 0xaa, 0x72,
+            0xdc, 0x5c, 0x29, 0x78, 0x35, 0xf7, 0x70, 0xb9,
+            0x72, 0x3e, 0x15, 0x5e, 0x97, 0x18, 0xcd, 0x4e,
+            0x97, 0xb6, 0x30, 0xb8, 0xa7, 0x4c, 0x41, 0xb8,
+        },
+        &solvCacheCookie("<repomd/>", .{}),
+    );
+}
+
 /// Cache metadata loaded under one opened cache root. repomd_bytes is the
 /// exact byte sequence parsed into repository and is never re-read by users
 /// that need to identify this cache snapshot.

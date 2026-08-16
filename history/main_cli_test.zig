@@ -70,7 +70,7 @@ fn expectExit(result: std.process.RunResult, expected: u8) !void {
 fn expectedUsage(allocator: std.mem.Allocator, binary: []const u8) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
-        "tdnf history db utility\n\n" ++
+        "rpmz history db utility\n\n" ++
             "Usage:\n\n" ++
             "{s} [-f dbfile] [-r rootdir] init|update\n" ++
             "{s} [-f dbfile] mark install|remove [pkg[...]]\n" ++

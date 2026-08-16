@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "rpmz",
+    "reposync",
+    "--norepopath",
+    "--delete"
+  ],
+  "stdout": "cannot use the delete option with norepopath",
+  "stderr": "Error(1622) : Invalid argument",
+  "retval": 1622
+}

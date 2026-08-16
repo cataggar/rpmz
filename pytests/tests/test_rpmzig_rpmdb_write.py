@@ -20,9 +20,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO_ROOT / "out"
 SPEC_DIR = REPO_ROOT / "pytests" / "repo"
 TEST_ROOT = OUT_DIR / "rpmzig-rpmdb-write-tests"
-WRITE_TOOL = OUT_DIR / "libexec" / "tdnf" / "tdnf-rpmdb-write"
-COUNT_TOOL = OUT_DIR / "libexec" / "tdnf" / "tdnf-rpmdb-count"
-LIST_TOOL = OUT_DIR / "libexec" / "tdnf" / "tdnf-rpmdb-list"
+WRITE_TOOL = OUT_DIR / "libexec" / "rpmz" / "rpmz-rpmdb-write"
+COUNT_TOOL = OUT_DIR / "libexec" / "rpmz" / "rpmz-rpmdb-count"
+LIST_TOOL = OUT_DIR / "libexec" / "rpmz" / "rpmz-rpmdb-list"
 
 pytestmark = pytest.mark.skipif(
     not WRITE_TOOL.exists() or

@@ -35,7 +35,7 @@ fn usage(argv0: [*:0]const u8) u8 {
 fn eraseFiles(root: []const u8, hnum: u32, trans_flags: u32) bool {
     var writer = rpmdb_write.Writer.openRoot(root) catch |err| {
         std.debug.print(
-            "tdnf-rpm-erase: erase: Writer.openRoot: {t}\n",
+            "rpmz-rpm-erase: erase: Writer.openRoot: {t}\n",
             .{err},
         );
         return false;
@@ -43,7 +43,7 @@ fn eraseFiles(root: []const u8, hnum: u32, trans_flags: u32) bool {
     defer writer.close();
     const blob = writer.readHeaderBlobCopy(std.heap.c_allocator, hnum) catch |err| {
         std.debug.print(
-            "tdnf-rpm-erase: erase: Writer.readHeaderBlobCopy({d}): {t}\n",
+            "rpmz-rpm-erase: erase: Writer.readHeaderBlobCopy({d}): {t}\n",
             .{ hnum, err },
         );
         return false;
@@ -51,7 +51,7 @@ fn eraseFiles(root: []const u8, hnum: u32, trans_flags: u32) bool {
     defer std.heap.c_allocator.free(blob);
     const hdr = header.Header.parse(blob) catch |err| {
         std.debug.print(
-            "tdnf-rpm-erase: erase: header.parse({d}): {t}\n",
+            "rpmz-rpm-erase: erase: header.parse({d}): {t}\n",
             .{ hnum, err },
         );
         return false;
@@ -66,19 +66,19 @@ fn eraseFiles(root: []const u8, hnum: u32, trans_flags: u32) bool {
         .keep_path_fn = keepPath,
         .keep_path_ctx = &keep_ctx,
     }) catch |err| {
-        std.debug.print("tdnf-rpm-erase: erase: erase init: {t}\n", .{err});
+        std.debug.print("rpmz-rpm-erase: erase: erase init: {t}\n", .{err});
         return false;
     };
     defer ctx.deinit();
     ctx.erase() catch |err| {
         if (ctx.last_path) |last_path| {
             std.debug.print(
-                "tdnf-rpm-erase: erase: rpm_erase_hnum({s}): {t}\n",
+                "rpmz-rpm-erase: erase: rpm_erase_hnum({s}): {t}\n",
                 .{ last_path, err },
             );
         } else {
             std.debug.print(
-                "tdnf-rpm-erase: erase: rpm_erase_hnum: {t}\n",
+                "rpmz-rpm-erase: erase: rpm_erase_hnum: {t}\n",
                 .{err},
             );
         }
@@ -90,7 +90,7 @@ fn eraseFiles(root: []const u8, hnum: u32, trans_flags: u32) bool {
 fn eraseDbRow(root: []const u8, hnum: u32) bool {
     var writer = rpmdb_write.Writer.openRoot(root) catch |err| {
         std.debug.print(
-            "tdnf-rpm-erase: erase-hnum: Writer.openRoot: {t}\n",
+            "rpmz-rpm-erase: erase-hnum: Writer.openRoot: {t}\n",
             .{err},
         );
         return false;
@@ -98,7 +98,7 @@ fn eraseDbRow(root: []const u8, hnum: u32) bool {
     defer writer.close();
     writer.eraseHnum(hnum) catch |err| {
         std.debug.print(
-            "tdnf-rpm-erase: erase-hnum: Writer.eraseHnum({d}): {t}\n",
+            "rpmz-rpm-erase: erase-hnum: Writer.eraseHnum({d}): {t}\n",
             .{ hnum, err },
         );
         return false;

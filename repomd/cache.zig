@@ -1891,6 +1891,20 @@ test "native cache round-trips golden fields" {
     }
 }
 
+test "native cache cookie preserves legacy identifier" {
+    try std.testing.expectEqualStrings("tdnf", cookie_ident);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{
+            0x1c, 0xed, 0x57, 0x46, 0xc9, 0x87, 0xb4, 0x1c,
+            0x81, 0xf2, 0x66, 0x77, 0x43, 0x0f, 0xd4, 0xc9,
+            0x9f, 0x55, 0xfb, 0x7b, 0x6f, 0xa2, 0xb1, 0x47,
+            0x43, 0xcb, 0x57, 0x5d, 0x93, 0x21, 0xb5, 0x85,
+        },
+        &calculateCookieForBytes("abc"),
+    );
+}
+
 test "native cache gracefully rejects truncated wrong-magic version and cookie mismatches" {
     const testing = std.testing;
 

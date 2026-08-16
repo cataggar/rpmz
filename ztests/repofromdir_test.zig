@@ -119,7 +119,7 @@ fn stageRpms(
     return std.fs.path.join(allocator, &.{ root.path, sub_path });
 }
 
-/// The flags that point tdnf at the staged directory and nothing else.
+/// The flags that point rpmz at the staged directory and nothing else.
 /// `--repo` restricts the run to it, so a result can only have come from the
 /// directory.
 fn fromDir(allocator: std.mem.Allocator, dir: []const u8) ![]const u8 {

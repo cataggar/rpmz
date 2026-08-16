@@ -47,13 +47,13 @@ def setup_test(utils):
 
 def teardown_test(utils):
     pkgname = utils.config["sglversion_pkgname"]
-    utils.run(['tdnf', 'erase', '-y', pkgname])
+    utils.run(['rpmz', 'erase', '-y', pkgname])
 
 
-def run_tdnf_blocking_cmd(utils, pkgname):
+def run_rpmz_blocking_cmd(utils, pkgname):
     try:
-        cmd = ['tdnf', 'install', pkgname]
-        utils._decorate_tdnf_cmd_for_test(cmd)
+        cmd = ['rpmz', 'install', pkgname]
+        utils._decorate_rpmz_cmd_for_test(cmd)
         print(cmd)
         global t1_started
         global proc
@@ -70,9 +70,9 @@ def run_tdnf_blocking_cmd(utils, pkgname):
         t1_failed = True
 
 
-def run_tdnf_search_cmd(utils, pkgname):
-    cmd = ['tdnf', 'search', pkgname]
-    utils._decorate_tdnf_cmd_for_test(cmd)
+def run_rpmz_search_cmd(utils, pkgname):
+    cmd = ['rpmz', 'search', pkgname]
+    utils._decorate_rpmz_cmd_for_test(cmd)
     global t2_started
     t2_started = True
     ret = utils.run(cmd)  # this gets blocked till install finishes
@@ -85,9 +85,9 @@ def run_tdnf_search_cmd(utils, pkgname):
         t2_failed = True
 
 
-def run_tdnf_info_cmd(utils, pkgname):
-    cmd = ['tdnf', 'info', pkgname]
-    utils._decorate_tdnf_cmd_for_test(cmd)
+def run_rpmz_info_cmd(utils, pkgname):
+    cmd = ['rpmz', 'info', pkgname]
+    utils._decorate_rpmz_cmd_for_test(cmd)
     global t3_started
     t3_started = True
     ret = utils.run(cmd)  # this gets blocked till install finishes
@@ -103,10 +103,10 @@ def run_tdnf_info_cmd(utils, pkgname):
 
 def test_lock_basic(utils):
     pkgname = utils.config["sglversion_pkgname"]
-    utils.run(['tdnf', 'erase', '-y', pkgname])
+    utils.run(['rpmz', 'erase', '-y', pkgname])
 
-    t2 = Thread(target=run_tdnf_search_cmd, args=(utils, pkgname, ))
-    t3 = Thread(target=run_tdnf_info_cmd, args=(utils, pkgname, ))
+    t2 = Thread(target=run_rpmz_search_cmd, args=(utils, pkgname, ))
+    t3 = Thread(target=run_rpmz_info_cmd, args=(utils, pkgname, ))
 
     with open(LOCKFILE, 'a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

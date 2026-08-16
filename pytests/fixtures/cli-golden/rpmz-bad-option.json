@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "rpmz",
+    "--bad-option"
+  ],
+  "stdout": "No such option: --bad-option. Please use /usr/bin/rpmz --help",
+  "stderr": "Error(908) : Command line error: option is invalid.",
+  "retval": 908
+}

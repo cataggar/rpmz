@@ -81,7 +81,7 @@ fn requireActiveCtx(ctx: ?*DigestCtx) ?*DigestCtx {
     return digest;
 }
 
-pub export fn tdnf_rpmzig_digest_open(kind: c_int) ?*DigestCtx {
+pub export fn rpmz_rpmzig_digest_open(kind: c_int) ?*DigestCtx {
     clearError();
     const state = digestStateForKind(kind) orelse {
         setError("unsupported digest kind: {d}", .{kind});
@@ -96,7 +96,7 @@ pub export fn tdnf_rpmzig_digest_open(kind: c_int) ?*DigestCtx {
     return ctx;
 }
 
-pub export fn tdnf_rpmzig_digest_update(
+pub export fn rpmz_rpmzig_digest_update(
     ctx: ?*DigestCtx,
     buf: ?[*]const u8,
     len: usize,
@@ -121,7 +121,7 @@ pub export fn tdnf_rpmzig_digest_update(
     return 0;
 }
 
-pub export fn tdnf_rpmzig_digest_final(
+pub export fn rpmz_rpmzig_digest_final(
     ctx: ?*DigestCtx,
     out_digest: ?[*]u8,
     out_len: usize,
@@ -150,12 +150,12 @@ pub export fn tdnf_rpmzig_digest_final(
     return 0;
 }
 
-pub export fn tdnf_rpmzig_digest_close(ctx: ?*DigestCtx) void {
+pub export fn rpmz_rpmzig_digest_close(ctx: ?*DigestCtx) void {
     const digest = ctx orelse return;
     std.heap.c_allocator.destroy(digest);
 }
 
-export fn tdnf_rpmzig_checksum_last_error() [*:0]const u8 {
+export fn rpmz_rpmzig_checksum_last_error() [*:0]const u8 {
     if (last_error_len >= last_error_buf.len) last_error_len = last_error_buf.len - 1;
     last_error_buf[last_error_len] = 0;
     return @ptrCast(&last_error_buf);
@@ -175,18 +175,18 @@ fn encodeHexLower(buf: []u8, bytes: []const u8) []const u8 {
 fn expectDigest(kind: c_int, chunks: []const []const u8, expected_hex: []const u8) !void {
     const testing = std.testing;
 
-    const ctx = tdnf_rpmzig_digest_open(kind) orelse {
-        std.debug.print("open failed: {s}\n", .{std.mem.span(tdnf_rpmzig_checksum_last_error())});
+    const ctx = rpmz_rpmzig_digest_open(kind) orelse {
+        std.debug.print("open failed: {s}\n", .{std.mem.span(rpmz_rpmzig_checksum_last_error())});
         return error.TestUnexpectedNull;
     };
-    defer tdnf_rpmzig_digest_close(ctx);
+    defer rpmz_rpmzig_digest_close(ctx);
 
     for (chunks) |chunk| {
-        try testing.expectEqual(@as(c_int, 0), tdnf_rpmzig_digest_update(ctx, chunk.ptr, chunk.len));
+        try testing.expectEqual(@as(c_int, 0), rpmz_rpmzig_digest_update(ctx, chunk.ptr, chunk.len));
     }
 
     var digest: [TDNF_RPMZIG_MAX_DIGEST_LEN]u8 = undefined;
-    try testing.expectEqual(@as(c_int, 0), tdnf_rpmzig_digest_final(ctx, digest[0..].ptr, digest.len));
+    try testing.expectEqual(@as(c_int, 0), rpmz_rpmzig_digest_final(ctx, digest[0..].ptr, digest.len));
 
     var actual_hex_buf: [TDNF_RPMZIG_MAX_DIGEST_LEN * 2]u8 = undefined;
     const actual_hex = encodeHexLower(&actual_hex_buf, digest[0 .. expected_hex.len / 2]);
@@ -226,23 +226,23 @@ test "SHA512 vectors" {
 test "unsupported digest kind reports last error" {
     const testing = std.testing;
 
-    try testing.expect(tdnf_rpmzig_digest_open(99) == null);
+    try testing.expect(rpmz_rpmzig_digest_open(99) == null);
     try testing.expectEqualStrings(
         "unsupported digest kind: 99",
-        std.mem.span(tdnf_rpmzig_checksum_last_error()),
+        std.mem.span(rpmz_rpmzig_checksum_last_error()),
     );
 }
 
 test "final rejects short output buffer" {
     const testing = std.testing;
 
-    const ctx = tdnf_rpmzig_digest_open(TDNF_HASH_SHA512) orelse return error.TestUnexpectedNull;
-    defer tdnf_rpmzig_digest_close(ctx);
+    const ctx = rpmz_rpmzig_digest_open(TDNF_HASH_SHA512) orelse return error.TestUnexpectedNull;
+    defer rpmz_rpmzig_digest_close(ctx);
 
     var digest: [SHA512_DIGEST_LEN - 1]u8 = undefined;
-    try testing.expectEqual(@as(c_int, -1), tdnf_rpmzig_digest_final(ctx, digest[0..].ptr, digest.len));
+    try testing.expectEqual(@as(c_int, -1), rpmz_rpmzig_digest_final(ctx, digest[0..].ptr, digest.len));
     try testing.expectEqualStrings(
         "output buffer too small: got 63, need at least 64",
-        std.mem.span(tdnf_rpmzig_checksum_last_error()),
+        std.mem.span(rpmz_rpmzig_checksum_last_error()),
     );
 }

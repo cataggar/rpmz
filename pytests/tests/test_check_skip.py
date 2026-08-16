@@ -20,7 +20,7 @@ def teardown_test(utils):
 
 
 def test_skipobsoletes(utils):
-    ret = utils.run(['tdnf', 'check', '--skipobsoletes'])
+    ret = utils.run(['rpmz', 'check', '--skipobsoletes'])
     assert ret['retval'] == 1301
     assert ' conflicts ' in '\n'.join(ret['stderr'])
     assert ' provides ' in '\n'.join(ret['stderr'])
@@ -28,7 +28,7 @@ def test_skipobsoletes(utils):
 
 
 def test_skipconflicts(utils):
-    ret = utils.run(['tdnf', 'check', '--skipconflicts'])
+    ret = utils.run(['rpmz', 'check', '--skipconflicts'])
     assert ret['retval'] == 1301
     assert ' obsoletes ' in '\n'.join(ret['stderr'])
     assert ' provides ' in '\n'.join(ret['stderr'])
@@ -36,7 +36,7 @@ def test_skipconflicts(utils):
 
 
 def test_skipconflicts_skipobsoletes(utils):
-    ret = utils.run(['tdnf', 'check', '--skipconflicts', '--skipobsoletes'])
+    ret = utils.run(['rpmz', 'check', '--skipconflicts', '--skipobsoletes'])
     assert ret['retval'] == 1301
     assert ' provides ' in '\n'.join(ret['stderr'])
     assert ' conflicts ' not in '\n'.join(ret['stderr'])
@@ -44,7 +44,7 @@ def test_skipconflicts_skipobsoletes(utils):
 
 
 def test_check_no_skip(utils):
-    ret = utils.run(['tdnf', 'check'])
+    ret = utils.run(['rpmz', 'check'])
     assert ' obsoletes ' in '\n'.join(ret['stderr'])
     assert ' conflicts ' in '\n'.join(ret['stderr'])
     assert ' provides ' in '\n'.join(ret['stderr'])

@@ -1,8 +1,8 @@
 
 
-# Contributing to tdnf
+# Contributing to rpmz
 
-The tdnf project team welcomes contributions from the community. If you wish to contribute code and you have not signed our contributor license agreement (CLA), our bot will update the issue when you open a Pull Request. For any questions about the CLA process, please refer to our [FAQ](https://cla.vmware.com/faq).
+The rpmz project team welcomes contributions from the community. If you wish to contribute code and you have not signed our contributor license agreement (CLA), our bot will update the issue when you open a Pull Request. For any questions about the CLA process, please refer to our [FAQ](https://cla.vmware.com/faq).
 
 ## Contribution Flow
 
@@ -18,7 +18,7 @@ This is a rough outline of what a contributor's workflow looks like:
 Example:
 
 ``` shell
-git remote add yourfork https://github.com/yourname/tdnf.git
+git remote add yourfork https://github.com/yourname/rpmz.git
 git pull yourfork
 git checkout -b topic/yourname/feature
 ... hack ...
@@ -31,7 +31,7 @@ On the push, you should see a URL to create a pull request (PR) on github. You c
 
 ### Testing Changes
 
-tdnf comes with an extensive test suite. Before opening a PR, build and
+rpmz comes with an extensive test suite. Before opening a PR, build and
 exercise it locally:
 
 ```
@@ -52,7 +52,7 @@ zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
 
 Pass `-Doptimize=ReleaseSafe`, as CI does. The native dependency audit
 reads the installed prefix and verifies that no public C headers,
-pkg-config metadata, or `libtdnf*` artifacts are present.
+pkg-config metadata, or `librpmz*` artifacts are present.
 
 The integration tests need an rpm-aware host (`rpm`, `rpmbuild`,
 `createrepo_c`, plus the python `pytest` / `requests` / `pyOpenSSL`

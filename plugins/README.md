@@ -1,19 +1,19 @@
-# Built-in tdnf plugins
+# Built-in rpmz plugins
 
-tdnf composes two plugins directly into the executable; no plugin shared
+rpmz composes two plugins directly into the executable; no plugin shared
 objects are loaded:
 
-- `tdnfmetalink` downloads metalink metadata, selects mirrors by preference,
+- `rpmzmetalink` downloads metalink metadata, selects mirrors by preference,
   and validates `repomd.xml` with the strongest supported metalink checksum.
-- `tdnfrepogpgcheck` verifies detached `repomd.xml.asc` signatures with the
+- `rpmzrepogpgcheck` verifies detached `repomd.xml.asc` signatures with the
   pure-Zig OpenPGP verifier. As before, keys come from the ambient GnuPG home
   (`GNUPGHOME`, or `$HOME/.gnupg`), not from the repository's `gpgkey=`.
 
 The existing yum-compatible controls still select these built-ins:
 
-- `plugins=1` in `tdnf.conf` enables plugin processing globally.
-- `/etc/tdnf/pluginconf.d/tdnfmetalink.conf` and
-  `tdnfrepogpgcheck.conf` each use `[main] enabled=0|1`.
+- `plugins=1` in `rpmz.conf` enables plugin processing globally.
+- `/etc/rpmz/pluginconf.d/rpmzmetalink.conf` and
+  `rpmzrepogpgcheck.conf` each use `[main] enabled=0|1`.
 - `--enableplugin=<name-or-glob>` and `--disableplugin=<name-or-glob>` apply
   sequentially, so later options override earlier matching options.
 - `--noplugins` disables both built-ins.

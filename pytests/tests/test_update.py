@@ -18,11 +18,11 @@ def setup_test(utils):
 def teardown_test(utils):
     mpkg = utils.config["mulversion_pkgname"]
     spkg = utils.config["sglversion_pkgname"]
-    utils.run(['tdnf', 'erase', '-y', spkg, mpkg])
+    utils.run(['rpmz', 'erase', '-y', spkg, mpkg])
 
 
 def test_update_invalid_arg(utils):
-    ret = utils.run(['tdnf', 'update', '-y', 'invalid_package'])
+    ret = utils.run(['rpmz', 'update', '-y', 'invalid_package'])
     assert ret['retval'] == 1011
 
 
@@ -30,7 +30,7 @@ def test_update_single_version_package(utils):
     spkg = utils.config["sglversion_pkgname"]
     if not utils.check_package(spkg):
         utils.install_package(spkg)
-    ret = utils.run(['tdnf', 'update', '-y', spkg])
+    ret = utils.run(['rpmz', 'update', '-y', spkg])
     assert ret['stderr'][0] == 'Nothing to do.'
 
 
@@ -45,9 +45,9 @@ def test_update_multi_version_package(utils):
     utils.install_package(mpkg, mpkg_version)
 
     # perform an upgrade
-    ret = utils.run(['tdnf', 'update', '-y', '--nogpgcheck', mpkg])
+    ret = utils.run(['rpmz', 'update', '-y', '--nogpgcheck', mpkg])
     assert ret['retval'] == 0
 
     # Verify that it cannot be further upgraded
-    ret = utils.run(['tdnf', 'update', '-y', mpkg])
+    ret = utils.run(['rpmz', 'update', '-y', mpkg])
     assert ret['stderr'][0] == 'Nothing to do.'

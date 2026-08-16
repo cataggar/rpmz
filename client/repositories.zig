@@ -5,13 +5,13 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const common = @import("tdnf_common");
+const common = @import("rpmz_common");
 const builtin = @import("builtin");
 const abi = @import("client_abi");
 const builtin_plugins = @import("builtin_plugins");
 const client_download = @import("client_download");
 const client_plugins = @import("client_plugins");
-const errors = @import("tdnf_error");
+const errors = @import("rpmz_error");
 const plugin_metadata = @import("plugin_metadata");
 const txn_config = @import("rpm_txn_config");
 const uri_sanitize = @import("uri_sanitize");
@@ -680,10 +680,10 @@ fn pinPathForHandle(
     path_z: [*:0]const u8,
     output: *PinnedPath,
 ) u32 {
-    const tdnf = handle orelse return pinPath(path_z, output);
-    const conf = tdnf.pConf orelse return pinPath(path_z, output);
+    const rpmz = handle orelse return pinPath(path_z, output);
+    const conf = rpmz.pConf orelse return pinPath(path_z, output);
     const path = std.mem.span(path_z);
-    const raw_config = tdnf.pRpmConfig orelse return pinPath(path_z, output);
+    const raw_config = rpmz.pRpmConfig orelse return pinPath(path_z, output);
     const config: *const txn_config.TxnConfig =
         @ptrCast(@alignCast(raw_config));
     if (conf.pszCacheDir) |cache_z| {
@@ -1758,7 +1758,7 @@ fn downloadUrlToFd(
             break;
         }
         result = errors.ERROR_TDNF_INVALID_PARAMETER;
-        common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'tdnf makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
+        common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'rpmz makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
         return result;
     }
     if (!successful_attempt) return result;
@@ -1834,7 +1834,7 @@ fn randomTempName(buffer: *[96]u8) u32 {
     const encoded = std.fmt.bytesToHex(random_bytes, .lower);
     _ = std.fmt.bufPrintZ(
         buffer,
-        ".tdnf-repository-{s}.tmp",
+        ".rpmz-repository-{s}.tmp",
         .{&encoded},
     ) catch return errors.ERROR_TDNF_INVALID_PARAMETER;
     return 0;
@@ -3114,7 +3114,7 @@ test "repositories production: alternate-root metalink validates pinned target m
         ),
     );
     var plugin = abi.Plugin{
-        .pszName = @constCast("tdnfmetalink"),
+        .pszName = @constCast("rpmzmetalink"),
         .nEnabled = 1,
         .nKind = 0,
         .pHandle = plugin_handle,
@@ -3392,7 +3392,7 @@ test "repositories production: alternate-root repo GPG validates and removes onl
         ),
     );
     var plugin = abi.Plugin{
-        .pszName = @constCast("tdnfrepogpgcheck"),
+        .pszName = @constCast("rpmzrepogpgcheck"),
         .nEnabled = 1,
         .nKind = 1,
         .pHandle = plugin_handle,
@@ -3470,7 +3470,7 @@ fn expectNoDownloadTemps(directory: []const u8) !void {
         try std.testing.expect(!std.mem.startsWith(
             u8,
             entry.name,
-            ".tdnf-repository-",
+            ".rpmz-repository-",
         ));
     }
 }
@@ -3724,11 +3724,11 @@ test "repositories production: download temp names are high entropy and unique" 
         try std.testing.expect(std.mem.startsWith(
             u8,
             value,
-            ".tdnf-repository-",
+            ".rpmz-repository-",
         ));
         try std.testing.expect(std.mem.endsWith(u8, value, ".tmp"));
         try std.testing.expectEqual(
-            @as(usize, ".tdnf-repository-".len + 32 + ".tmp".len),
+            @as(usize, ".rpmz-repository-".len + 32 + ".tmp".len),
             value.len,
         );
         for (names[0..index]) |prior| {
@@ -3878,7 +3878,7 @@ test "repositories production: metadata and snapshot downloads reject symlinks a
         for (0..download_temp_attempts) |candidate| {
             const predictable = try std.fmt.allocPrint(
                 std.testing.allocator,
-                "{s}/.tdnf-repository-{d}-{d}.tmp",
+                "{s}/.rpmz-repository-{d}-{d}.tmp",
                 .{ directory, std.os.linux.getpid(), candidate },
             );
             defer std.testing.allocator.free(predictable);

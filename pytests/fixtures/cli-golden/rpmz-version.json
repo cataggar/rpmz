@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "rpmz",
+    "--version"
+  ],
+  "stdout": "rpmz: 0.1.0",
+  "stderr": "",
+  "retval": 0
+}

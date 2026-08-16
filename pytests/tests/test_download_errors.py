@@ -48,7 +48,7 @@ def repofile_path(utils):
 def test_http_error_contains_url(utils):
     utils.create_repoconf(repofile_path(utils), BAD_HTTP_URL, REPONAME)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', f'--enablerepo={REPONAME}',
                      'makecache'],
                     cwd=WORKDIR)
@@ -62,7 +62,7 @@ def test_http_error_contains_url(utils):
 def test_curl_error_contains_url(utils):
     utils.create_repoconf(repofile_path(utils), BAD_CURL_URL, REPONAME)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', f'--enablerepo={REPONAME}',
                      'makecache'],
                     cwd=WORKDIR)
@@ -78,7 +78,7 @@ def test_multi_baseurl_fallback_warning_contains_url(utils):
     baseurls = f'{BAD_HTTP_URL} {GOOD_HTTP_URL}'
     utils.create_repoconf(repofile_path(utils), baseurls, REPONAME)
 
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', f'--enablerepo={REPONAME}',
                      'makecache'],
                     cwd=WORKDIR)
@@ -102,14 +102,14 @@ def test_multi_baseurl_pkg_download_warning_contains_url(utils):
     utils.create_repoconf(repofile_path(utils), baseurls, REPONAME)
 
     # prime the cache with a working URL first
-    ret = utils.run(['tdnf',
+    ret = utils.run(['rpmz',
                      '--disablerepo=*', f'--enablerepo={REPONAME}',
                      '--setopt={}.baseurl={}'.format(REPONAME, GOOD_HTTP_URL),
                      'makecache'],
                     cwd=WORKDIR)
     assert ret['retval'] == 0
 
-    ret = utils.run(['tdnf', '-y', '--nogpgcheck',
+    ret = utils.run(['rpmz', '-y', '--nogpgcheck',
                      '--disablerepo=*', f'--enablerepo={REPONAME}',
                      'install', pkgname],
                     cwd=WORKDIR)
