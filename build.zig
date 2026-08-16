@@ -334,6 +334,20 @@ pub fn build(b: *Build) void {
     }
 
     const zig_test_step = b.step("test", "Run Zig unit tests");
+    const docs_audit_step = b.step(
+        "docs-audit",
+        "Verify the minimal README and migration documentation",
+    );
+    const run_docs_audit = b.addSystemCommand(
+        &.{ "python3", "scripts/docs-audit.py" },
+    );
+    run_docs_audit.setCwd(b.path("."));
+    const test_docs_audit = b.addSystemCommand(
+        &.{ "python3", "scripts/docs-audit.py", "--self-test" },
+    );
+    test_docs_audit.setCwd(b.path("."));
+    docs_audit_step.dependOn(&run_docs_audit.step);
+    docs_audit_step.dependOn(&test_docs_audit.step);
     const replay_docs_audit_step = b.step(
         "replay-docs-audit",
         "Verify the published replay contract covers every public result tag",
@@ -379,6 +393,8 @@ pub fn build(b: *Build) void {
     );
     run_migration_audit.setCwd(b.path("."));
     migration_audit_step.dependOn(&run_migration_audit.step);
+    migration_audit_step.dependOn(&run_docs_audit.step);
+    migration_audit_step.dependOn(&test_docs_audit.step);
     migration_audit_step.dependOn(&run_replay_docs_audit.step);
     migration_audit_step.dependOn(&test_replay_docs_audit.step);
     migration_audit_step.dependOn(&run_replay_confinement_audit.step);

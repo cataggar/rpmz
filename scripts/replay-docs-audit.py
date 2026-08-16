@@ -325,18 +325,6 @@ def audit_contract(
         "transaction plan result ordering",
     )
     require(readme, "doc/replay-api.md", "README replay reference")
-    require(readme, ".replay", "README public replay namespace")
-    require(readme, "RPM payload scriptlets", "README payload caveat")
-    require(readme, "no-network namespace", "README isolation requirement")
-    require_clause(
-        readme,
-        (
-            "callers must use an OS-level no-network namespace or equivalent "
-            "isolation whenever offline behavior must include payload "
-            "execution."
-        ),
-        "README mandatory payload isolation",
-    )
     require(
         bundle_doc,
         "outside that guarantee",
