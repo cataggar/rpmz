@@ -345,6 +345,12 @@ def ast_shape(node):
 
 
 def audit_packager(errors, manifest, packager):
+    expected_manifest_keys = {
+        "repository", "platforms", "binary_archive", "source_archive",
+        "internal_sbom", "public_release_assets", "install_command",
+    }
+    if set(manifest) != expected_manifest_keys:
+        errors.append("release manifest key allowlist changed")
     if manifest.get("repository") != "cataggar/rpmz":
         errors.append("release manifest repository is not cataggar/rpmz")
     if manifest.get("platforms") != ["linux-x64", "linux-arm64"]:
@@ -352,12 +358,20 @@ def audit_packager(errors, manifest, packager):
     templates = {
         "binary_archive": "rpmz-{version}-{platform}.tar.gz",
         "source_archive": "rpmz-{version}.tar.xz",
-        "sbom": "rpmz-{version}-{platform}.sbom.spdx.json",
+        "internal_sbom": "rpmz-{version}-{platform}.sbom.spdx.json",
         "install_command": "ghr install cataggar/rpmz@v{version}",
     }
     for key, value in templates.items():
         if manifest.get(key) != value:
             errors.append(f"release manifest {key} is inconsistent")
+    if manifest.get("public_release_assets") != [
+        "rpmz-{version}-linux-x64.tar.gz",
+        "rpmz-{version}-linux-arm64.tar.gz",
+        "rpmz-{version}.tar.xz",
+    ]:
+        errors.append(
+            "release manifest public assets are not the exact archive set"
+        )
 
     tree = ast.parse(packager)
     audit_script_signing(errors, tree, "release packager")
@@ -584,7 +598,7 @@ def audit_smoke_source(errors, smoke_source):
         tree,
         "release smoke script",
         {
-            "argparse", "hashlib", "json", "os", "shutil",
+            "argparse", "json", "os", "shutil",
             "subprocess", "sys", "uuid",
         },
         {
@@ -632,27 +646,6 @@ def audit_smoke_source(errors, smoke_source):
             ),
             {"check", "capture_output", "text", "env"},
         ),
-        "download_assets": (
-            sequence(
-                constant("gh"),
-                constant("release"),
-                constant("download"),
-                name("tag"),
-                constant("--repo"),
-                name("repo"),
-                constant("--dir"),
-                call("str", name("directory")),
-                constant("--pattern"),
-                name("archive_name"),
-                constant("--pattern"),
-                binop(
-                    "Add",
-                    name("archive_name"),
-                    constant(".sha256"),
-                ),
-            ),
-            {"check", "capture_output", "text", "env"},
-        ),
     })
     parents = {}
     for parent in ast.walk(tree):
@@ -677,7 +670,7 @@ def audit_smoke_source(errors, smoke_source):
     method_names = [call.func.attr for call in runner_methods]
     expected_methods = [
         "ghr_install", "rpmz_version", "native_audit",
-        "release_assets", "download_assets",
+        "release_assets",
     ]
     if sorted(method_names) != sorted(expected_methods):
         errors.append(
@@ -723,8 +716,7 @@ def audit_smoke_source(errors, smoke_source):
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name)
     }
-    for required in ("validate_arguments", "expected_assets",
-                     "verify_checksum"):
+    for required in ("validate_arguments", "expected_assets"):
         if required not in call_names:
             errors.append(
                 f"release smoke is missing {required} verification"
@@ -1013,19 +1005,14 @@ def audit_release_workflow(errors, document):
             "ghr install cataggar/rpmz@v${{ "
             "steps.version.outputs.version }}\n"
             "```\n\n"
-            "Binary archives contain the normal rpmz install layout, "
-            "including\n"
-            "`bin/`, `lib/`, `libexec/`, and `etc/`, plus COPYING and "
-            "README.md.\n"
-            "SHA-256 sidecars, SPDX SBOMs, and GitHub provenance "
-            "attestations\n"
-            "are published with the archives.\n"
+            "## Highlights\n\n"
+            "- Native Zig RPM package manager derived from upstream tdnf.\n"
+            "- Linux x64 and ARM64 archives installable with ghr.\n"
+            "- GitHub provenance attestations for published archives.\n"
         )
         expected_files = (
             "release-assets/rpmz-*.tar.gz\n"
             "release-assets/rpmz-*.tar.xz\n"
-            "release-assets/rpmz-*.sha256\n"
-            "release-assets/rpmz-*.sbom.spdx.json\n"
         )
         expect(
             errors,
@@ -1254,10 +1241,29 @@ def self_test(
         "    needs: build  # needs: release",
         1,
     )
-    wrong_asset = release_source.replace(
+    published_checksum = release_source.replace(
+        "          files: |\n"
+        "            release-assets/rpmz-*.tar.gz\n"
+        "            release-assets/rpmz-*.tar.xz\n",
+        "          files: |\n"
+        "            release-assets/rpmz-*.tar.gz\n"
+        "            release-assets/rpmz-*.tar.xz\n"
         "            release-assets/rpmz-*.sha256\n",
-        "            release-assets/rpmz-checksums.txt\n"
-        "            # release-assets/rpmz-*.sha256\n",
+        1,
+    )
+    published_sbom = release_source.replace(
+        "          files: |\n"
+        "            release-assets/rpmz-*.tar.gz\n"
+        "            release-assets/rpmz-*.tar.xz\n",
+        "          files: |\n"
+        "            release-assets/rpmz-*.tar.gz\n"
+        "            release-assets/rpmz-*.tar.xz\n"
+        "            release-assets/rpmz-*.sbom.spdx.json\n",
+        1,
+    )
+    wrong_highlights = release_source.replace(
+        "            ## Highlights\n",
+        "            ## Release notes\n",
         1,
     )
     wrong_smoke_script = release_source.replace(
@@ -1321,7 +1327,9 @@ def self_test(
         (write_build_permissions, ci_source),
         (retained_write_checkout, ci_source),
         (wrong_needs, ci_source),
-        (wrong_asset, ci_source),
+        (published_checksum, ci_source),
+        (published_sbom, ci_source),
+        (wrong_highlights, ci_source),
         (wrong_smoke_script, ci_source),
         (wrong_matrix, ci_source),
         (signing_step, ci_source),
@@ -1346,6 +1354,21 @@ def self_test(
         common_source,
     ):
         raise AssertionError("negative manifest self-test was accepted")
+    for metadata_template in (
+        "rpmz-{version}-linux-x64.tar.gz.sha256",
+        "rpmz-{version}-linux-x64.sbom.spdx.json",
+    ):
+        broken = dict(manifest)
+        broken["public_release_assets"] = [
+            *manifest["public_release_assets"], metadata_template,
+        ]
+        if not audit(
+            release_source, ci_source, broken, packager, smoke_source,
+            common_source,
+        ):
+            raise AssertionError(
+                "public metadata manifest self-test was accepted"
+            )
 
     def assert_packager_probe(lines, description):
         probe = packager.replace(
@@ -1425,7 +1448,6 @@ def self_test(
 def run_smoke(args, runner):
     validate_arguments(args, {})
     expected_assets({}, "0.1.0")
-    verify_checksum(None, "archive")
     if False:
         runner.ghr_install("cataggar/rpmz@v0.1.0", {})
 """

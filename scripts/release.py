@@ -43,7 +43,7 @@ def manifest():
     return json.loads(MANIFEST.read_text(encoding="utf-8"))
 
 
-def names(version, platform_name=None):
+def generated_asset_names(version, platform_name=None):
     data = manifest()
     result = [
         data["source_archive"].format(version=version),
@@ -57,7 +57,9 @@ def names(version, platform_name=None):
         result.extend([
             archive,
             archive + ".sha256",
-            data["sbom"].format(version=version, platform=current),
+            data["internal_sbom"].format(
+                version=version, platform=current
+            ),
         ])
     result.append(result[0] + ".sha256")
     return result
@@ -180,7 +182,7 @@ def write_sbom(
     staging, destination, version, platform_name, package_name
 ):
     data = manifest()
-    sbom_name = data["sbom"].format(
+    sbom_name = data["internal_sbom"].format(
         version=version, platform=platform_name
     )
     files = []
@@ -298,14 +300,14 @@ def verify_checksum(path):
 
 def verify_assets(args):
     directory = Path(args.directory).resolve()
-    expected = set(names(args.version, args.platform))
+    expected = set(generated_asset_names(args.version, args.platform))
     actual = {
         path.name for path in directory.iterdir()
         if path.is_file() and path.name.startswith(f"rpmz-{args.version}")
     }
     if actual != expected:
         raise SystemExit(
-            "release assets differ:\n"
+            "generated release files differ:\n"
             f"  expected: {sorted(expected)}\n  actual: {sorted(actual)}"
         )
     platforms = (
@@ -317,7 +319,7 @@ def verify_assets(args):
         )
         verify_archive(archive, args.version, current)
         verify_checksum(archive)
-        sbom_path = directory / manifest()["sbom"].format(
+        sbom_path = directory / manifest()["internal_sbom"].format(
             version=args.version, platform=current
         )
         sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
@@ -410,7 +412,10 @@ def dry_run(args):
         version=args.version,
         platform=current,
     ))
-    print(f"release dry-run passed: {', '.join(names(args.version, current))}")
+    print(
+        "release dry-run passed (generated files): "
+        f"{', '.join(generated_asset_names(args.version, current))}"
+    )
 
 
 def parser():
@@ -443,7 +448,9 @@ def parser():
     listing = subparsers.add_parser("names")
     listing.add_argument("--version", required=True)
     listing.set_defaults(
-        function=lambda args: print("\n".join(names(args.version)))
+        function=lambda args: print(
+            "\n".join(generated_asset_names(args.version))
+        )
     )
     return result
 
