@@ -24,7 +24,6 @@ README_REQUIRED = (
     "(CONTRIBUTING.md)",
     "(doc/building-and-testing.md)",
     "(doc/migrating-from-tdnf.md)",
-    "upcoming v0.1.0 tagged release",
 )
 MIGRATION_REQUIRED = (
     "`tdnf` | `rpmz`",
@@ -316,6 +315,8 @@ def audit(readme: str, migration: str) -> list[str]:
     for required in README_REQUIRED:
         if required not in readme:
             errors.append(f"README.md is missing {required!r}")
+    if "upcoming v0.1.0" in normalize(readme):
+        errors.append("README.md describes the published v0.1.0 release as upcoming")
     for command in (
         "ghr install cataggar/rpmz@v0.1.0",
         "zig build -Doptimize=ReleaseSafe install --prefix ./out",
@@ -373,6 +374,15 @@ def self_test(readme: str, migration: str) -> None:
             raise AssertionError(
                 f"missing README requirement accepted: {required}"
             )
+    if not audit(
+        readme.replace(
+            "## Install",
+            "## Install\n\nFor the upcoming v0.1.0 tagged release:",
+            1,
+        ),
+        migration,
+    ):
+        raise AssertionError("stale upcoming v0.1.0 wording accepted")
     for required in MIGRATION_REQUIRED:
         changed = migration.replace(required, "REMOVED", 1)
         if not audit(readme, changed):
