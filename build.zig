@@ -348,6 +348,15 @@ pub fn build(b: *Build) void {
     test_docs_audit.setCwd(b.path("."));
     docs_audit_step.dependOn(&run_docs_audit.step);
     docs_audit_step.dependOn(&test_docs_audit.step);
+    const release_audit_step = b.step(
+        "release-audit",
+        "Verify the release workflow and asset policy",
+    );
+    const run_release_audit = b.addSystemCommand(
+        &.{ "python3", "scripts/release-audit.py" },
+    );
+    run_release_audit.setCwd(b.path("."));
+    release_audit_step.dependOn(&run_release_audit.step);
     const replay_docs_audit_step = b.step(
         "replay-docs-audit",
         "Verify the published replay contract covers every public result tag",
@@ -395,6 +404,7 @@ pub fn build(b: *Build) void {
     migration_audit_step.dependOn(&run_migration_audit.step);
     migration_audit_step.dependOn(&run_docs_audit.step);
     migration_audit_step.dependOn(&test_docs_audit.step);
+    migration_audit_step.dependOn(&run_release_audit.step);
     migration_audit_step.dependOn(&run_replay_docs_audit.step);
     migration_audit_step.dependOn(&test_replay_docs_audit.step);
     migration_audit_step.dependOn(&run_replay_confinement_audit.step);
@@ -433,6 +443,27 @@ pub fn build(b: *Build) void {
     run_native_dependency_audit.setCwd(b.path("."));
     run_native_dependency_audit.step.dependOn(b.getInstallStep());
     native_dependency_audit_step.dependOn(&run_native_dependency_audit.step);
+    const release_dry_run_step = b.step(
+        "release-dry-run",
+        "Build and validate an unpublished release for this host",
+    );
+    const run_release_dry_run = b.addSystemCommand(
+        &.{
+            "python3",
+            "scripts/release.py",
+            "dry-run",
+            "--prefix",
+            b.getInstallPath(.prefix, ""),
+            "--output",
+            b.pathJoin(&.{ b.build_root.path.?, ".zig-cache", "release-dry-run" }),
+            "--version",
+            project_version,
+        },
+    );
+    run_release_dry_run.setCwd(b.path("."));
+    run_release_dry_run.step.dependOn(b.getInstallStep());
+    run_release_dry_run.step.dependOn(&run_native_dependency_audit.step);
+    release_dry_run_step.dependOn(&run_release_dry_run.step);
     const sqlite_singleton_audit_step = b.step(
         "sqlite-confined-singleton-audit",
         "Require one confined SQLite registry in each installed consumer",

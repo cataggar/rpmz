@@ -6,149 +6,146 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   build:
-    name: Build ${{ matrix.name }}
+    name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
-            name: linux-x64
+            platform: linux-x64
           - os: ubuntu-24.04-arm
-            name: linux-arm64
-
+            platform: linux-arm64
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.16.0
           use-cache: false
-
-      - name: Configure Zig caches
-        uses: ./.github/actions/zig-cache
-
+      - uses: ./.github/actions/zig-cache
       - name: Get version
         id: version
-        shell: bash
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Build
         run: |
-          zig build \
-            -Doptimize=ReleaseSafe \
+          python3 scripts/release.py version --tag "$GITHUB_REF_NAME" \
+            >> "$GITHUB_OUTPUT"
+      - name: Build normal install layout
+        run: |
+          zig build -Doptimize=ReleaseSafe \
             "-Dversion=${{ steps.version.outputs.version }}" \
-            install --prefix ./out
-
-      - name: Verify CLI version
-        shell: bash
+            install --prefix ./release-install
+      - name: Package binary archive, checksum, and SBOM
         run: |
-          VERSION_OUTPUT="$(./out/bin/rpmz --version 2>&1)"
-          EXPECTED="rpmz: ${{ steps.version.outputs.version }}"
-          if [ "$VERSION_OUTPUT" != "$EXPECTED" ]; then
-            echo "Expected: $EXPECTED"
-            echo "Actual:   $VERSION_OUTPUT"
-            exit 1
-          fi
-
-      - name: Package
-        shell: bash
-        run: |
-          PKGNAME="rpmz-${{ steps.version.outputs.version }}-${{ matrix.name }}"
-          mkdir -p "$PKGNAME"
-          cp -a ./out/. "$PKGNAME/"
-          cp COPYING README.md "$PKGNAME/"
-          tar czf "$PKGNAME.tar.gz" "$PKGNAME"
-          sha256sum "$PKGNAME.tar.gz" > "$PKGNAME.tar.gz.sha256"
-
-      - name: Generate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+          python3 scripts/release.py binary \
+            --prefix ./release-install \
+            --output ./release-assets \
+            --version "${{ steps.version.outputs.version }}" \
+            --platform "${{ matrix.platform }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: ./out/
-          output-file: rpmz-${{ steps.version.outputs.version }}-${{ matrix.name }}.sbom.spdx.json
-          upload-artifact: false
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ matrix.name }}
-          path: |
-            rpmz-*.tar.gz
-            rpmz-*.sha256
-            rpmz-*.sbom.spdx.json
+          name: ${{ matrix.platform }}
+          path: release-assets/
 
   source:
-    name: Source tarball
-    runs-on: ubuntu-latest
+    name: Source archive
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
       - name: Get version
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Package source
         run: |
-          PKGNAME="rpmz-${{ steps.version.outputs.version }}"
-          git archive --format=tar --prefix="$PKGNAME/" HEAD | xz > "$PKGNAME.tar.xz"
-          sha256sum "$PKGNAME.tar.xz" > "$PKGNAME.tar.xz.sha256"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+          python3 scripts/release.py version --tag "$GITHUB_REF_NAME" \
+            >> "$GITHUB_OUTPUT"
+      - name: Package source archive and checksum
+        run: |
+          python3 scripts/release.py source \
+            --output ./release-assets \
+            --version "${{ steps.version.outputs.version }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: source
-          path: |
-            rpmz-*.tar.xz
-            rpmz-*.sha256
+          path: release-assets/
 
   release:
-    name: Create Release
+    name: Create release
     needs: [build, source]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          path: release-assets
           merge-multiple: true
-
       - name: Get version
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
+        run: |
+          python3 scripts/release.py version --tag "$GITHUB_REF_NAME" \
+            >> "$GITHUB_OUTPUT"
       - name: Attest build provenance
         uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
         with:
           subject-path: |
-            rpmz-*.tar.gz
-            rpmz-*.tar.xz
-
+            release-assets/rpmz-*.tar.gz
+            release-assets/rpmz-*.tar.xz
       - name: Create release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
           name: rpmz ${{ steps.version.outputs.version }}
           body: |
-            **Install:** download the appropriate tarball for your architecture, verify the SHA256, and extract.
+            **Install:**
 
-            Each archive contains the same install layout produced by
-            `zig build install --prefix ./out`:
-            `bin/`, `lib/`, `libexec/`, and `etc/`, plus the project
-            `COPYING` and `README.md`.
+            ```sh
+            ghr install cataggar/rpmz@v${{ steps.version.outputs.version }}
+            ```
 
-            `libexec/rpmz/rpmz-test-support` is intentionally included so a
-            source checkout can use the documented install-then-pytest
-            workflow. It is a private command bridge, not a public API.
-
-            See the source tarball (`rpmz-*.tar.xz`) for a reproducible source snapshot.
+            Binary archives contain the normal rpmz install layout, including
+            `bin/`, `lib/`, `libexec/`, and `etc/`, plus COPYING and README.md.
+            SHA-256 sidecars, SPDX SBOMs, and GitHub provenance attestations
+            are published with the archives.
           files: |
-            rpmz-*.tar.gz
-            rpmz-*.tar.xz
-            rpmz-*.sha256
-            rpmz-*.sbom.spdx.json
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, 'dev') || contains(steps.version.outputs.version, 'rc') }}
+            release-assets/rpmz-*.tar.gz
+            release-assets/rpmz-*.tar.xz
+            release-assets/rpmz-*.sha256
+            release-assets/rpmz-*.sbom.spdx.json
+          prerelease: ${{ steps.version.outputs.prerelease }}
+
+  post-release-smoke:
+    name: ghr install smoke (${{ matrix.platform }})
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install pinned ghr
+        run: pipx install ghr-bin==0.7.0
+      - name: Get version
+        id: version
+        run: |
+          python3 scripts/release.py version --tag "$GITHUB_REF_NAME" \
+            >> "$GITHUB_OUTPUT"
+      - name: Install and audit published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/release-smoke.py \
+            --repo cataggar/rpmz \
+            --tag "$GITHUB_REF_NAME" \
+            --version "${{ steps.version.outputs.version }}" \
+            --platform "${{ matrix.platform }}" \
+            --prefix "$RUNNER_TEMP/rpmz-ghr-smoke"
