@@ -16,6 +16,20 @@ fn run(
     return std.process.run(allocator, io, .{ .argv = argv });
 }
 
+fn runWithPath(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    path: []const u8,
+) !std.process.RunResult {
+    var environment = std.process.Environ.Map.init(allocator);
+    defer environment.deinit();
+    try environment.put("PATH", path);
+    return std.process.run(allocator, io, .{
+        .argv = argv,
+        .environ_map = &environment,
+    });
+}
+
 fn expectTermEqual(actual: std.process.Child.Term, expected: std.process.Child.Term) !void {
     switch (expected) {
         .exited => |expected_code| switch (actual) {
@@ -113,6 +127,7 @@ test "rpmz reserves top-level help and version" {
     defer allocator.free(bare.stderr);
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, bare.term);
     try std.testing.expect(std.mem.startsWith(u8, bare.stdout, "Usage: rpmz COMMAND\n"));
+    try std.testing.expect(std.mem.indexOf(u8, bare.stdout, "  auto     Run the automatic updater") != null);
 
     const help = try run(allocator, &.{ rpmz, "--help" });
     defer allocator.free(help.stdout);
@@ -132,4 +147,53 @@ test "rpmz reserves top-level help and version" {
     defer allocator.free(legacy_root.stderr);
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 1 }, legacy_root.term);
     try std.testing.expect(std.mem.indexOf(u8, legacy_root.stdout, "Unknown rpmz command: install") != null);
+}
+
+test "rpmz auto is private and does not need a compatibility executable in PATH" {
+    const allocator = std.testing.allocator;
+    const prefix = std.testing.environ.getAlloc(
+        allocator,
+        "RPMZ_DISPATCHER_TEST_PREFIX",
+    ) catch try allocator.dupe(u8, "zig-out");
+    defer allocator.free(prefix);
+
+    const rpmz = try std.fs.path.join(allocator, &.{ prefix, "bin", "rpmz" });
+    defer allocator.free(rpmz);
+    const retired_automatic = try std.fs.path.join(
+        allocator,
+        &.{ prefix, "bin", "rpmz-automatic" },
+    );
+    defer allocator.free(retired_automatic);
+    try std.testing.expectError(
+        error.FileNotFound,
+        std.Io.Dir.cwd().access(io, retired_automatic, .{}),
+    );
+
+    const helper = try std.fs.path.join(
+        allocator,
+        &.{ prefix, "libexec", "rpmz", "rpmz-auto" },
+    );
+    defer allocator.free(helper);
+    try std.Io.Dir.cwd().access(io, helper, .{});
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.symLink(io, "/bin/bash", "bash", .{});
+    var tmp_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const tmp_path_len = try tmp.dir.realPath(io, &tmp_path_buffer);
+
+    const result = try runWithPath(
+        allocator,
+        &.{ rpmz, "auto", "--help" },
+        tmp_path_buffer[0..tmp_path_len],
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    if (std.os.linux.geteuid() == 0) {
+        try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "rpmz auto help:") != null);
+    } else {
+        try std.testing.expectEqual(std.process.Child.Term{ .exited = 13 }, result.term);
+        try std.testing.expect(std.mem.indexOf(u8, result.stderr, "must be run as root") != null);
+    }
 }

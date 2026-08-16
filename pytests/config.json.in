@@ -15,7 +15,7 @@
     "replay_export_binary": "@REPLAY_EXPORT_BINARY@",
     "rpmdb_list_binary": "@RPMDB_LIST_BINARY@",
     "rpmdb_write_binary": "@RPMDB_WRITE_BINARY@",
-    "automatic_script": "@AUTOMATIC_SCRIPT@",
+    "automatic_command": "@AUTOMATIC_COMMAND@",
     "automatic_conf": "@CMAKE_SOURCE_DIR@/etc/rpmz/automatic.conf",
     "sglversion_pkgname": "tdnf-test-one",
     "sglversion2_pkgname": "tdnf-test-two",

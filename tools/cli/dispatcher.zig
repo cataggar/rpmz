@@ -11,6 +11,7 @@ const system_compatibility_path = "/usr/bin/tdnf";
 const alternate_compatibility_path = "/opt/rpmz/bin/tdnf/";
 
 pub const Action = union(enum) {
+    auto,
     compatibility: usize,
     help,
     version,
@@ -27,6 +28,9 @@ pub fn classify(argv0: []const u8, first_arg: ?[]const u8) Action {
     if (std.mem.eql(u8, command, compatibility_command)) {
         return .{ .compatibility = 2 };
     }
+    if (std.mem.eql(u8, command, "auto")) {
+        return .auto;
+    }
     if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
         return .help;
     }
@@ -41,6 +45,7 @@ test "classifies rpmz top-level invocations" {
     try std.testing.expectEqual(Action.help, classify("rpmz", "--help"));
     try std.testing.expectEqual(Action.help, classify("rpmz", "-h"));
     try std.testing.expectEqual(Action.version, classify("rpmz", "--version"));
+    try std.testing.expectEqual(Action.auto, classify("rpmz", "auto"));
     try std.testing.expectEqual(Action.unknown, classify("rpmz", "install"));
     try std.testing.expectEqual(
         Action{ .compatibility = 2 },

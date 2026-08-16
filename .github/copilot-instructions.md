@@ -69,7 +69,7 @@ pkg-config, or shared-library surface.
 ## Generated files
 
 `build.zig` writes `pytests/config.json`, `pytests/mount-small-cache`, and
-`bin/rpmz-automatic` into the source tree. Edit their templates, not generated
+`libexec/rpmz-auto` into the source tree. Edit their templates, not generated
 outputs.
 
 Edit the corresponding templates, not generated outputs.

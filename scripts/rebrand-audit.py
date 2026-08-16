@@ -78,6 +78,9 @@ COMPATIBILITY_CLI_ALLOWANCES = {
     "tools/cli/replay_cli_test.zig": (
         'const compatibility_command = "tdnf";',
     ),
+    "libexec/rpmz-auto.in": (
+        '  "${RPMZ_AUTO_EXECUTABLE}" tdnf "$@"',
+    ),
     "ztests/harness.zig": (
         'const compatibility_command = "tdnf";',
     ),
@@ -292,6 +295,15 @@ def self_test():
     )
     if LEGACY_PRODUCT.search(scrubbed):
         raise AssertionError("explicit compatibility CLI tokens were rejected")
+    private_auto_source = '  "${RPMZ_AUTO_EXECUTABLE}" tdnf "$@"'
+    scrubbed = scrub_allowed(
+        private_auto_source,
+        Path("libexec/rpmz-auto.in"),
+        set(),
+        set(),
+    )
+    if LEGACY_PRODUCT.search(scrubbed):
+        raise AssertionError("private automatic compatibility token was rejected")
     stale_source = 'const obsolete_product = "tdnf";'
     scrubbed = scrub_allowed(
         stale_source,
