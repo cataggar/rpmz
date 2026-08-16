@@ -5,6 +5,7 @@ const rpmz = @import("rpmz");
 const replay_options = @import("replay_options.zig");
 
 const allocator = std.testing.allocator;
+const compatibility_command = "tdnf";
 const io = std.testing.io;
 const replay = rpmz.replay;
 const resolver = rpmz.resolver;
@@ -383,7 +384,7 @@ fn runLegacyCli(binary: []const u8, args: []const []const u8) !std.process.RunRe
     const argv = try allocator.alloc([]const u8, args.len + 2);
     defer allocator.free(argv);
     argv[0] = binary;
-    argv[1] = "tdnf";
+    argv[1] = compatibility_command;
     @memcpy(argv[2..], args);
     return std.process.run(allocator, io, .{
         .argv = argv,

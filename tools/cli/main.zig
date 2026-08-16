@@ -30,12 +30,13 @@ comptime {
 const LOG_INFO: c_int = 0;
 const LOG_ERR: c_int = 1;
 const LOG_CRIT: c_int = 2;
+const compatibility_command: [*:0]const u8 = "tdnf";
 const top_level_help =
     \\Usage: rpmz COMMAND
     \\
     \\Commands:
     \\  replay   Apply an offline transaction bundle
-    \\  tdnf     Run the tdnf-compatible package manager
+    \\  tdnf     Run the compatibility package manager
     \\
     \\Run 'rpmz COMMAND --help' for command help.
     \\
@@ -1033,7 +1034,7 @@ fn runCompatibility(argv: []const [*:0]const u8, argument_start: usize) u8 {
     };
     defer std.heap.page_allocator.free(normalized_argv);
 
-    normalized_argv[0] = @constCast("tdnf");
+    normalized_argv[0] = @constCast(compatibility_command);
     for (argv[argument_start..], 1..) |arg, index| {
         normalized_argv[index] = @constCast(arg);
     }
@@ -1047,7 +1048,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const action = dispatcher.classify(std.mem.span(argv[0]), first_arg);
 
     switch (action) {
-        .tdnf => |argument_start| return runCompatibility(argv, argument_start),
+        .compatibility => |argument_start| return runCompatibility(argv, argument_start),
         else => {},
     }
 
@@ -1068,6 +1069,6 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             common.log(LOG_CRIT, "Unknown rpmz command: %s. Please use 'rpmz --help'.\n", .{argv[1]});
             return 1;
         },
-        .tdnf => unreachable,
+        .compatibility => unreachable,
     }
 }

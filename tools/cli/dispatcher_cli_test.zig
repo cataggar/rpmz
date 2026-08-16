@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const io = std.testing.io;
+const compatibility_command = "tdnf";
 
 fn run(
     allocator: std.mem.Allocator,
@@ -27,36 +28,36 @@ fn expectTermEqual(actual: std.process.Child.Term, expected: std.process.Child.T
 
 fn expectCompatibilityParity(
     allocator: std.mem.Allocator,
-    tdnf: []const u8,
+    compatibility_cli: []const u8,
     rpmz: []const u8,
     args: []const []const u8,
 ) !void {
-    var tdnf_argv: std.ArrayList([]const u8) = .empty;
-    defer tdnf_argv.deinit(allocator);
-    try tdnf_argv.ensureTotalCapacity(allocator, args.len + 1);
-    tdnf_argv.appendAssumeCapacity(tdnf);
-    tdnf_argv.appendSliceAssumeCapacity(args);
+    var compatibility_argv: std.ArrayList([]const u8) = .empty;
+    defer compatibility_argv.deinit(allocator);
+    try compatibility_argv.ensureTotalCapacity(allocator, args.len + 1);
+    compatibility_argv.appendAssumeCapacity(compatibility_cli);
+    compatibility_argv.appendSliceAssumeCapacity(args);
 
     var rpmz_argv: std.ArrayList([]const u8) = .empty;
     defer rpmz_argv.deinit(allocator);
     try rpmz_argv.ensureTotalCapacity(allocator, args.len + 2);
     rpmz_argv.appendAssumeCapacity(rpmz);
-    rpmz_argv.appendAssumeCapacity("tdnf");
+    rpmz_argv.appendAssumeCapacity(compatibility_command);
     rpmz_argv.appendSliceAssumeCapacity(args);
 
-    const tdnf_result = try run(allocator, tdnf_argv.items);
-    defer allocator.free(tdnf_result.stdout);
-    defer allocator.free(tdnf_result.stderr);
+    const compatibility_result = try run(allocator, compatibility_argv.items);
+    defer allocator.free(compatibility_result.stdout);
+    defer allocator.free(compatibility_result.stderr);
     const rpmz_result = try run(allocator, rpmz_argv.items);
     defer allocator.free(rpmz_result.stdout);
     defer allocator.free(rpmz_result.stderr);
 
-    try expectTermEqual(rpmz_result.term, tdnf_result.term);
-    try std.testing.expectEqualStrings(tdnf_result.stdout, rpmz_result.stdout);
-    try std.testing.expectEqualStrings(tdnf_result.stderr, rpmz_result.stderr);
+    try expectTermEqual(rpmz_result.term, compatibility_result.term);
+    try std.testing.expectEqualStrings(compatibility_result.stdout, rpmz_result.stdout);
+    try std.testing.expectEqualStrings(compatibility_result.stderr, rpmz_result.stderr);
 }
 
-test "rpmz dispatches tdnf compatibility commands" {
+test "rpmz dispatches compatibility commands" {
     const allocator = std.testing.allocator;
     const prefix = std.testing.environ.getAlloc(
         allocator,
@@ -66,31 +67,34 @@ test "rpmz dispatches tdnf compatibility commands" {
 
     const rpmz = try std.fs.path.join(allocator, &.{ prefix, "bin", "rpmz" });
     defer allocator.free(rpmz);
-    const installed_tdnf = try std.fs.path.join(allocator, &.{ prefix, "bin", "tdnf" });
-    defer allocator.free(installed_tdnf);
+    const installed_compatibility_cli = try std.fs.path.join(
+        allocator,
+        &.{ prefix, "bin", compatibility_command },
+    );
+    defer allocator.free(installed_compatibility_cli);
     try std.testing.expectError(
         error.FileNotFound,
-        std.Io.Dir.cwd().access(io, installed_tdnf, .{}),
+        std.Io.Dir.cwd().access(io, installed_compatibility_cli, .{}),
     );
 
     const rpmz_absolute = try std.Io.Dir.cwd().realPathFileAlloc(io, rpmz, allocator);
     defer allocator.free(rpmz_absolute);
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.symLink(io, rpmz_absolute, "tdnf", .{});
+    try tmp.dir.symLink(io, rpmz_absolute, compatibility_command, .{});
 
     var tmp_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const tmp_path_len = try tmp.dir.realPath(io, &tmp_path_buffer);
-    const tdnf = try std.fs.path.join(
+    const compatibility_cli = try std.fs.path.join(
         allocator,
-        &.{ tmp_path_buffer[0..tmp_path_len], "tdnf" },
+        &.{ tmp_path_buffer[0..tmp_path_len], compatibility_command },
     );
-    defer allocator.free(tdnf);
+    defer allocator.free(compatibility_cli);
 
-    try expectCompatibilityParity(allocator, tdnf, rpmz, &.{"--version"});
-    try expectCompatibilityParity(allocator, tdnf, rpmz, &.{"--help"});
-    try expectCompatibilityParity(allocator, tdnf, rpmz, &.{"--invalid-option"});
-    try expectCompatibilityParity(allocator, tdnf, rpmz, &.{"not-a-command"});
+    try expectCompatibilityParity(allocator, compatibility_cli, rpmz, &.{"--version"});
+    try expectCompatibilityParity(allocator, compatibility_cli, rpmz, &.{"--help"});
+    try expectCompatibilityParity(allocator, compatibility_cli, rpmz, &.{"--invalid-option"});
+    try expectCompatibilityParity(allocator, compatibility_cli, rpmz, &.{"not-a-command"});
 }
 
 test "rpmz reserves top-level help and version" {

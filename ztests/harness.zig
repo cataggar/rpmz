@@ -18,6 +18,7 @@
 const std = @import("std");
 
 const io = std.testing.io;
+const compatibility_command = "tdnf";
 
 pub const Error = error{
     MissingBuildTree,
@@ -376,16 +377,17 @@ pub const Root = struct {
         try self.tmp.dir.writeFile(io, .{ .sub_path = "rpmz.conf", .data = body.items });
     }
 
-    /// Runs `rpmz tdnf` against this root. `-c <conf>`, `--installroot <root>`
-    /// and `--releasever` are injected, mirroring what the pytest `utils.run`
-    /// fixture does, so a test body reads like the command a user would type.
+    /// Runs the package-manager compatibility command against this root.
+    /// `-c <conf>`, `--installroot <root>` and `--releasever` are injected,
+    /// mirroring what the pytest `utils.run` fixture does, so a test body reads
+    /// like the command a user would type.
     pub fn run(self: *Root, args: []const []const u8) !Result {
         var argv: std.ArrayList([]const u8) = .empty;
         defer argv.deinit(self.allocator);
         try argv.ensureTotalCapacity(self.allocator, args.len + 7);
 
         argv.appendAssumeCapacity(self.layout.rpmz);
-        argv.appendAssumeCapacity("tdnf");
+        argv.appendAssumeCapacity(compatibility_command);
         argv.appendAssumeCapacity("-c");
         argv.appendAssumeCapacity(self.conf);
         argv.appendAssumeCapacity("--installroot");

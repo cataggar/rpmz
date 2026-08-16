@@ -59,6 +59,29 @@ PROTOCOL = re.compile(
 LEGACY_PRODUCT = re.compile(r"(?i)(?<![A-Za-z0-9_])tdnf(?![A-Za-z0-9_])")
 FIXTURE_TOKEN = re.compile(r"\btdnf-[A-Za-z0-9_.+*?/-]+")
 RENAMED_FIXTURE_TOKEN = re.compile(r"\brpmz-[A-Za-z0-9_.+*?/-]+")
+COMPATIBILITY_CLI_ALLOWANCES = {
+    "tools/cli/dispatcher.zig": (
+        'const compatibility_command = "tdnf";',
+        'const system_compatibility_path = "/usr/bin/tdnf";',
+        'const alternate_compatibility_path = "/opt/rpmz/bin/tdnf/";',
+    ),
+    "tools/cli/dispatcher_cli_test.zig": (
+        'const compatibility_command = "tdnf";',
+    ),
+    "tools/cli/main.zig": (
+        'const compatibility_command: [*:0]const u8 = "tdnf";',
+        r"\\  tdnf     Run the compatibility package manager",
+    ),
+    "tools/cli/plan_cli_test.zig": (
+        'const compatibility_command = "tdnf";',
+    ),
+    "tools/cli/replay_cli_test.zig": (
+        'const compatibility_command = "tdnf";',
+    ),
+    "ztests/harness.zig": (
+        'const compatibility_command = "tdnf";',
+    ),
+}
 
 
 def repository_files():
@@ -195,6 +218,14 @@ def dynamic_fixture_errors(source, source_name):
     return errors
 
 
+def scrub_compatibility_allowances(source, relative):
+    for allowed in COMPATIBILITY_CLI_ALLOWANCES.get(
+        relative.as_posix(), ()
+    ):
+        source = source.replace(allowed, "")
+    return source
+
+
 def self_test():
     errors = config_fixture_errors(
         '{"requiring_package": "rpmz-test-not-a-fixture"}',
@@ -248,6 +279,28 @@ def self_test():
             raise AssertionError(
                 f"fake generated fixture {renamed!r} was not rejected"
             )
+    compatibility_source = (
+        'const compatibility_command = "tdnf";\n'
+        'const system_compatibility_path = "/usr/bin/tdnf";\n'
+        'const alternate_compatibility_path = "/opt/rpmz/bin/tdnf/";'
+    )
+    scrubbed = scrub_allowed(
+        compatibility_source,
+        Path("tools/cli/dispatcher.zig"),
+        set(),
+        set(),
+    )
+    if LEGACY_PRODUCT.search(scrubbed):
+        raise AssertionError("explicit compatibility CLI tokens were rejected")
+    stale_source = 'const obsolete_product = "tdnf";'
+    scrubbed = scrub_allowed(
+        stale_source,
+        Path("tools/cli/dispatcher.zig"),
+        set(),
+        set(),
+    )
+    if not LEGACY_PRODUCT.search(scrubbed):
+        raise AssertionError("unrelated stale product token was accepted")
 
 
 def scrub_allowed(source, relative, fixture_names, legacy_fixture_tokens):
@@ -313,6 +366,7 @@ def scrub_allowed(source, relative, fixture_names, legacy_fixture_tokens):
         "scripts/docs-audit.py",
     }:
         source = LEGACY_PRODUCT.sub("", source)
+    source = scrub_compatibility_allowances(source, relative)
     return source
 
 
