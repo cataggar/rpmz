@@ -5,6 +5,7 @@ const rpmz = @import("rpmz");
 const replay_options = @import("replay_options.zig");
 
 const allocator = std.testing.allocator;
+const compatibility_command = "tdnf";
 const io = std.testing.io;
 const replay = rpmz.replay;
 const resolver = rpmz.resolver;
@@ -379,6 +380,19 @@ fn runCli(binary: []const u8, args: []const []const u8) !std.process.RunResult {
     });
 }
 
+fn runLegacyCli(binary: []const u8, args: []const []const u8) !std.process.RunResult {
+    const argv = try allocator.alloc([]const u8, args.len + 2);
+    defer allocator.free(argv);
+    argv[0] = binary;
+    argv[1] = compatibility_command;
+    @memcpy(argv[2..], args);
+    return std.process.run(allocator, io, .{
+        .argv = argv,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
+    });
+}
+
 const ClosedStderrResult = struct {
     term: std.process.Child.Term,
     stdout: []u8,
@@ -511,7 +525,7 @@ fn expectLegacyOptionJson(
     expected_message: []const u8,
     expected_stderr: ?[]const u8,
 ) !void {
-    const result = try runCli(binary, args);
+    const result = try runLegacyCli(binary, args);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
     try std.testing.expectEqual(expected_code, exitCode(result));
@@ -634,7 +648,7 @@ test "legacy parser diagnostics retain non-JSON channels" {
     };
 
     for (cases) |case| {
-        const result = try runCli(binary, case.args);
+        const result = try runLegacyCli(binary, case.args);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
         try std.testing.expect(std.mem.indexOf(
@@ -1172,7 +1186,7 @@ test "replay-only options preserve legacy JSON and diagnostic channels" {
         &.{ "list", "--rpmdb-path", "--json" },
     };
     for (json_operands) |args| {
-        const non_json = try runCli(binary, args);
+        const non_json = try runLegacyCli(binary, args);
         defer allocator.free(non_json.stdout);
         defer allocator.free(non_json.stderr);
         try std.testing.expectEqual(@as(u8, 140), exitCode(non_json));
@@ -1430,7 +1444,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         "Usage: rpmz replay",
     ) == null);
 
-    const config_value_replay = try runCli(
+    const config_value_replay = try runLegacyCli(
         binary,
         &.{ "--config", "replay", "--version" },
     );
@@ -1443,7 +1457,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         "Usage: rpmz replay",
     ) == null);
 
-    const inline_config_value_replay = try runCli(
+    const inline_config_value_replay = try runLegacyCli(
         binary,
         &.{ "--config=replay", "--version" },
     );
@@ -1459,7 +1473,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         "Usage: rpmz replay",
     ) == null);
 
-    const short_config_value_replay = try runCli(
+    const short_config_value_replay = try runLegacyCli(
         binary,
         &.{ "-c", "replay", "--version" },
     );
@@ -1475,7 +1489,7 @@ test "replay CLI rejects missing ambiguous extra and unsafe inputs" {
         "Usage: rpmz replay",
     ) == null);
 
-    const attached_short_config_value_replay = try runCli(
+    const attached_short_config_value_replay = try runLegacyCli(
         binary,
         &.{ "-creplay", "--version" },
     );

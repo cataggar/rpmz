@@ -14,6 +14,7 @@ const resolver = client.resolver;
 
 const io = std.testing.io;
 const schema = "tdnf.transaction-plan/v1";
+const compatibility_command = "tdnf";
 
 const primary_xml =
     \\<?xml version="1.0" encoding="UTF-8"?>
@@ -174,6 +175,7 @@ test "plan command accepts a trailing-slash installroot and emits parseable vers
     const run_result = try std.process.run(allocator, io, .{
         .argv = &.{
             rpmz,
+            compatibility_command,
             "-c",
             config,
             installroot_arg,
@@ -207,6 +209,7 @@ test "plan command accepts a trailing-slash installroot and emits parseable vers
     const broken_result = try std.process.run(allocator, io, .{
         .argv = &.{
             rpmz,
+            compatibility_command,
             "-c",
             config,
             "--installroot",
@@ -357,10 +360,11 @@ test "the plan command and the public resolver agree byte for byte" {
     for ([_][]const u8{ "app", "broken" }) |subject| {
         const cli = try std.process.run(allocator, io, .{
             .argv = &.{
-                rpmz,            "-c",          config,
-                "--installroot", root,          "--releasever",
-                "1",             "--forcearch", "x86_64",
-                "plan",          "install",     subject,
+                rpmz,           compatibility_command, "-c",
+                config,         "--installroot",       root,
+                "--releasever", "1",                   "--forcearch",
+                "x86_64",       "plan",                "install",
+                subject,
             },
             .environ_map = &environ,
         });

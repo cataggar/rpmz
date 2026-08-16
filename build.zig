@@ -2630,6 +2630,40 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_replay_cli_tests.step);
     }
 
+    {
+        const dispatcher_test_mod = b.createModule(.{
+            .root_source_file = b.path("tools/cli/dispatcher.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        const dispatcher_tests = b.addTest(.{ .root_module = dispatcher_test_mod });
+        const run_dispatcher_tests = b.addRunArtifact(dispatcher_tests);
+
+        const dispatcher_cli_test_mod = b.createModule(.{
+            .root_source_file = b.path("tools/cli/dispatcher_cli_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        const dispatcher_cli_tests = b.addTest(.{ .root_module = dispatcher_cli_test_mod });
+        const run_dispatcher_cli_tests = b.addRunArtifact(dispatcher_cli_tests);
+        run_dispatcher_cli_tests.setEnvironmentVariable(
+            "RPMZ_DISPATCHER_TEST_PREFIX",
+            b.getInstallPath(.prefix, ""),
+        );
+        run_dispatcher_cli_tests.step.dependOn(b.getInstallStep());
+        run_dispatcher_cli_tests.has_side_effects = true;
+
+        const dispatcher_test_step = b.step(
+            "dispatcher-test",
+            "Run rpmz dispatcher compatibility tests",
+        );
+        dispatcher_test_step.dependOn(&run_dispatcher_tests.step);
+        dispatcher_test_step.dependOn(&run_dispatcher_cli_tests.step);
+        zig_test_step.dependOn(&run_dispatcher_tests.step);
+        zig_test_step.dependOn(&run_dispatcher_cli_tests.step);
+    }
+
     // rpmz-config
     const rpmz_config_mod = b.createModule(.{
         .root_source_file = b.path("tools/config/main.zig"),
