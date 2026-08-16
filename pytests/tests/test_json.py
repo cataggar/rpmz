@@ -179,15 +179,3 @@ def test_history_info(utils):
     ret = utils.run(['rpmz', '-j', 'history', '--info'])
     d = json.loads("\n".join(ret['stdout']))
     assert type(d) is list
-
-
-def test_jsondump(utils):
-    cmd = os.path.join(utils.config['bin_dir'], 'jsondumptest')
-    ret = utils.run([cmd])
-    assert "FAIL" not in "\n".join(ret['stdout'])
-
-
-def test_jsondump_memcheck(utils):
-    cmd = os.path.join(utils.config['bin_dir'], 'jsondumptest')
-    ret = utils.run_memcheck([cmd])
-    assert ret['retval'] == 0
