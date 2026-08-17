@@ -293,6 +293,27 @@ def archive_members(path):
         return archive.getmembers()
 
 
+def verify_public_archive_bin(member_names, package_name, archive_name):
+    bin_dir = PurePosixPath(package_name) / "bin"
+    for retired in RETIRED_PUBLIC_BINARIES:
+        retired_path = str(bin_dir / retired)
+        if retired_path in member_names:
+            raise SystemExit(
+                f"{archive_name}: retired public executable is installed: "
+                f"bin/{retired}"
+            )
+    bin_entries = {
+        PurePosixPath(name).name
+        for name in member_names
+        if PurePosixPath(name).parent == bin_dir
+    }
+    if bin_entries != set(PUBLIC_BINARIES):
+        raise SystemExit(
+            f"{archive_name}: bin must contain only rpmz: "
+            f"got {sorted(bin_entries)}"
+        )
+
+
 def verify_archive(path, version, platform_name):
     package_name = f"rpmz-{version}-{platform_name}"
     members = archive_members(path)
@@ -311,17 +332,7 @@ def verify_archive(path, version, platform_name):
         expected = f"{package_name}/{relative}"
         if expected not in member_names:
             raise SystemExit(f"{path.name}: missing {expected}")
-    bin_entries = {
-        PurePosixPath(member.name.rstrip("/")).name
-        for member in members
-        if PurePosixPath(member.name.rstrip("/")).parent
-        == PurePosixPath(package_name) / "bin"
-    }
-    if bin_entries != set(PUBLIC_BINARIES):
-        raise SystemExit(
-            f"{path.name}: bin must contain only rpmz: "
-            f"got {sorted(bin_entries)}"
-        )
+    verify_public_archive_bin(member_names, package_name, path.name)
     rpmz_member = next(
         member for member in members
         if member.name.rstrip("/") == f"{package_name}/bin/rpmz"
@@ -332,17 +343,6 @@ def verify_archive(path, version, platform_name):
         prefix = f"{package_name}/{directory}/"
         if not any(name.startswith(prefix) for name in member_names):
             raise SystemExit(f"{path.name}: empty/missing {directory}/")
-    legacy = "td" + "nf"
-    offenders = [
-        name for name in member_names
-        if legacy in PurePosixPath(name).name.lower()
-    ]
-    if offenders:
-        raise SystemExit(
-            f"{path.name}: legacy installed artifact: {offenders[0]}"
-        )
-
-
 def verify_checksum(path):
     sidecar = path.with_name(path.name + ".sha256")
     fields = sidecar.read_text(encoding="ascii").strip().split()
@@ -467,6 +467,36 @@ def dry_run(args):
     print(f"release dry-run passed: {', '.join(names(args.version, current))}")
 
 
+def self_test(_args):
+    package_name = "rpmz-1.2.3-linux-x64"
+    rpmz_path = f"{package_name}/bin/rpmz"
+    fixture_name = "td" + "nf-repoquery-enhances-1.0-1.x86_64.rpm"
+    fixture_path = f"{package_name}/repo/photon-test-sha512/RPMS/x86_64/"
+    verify_public_archive_bin(
+        {rpmz_path, fixture_path + fixture_name},
+        package_name,
+        "self-test.tar.gz",
+    )
+    for retired in RETIRED_PUBLIC_BINARIES:
+        try:
+            verify_public_archive_bin(
+                {rpmz_path, f"{package_name}/bin/{retired}"},
+                package_name,
+                "self-test.tar.gz",
+            )
+        except SystemExit as error:
+            if f"bin/{retired}" in str(error):
+                continue
+            raise AssertionError(
+                f"retired public executable had the wrong rejection: "
+                f"bin/{retired}"
+            ) from error
+        raise AssertionError(
+            f"retired public executable was accepted: bin/{retired}"
+        )
+    print("release archive self-test passed")
+
+
 def parser():
     result = argparse.ArgumentParser()
     subparsers = result.add_subparsers(dest="command", required=True)
@@ -494,6 +524,8 @@ def parser():
     dry.add_argument("--output", required=True)
     dry.add_argument("--version", required=True)
     dry.set_defaults(function=dry_run)
+    self_test_parser = subparsers.add_parser("self-test")
+    self_test_parser.set_defaults(function=self_test)
     listing = subparsers.add_parser("names")
     listing.add_argument("--version", required=True)
     listing.set_defaults(

@@ -428,6 +428,7 @@ def audit_packager(errors, manifest, packager):
             "verify_archive", "verify_checksum", "archive_members",
         },
         "dry_run": {"package_binary", "package_source", "verify_assets"},
+        "self_test": {"verify_public_archive_bin"},
     }
     for function, required_calls in expected_calls.items():
         missing = required_calls - calls.get(function, set())
