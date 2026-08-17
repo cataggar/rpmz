@@ -13,7 +13,7 @@ import subprocess
 
 ERROR_RETVAL_RE = re.compile(r'^Error\((\d+)\) :', re.MULTILINE)
 RPMZ_BINARIES = {'rpmz'}
-RPMZ_TOP_LEVEL_COMMANDS = {'auto', 'repo-config', 'tdnf'}
+RPMZ_TOP_LEVEL_COMMANDS = {'auto', 'replay', 'repo-config', 'tdnf'}
 
 
 def split_output_lines(text):

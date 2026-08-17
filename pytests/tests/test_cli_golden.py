@@ -83,6 +83,24 @@ def test_test_harness_inserts_compatibility_command():
     assert executable == os.path.join('bin', 'rpmz')
 
 
+def test_test_harness_preserves_replay_command():
+    config = {
+        'bindir': 'bin',
+        'repo_path': 'repo',
+    }
+    argv, executable = decorate_rpmz_cmd_for_test(
+        ['rpmz', 'replay', '--help'],
+        config,
+        noconfig=True,
+    )
+    assert argv == [
+        'rpmz',
+        'replay',
+        '--help',
+    ]
+    assert executable == os.path.join('bin', 'rpmz')
+
+
 @pytest.mark.parametrize('fixture_path', FIXTURE_PATHS, ids=_fixture_id)
 def test_cli_golden(cli_runtime, fixture_path):
     with open(fixture_path) as handle:

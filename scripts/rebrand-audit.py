@@ -95,8 +95,12 @@ COMPATIBILITY_CLI_ALLOWANCES = {
         "tdnf -> rpmz",
     ),
     "etc/bash_completion.d/rpmz-completion.bash": (
-        '"${COMP_WORDS[1]}" != "tdnf"',
-        '"auto repo-config tdnf --help --version -h"',
+        'compatibility_command="tdnf"',
+        '"auto repo-config replay tdnf --help --version -h"',
+    ),
+    "pytests/tests/test_bash_completion.py": (
+        "COMPATIBILITY_COMMAND = 'tdnf'",
+        "rpmz tdnf",
     ),
     "scripts/librpm-audit.py": (
         '"tdnf",',

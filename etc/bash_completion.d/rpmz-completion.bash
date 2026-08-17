@@ -210,29 +210,122 @@ _rpmz__process_if_cmd() {
     return 0
 }
 
-_rpmz() {
-    local c=0 cur __opts __cmds
-    COMPREPLY=()
-    cur="${COMP_WORDS[COMP_CWORD]}"
-    if [[ "${COMP_WORDS[1]}" != "tdnf" ]]; then
-        COMPREPLY=( $(compgen -W "auto repo-config tdnf --help --version -h" -- "$cur") )
-        return 0
-    fi
+_rpmz__complete_words() {
+    COMPREPLY=( $(compgen -W "$1" -- "$cur") )
+}
+
+_rpmz__complete_legacy() {
+    local first_cmd_index="$1" c="$1" opts
+    local __opts __cmds
     __opts="--4 -4 --6 -6 --alldeps --allowerasing --assumeno -y --assumeyes -b --best --builddeps -C --cacheonly -c --config -d --debuglevel --debugsolver --disableexcludes --disableplugin --disablerepo --downloaddir --downloadonly --enablerepo --enableplugin --exclude --forcearch --help -h -i --installroot --json --noautoremove --nodeps --nogpgcheck --nocligpgcheck --noplugins -q --quiet --reboot-required --refresh --releasever --repo --repofromdir --repofrompath --repoid --rpmdefine --rpmverbosity --sec-severity --security --setopt --skip-broken --skipconflicts --skipdigest --skipsignature --skipobsoletes --source --testonly -v --verbose --version --available --duplicates --extras --file --installed --userinstalled --upgrades --downgrades --whatdepends --whatrequires --whatenhances --whatobsoletes --whatprovides --whatrecommends --whatsuggests --whatsupplements --whatconflicts --changelogs --conflicts --depends --enhances --list --location --obsoletes --provides --qf --recommends --requires --requires-pre --suggests --supplements --all --info --summary --recent --updates --downgrades --to --from --reverse --arch --delete --download-metadata --download-path --gpgcheck --metadata-path --newest-only --norepopath --urls"
     __cmds="autoerase autoremove check check-local check-update clean count distro-sync downgrade erase help history info install list makecache mark provides whatprovides reinstall remove repolist repoquery reposync search update update-to updateinfo upgrade upgrade-to"
     _rpmz__process_if_prev_is_option && return 0
-    while [ $c -lt ${COMP_CWORD} ]; do
-        _rpmz__process_if_cmd $((c++)) && return 0
+    while [ "$c" -lt "${COMP_CWORD}" ]; do
+        _rpmz__process_if_cmd "$c" && return 0
+        c=$((c + 1))
     done
 
-    # if command was not specified:
-    # 1) time for [options], or
-    # 2) command autocomplete?
-    local opts
-    [[ $cur == -* ]] && opts=$__opts || opts=$__cmds
-    COMPREPLY=( $(compgen -W "$opts" -- $cur) )
-    return 0
+    [[ "$cur" == -* ]] && opts="$__opts" || opts="$__cmds"
+    _rpmz__complete_words "$opts"
 }
-complete -F _rpmz -o default -o filenames rpmz
+
+_rpmz__complete_replay() {
+    local prev opts
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    case "$prev" in
+        -i|--installroot|-installroot)
+            COMPREPLY=( $(compgen -d -- "$cur") )
+            return 0
+            ;;
+        --rpmdb-path|-rpmdb-path)
+            COMPREPLY=( $(compgen -f -- "$cur") )
+            return 0
+            ;;
+        --forcearch|-forcearch)
+            _rpmz__complete_words "x86_64 aarch64 noarch"
+            return 0
+            ;;
+    esac
+
+    opts="-i --installroot -installroot --rpmdb-path -rpmdb-path --forcearch -forcearch -j --json -json -h --help"
+    if [[ "$cur" == -* ]]; then
+        _rpmz__complete_words "$opts"
+    else
+        COMPREPLY=(
+            $(compgen -W "$opts" -- "$cur")
+            $(compgen -d -- "$cur")
+        )
+    fi
+}
+
+_rpmz__complete_auto() {
+    local prev
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    case "$prev" in
+        -c|--conf)
+            COMPREPLY=( $(compgen -f -- "$cur") )
+            return 0
+            ;;
+    esac
+    _rpmz__complete_words "-c --conf -i --install -n --notify -t --timer -h --help -v --version"
+}
+
+_rpmz__complete_repo_config() {
+    local c=2 prev opts
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    case "$prev" in
+        -c|--config|-f|--file)
+            COMPREPLY=( $(compgen -f -- "$cur") )
+            return 0
+            ;;
+    esac
+
+    opts="-c --config -f --file -j --json"
+    if [[ "$cur" == -* ]]; then
+        _rpmz__complete_words "$opts"
+        return 0
+    fi
+    while [ "$c" -lt "${COMP_CWORD}" ]; do
+        case "${COMP_WORDS[c]}" in
+            create|edit|get|remove|removerepo|dump)
+                return 0
+                ;;
+        esac
+        c=$((c + 1))
+    done
+    _rpmz__complete_words "$opts create edit get remove removerepo dump"
+}
+
+_rpmz() {
+    local cur compatibility_command top_level_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    compatibility_command="tdnf"
+    top_level_opts="auto repo-config replay tdnf --help --version -h"
+    if [[ "${COMP_WORDS[0]##*/}" == "$compatibility_command" ]]; then
+        _rpmz__complete_legacy 1
+        return 0
+    fi
+    if [ "$COMP_CWORD" -le 1 ]; then
+        _rpmz__complete_words "$top_level_opts"
+        return 0
+    fi
+
+    case "${COMP_WORDS[1]}" in
+        "$compatibility_command")
+            _rpmz__complete_legacy 2
+            ;;
+        replay)
+            _rpmz__complete_replay
+            ;;
+        auto)
+            _rpmz__complete_auto
+            ;;
+        repo-config)
+            _rpmz__complete_repo_config
+            ;;
+    esac
+}
+complete -F _rpmz -o default -o filenames rpmz tdnf
 
 # vim: set et ts=4 sw=4 :
