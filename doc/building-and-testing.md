@@ -12,7 +12,7 @@ zig build -Doptimize=ReleaseSafe install --prefix ./out
 zig build -Doptimize=Debug install --prefix ./out
 ```
 
-The install contains `rpmz`, `rpmz-config`, `rpmz-automatic`, configuration,
+The install contains `rpmz` (including `repo-config`), `rpmz-automatic`, configuration,
 systemd units, shell completion, and private helpers under `libexec/rpmz`.
 
 ## Public Zig package

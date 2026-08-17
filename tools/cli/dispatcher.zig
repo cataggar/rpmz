@@ -7,12 +7,14 @@
 const std = @import("std");
 
 const compatibility_command = "tdnf";
+const repo_config_command = "repo-config";
 const system_compatibility_path = "/usr/bin/tdnf";
 const alternate_compatibility_path = "/opt/rpmz/bin/tdnf/";
 
 pub const Action = union(enum) {
     auto,
     compatibility: usize,
+    repo_config,
     help,
     version,
     missing,
@@ -31,6 +33,9 @@ pub fn classify(argv0: []const u8, first_arg: ?[]const u8) Action {
     if (std.mem.eql(u8, command, "auto")) {
         return .auto;
     }
+    if (std.mem.eql(u8, command, repo_config_command)) {
+        return .repo_config;
+    }
     if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
         return .help;
     }
@@ -47,6 +52,7 @@ test "classifies rpmz top-level invocations" {
     try std.testing.expectEqual(Action.version, classify("rpmz", "--version"));
     try std.testing.expectEqual(Action.auto, classify("rpmz", "auto"));
     try std.testing.expectEqual(Action.unknown, classify("rpmz", "install"));
+    try std.testing.expectEqual(Action.repo_config, classify("rpmz", repo_config_command));
     try std.testing.expectEqual(
         Action{ .compatibility = 2 },
         classify("rpmz", compatibility_command),

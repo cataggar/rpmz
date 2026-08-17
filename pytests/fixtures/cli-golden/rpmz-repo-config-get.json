@@ -1,6 +1,7 @@
 {
   "argv": [
-    "rpmz-config",
+    "rpmz",
+    "repo-config",
     "get",
     "foo",
     "baseurl"

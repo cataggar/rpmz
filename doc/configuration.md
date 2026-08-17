@@ -24,5 +24,5 @@ After installing to `./out`, for example:
 ./out/bin/rpmz --help
 ```
 
-`rpmz-config` manages repository configuration, and `rpmz-automatic` supports
+`rpmz repo-config` manages repository configuration, and `rpmz-automatic` supports
 scheduled operations using `/etc/rpmz/automatic.conf`.

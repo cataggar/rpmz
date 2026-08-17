@@ -305,16 +305,15 @@ fn printRemoveError(psz_filename: [*c]const u8) u8 {
     );
 }
 
-pub fn main(init: std.process.Init.Minimal) u8 {
+pub fn run(argv: []const [*:0]const u8) u8 {
     var psz_main_config: [*c]const u8 = rpmz_conf_file;
     var psz_repo_config: [*c]const u8 = null;
     var do_json = false;
 
-    const argv = init.args.vector;
     const argc: c_int = @intCast(argv.len);
     const argv_ptr: [*c]?[*:0]u8 = @ptrCast(@constCast(argv.ptr));
 
-    c.optind = 1;
+    c.optind = 0;
     c.opterr = 1;
     c.optopt = 0;
     c.optarg = null;
@@ -323,7 +322,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         var long_options = [_]c.struct_option{
             .{ .name = "config", .has_arg = 1, .flag = null, .val = 'c' },
             .{ .name = "file", .has_arg = 1, .flag = null, .val = 'f' },
-            .{ .name = "json", .has_arg = 1, .flag = null, .val = 'j' },
+            .{ .name = "json", .has_arg = 0, .flag = null, .val = 'j' },
             .{ .name = null, .has_arg = 0, .flag = null, .val = 0 },
         };
 
@@ -590,4 +589,13 @@ test "json dump preserves repo wrapper object" {
         "{\"foo\":{\"name\":\"Foo\",\"enabled\":\"1\"}}",
         std.mem.span(jd.buf),
     );
+}
+
+test "argv runner resets getopt state" {
+    const no_args = [_][*:0]const u8{"repo-config"};
+    const config_only = [_][*:0]const u8{ "repo-config", "-c", "main.conf" };
+
+    try std.testing.expectEqual(@as(u8, 0), run(&no_args));
+    try std.testing.expectEqual(@as(u8, 0), run(&config_only));
+    try std.testing.expectEqual(@as(u8, 0), run(&no_args));
 }

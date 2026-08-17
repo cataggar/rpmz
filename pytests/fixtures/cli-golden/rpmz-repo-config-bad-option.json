@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "rpmz",
+    "repo-config",
+    "--bad-option"
+  ],
+  "stdout": "",
+  "stderr": "repo-config: unrecognized option '--bad-option'",
+  "retval": 1
+}

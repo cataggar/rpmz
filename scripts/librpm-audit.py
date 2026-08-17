@@ -300,13 +300,18 @@ def installed_surface_errors(prefix):
     rpmz = prefix / "bin" / "rpmz"
     required = (
         rpmz,
-        prefix / "bin" / "rpmz-config",
         prefix / "libexec" / "rpmz" / "rpmz-history-util",
         prefix / "libexec" / "rpmz" / "rpmz-test-support",
     )
     for path in required:
         if not path.is_file():
             errors.append(f"{path}: required executable is missing")
+
+    retired_config = prefix / "bin" / "rpmz-config"
+    if retired_config.exists() or retired_config.is_symlink():
+        errors.append(
+            f"{retired_config}: retired standalone executable is installed"
+        )
 
     for path in sorted(prefix.rglob("*")):
         relative = path.relative_to(prefix)

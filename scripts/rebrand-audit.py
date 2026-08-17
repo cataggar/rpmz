@@ -84,6 +84,15 @@ COMPATIBILITY_CLI_ALLOWANCES = {
     "ztests/harness.zig": (
         'const compatibility_command = "tdnf";',
     ),
+    "pytests/cli_testlib.py": (
+        "'repo-config', 'tdnf',",
+    ),
+    "pytests/scripts/refresh_cli_golden.py": (
+        "case['argv'].insert(1, 'tdnf')",
+    ),
+    "pytests/tests/test_configutil.py": (
+        "['rpmz', 'tdnf', 'repolist']",
+    ),
 }
 
 
@@ -229,6 +238,20 @@ def scrub_compatibility_allowances(source, relative):
     return source
 
 
+def scrub_golden_compatibility_argv(source, relative):
+    if not (
+        relative.as_posix().startswith("pytests/fixtures/cli-golden/rpmz-")
+        and relative.suffix == ".json"
+    ):
+        return source
+    return re.sub(
+        r'("argv"\s*:\s*\[\s*"rpmz"\s*,\s*)"tdnf"(\s*,)',
+        r"\1\2",
+        source,
+        count=1,
+    )
+
+
 def self_test():
     errors = config_fixture_errors(
         '{"requiring_package": "rpmz-test-not-a-fixture"}',
@@ -313,6 +336,26 @@ def self_test():
     )
     if not LEGACY_PRODUCT.search(scrubbed):
         raise AssertionError("unrelated stale product token was accepted")
+    golden_compatibility_source = (
+        '{"argv": ["rpmz", "tdnf", "list"]}'
+    )
+    scrubbed = scrub_allowed(
+        golden_compatibility_source,
+        Path("pytests/fixtures/cli-golden/rpmz-list-help.json"),
+        set(),
+        set(),
+    )
+    if LEGACY_PRODUCT.search(scrubbed):
+        raise AssertionError("compatibility golden argv was rejected")
+    stale_golden_source = '{"argv": ["rpmz", "list"], "stderr": "tdnf"}'
+    scrubbed = scrub_allowed(
+        stale_golden_source,
+        Path("pytests/fixtures/cli-golden/rpmz-list-help.json"),
+        set(),
+        set(),
+    )
+    if not LEGACY_PRODUCT.search(scrubbed):
+        raise AssertionError("non-argv golden product token was accepted")
 
 
 def scrub_allowed(source, relative, fixture_names, legacy_fixture_tokens):
@@ -378,6 +421,7 @@ def scrub_allowed(source, relative, fixture_names, legacy_fixture_tokens):
         "scripts/docs-audit.py",
     }:
         source = LEGACY_PRODUCT.sub("", source)
+    source = scrub_golden_compatibility_argv(source, relative)
     source = scrub_compatibility_allowances(source, relative)
     return source
 

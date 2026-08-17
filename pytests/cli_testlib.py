@@ -12,7 +12,7 @@ import shutil
 import subprocess
 
 ERROR_RETVAL_RE = re.compile(r'^Error\((\d+)\) :', re.MULTILINE)
-RPMZ_BINARIES = {'rpmz', 'rpmz-config'}
+RPMZ_BINARIES = {'rpmz'}
 
 
 def split_output_lines(text):
@@ -57,7 +57,13 @@ def decorate_rpmz_cmd_for_test(cmd, config, noconfig=False):
         executable = os.path.join(resolve_bindir(config), decorated[0])
         if ('-c' not in decorated and '--config' not in decorated and
                 not noconfig):
-            decorated[1:1] = [
+            config_index = (
+                2 if len(decorated) > 1 and decorated[1] in {
+                    'repo-config', 'tdnf',
+                }
+                else 1
+            )
+            decorated[config_index:config_index] = [
                 '-c',
                 os.path.join(config['repo_path'], 'rpmz.conf'),
             ]
@@ -122,10 +128,10 @@ class MinimalCliRuntime(object):
 
     def prepare_case(self, argv):
         self.remove_repo_file()
-        if not argv or argv[0] != 'rpmz-config':
+        if len(argv) < 2 or argv[:2] != ['rpmz', 'repo-config']:
             return
 
-        action = _get_rpmz_config_action(argv)
+        action = _get_repo_config_action(argv[2:])
         if action == 'edit':
             self.seed_repo_file({
                 'name': 'Foo',
@@ -188,8 +194,8 @@ class MinimalCliRuntime(object):
             handle.write('cachedir={}\n'.format(self._cachedir()))
 
 
-def _get_rpmz_config_action(argv):
-    index = 1
+def _get_repo_config_action(argv):
+    index = 0
     while index < len(argv):
         token = argv[index]
         if token in {'-c', '--config', '-f', '--file'}:

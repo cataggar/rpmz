@@ -1462,21 +1462,27 @@ pub fn build(b: *Build) void {
         zig_test_step.dependOn(&run_tests.step);
     }
 
+    const repo_config_mod = b.createModule(.{
+        .root_source_file = b.path("tools/config/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
+    });
+    repo_config_mod.addIncludePath(b.path("."));
+    repo_config_mod.addImport("jsondump_abi", jsondump_abi_mod);
+    repo_config_mod.linkLibrary(llconf_lib);
+    repo_config_mod.linkLibrary(jsondump_lib);
+    linkSystem(repo_config_mod, &.{"dl"});
+    const repo_config_test_step = b.step(
+        "repo-config-test",
+        "Run repository configuration argv and dispatcher tests",
+    );
     {
-        const test_mod = b.createModule(.{
-            .root_source_file = b.path("tools/config/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        });
-        test_mod.addIncludePath(b.path("."));
-        test_mod.addImport("jsondump_abi", jsondump_abi_mod);
-        test_mod.linkLibrary(llconf_lib);
-        test_mod.linkLibrary(jsondump_lib);
-        linkSystem(test_mod, &.{"dl"});
-        const tests = b.addTest(.{ .root_module = test_mod });
+        const tests = b.addTest(.{ .root_module = repo_config_mod });
         const run_tests = b.addRunArtifact(tests);
         zig_test_step.dependOn(&run_tests.step);
+        repo_config_test_step.dependOn(&run_tests.step);
     }
 
     // Smoke-test the vendored zig-sqlite dependency in isolation.
@@ -2571,13 +2577,17 @@ pub fn build(b: *Build) void {
         .pic = true,
     });
     rpmz_mod.addIncludePath(b.path("tools/cli"));
+    rpmz_mod.addIncludePath(b.path("."));
     rpmz_mod.addImport("jsondump_abi", jsondump_abi_mod);
     rpmz_mod.addImport("rpmz_common", common_api_mod);
     rpmz_mod.addImport("tdnf_internal_abi", internal_abi_mod);
     rpmz_mod.addImport("rpmz_client", client_mod);
     rpmz_mod.addImport("rpmz_cli", cli_mod);
     rpmz_mod.addImport("rpmz", public_rpmz_mod);
+    rpmz_mod.addImport("repo_config", repo_config_mod);
+    rpmz_mod.linkLibrary(llconf_lib);
     rpmz_mod.linkLibrary(jsondump_lib);
+    linkSystem(rpmz_mod, &.{"dl"});
     const rpmz_exe = b.addExecutable(.{
         .name = "rpmz",
         .root_module = rpmz_mod,
@@ -2662,27 +2672,8 @@ pub fn build(b: *Build) void {
         dispatcher_test_step.dependOn(&run_dispatcher_cli_tests.step);
         zig_test_step.dependOn(&run_dispatcher_tests.step);
         zig_test_step.dependOn(&run_dispatcher_cli_tests.step);
+        repo_config_test_step.dependOn(&run_dispatcher_cli_tests.step);
     }
-
-    // rpmz-config
-    const rpmz_config_mod = b.createModule(.{
-        .root_source_file = b.path("tools/config/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .pic = true,
-    });
-    rpmz_config_mod.addIncludePath(b.path("."));
-    rpmz_config_mod.addImport("jsondump_abi", jsondump_abi_mod);
-    rpmz_config_mod.linkLibrary(llconf_lib);
-    rpmz_config_mod.linkLibrary(jsondump_lib);
-    linkSystem(rpmz_config_mod, &.{"dl"});
-    const rpmz_config_exe = b.addExecutable(.{
-        .name = "rpmz-config",
-        .root_module = rpmz_config_mod,
-    });
-    hardenExe(rpmz_config_exe);
-    b.installArtifact(rpmz_config_exe);
 
     // rpmz-history-util links the vendored-SQLite history and rpmzig libs.
     const history_util_options = b.addOptions();

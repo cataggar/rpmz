@@ -26,6 +26,13 @@ CMD_RE = re.compile(
     re.MULTILINE,
 )
 BINDIR_ENV = 'RPMZ_CLI_GOLDEN_BINDIR'
+TOP_LEVEL_CASES = {
+    'rpmz-help-long',
+    'rpmz-no-args',
+    'rpmz-bad-command',
+    'rpmz-bad-option',
+    'rpmz-version',
+}
 
 
 def parse_args():
@@ -166,9 +173,10 @@ def build_cases(commands):
             'argv': ['rpmz', 'reposync', '--norepopath', '--delete'],
         },
         {
-            'name': 'rpmz-config-create',
+            'name': 'rpmz-repo-config-create',
             'argv': [
-                'rpmz-config',
+                'rpmz',
+                'repo-config',
                 'create',
                 'foo',
                 'name=Foo',
@@ -177,34 +185,39 @@ def build_cases(commands):
             ],
         },
         {
-            'name': 'rpmz-config-edit',
-            'argv': ['rpmz-config', 'edit', 'foo', 'enabled=true'],
+            'name': 'rpmz-repo-config-edit',
+            'argv': ['rpmz', 'repo-config', 'edit', 'foo', 'enabled=true'],
         },
         {
-            'name': 'rpmz-config-get',
-            'argv': ['rpmz-config', 'get', 'foo', 'baseurl'],
+            'name': 'rpmz-repo-config-get',
+            'argv': ['rpmz', 'repo-config', 'get', 'foo', 'baseurl'],
         },
         {
-            'name': 'rpmz-config-dump',
-            'argv': ['rpmz-config', '-j', 'dump', 'foo'],
+            'name': 'rpmz-repo-config-dump',
+            'argv': ['rpmz', 'repo-config', '-j', 'dump', 'foo'],
         },
         {
-            'name': 'rpmz-config-remove',
-            'argv': ['rpmz-config', 'remove', 'foo', 'gpgcheck'],
+            'name': 'rpmz-repo-config-remove',
+            'argv': ['rpmz', 'repo-config', 'remove', 'foo', 'gpgcheck'],
         },
         {
-            'name': 'rpmz-config-removerepo',
-            'argv': ['rpmz-config', 'removerepo', 'foo'],
+            'name': 'rpmz-repo-config-removerepo',
+            'argv': ['rpmz', 'repo-config', 'removerepo', 'foo'],
         },
         {
-            'name': 'rpmz-config-bad-option',
-            'argv': ['rpmz-config', '--bad-option'],
+            'name': 'rpmz-repo-config-bad-option',
+            'argv': ['rpmz', 'repo-config', '--bad-option'],
         },
         {
-            'name': 'rpmz-config-bad-action',
-            'argv': ['rpmz-config', 'frobnicate'],
+            'name': 'rpmz-repo-config-bad-action',
+            'argv': ['rpmz', 'repo-config', 'frobnicate'],
         },
     ])
+    for case in cases:
+        if case['name'] not in TOP_LEVEL_CASES and (
+                case['argv'][0] == 'rpmz' and
+                case['argv'][1] != 'repo-config'):
+            case['argv'].insert(1, 'tdnf')
     return cases
 
 
