@@ -19,7 +19,7 @@ Three real production bugs passed both gates cleanly:
 | Bug | PR | Why the gate missed it |
 |---|---|---|
 | `provides` matched on substrings | #252 | assertion was satisfied by unrelated stdout |
-| `rpmz count` off by one | #252 | no test compared `count` to `list --all` |
+| `rpmz tdnf count` off by one | #252 | no test compared `count` to `list --all` |
 | repository priority not normalized | #251 | oracle does not inspect plan fields |
 
 **Therefore every port must include an explicit before/after behavioural

@@ -191,7 +191,7 @@ pub const Result = struct {
         return error.TestUnexpectedResult;
     }
 
-    /// One row of `rpmz list` output: `<name>.<arch>  <evr>  <repo>`.
+    /// One row of `rpmz tdnf list` output: `<name>.<arch>  <evr>  <repo>`.
     pub const PackageLine = struct {
         name: []const u8,
         arch: []const u8,
@@ -208,7 +208,7 @@ pub const Result = struct {
         }
     };
 
-    /// Parses `rpmz list`'s three-column output.
+    /// Parses `rpmz tdnf list`'s three-column output.
     ///
     /// The returned strings borrow `stdout`, so they live as long as the
     /// `Result`. A line that does not have exactly three columns, or whose

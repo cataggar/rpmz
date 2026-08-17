@@ -2,7 +2,7 @@
 //!
 //! `resolvePlan` is the only supported way to obtain a
 //! `transaction_plan.Plan` without going through the private handle API. It
-//! runs the same `resolve_service` pipeline `rpmz plan` uses, so the canonical
+//! runs the same `resolve_service` pipeline `rpmz tdnf plan` uses, so the canonical
 //! bytes and digest produced here are the bytes and digest the CLI prints.
 //!
 //! Every fact the resolve depends on is declared by the caller. The resolver
@@ -123,12 +123,12 @@ pub const Operation = enum {
     }
 
     /// The single mapping from a user-facing transaction verb to a typed
-    /// operation. `rpmz plan` and `resolvePlan` both resolve their verbs here,
+    /// operation. `rpmz tdnf plan` and `resolvePlan` both resolve their verbs here,
     /// so no caller can disagree with another about what an alias means.
     ///
     /// A verb whose bare form means "act on everything installed" is promoted
     /// to its singleton operation when no subject was given, which is the rule
-    /// `rpmz upgrade`, `rpmz downgrade`, and `rpmz autoremove` have always
+    /// `rpmz tdnf upgrade`, `rpmz tdnf downgrade`, and `rpmz tdnf autoremove` have always
     /// followed. Returns null for a verb this resolver does not plan.
     pub fn fromVerb(name: []const u8, subject_count: usize) ?Operation {
         const bare = subject_count == 0;
@@ -397,7 +397,7 @@ pub fn resolvePlan(
 
     // A solver contradiction publishes a structured problem plan and still
     // reports a resolve error. The published plan is the answer in that case,
-    // exactly as it is for `rpmz plan`.
+    // exactly as it is for `rpmz tdnf plan`.
     if (state.takePublished()) |plan| return plan;
     if (resolve_result == 0) return error.ResolveFailed;
     return mapError(resolve_result);
@@ -415,7 +415,7 @@ extern fn TDNFTransactionPlanGetCanonicalJson(
 /// Plans `ppszCmds[0]` over `ppszCmds[1..]` on an already configured handle and
 /// renders the canonical plan bytes.
 ///
-/// This is the whole of `rpmz plan`. The command owns nothing but its argument
+/// This is the whole of `rpmz tdnf plan`. The command owns nothing but its argument
 /// vector and stdout: the verb mapping, the capture lifecycle, the
 /// problem-plan policy, and the canonical writer all live here, so the CLI
 /// cannot disagree with `resolvePlan` about any of them.
@@ -1454,7 +1454,7 @@ test "resolver: every transaction verb maps to exactly one operation" {
         with_subject: Operation,
     };
     // Every alias `rpmz` accepts for a planned transaction, and what it means
-    // with and without a subject. This table is the contract `rpmz plan` and
+    // with and without a subject. This table is the contract `rpmz tdnf plan` and
     // `resolvePlan` share.
     const cases = [_]Case{
         .{ .verb = "install", .bare = .install, .with_subject = .install },

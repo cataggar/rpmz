@@ -36,6 +36,15 @@ class CommandRunner:
             env=env,
         )
 
+    def compatibility_version(self, path, env):
+        return subprocess.run(
+            [path, "tdnf", "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
     def native_audit(self, prefix, env):
         return subprocess.run(
             [
@@ -168,6 +177,9 @@ def run_smoke(args, runner=None):
     version_result = runner.rpmz_version(rpmz_path, env)
     if version_result.stdout.strip() != f"rpmz: {args.version}":
         raise SystemExit("installed rpmz reported the wrong version")
+    compatibility_version = runner.compatibility_version(rpmz_path, env)
+    if compatibility_version.stdout.strip() != f"rpmz: {args.version}":
+        raise SystemExit("installed rpmz compatibility command reported the wrong version")
 
     install_roots = [
         path.parent.parent
@@ -177,6 +189,11 @@ def run_smoke(args, runner=None):
     if len(install_roots) != 1:
         raise SystemExit("expected exactly one installed rpmz layout")
     install_root = install_roots[0]
+    bin_entries = sorted(path.name for path in (install_root / "bin").iterdir())
+    if bin_entries != ["rpmz"]:
+        raise SystemExit(
+            f"installed release bin must contain only rpmz: {bin_entries}"
+        )
     for relative in ("lib", "libexec", "etc", "COPYING", "README.md"):
         if not (install_root / relative).exists():
             raise SystemExit(f"installed release is missing {relative}")
@@ -240,6 +257,11 @@ class FakeRunner:
     def rpmz_version(self, path, env):
         del env
         self.commands.append([path, "--version"])
+        return FakeResult(stdout=f"rpmz: {self.args.version}\n")
+
+    def compatibility_version(self, path, env):
+        del env
+        self.commands.append([path, "tdnf", "--version"])
         return FakeResult(stdout=f"rpmz: {self.args.version}\n")
 
     def native_audit(self, prefix, env):

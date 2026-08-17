@@ -828,7 +828,7 @@ fn downloadToPinnedParent(
 
         const safe_url = uri_sanitize.redactAlloc(allocator, std.mem.span(url)) catch "download URL";
         if (status >= 400) {
-            if (!builtin.is_test) common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'rpmz makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
+            if (!builtin.is_test) common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'rpmz tdnf makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
             return errors.ERROR_TDNF_REPO_PERFORM;
         }
     }

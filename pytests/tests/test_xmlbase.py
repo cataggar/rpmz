@@ -227,7 +227,7 @@ def env(utils, xmlbase_repos):
 # ---------------------------------------------------------------------------
 
 def _assert_list(utils, envdir, pkgname=PKGNAME):
-    """rpmz list --available must show the package."""
+    """rpmz tdnf list --available must show the package."""
     conf = os.path.join(envdir, 'rpmz.conf')
     ret = utils.run(['rpmz', '-c', conf, '--disablerepo=*',
                      '--enablerepo=test-repo', 'list', '--available',
@@ -239,7 +239,7 @@ def _assert_list(utils, envdir, pkgname=PKGNAME):
 
 def _repoquery_location(utils, envdir, pkgname=PKGNAME):
     """
-    Run rpmz repoquery --location and return the location line.
+    Run rpmz tdnf repoquery --location and return the location line.
 
     Filters out informational lines like "Refreshing metadata for: ..."
     so assertions are not confused by those.
@@ -257,7 +257,7 @@ def _repoquery_location(utils, envdir, pkgname=PKGNAME):
 def _assert_repoquery_location(utils, envdir, expected_suffix,
                                pkgname=PKGNAME):
     """
-    rpmz repoquery --location must return a path/URL ending with
+    rpmz tdnf repoquery --location must return a path/URL ending with
     *expected_suffix* (the RPM filename).
     """
     location = _repoquery_location(utils, envdir, pkgname)
@@ -268,7 +268,7 @@ def _assert_repoquery_location(utils, envdir, expected_suffix,
 
 
 def _assert_install(utils, envdir, pkgname=PKGNAME):
-    """rpmz install -y must succeed and the package must be installed."""
+    """rpmz tdnf install -y must succeed and the package must be installed."""
     conf = os.path.join(envdir, 'rpmz.conf')
     utils.erase_package(pkgname)
     ret = utils.run(['rpmz', '-c', conf, '--disablerepo=*',
@@ -280,7 +280,7 @@ def _assert_install(utils, envdir, pkgname=PKGNAME):
 
 
 def _assert_downloadonly(utils, envdir, pkgname=PKGNAME):
-    """rpmz install --downloadonly must download the RPM without installing."""
+    """rpmz tdnf install --downloadonly must download the RPM without installing."""
     conf = os.path.join(envdir, 'rpmz.conf')
     utils.erase_package(pkgname)
     dldir = tempfile.mkdtemp(dir=envdir, prefix='dl-')

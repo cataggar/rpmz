@@ -31,11 +31,11 @@ pub export fn TDNFCliShowHelp() void {
 }
 
 pub export fn TDNFCliShowNoSuchCommand(pszCmd: ?[*:0]const u8) void {
-    common.log(parserDiagnosticLevel(LOG_CRIT), "No such command: %s. Please use /usr/bin/rpmz --help\n", .{pszCmd orelse ""});
+    common.log(parserDiagnosticLevel(LOG_CRIT), "No such command: %s. Please use /usr/bin/rpmz tdnf --help\n", .{pszCmd orelse ""});
 }
 
 pub export fn TDNFCliShowNoSuchOption(pszOption: ?[*:0]const u8) void {
-    common.log(parserDiagnosticLevel(LOG_CRIT), "No such option: %s. Please use /usr/bin/rpmz --help\n", .{pszOption orelse ""});
+    common.log(parserDiagnosticLevel(LOG_CRIT), "No such option: %s. Please use /usr/bin/rpmz tdnf --help\n", .{pszOption orelse ""});
 }
 
 pub export fn TDNFCliHelpCommand(
@@ -51,6 +51,6 @@ pub export fn TDNFCliHelpCommand(
 }
 
 test "help text preserves usage heading" {
-    try std.testing.expect(std.mem.startsWith(u8, help_msg, "Usage: rpmz [options] COMMAND\n"));
+    try std.testing.expect(std.mem.startsWith(u8, help_msg, "Usage: rpmz tdnf [options] COMMAND\n"));
     try std.testing.expect(std.mem.indexOf(u8, help_msg, "Please refer to https://github.com/cataggar/rpmz") != null);
 }

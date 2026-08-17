@@ -375,11 +375,21 @@ def audit_packager(errors, manifest, packager):
         },
     )
     audit_process_execution(errors, tree, "release packager", {
-        "package_binary": (
+        "rpmz_version": (
             sequence(
                 binop(
                     "Div", name("prefix"), constant("bin/rpmz")
                 ),
+                constant("--version"),
+            ),
+            {"check", "capture_output", "text"},
+        ),
+        "compatibility_version": (
+            sequence(
+                binop(
+                    "Div", name("prefix"), constant("bin/rpmz")
+                ),
+                constant("tdnf"),
                 constant("--version"),
             ),
             {"check", "capture_output", "text"},
@@ -410,6 +420,7 @@ def audit_packager(errors, manifest, packager):
             }
     expected_calls = {
         "package_binary": {
+            "verify_public_bin", "rpmz_version", "compatibility_version",
             "copy_install_tree", "add_tree", "write_checksum", "write_sbom",
         },
         "package_source": {"write_checksum"},
@@ -603,6 +614,10 @@ def audit_smoke_source(errors, smoke_source):
             sequence(name("path"), constant("--version")),
             {"check", "capture_output", "text", "env"},
         ),
+        "compatibility_version": (
+            sequence(name("path"), constant("tdnf"), constant("--version")),
+            {"check", "capture_output", "text", "env"},
+        ),
         "native_audit": (
             sequence(
                 attribute(name("sys"), "executable"),
@@ -676,7 +691,7 @@ def audit_smoke_source(errors, smoke_source):
     ]
     method_names = [call.func.attr for call in runner_methods]
     expected_methods = [
-        "ghr_install", "rpmz_version", "native_audit",
+        "ghr_install", "rpmz_version", "compatibility_version", "native_audit",
         "release_assets", "download_assets",
     ]
     if sorted(method_names) != sorted(expected_methods):
@@ -1013,13 +1028,15 @@ def audit_release_workflow(errors, document):
             "ghr install cataggar/rpmz@v${{ "
             "steps.version.outputs.version }}\n"
             "```\n\n"
-            "Binary archives contain the normal rpmz install layout, "
-            "including\n"
-            "`bin/`, `lib/`, `libexec/`, and `etc/`, plus COPYING and "
-            "README.md.\n"
-            "SHA-256 sidecars, SPDX SBOMs, and GitHub provenance "
-            "attestations\n"
-            "are published with the archives.\n"
+            "Binary archives expose one public executable: `bin/rpmz`. Use\n"
+            "`rpmz tdnf [options] COMMAND` for dnf/yum-compatible "
+            "operations,\n"
+            "`rpmz repo-config` for repository configuration, and `rpmz "
+            "auto`\n"
+            "for scheduled updates. The archives also contain `lib/`,\n"
+            "`libexec/`, and `etc/`, plus COPYING and README.md. SHA-256\n"
+            "sidecars, SPDX SBOMs, and GitHub provenance attestations are\n"
+            "published with the archives.\n"
         )
         expected_files = (
             "release-assets/rpmz-*.tar.gz\n"

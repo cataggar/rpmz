@@ -16,12 +16,12 @@ _rpmz__process_if_prev_is_option() {
             return 0
             ;;
         --enablerepo)
-            opts=$(rpmz repolist disabled 2>/dev/null | awk '{if (NR > 1) print $1}')
+            opts=$(rpmz tdnf repolist disabled 2>/dev/null | awk '{if (NR > 1) print $1}')
             COMPREPLY=( $(compgen -W "$opts" -- $cur) )
             return 0
             ;;
         --disablerepo)
-            opts=$(rpmz repolist enabled 2>/dev/null | awk '{if (NR > 1) print $1}')
+            opts=$(rpmz tdnf repolist enabled 2>/dev/null | awk '{if (NR > 1) print $1}')
             COMPREPLY=( $(compgen -W "$opts" -- $cur) )
             return 0
             ;;
@@ -30,7 +30,7 @@ _rpmz__process_if_prev_is_option() {
             return 0
             ;;
         --repo|--repoid)
-            opts=$(rpmz repolist all 2>/dev/null | awk '{if (NR > 1) print $1}')
+            opts=$(rpmz tdnf repolist all 2>/dev/null | awk '{if (NR > 1) print $1}')
             COMPREPLY=( $(compgen -W "$opts" -- $cur) )
             return 0
             ;;
@@ -75,7 +75,7 @@ _rpmz__process_if_prev_is_option() {
             return 0
             ;;
         --whatdepends|--whatrequires|--whatprovides|--whatobsoletes|--whatconflicts|--whatrecommends|--whatsuggests|--whatsupplements|--whatenhances)
-            opts=$(rpmz repoquery --qf=%{name} 2>/dev/null)
+            opts=$(rpmz tdnf repoquery --qf=%{name} 2>/dev/null)
             COMPREPLY=( $(compgen -W "$opts" -- $cur) )
             return 0
             ;;
@@ -84,7 +84,7 @@ _rpmz__process_if_prev_is_option() {
             return 0
             ;;
         --to|--from)
-            opts=$(rpmz history list | awk '{if (NR > 1) print $1}')
+            opts=$(rpmz tdnf history list | awk '{if (NR > 1) print $1}')
             COMPREPLY=( $(compgen -W "$opts" -- $cur) )
             return 0
             ;;
@@ -118,10 +118,10 @@ _rpmz__process_if_cmd() {
             fi
             ;;
         downgrade)
-            opts=$(rpmz repoquery --downgrades --qf=%{name} 2>/dev/null)
+            opts=$(rpmz tdnf repoquery --downgrades --qf=%{name} 2>/dev/null)
             ;;
         autoerase|autoremove|erase|reinstall|remove)
-            opts=$(rpmz repoquery --installed --qf=%{name} 2>/dev/null)
+            opts=$(rpmz tdnf repoquery --installed --qf=%{name} 2>/dev/null)
             ;;
         history)
             if [ $1 -eq $(($COMP_CWORD - 1)) ]; then
@@ -134,10 +134,10 @@ _rpmz__process_if_cmd() {
             return 0
             ;;
         distro-sync)
-            opts=$(rpmz repoquery --qf=%{name} 2>/dev/null)
+            opts=$(rpmz tdnf repoquery --qf=%{name} 2>/dev/null)
             ;;
         install)
-            opts=$(rpmz repoquery --qf=%{name})
+            opts=$(rpmz tdnf repoquery --qf=%{name})
             ;;
         mark)
             if [ $1 -eq $(($COMP_CWORD - 1)) ]; then
@@ -156,11 +156,11 @@ _rpmz__process_if_cmd() {
         repoquery)
             # After repoquery, offer both repoquery-specific options and package names
             local repoquery_opts="--available --duplicates --extras --file --installed --userinstalled --upgrades --downgrades --whatconflicts --whatdepends --whatenhances --whatobsoletes --whatprovides --whatrecommends --whatrequires --whatsuggests --whatsupplements --changelogs --conflicts --depends --enhances --list --location --obsoletes --provides --qf --recommends --requires --requires-pre --suggests --supplements --source"
-            local pkg_names=$(rpmz repoquery --qf=%{name} 2>/dev/null)
+            local pkg_names=$(rpmz tdnf repoquery --qf=%{name} 2>/dev/null)
             opts="$repoquery_opts $pkg_names"
             ;;
         update|upgrade)
-            opts=$(rpmz repoquery --upgrades --qf=%{name} 2>/dev/null)
+            opts=$(rpmz tdnf repoquery --upgrades --qf=%{name} 2>/dev/null)
             ;;
         check|help|makecache)
             # Commands that take no arguments
@@ -168,18 +168,18 @@ _rpmz__process_if_cmd() {
             ;;
         check-update)
             # Optional package names
-            opts="$(rpmz repoquery --qf=%{name} 2>/dev/null)"
+            opts="$(rpmz tdnf repoquery --qf=%{name} 2>/dev/null)"
             ;;
         info)
             # Package names or scope options
             local scope_opts="installed available updates downgrades recent all"
-            local pkg_names="$(rpmz repoquery --qf=%{name} 2>/dev/null)"
+            local pkg_names="$(rpmz tdnf repoquery --qf=%{name} 2>/dev/null)"
             opts="$scope_opts $pkg_names"
             ;;
         list)
             # Scope options or package names
             local scope_opts="installed available updates downgrades recent all"
-            local pkg_names="$(rpmz repoquery --qf=%{name} 2>/dev/null)"
+            local pkg_names="$(rpmz tdnf repoquery --qf=%{name} 2>/dev/null)"
             opts="$scope_opts $pkg_names"
             ;;
         provides|whatprovides)
@@ -189,7 +189,7 @@ _rpmz__process_if_cmd() {
             ;;
         reposync)
             # Optional repository names
-            opts=$(rpmz repolist all 2>/dev/null | awk '{if (NR > 1) print $1}')
+            opts=$(rpmz tdnf repolist all 2>/dev/null | awk '{if (NR > 1) print $1}')
             ;;
         search)
             # Search terms - no easy way to list these, allow free-form input
@@ -197,12 +197,12 @@ _rpmz__process_if_cmd() {
             ;;
         update-to|upgrade-to)
             # Package names (with optional version)
-            opts="$(rpmz repoquery --qf=%{name} 2>/dev/null)"
+            opts="$(rpmz tdnf repoquery --qf=%{name} 2>/dev/null)"
             ;;
         updateinfo)
             # Mode options or package names
             local mode_opts="all info summary"
-            local pkg_names="$(rpmz repoquery --qf=%{name} 2>/dev/null)"
+            local pkg_names="$(rpmz tdnf repoquery --qf=%{name} 2>/dev/null)"
             opts="$mode_opts $pkg_names"
             ;;
     esac
@@ -213,9 +213,13 @@ _rpmz__process_if_cmd() {
 _rpmz() {
     local c=0 cur __opts __cmds
     COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ "${COMP_WORDS[1]}" != "tdnf" ]]; then
+        COMPREPLY=( $(compgen -W "auto repo-config tdnf --help --version -h" -- "$cur") )
+        return 0
+    fi
     __opts="--4 -4 --6 -6 --alldeps --allowerasing --assumeno -y --assumeyes -b --best --builddeps -C --cacheonly -c --config -d --debuglevel --debugsolver --disableexcludes --disableplugin --disablerepo --downloaddir --downloadonly --enablerepo --enableplugin --exclude --forcearch --help -h -i --installroot --json --noautoremove --nodeps --nogpgcheck --nocligpgcheck --noplugins -q --quiet --reboot-required --refresh --releasever --repo --repofromdir --repofrompath --repoid --rpmdefine --rpmverbosity --sec-severity --security --setopt --skip-broken --skipconflicts --skipdigest --skipsignature --skipobsoletes --source --testonly -v --verbose --version --available --duplicates --extras --file --installed --userinstalled --upgrades --downgrades --whatdepends --whatrequires --whatenhances --whatobsoletes --whatprovides --whatrecommends --whatsuggests --whatsupplements --whatconflicts --changelogs --conflicts --depends --enhances --list --location --obsoletes --provides --qf --recommends --requires --requires-pre --suggests --supplements --all --info --summary --recent --updates --downgrades --to --from --reverse --arch --delete --download-metadata --download-path --gpgcheck --metadata-path --newest-only --norepopath --urls"
     __cmds="autoerase autoremove check check-local check-update clean count distro-sync downgrade erase help history info install list makecache mark provides whatprovides reinstall remove repolist repoquery reposync search update update-to updateinfo upgrade upgrade-to"
-    cur="${COMP_WORDS[COMP_CWORD]}"
     _rpmz__process_if_prev_is_option && return 0
     while [ $c -lt ${COMP_CWORD} ]; do
         _rpmz__process_if_cmd $((c++)) && return 0

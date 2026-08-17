@@ -548,7 +548,7 @@ fn checkLocalPrepareError(
     }
 }
 
-/// Run `rpmz check-local <dir>` natively: build a universe holding only the
+/// Run `rpmz tdnf check-local <dir>` natively: build a universe holding only the
 /// `.rpm` files under `raw_directory`, request every one of them, and either
 /// report a clean check or retain the solver's diagnostics.
 ///

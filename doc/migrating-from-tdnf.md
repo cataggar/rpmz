@@ -5,9 +5,9 @@ product-facing names changed as follows:
 
 | tdnf name | rpmz name |
 |---|---|
-| `tdnf` | `rpmz` |
+| `tdnf [options] COMMAND` | `rpmz tdnf [options] COMMAND` |
 | `tdnf-config` | `rpmz repo-config` |
-| `tdnf-automatic` | `rpmz-automatic` |
+| `tdnf-automatic` | `rpmz auto` |
 | `tdnfmetalink` | `rpmzmetalink` |
 | `tdnfrepogpgcheck` | `rpmzrepogpgcheck` |
 | `tdnfmetalink.conf` | `rpmzmetalink.conf` |
@@ -21,6 +21,11 @@ product-facing names changed as follows:
 The systemd directory can be changed with `-Dsystemd-dir`; the table shows the
 default installed path. Configuration files, plugin configuration, and
 automatic-update configuration now live below `/etc/rpmz`.
+
+rpmz installs only `bin/rpmz`; it does not install a `tdnf` compatibility
+symlink. If existing automation requires the original `tdnf [options] COMMAND`
+shape, create a user-managed `tdnf -> rpmz` symlink in a directory on `PATH`.
+The symlink dispatches to the same compatibility command as `rpmz tdnf`.
 
 `--enableplugin` and `--disableplugin` values, plus copied files under
 `/etc/rpmz/pluginconf.d`, must use the rpmz names because no legacy plugin

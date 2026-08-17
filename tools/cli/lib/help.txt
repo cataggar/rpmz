@@ -1,111 +1,111 @@
-Usage: rpmz [options] COMMAND
+Usage: rpmz tdnf [options] COMMAND
 
 Common Options
 --4, -4                    Resolve to IPv4 addresses only
-                           Example: rpmz -4 install package
+                           Example: rpmz tdnf -4 install package
 --6, -6                    Resolve to IPv6 addresses only
-                           Example: rpmz -6 install package
+                           Example: rpmz tdnf -6 install package
 --alldeps                  Download all dependencies (requires --downloadonly or --urls)
-                           Example: rpmz --downloadonly --alldeps install package
+                           Example: rpmz tdnf --downloadonly --alldeps install package
 --allowerasing             Allow erasing of installed packages to resolve dependencies
-                           Example: rpmz --allowerasing install pkg
+                           Example: rpmz tdnf --allowerasing install pkg
 --assumeno                 Answer 'no' to all questions
-                           Example: rpmz --assumeno remove package
+                           Example: rpmz tdnf --assumeno remove package
 -y, --assumeyes            Answer 'yes' to all questions
-                           Example: rpmz -y install package
+                           Example: rpmz tdnf -y install package
 -b, --best                 Try the best available package versions
-                           Example: rpmz --best install package
+                           Example: rpmz tdnf --best install package
 --builddeps                Install build dependencies
-                           Example: rpmz --builddeps install package
+                           Example: rpmz tdnf --builddeps install package
 -C, --cacheonly            Run entirely from cache, don't update
-                           Example: rpmz -C install package
+                           Example: rpmz tdnf -C install package
 -c, --config <file>        Path to configuration file
-                           Example: rpmz -c /etc/rpmz/rpmz.conf install package
+                           Example: rpmz tdnf -c /etc/rpmz/rpmz.conf install package
 -d, --debuglevel <level>   Debug output level (emergency|alert|critical|error|warning|notice|info|debug)
-                           Example: rpmz -d debug install package
+                           Example: rpmz tdnf -d debug install package
 --debugsolver              Enable debug output for dependency solver
-                           Example: rpmz --debugsolver install pkg
+                           Example: rpmz tdnf --debugsolver install pkg
 --disableexcludes          Disable excludes from rpmz.conf
-                           Example: rpmz --disableexcludes install
+                           Example: rpmz tdnf --disableexcludes install
 --disableplugin <name>     Disable plugins by name
-                           Example: rpmz --disableplugin=versionlock install package
+                           Example: rpmz tdnf --disableplugin=versionlock install package
 --disablerepo <repoid>     Disable repositories by id
-                           Example: rpmz --disablerepo=updates install package
+                           Example: rpmz tdnf --disablerepo=updates install package
 --downloaddir <dir>        Directory to store downloaded packages (requires --downloadonly)
-                           Example: rpmz --downloadonly --downloaddir=/tmp/pkgs install
+                           Example: rpmz tdnf --downloadonly --downloaddir=/tmp/pkgs install
 --downloadonly             Download packages only, do not install
-                           Example: rpmz --downloadonly install pkg
+                           Example: rpmz tdnf --downloadonly install pkg
 
 --urls                     Print package URLs only, do not download or install
-                           Example: rpmz --urls install pkg
+                           Example: rpmz tdnf --urls install pkg
 --enablerepo <repoid>      Enable repositories by id
-                           Example: rpmz --enablerepo=updates install
+                           Example: rpmz tdnf --enablerepo=updates install
 --enableplugin <name>      Enable plugins by name
-                           Example: rpmz --enableplugin=versionlock install package
+                           Example: rpmz tdnf --enableplugin=versionlock install package
 --exclude <pkg1,pkg2,...>  Exclude packages by name
-                           Example: rpmz --exclude=linux* install
+                           Example: rpmz tdnf --exclude=linux* install
 --forcearch <arch>         Force architecture (x86_64|aarch64|noarch)
-                           Example: rpmz --forcearch=x86_64 install
+                           Example: rpmz tdnf --forcearch=x86_64 install
 -h, --help                 Show this help message
-                           Example: rpmz --help
+                           Example: rpmz tdnf --help
 -i, --installroot <path>   Set install root path (must be absolute)
-                           Example: rpmz -i /mnt/chroot install pkg
+                           Example: rpmz tdnf -i /mnt/chroot install pkg
 -j, --json                 Output in JSON format
-                           Example: rpmz --json list installed
+                           Example: rpmz tdnf --json list installed
 --noautoremove             Do not remove automatically installed dependencies
-                           Example: rpmz --noautoremove remove pkg
+                           Example: rpmz tdnf --noautoremove remove pkg
 --nodeps                   Skip dependency checks (requires --downloadonly or --urls)
-                           Example: rpmz --downloadonly --nodeps install package
+                           Example: rpmz tdnf --downloadonly --nodeps install package
 --nogpgcheck               Skip GPG signature checks
-                           Example: rpmz --nogpgcheck install pkg
+                           Example: rpmz tdnf --nogpgcheck install pkg
 --nocligpgcheck            Skip GPG signature checks for command line rpms
-                           Example: rpmz --nocligpgcheck install http://foo.bar.com/package.rpm
+                           Example: rpmz tdnf --nocligpgcheck install http://foo.bar.com/package.rpm
 --noplugins                Disable all plugins
-                           Example: rpmz --noplugins install package
+                           Example: rpmz tdnf --noplugins install package
 -q, --quiet                Quiet operation
-                           Example: rpmz -q install package
+                           Example: rpmz tdnf -q install package
 --reboot-required          Check if reboot is required after transaction
-                           Example: rpmz --reboot-required install package
+                           Example: rpmz tdnf --reboot-required install package
 --refresh                  Refresh repository metadata before operation
-                           Example: rpmz --refresh install package
+                           Example: rpmz tdnf --refresh install package
 --releasever <version>     Set release version
-                           Example: rpmz --releasever=5.0 install pkg
+                           Example: rpmz tdnf --releasever=5.0 install pkg
 --repo <repoid>            Enable only this repository
-                           Example: rpmz --repo=base install pkg
+                           Example: rpmz tdnf --repo=base install pkg
 --repofromdir <id>,<dir>   Add repository from directory
-                           Example: rpmz --repofromdir=local,/path/to/repo install package
+                           Example: rpmz tdnf --repofromdir=local,/path/to/repo install package
 --repofrompath <id>,<path> Add repository from path
-                           Example: rpmz --repofrompath=local,/mnt/repo install package
+                           Example: rpmz tdnf --repofrompath=local,/mnt/repo install package
 --repoid <repoid>          Same as --repo
-                           Example: rpmz --repoid=base install pkg
+                           Example: rpmz tdnf --repoid=base install pkg
 --rpmdefine <macro>        Define RPM macro
-                           Example: rpmz --rpmdefine='_dbpath <path>' install package
+                           Example: rpmz tdnf --rpmdefine='_dbpath <path>' install package
 --rpmverbosity <level>     Compatibility no-op; accepted for CLI compatibility
                            (the native transaction engine has no RPM logger)
 --sec-severity <level>     Filter by security severity (Critical|Important|Moderate|Low)
-                           Example: rpmz updateinfo --sec-severity=Critical
+                           Example: rpmz tdnf updateinfo --sec-severity=Critical
 --security                 Only show security updates
-                           Example: rpmz --security update
+                           Example: rpmz tdnf --security update
 --setopt <option>=<value>  Set configuration option
-                           Example: rpmz --setopt=keepcache=1 install package
+                           Example: rpmz tdnf --setopt=keepcache=1 install package
 --skip-broken              Skip packages with broken dependencies
-                           Example: rpmz --skip-broken install pkg
+                           Example: rpmz tdnf --skip-broken install pkg
 --skipconflicts            Skip packages with conflicts
-                           Example: rpmz --skipconflicts install pkg
+                           Example: rpmz tdnf --skipconflicts install pkg
 --skipdigest               Skip package digest verification
-                           Example: rpmz --skipdigest install pkg
+                           Example: rpmz tdnf --skipdigest install pkg
 --skipsignature            Skip package signature verification
-                           Example: rpmz --skipsignature install
+                           Example: rpmz tdnf --skipsignature install
 --skipobsoletes            Skip obsolete packages
-                           Example: rpmz --skipobsoletes install
+                           Example: rpmz tdnf --skipobsoletes install
 --source                   Operate on source packages
-                           Example: rpmz --source install package
+                           Example: rpmz tdnf --source install package
 --testonly                 Run transaction in test mode only
-                           Example: rpmz --testonly install package
+                           Example: rpmz tdnf --testonly install package
 -v, --verbose              Verbose operation
-                           Example: rpmz -v install package
+                           Example: rpmz tdnf -v install package
 --version                  Show version information
-                           Example: rpmz --version
+                           Example: rpmz tdnf --version
 
 Replay Options
 --rpmdb-path <path>        Exact absolute install-root-relative RPM database path
@@ -125,181 +125,181 @@ include RPM scriptlets, triggers, interpreters, or descendant processes.
 
 Repoquery Select Options
 --available                Show only available packages
-                           Example: rpmz repoquery --available pkg
+                           Example: rpmz tdnf repoquery --available pkg
 --duplicates               Show duplicate packages
-                           Example: rpmz repoquery --duplicates
+                           Example: rpmz tdnf repoquery --duplicates
 --extras                   Show packages not in any repository
-                           Example: rpmz repoquery --extras
+                           Example: rpmz tdnf repoquery --extras
 --file <file>              Query packages that own the file
-                           Example: rpmz repoquery --file=/usr/bin/bash
+                           Example: rpmz tdnf repoquery --file=/usr/bin/bash
 --installed                Show only installed packages
-                           Example: rpmz repoquery --installed pkg
+                           Example: rpmz tdnf repoquery --installed pkg
 --userinstalled            Show only user-installed packages
-                           Example: rpmz repoquery --userinstalled
+                           Example: rpmz tdnf repoquery --userinstalled
 --upgrades                 Show only upgradeable packages
-                           Example: rpmz repoquery --upgrades
+                           Example: rpmz tdnf repoquery --upgrades
 --downgrades               Show only downgradeable packages
-                           Example: rpmz repoquery --downgrades
+                           Example: rpmz tdnf repoquery --downgrades
 --whatconflicts <cap>      Find packages that conflict with capability
-                           Example: rpmz repoquery --whatconflicts=package
+                           Example: rpmz tdnf repoquery --whatconflicts=package
 --whatdepends <cap>        Find packages that depend on capability
-                           Example: rpmz repoquery --whatdepends=glibc
+                           Example: rpmz tdnf repoquery --whatdepends=glibc
 --whatenhances <cap>       Find packages that enhance capability
-                           Example: rpmz repoquery --whatenhances=package
+                           Example: rpmz tdnf repoquery --whatenhances=package
 --whatobsoletes <cap>      Find packages that obsolete capability
-                           Example: rpmz repoquery --whatobsoletes=package
+                           Example: rpmz tdnf repoquery --whatobsoletes=package
 --whatprovides <cap>       Find packages that provide capability
-                           Example: rpmz repoquery --whatprovides=/usr/bin/bash
+                           Example: rpmz tdnf repoquery --whatprovides=/usr/bin/bash
 --whatrecommends <cap>     Find packages that recommend capability
-                           Example: rpmz repoquery --whatrecommends=package
+                           Example: rpmz tdnf repoquery --whatrecommends=package
 --whatrequires <cap>       Find packages that require capability
-                           Example: rpmz repoquery --whatrequires=glibc
+                           Example: rpmz tdnf repoquery --whatrequires=glibc
 --whatsuggests <cap>       Find packages that suggest capability
-                           Example: rpmz repoquery --whatsuggests=package
+                           Example: rpmz tdnf repoquery --whatsuggests=package
 --whatsupplements <cap>    Find packages that supplement capability
-                           Example: rpmz repoquery --whatsupplements=package
+                           Example: rpmz tdnf repoquery --whatsupplements=package
 
 Repoquery Query Options
 --changelogs               Show package changelogs
-                           Example: rpmz repoquery --changelogs pkg
+                           Example: rpmz tdnf repoquery --changelogs pkg
 --conflicts                Show package conflicts
-                           Example: rpmz repoquery --conflicts pkg
+                           Example: rpmz tdnf repoquery --conflicts pkg
 --depends                  Show package dependencies
-                           Example: rpmz repoquery --depends package
+                           Example: rpmz tdnf repoquery --depends package
 --enhances                 Show packages enhanced by this package
-                           Example: rpmz repoquery --enhances pkg
+                           Example: rpmz tdnf repoquery --enhances pkg
 --list                     List files in package
-                           Example: rpmz repoquery --list package
+                           Example: rpmz tdnf repoquery --list package
 --location                 Show package location
-                           Example: rpmz repoquery --location pkg
+                           Example: rpmz tdnf repoquery --location pkg
 --obsoletes                Show packages obsoleted by this package
-                           Example: rpmz repoquery --obsoletes pkg
+                           Example: rpmz tdnf repoquery --obsoletes pkg
 --provides                 Show capabilities provided by package
-                           Example: rpmz repoquery --provides package
+                           Example: rpmz tdnf repoquery --provides package
 --qf <fmt>                 Use custom query format
-                           Example: rpmz repoquery --qf='%{name}-%{version}' package
+                           Example: rpmz tdnf repoquery --qf='%{name}-%{version}' package
 --recommends               Show packages recommended by this package
-                           Example: rpmz repoquery --recommends pkg
+                           Example: rpmz tdnf repoquery --recommends pkg
 --requires                 Show package requirements
-                           Example: rpmz repoquery --requires pkg
+                           Example: rpmz tdnf repoquery --requires pkg
 --requires-pre             Show pre-requisites
-                           Example: rpmz repoquery --requires-pre pkg
+                           Example: rpmz tdnf repoquery --requires-pre pkg
 --suggests                 Show packages suggested by this package
-                           Example: rpmz repoquery --suggests pkg
+                           Example: rpmz tdnf repoquery --suggests pkg
 --source                   Show source package
-                           Example: rpmz repoquery --source package
+                           Example: rpmz tdnf repoquery --source package
 --supplements              Show packages supplemented by this package
-                           Example: rpmz repoquery --supplements pkg
+                           Example: rpmz tdnf repoquery --supplements pkg
 
 Reposync Options
 --arch <arch>              Sync packages for specific architecture (can be specified multiple times)
-                           Example: rpmz reposync --arch=x86_64 --arch=noarch
+                           Example: rpmz tdnf reposync --arch=x86_64 --arch=noarch
 --delete                   Delete local packages not in repository
-                           Example: rpmz reposync --delete
+                           Example: rpmz tdnf reposync --delete
 --download-metadata        Download repository metadata
-                           Example: rpmz reposync --download-metadata
+                           Example: rpmz tdnf reposync --download-metadata
 --download-path <dir>      Directory to download packages to
-                           Example: rpmz reposync --download-path=/mnt/repo
+                           Example: rpmz tdnf reposync --download-path=/mnt/repo
 --gpgcheck                 Enable GPG signature checking
-                           Example: rpmz reposync --gpgcheck
+                           Example: rpmz tdnf reposync --gpgcheck
 --metadata-path <dir>      Directory to store metadata
-                           Example: rpmz reposync --metadata-path=/mnt/repo/metadata
+                           Example: rpmz tdnf reposync --metadata-path=/mnt/repo/metadata
 --newest-only              Download only newest packages
-                           Example: rpmz reposync --newest-only
+                           Example: rpmz tdnf reposync --newest-only
 --norepopath               Do not create repository directory structure
-                           Example: rpmz reposync --norepopath
+                           Example: rpmz tdnf reposync --norepopath
 --source                   Sync source packages
-                           Example: rpmz reposync --source
+                           Example: rpmz tdnf reposync --source
 --urls                     Show URLs instead of downloading
-                           Example: rpmz reposync --urls
+                           Example: rpmz tdnf reposync --urls
 
 List and Updateinfo Scope Options
 --all                      Show all packages/advisories
-                           Example: rpmz list --all
+                           Example: rpmz tdnf list --all
 --downgrades               Show downgradeable packages
-                           Example: rpmz list --downgrades
+                           Example: rpmz tdnf list --downgrades
 --info                     Show detailed advisory information
-                           Example: rpmz updateinfo --info
+                           Example: rpmz tdnf updateinfo --info
 --recent                   Show recent packages/advisories
-                           Example: rpmz list --recent
+                           Example: rpmz tdnf list --recent
 --summary                  Show advisory summary
-                           Example: rpmz updateinfo --summary
+                           Example: rpmz tdnf updateinfo --summary
 --updates                  Show updateable packages
-                           Example: rpmz list --updates
+                           Example: rpmz tdnf list --updates
 
 History Options
 --from <id>                Start from transaction ID
-                           Example: rpmz history list --from=10
+                           Example: rpmz tdnf history list --from=10
 --reverse                  Show history in reverse order
-                           Example: rpmz history list --reverse
+                           Example: rpmz tdnf history list --reverse
 --to <id>                  End at transaction ID
-                           Example: rpmz history list --to=20
+                           Example: rpmz tdnf history list --to=20
 
 List of Main Commands
 autoerase                  Same as 'autoremove'
-                           Example: rpmz autoerase
+                           Example: rpmz tdnf autoerase
 autoremove                 Remove automatically installed dependencies
-                           Example: rpmz autoremove
+                           Example: rpmz tdnf autoremove
 check                      Check repositories for problems
-                           Example: rpmz check
+                           Example: rpmz tdnf check
 check-local <dir>          Check local RPM folder for problems
-                           Example: rpmz check-local /path/to/rpms
+                           Example: rpmz tdnf check-local /path/to/rpms
 check-update               Check for available package upgrades
-                           Example: rpmz check-update
+                           Example: rpmz tdnf check-update
 clean <type>               Remove cached data (packages|metadata|dbcache|plugins|expire-cache|all|expire-cache|all)
-                           Example: rpmz clean all
+                           Example: rpmz tdnf clean all
 count                      Count packages
-                           Example: rpmz count
+                           Example: rpmz tdnf count
 distro-sync                Synchronize installed packages to latest available versions
-                           Example: rpmz distro-sync
+                           Example: rpmz tdnf distro-sync
 downgrade <pkg>            Downgrade a package
-                           Example: rpmz downgrade package-1.0
+                           Example: rpmz tdnf downgrade package-1.0
 erase <pkg>                Remove a package or packages from your system
-                           Example: rpmz erase package
+                           Example: rpmz tdnf erase package
 help                       Display this help message
-                           Example: rpmz help
+                           Example: rpmz tdnf help
 history <cmd>              History commands (init|update|list|rollback|undo|redo|id)
-                           Example: rpmz history list
-                           Example: rpmz history id
+                           Example: rpmz tdnf history list
+                           Example: rpmz tdnf history id
 info <pkg>                 Display details about a package or group of packages
-                           Example: rpmz info package
+                           Example: rpmz tdnf info package
 install <pkg>              Install a package or packages on your system
-                           Example: rpmz install package
+                           Example: rpmz tdnf install package
 list <pkg>                 List a package or groups of packages
-                           Example: rpmz list installed
+                           Example: rpmz tdnf list installed
 makecache                  Generate the metadata cache
-                           Example: rpmz makecache
+                           Example: rpmz tdnf makecache
 mark <action> <pkg>        Mark package(s) (install|remove)
-                           Example: rpmz mark install package
+                           Example: rpmz tdnf mark install package
 plan <cmd> [pkg]           Resolve a transaction command and print its canonical plan JSON
-                           Example: rpmz plan install package
+                           Example: rpmz tdnf plan install package
 replay <bundle-directory>  Apply an exact offline bundle and print canonical replay-result JSON
                            Example: rpmz replay --installroot /image --rpmdb-path /var/lib/rpm --forcearch x86_64 /bundle
 provides <cap>             Same as 'whatprovides'
-                           Example: rpmz provides /usr/bin/bash
+                           Example: rpmz tdnf provides /usr/bin/bash
 whatprovides <cap>         Find what package provides the given value
-                           Example: rpmz whatprovides /usr/bin/bash
+                           Example: rpmz tdnf whatprovides /usr/bin/bash
 reinstall <pkg>            Reinstall a package
-                           Example: rpmz reinstall package
+                           Example: rpmz tdnf reinstall package
 remove <pkg>               Remove a package or packages from your system
-                           Example: rpmz remove package
+                           Example: rpmz tdnf remove package
 repolist [filter]          Display the configured software repositories (all|enabled|disabled)
-                           Example: rpmz repolist all
+                           Example: rpmz tdnf repolist all
 repoquery <pkg>            Query repositories
-                           Example: rpmz repoquery --list package
+                           Example: rpmz tdnf repoquery --list package
 reposync                   Download all packages from one or more repositories to a directory
-                           Example: rpmz reposync --download-path=/mnt/repo
+                           Example: rpmz tdnf reposync --download-path=/mnt/repo
 search <term>              Search package details for the given string
-                           Example: rpmz search bash
+                           Example: rpmz tdnf search bash
 update <pkg>               Upgrade a package or packages on your system (same as 'upgrade')
-                           Example: rpmz update package
+                           Example: rpmz tdnf update package
 update-to <pkg-version>    Same as 'upgrade-to'
-                           Example: rpmz update-to package-1.0
+                           Example: rpmz tdnf update-to package-1.0
 updateinfo [mode]          Display advisories about packages (all|info|summary)
-                           Example: rpmz updateinfo summary
+                           Example: rpmz tdnf updateinfo summary
 upgrade <pkg>              Upgrade a package or packages on your system
-                           Example: rpmz upgrade package
+                           Example: rpmz tdnf upgrade package
 upgrade-to <pkg-version>   Upgrade a package on your system to the specified version
-                           Example: rpmz upgrade-to package-1.0-1.ph5
+                           Example: rpmz tdnf upgrade-to package-1.0-1.ph5
 
 Please refer to https://github.com/cataggar/rpmz for documentation.

@@ -1351,7 +1351,7 @@ test "file dependency bridge seeds ten thousand paths by kind" {
 }
 
 test "bridged repository keeps the file provides libsolv reads from the filtered filelist" {
-    // Regression pin for the `rpmz plan` failure in #268. `addPrimary` marks
+    // Regression pin for the `rpmz tdnf plan` failure in #268. `addPrimary` marks
     // its repodata `REPODATA_FILELIST_FILTERED`, and `pool_addfileprovides()`
     // then treats that repodata as the only source for any path the standard
     // filter accepts. When it held no files at all, every file provide in the

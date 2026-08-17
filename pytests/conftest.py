@@ -422,7 +422,7 @@ class TestUtils(object):
         ''' Check if a package exists '''
         ret = self.run(["rpmz", "--disablerepo=*", "list", "-j", "--installed", package])
         pkglist = json.loads('\n'.join(ret['stdout']))
-        assert type(pkglist) is list, f"unexpected json type from 'rpmz list': pkglist={pkglist}"
+        assert type(pkglist) is list, f"unexpected json type from 'rpmz tdnf list': pkglist={pkglist}"
         for p in pkglist:
             if p['Name'] == package and (version is None or p['Evr'] == version):
                 return True

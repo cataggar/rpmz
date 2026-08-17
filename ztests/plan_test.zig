@@ -1,4 +1,4 @@
-//! `rpmz plan` acceptance against the real fixture repository.
+//! `rpmz tdnf plan` acceptance against the real fixture repository.
 //!
 //! `tools/cli/plan_cli_test.zig` already covers the verb, but it serves a
 //! synthetic two-package repository it builds itself. That repository has no
@@ -325,7 +325,7 @@ test "planning a downgrade classifies a downgrade named and for the whole root" 
     try std.testing.expect(everything.hasAction("downgrade", multiversion));
 
     // A distro-sync under `clean_requirements_on_remove` is a native-solver
-    // gap that predates the plan API and stops every `rpmz distro-sync`, not
+    // gap that predates the plan API and stops every `rpmz tdnf distro-sync`, not
     // just the planned one, so turn the policy off for both forms.
     try root.setMainOption("clean_requirements_on_remove", "0");
     var synced_named = try plan(&root, &.{ "distro-sync", multiversion });

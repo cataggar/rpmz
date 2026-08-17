@@ -1758,7 +1758,7 @@ fn downloadUrlToFd(
             break;
         }
         result = errors.ERROR_TDNF_INVALID_PARAMETER;
-        common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'rpmz makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
+        common.log(LOG_ERR, "Error: %ld when downloading %.*s. Please check repo url or refresh metadata with 'rpmz tdnf makecache'.\n", .{ status, @as(c_int, @intCast(safe_url.len)), safe_url.ptr });
         return result;
     }
     if (!successful_attempt) return result;

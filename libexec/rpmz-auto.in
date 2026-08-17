@@ -437,7 +437,7 @@ ShowOrApplyUpdates()
 
     local msg="$(RunRpmz -c "${RpmzConf}" check-update)"
     if [ "$?" != "0" ]; then
-      EchoErr "rpmz check-update failed..."
+      EchoErr "rpmz tdnf check-update failed..."
       return 121
     fi
 
@@ -469,7 +469,7 @@ ShowOrApplyUpdates()
     else
       available_updates="$(RunRpmz -c "${RpmzConf}" updateinfo info)"
       if [ "$?" != "0" ]; then
-        EchoErr "rpmz updateinfo info failed..."
+        EchoErr "rpmz tdnf updateinfo info failed..."
         return 121
       fi
     fi
@@ -478,7 +478,7 @@ ShowOrApplyUpdates()
   if [ "${install}" = 1 ]; then
     [ "${update_type}" = "all" ] && RunRpmz -c "${RpmzConf}" upgrade -y || RunRpmz -c "${RpmzConf}" --security update -y
     if [ "$?" != "0" ]; then
-      EchoErr "rpmz upgrade | rpmz --security update failed..."
+      EchoErr "rpmz tdnf upgrade | rpmz tdnf --security update failed..."
       return 121
     fi
     if [ "${emitter}" = "1" ]; then

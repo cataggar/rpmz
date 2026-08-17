@@ -21,6 +21,15 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / ".github/release-assets.json"
 REQUIRED_DIRS = ("bin", "lib", "libexec", "etc")
 REQUIRED_FILES = ("bin/rpmz", "COPYING", "README.md")
+PUBLIC_BINARIES = ("rpmz",)
+RETIRED_PUBLIC_BINARIES = (
+    "tdnf",
+    "rpmz-config",
+    "rpmz-automatic",
+    "jsondumptest",
+)
+
+
 def validated_version(value):
     try:
         return parse_semver(value)[0]
@@ -108,6 +117,41 @@ def copy_install_tree(prefix, staging):
     shutil.copy2(ROOT / "README.md", staging / "README.md")
 
 
+def verify_public_bin(prefix):
+    bin_dir = prefix / "bin"
+    if not bin_dir.is_dir():
+        raise SystemExit("installed bin directory is missing")
+    entries = tuple(sorted(path.name for path in bin_dir.iterdir()))
+    if entries != PUBLIC_BINARIES:
+        raise SystemExit(
+            "installed bin must contain only rpmz: "
+            f"got {list(entries)}"
+        )
+    for retired in RETIRED_PUBLIC_BINARIES:
+        if (bin_dir / retired).exists() or (bin_dir / retired).is_symlink():
+            raise SystemExit(
+                f"retired public executable is installed: bin/{retired}"
+            )
+
+
+def rpmz_version(prefix):
+    return subprocess.run(
+        [prefix / "bin/rpmz", "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def compatibility_version(prefix):
+    return subprocess.run(
+        [prefix / "bin/rpmz", "tdnf", "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def package_binary(args):
     prefix = Path(args.prefix).resolve()
     destination = Path(args.output).resolve()
@@ -115,17 +159,16 @@ def package_binary(args):
     for required in REQUIRED_DIRS:
         if not (prefix / required).is_dir():
             raise SystemExit(f"missing installed directory: {required}")
+    verify_public_bin(prefix)
     if not os.access(prefix / "bin/rpmz", os.X_OK):
         raise SystemExit("installed bin/rpmz is not executable")
     expected = f"rpmz: {args.version}"
-    actual = subprocess.run(
-        [prefix / "bin/rpmz", "--version"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if actual != expected:
-        raise SystemExit(f"expected {expected!r}, got {actual!r}")
+    if rpmz_version(prefix) != expected:
+        raise SystemExit("installed rpmz reported the wrong version")
+    if compatibility_version(prefix) != expected:
+        raise SystemExit(
+            "installed rpmz compatibility command reported the wrong version"
+        )
 
     data = manifest()
     archive_name = data["binary_archive"].format(
@@ -268,6 +311,17 @@ def verify_archive(path, version, platform_name):
         expected = f"{package_name}/{relative}"
         if expected not in member_names:
             raise SystemExit(f"{path.name}: missing {expected}")
+    bin_entries = {
+        PurePosixPath(member.name.rstrip("/")).name
+        for member in members
+        if PurePosixPath(member.name.rstrip("/")).parent
+        == PurePosixPath(package_name) / "bin"
+    }
+    if bin_entries != set(PUBLIC_BINARIES):
+        raise SystemExit(
+            f"{path.name}: bin must contain only rpmz: "
+            f"got {sorted(bin_entries)}"
+        )
     rpmz_member = next(
         member for member in members
         if member.name.rstrip("/") == f"{package_name}/bin/rpmz"
