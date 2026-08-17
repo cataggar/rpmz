@@ -8,7 +8,7 @@
 """
 Targeted coverage for the composed rpmzig transaction executor.
 
-rpmz install/erase/upgrade always dispatch through the composed native
+rpmz tdnf install/erase/upgrade always dispatch through the composed native
 executor in client/transaction.zig. The former rollback build flag was
 removed after issue #117, so these tests always run.
 """

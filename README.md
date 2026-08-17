@@ -15,6 +15,14 @@ ghr install cataggar/rpmz@v0.1.0
 zig build -Doptimize=ReleaseSafe install --prefix ./out
 ```
 
+## Command model
+
+The install publishes one executable: `rpmz`. Use `rpmz tdnf [options] COMMAND` for
+dnf/yum-compatible package operations, `rpmz repo-config` to manage repository files,
+and `rpmz auto` for scheduled updates.
+To retain `tdnf [options] COMMAND`, create a user-managed `tdnf -> rpmz`
+symlink in a directory on `PATH`; rpmz does not install that symlink.
+
 ## Documentation
 
 - [Configuration and usage](doc/configuration.md)

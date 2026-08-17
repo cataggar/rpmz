@@ -53,7 +53,7 @@ def get_pkg_remote_url_with_doubledots(utils, pkgname):
     return url
 
 
-# test something like "rpmz install /path/to/pkg.rpm"
+# test something like "rpmz tdnf install /path/to/pkg.rpm"
 def test_install_as_file(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
@@ -62,7 +62,7 @@ def test_install_as_file(utils):
     assert utils.check_package(pkgname)
 
 
-# test something like "rpmz install ../path/to/pkg.rpm" (relative path)
+# test something like "rpmz tdnf install ../path/to/pkg.rpm" (relative path)
 def test_install_as_file_relpath1(utils):
     pkgname = utils.config["sglversion_pkgname"]
     tmpdir = 'rpmtmp'
@@ -82,7 +82,7 @@ def test_install_as_file_relpath1(utils):
     shutil.rmtree(tmpdir)
 
 
-# test something like "rpmz install /somepath/../path/to/pkg.rpm"
+# test something like "rpmz tdnf install /somepath/../path/to/pkg.rpm"
 def test_install_as_file_with_doubledots(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path_with_doubledots(utils, pkgname)
@@ -91,7 +91,7 @@ def test_install_as_file_with_doubledots(utils):
     assert utils.check_package(pkgname)
 
 
-# test something like "rpmz install pkg.rpm"
+# test something like "rpmz tdnf install pkg.rpm"
 def test_install_as_file_relpath2(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = os.path.relpath(get_pkg_file_path(utils, pkgname))
@@ -100,7 +100,7 @@ def test_install_as_file_relpath2(utils):
     assert utils.check_package(pkgname)
 
 
-# test something like "rpmz install file:///path/to/pkg.rpm"
+# test something like "rpmz tdnf install file:///path/to/pkg.rpm"
 def test_install_as_file_uri(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
@@ -110,7 +110,7 @@ def test_install_as_file_uri(utils):
     assert utils.check_package(pkgname)
 
 
-# test something like "rpmz install http://server.com/path/to/pkg.rpm"
+# test something like "rpmz tdnf install http://server.com/path/to/pkg.rpm"
 def test_install_remote(utils):
     pkgname = utils.config["sglversion_pkgname"]
     uri = get_pkg_remote_url(utils, pkgname)
@@ -119,7 +119,7 @@ def test_install_remote(utils):
     assert utils.check_package(pkgname)
 
 
-# test something like "rpmz install http://server.com/otherpath/../path/to/pkg.rpm"
+# test something like "rpmz tdnf install http://server.com/otherpath/../path/to/pkg.rpm"
 def test_install_remote_with_doubledots(utils):
     pkgname = utils.config["sglversion_pkgname"]
     uri = get_pkg_remote_url_with_doubledots(utils, pkgname)
@@ -128,7 +128,7 @@ def test_install_remote_with_doubledots(utils):
     assert utils.check_package(pkgname)
 
 
-# test something like "rpmz install http://server.com/path/to/pkg.rpm",
+# test something like "rpmz tdnf install http://server.com/path/to/pkg.rpm",
 # but file doesn't exist, expect failure
 def test_install_remote_notfound(utils):
     uri = 'http://localhost:8080/doesnotexist.rpm'
@@ -136,7 +136,7 @@ def test_install_remote_notfound(utils):
     assert ret['retval'] == 1622
 
 
-# test something like "rpmz install /path/to/pkg.rpm otherpkg"
+# test something like "rpmz tdnf install /path/to/pkg.rpm otherpkg"
 def test_install_as_mixed(utils):
     pkgname = utils.config["sglversion_pkgname"]
     pkgname2 = utils.config["sglversion2_pkgname"]
@@ -150,7 +150,7 @@ def test_install_as_mixed(utils):
 
 
 # test installing a package that has the same name as a file
-# example: touch foo; rpmz install foo
+# example: touch foo; rpmz tdnf install foo
 # (file needs to have "*.rpm" extension to qualify)
 def test_install_same_as_filname(utils):
     pkgname = utils.config["sglversion_pkgname"]
@@ -160,7 +160,7 @@ def test_install_same_as_filname(utils):
     assert utils.check_package(pkgname)
 
 
-# test "rpmz reinstall /path/to/pkg.rpm". See PR #300.
+# test "rpmz tdnf reinstall /path/to/pkg.rpm". See PR #300.
 def test_reinstall_as_file(utils):
     pkgname = utils.config["sglversion_pkgname"]
     path = get_pkg_file_path(utils, pkgname)
@@ -178,7 +178,7 @@ def test_reinstall_as_file(utils):
     assert "Reinstalling" in "\n".join(ret['stdout'])
 
 
-# test something like "rpmz install /path/to/pkg.rpm"
+# test something like "rpmz tdnf install /path/to/pkg.rpm"
 # with nocmdlinegpgcheck option
 def test_install_as_file_nocmdlinegpgcheck(utils):
     pkgname = utils.config["sglversion_pkgname"]
@@ -194,7 +194,7 @@ def test_install_as_file_nocmdlinegpgcheck(utils):
     assert utils.check_package(pkgname)
 
 
-# test something like "rpmz install /path/to/pkg.rpm"
+# test something like "rpmz tdnf install /path/to/pkg.rpm"
 # with gpgcheck set to 1, but cligpgcheck set to 0
 def test_install_as_file_nocmdlinegpgcheck_conf(utils):
     pkgname = utils.config["sglversion_pkgname"]
@@ -236,7 +236,7 @@ MANY_FILE_PKGS = [
 ]
 
 
-# test "rpmz install a.rpm b.rpm ... " with many files in one transaction.
+# test "rpmz tdnf install a.rpm b.rpm ... " with many files in one transaction.
 #
 # This began as a regression test for a libsolv ring-buffer bug: the paths came
 # from solvable_get_location(), which returns pool scratch memory

@@ -216,7 +216,7 @@ const error_descriptions = [_]ErrorDescription{
     .{ .code = 1023, .description = "There was an error reading version of distroverpkg" },
     .{ .code = 1024, .description = "A memory allocation was requested with an invalid size" },
     .{ .code = 1025, .description = "Requested string allocation size was too long." },
-    .{ .code = 1012, .description = "There are no enabled repos.\n Run \"rpmz repolist all\" to see the repos you have.\n You can enable repos by\n 1. by passing in --enablerepo <reponame>\n 2. editing repo files in your repodir(usually /etc/yum.repos.d)" },
+    .{ .code = 1012, .description = "There are no enabled repos.\n Run \"rpmz tdnf repolist all\" to see the repos you have.\n You can enable repos by\n 1. by passing in --enablerepo <reponame>\n 2. editing repo files in your repodir(usually /etc/yum.repos.d)" },
     .{ .code = 1013, .description = "Packagelist was empty" },
     .{ .code = 1014, .description = "Error creating goal" },
     .{ .code = 1015, .description = "Invalid argument in resolve" },

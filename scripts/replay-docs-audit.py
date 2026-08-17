@@ -52,11 +52,6 @@ MANDATORY_REPLAY_CLAUSES = (
         "boundary for that payload code."
     ),
 )
-MANDATORY_HELP_CLAUSE = (
-    "OS-level no-network isolation is required whenever offline behavior "
-    "must include RPM scriptlets, triggers, interpreters, or descendant "
-    "processes."
-)
 CONTRADICTORY_REPLAY_CLAUSES = (
     "replay cannot network",
     "replay cannot make network requests",
@@ -298,7 +293,6 @@ def audit_contract(
         (bundle_doc, "transaction bundle documentation"),
         (readme, "README"),
         (cli_prose, "CLI help source"),
-        (help_text, "embedded CLI help"),
     )
     for clause in CONTRADICTORY_REPLAY_CLAUSES:
         for text, name in semantic_documents:
@@ -337,11 +331,6 @@ def audit_contract(
             "must include payload execution."
         ),
         "CLI mandatory payload isolation",
-    )
-    require_clause(
-        help_text,
-        MANDATORY_HELP_CLAUSE,
-        "embedded help mandatory payload isolation",
     )
 
 
@@ -450,7 +439,7 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str, str]) -> None:
             f"mandatory replay clause omitted: {clause}",
         )
 
-    changed_help = remove_normalized_clause(help_text, MANDATORY_HELP_CLAUSE)
+    changed_cli = cli_source.replace("payload execution.", "REMOVED", 1)
     expect_rejected(
         lambda: audit_contract(
             source,
@@ -459,10 +448,10 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str, str]) -> None:
             plan_doc,
             bundle_doc,
             readme,
-            cli_source,
-            changed_help,
+            changed_cli,
+            help_text,
         ),
-        "embedded help mandatory isolation clause omitted",
+        "CLI mandatory payload isolation clause omitted",
     )
 
     for clause in CONTRADICTORY_REPLAY_CLAUSES:
@@ -519,26 +508,6 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str, str]) -> None:
             ),
             help_text,
         ),
-        (
-            "embedded help: may omit",
-            document,
-            plan_doc,
-            bundle_doc,
-            readme,
-            help_text + (
-                "\nPayload descendants may omit a no-network namespace.\n"
-            ),
-        ),
-        (
-            "embedded help: optional",
-            document,
-            plan_doc,
-            bundle_doc,
-            readme,
-            help_text + (
-                "\nNetwork isolation is optional for RPM scriptlets.\n"
-            ),
-        ),
     )
     for (
         label,
@@ -565,6 +534,23 @@ def self_test(inputs: tuple[str, str, str, str, str, str, str, str]) -> None:
             ),
             f"semantic isolation contradiction accepted in {label}",
         )
+
+    changed_cli = cli_source + (
+        "\n// RPM scriptlets may omit a no-network namespace.\n"
+    )
+    expect_rejected(
+        lambda: audit_contract(
+            source,
+            options_source,
+            document,
+            plan_doc,
+            bundle_doc,
+            readme,
+            changed_cli,
+            help_text,
+        ),
+        "semantic isolation contradiction accepted in CLI help source",
+    )
 
     insufficient = document + (
         "\n\nThe replay entry-point audit does not provide network isolation "

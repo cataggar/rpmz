@@ -26,9 +26,9 @@ README_REQUIRED = (
     "(doc/migrating-from-tdnf.md)",
 )
 MIGRATION_REQUIRED = (
-    "`tdnf` | `rpmz`",
+    "`tdnf [options] COMMAND` | `rpmz tdnf [options] COMMAND`",
     "`tdnf-config` | `rpmz repo-config`",
-    "`tdnf-automatic` | `rpmz-automatic`",
+    "`tdnf-automatic` | `rpmz auto`",
     "`tdnfmetalink` | `rpmzmetalink`",
     "`tdnfrepogpgcheck` | `rpmzrepogpgcheck`",
     "`tdnfmetalink.conf` | `rpmzmetalink.conf`",

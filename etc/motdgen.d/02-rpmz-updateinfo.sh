@@ -19,14 +19,14 @@ fi
 TRIGGERED_BY_MOTD_TIMER="${TRIGGERED_BY_MOTD_TIMER:-0}"
 
 if [ "$TRIGGERED_BY_MOTD_TIMER" = "1" ]; then
-    rpmz -q --refresh updateinfo | grep -vE '^Refreshing|^Disabling' > "${path}"
+    rpmz tdnf -q --refresh updateinfo | grep -vE '^Refreshing|^Disabling' > "${path}"
 fi
 
 if [ -s "${path}" ]; then
     grep -qE 'Security|Bugfix|Enhancement' "${path}" || exit 0
     echo
     cat "${path}"
-    echo "Run 'rpmz updateinfo info' to see the details."
+    echo "Run 'rpmz tdnf updateinfo info' to see the details."
 else
-    echo "rpmz update info not available yet!"
+    echo "rpmz tdnf update info not available yet!"
 fi

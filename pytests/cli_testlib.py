@@ -13,6 +13,7 @@ import subprocess
 
 ERROR_RETVAL_RE = re.compile(r'^Error\((\d+)\) :', re.MULTILINE)
 RPMZ_BINARIES = {'rpmz'}
+RPMZ_TOP_LEVEL_COMMANDS = {'auto', 'replay', 'repo-config', 'tdnf'}
 
 
 def split_output_lines(text):
@@ -49,11 +50,16 @@ def build_command_env(_config):
     return os.environ.copy()
 
 
-def decorate_rpmz_cmd_for_test(cmd, config, noconfig=False):
+def decorate_rpmz_cmd_for_test(
+        cmd, config, noconfig=False, compatibility=True):
     decorated = list(cmd)
     executable = None
 
     if decorated[0] in RPMZ_BINARIES:
+        # Existing integration cases use the historical short argv form.
+        if (compatibility and len(decorated) > 1 and
+                decorated[1] not in RPMZ_TOP_LEVEL_COMMANDS):
+            decorated.insert(1, 'tdnf')
         executable = os.path.join(resolve_bindir(config), decorated[0])
         if ('-c' not in decorated and '--config' not in decorated and
                 not noconfig):
@@ -71,7 +77,8 @@ def decorate_rpmz_cmd_for_test(cmd, config, noconfig=False):
     return decorated, executable
 
 
-def run_command(cmd, config, cwd=None, noconfig=False):
+def run_command(
+        cmd, config, cwd=None, noconfig=False, compatibility=True):
     use_shell = not isinstance(cmd, list)
     decorated = cmd
     executable = None
@@ -81,6 +88,7 @@ def run_command(cmd, config, cwd=None, noconfig=False):
             cmd,
             config,
             noconfig=noconfig,
+            compatibility=compatibility,
         )
 
     process = subprocess.Popen(
@@ -124,7 +132,13 @@ class MinimalCliRuntime(object):
     def capture(self, argv, cwd=None, noconfig=False):
         self.reset()
         self.prepare_case(argv)
-        return run_command(argv, self.config, cwd=cwd, noconfig=noconfig)
+        return run_command(
+            argv,
+            self.config,
+            cwd=cwd,
+            noconfig=noconfig,
+            compatibility=False,
+        )
 
     def prepare_case(self, argv):
         self.remove_repo_file()

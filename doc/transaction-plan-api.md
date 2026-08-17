@@ -118,7 +118,7 @@ over exactly those bytes.
 - Changing the request, repository metadata, installed rpmdb state,
   architecture, distro, release version, or policy does change it.
 
-`rpmz plan <verb>` prints exactly these bytes. The CLI is a thin adapter over
+`rpmz tdnf plan <verb>` prints exactly these bytes. The CLI is a thin adapter over
 the same entry point, and a test asserts the two agree byte for byte, so a
 plan captured from the command line and one produced through the API are the
 same document.

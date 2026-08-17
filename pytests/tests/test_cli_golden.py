@@ -17,7 +17,10 @@ PYTESTS_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 if PYTESTS_DIR not in sys.path:
     sys.path.insert(0, PYTESTS_DIR)
 
-from cli_testlib import MinimalCliRuntime  # noqa: E402
+from cli_testlib import (  # noqa: E402
+    MinimalCliRuntime,
+    decorate_rpmz_cmd_for_test,
+)
 
 REPO_ROOT = os.path.dirname(PYTESTS_DIR)
 FIXTURE_DIR = os.path.join(PYTESTS_DIR, 'fixtures', 'cli-golden')
@@ -58,6 +61,44 @@ def cli_runtime():
 
 def _fixture_id(path):
     return os.path.splitext(os.path.basename(path))[0]
+
+
+def test_test_harness_inserts_compatibility_command():
+    config = {
+        'bindir': 'bin',
+        'repo_path': 'repo',
+    }
+    argv, executable = decorate_rpmz_cmd_for_test(
+        ['rpmz', 'install', 'package'],
+        config,
+    )
+    assert argv == [
+        'rpmz',
+        'tdnf',
+        '-c',
+        os.path.join('repo', 'rpmz.conf'),
+        'install',
+        'package',
+    ]
+    assert executable == os.path.join('bin', 'rpmz')
+
+
+def test_test_harness_preserves_replay_command():
+    config = {
+        'bindir': 'bin',
+        'repo_path': 'repo',
+    }
+    argv, executable = decorate_rpmz_cmd_for_test(
+        ['rpmz', 'replay', '--help'],
+        config,
+        noconfig=True,
+    )
+    assert argv == [
+        'rpmz',
+        'replay',
+        '--help',
+    ]
+    assert executable == os.path.join('bin', 'rpmz')
 
 
 @pytest.mark.parametrize('fixture_path', FIXTURE_PATHS, ids=_fixture_id)

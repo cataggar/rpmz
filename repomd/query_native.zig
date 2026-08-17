@@ -4814,7 +4814,7 @@ test "exclude line order does not depend on the order the patterns are given" {
 // PR #255 replaced libsolv's `SolvFindBestAvailable` with a native lookup that
 // selected on EVR alone. Real repositories give the obsoleting package the same
 // EVR as the package it replaces, so the tie fell to iteration order and
-// `rpmz install <obsoleted>` pulled in the obsoleted package instead of its
+// `rpmz tdnf install <obsoleted>` pulled in the obsoleted package instead of its
 // replacement.
 test "an obsoleting package wins an EVR tie against the package it obsoletes" {
     const testing = std.testing;

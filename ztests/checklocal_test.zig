@@ -1,4 +1,4 @@
-//! `rpmz check-local <dir>`: the dependency check over a directory of `.rpm`
+//! `rpmz tdnf check-local <dir>`: the dependency check over a directory of `.rpm`
 //! files rather than over a repository.
 //!
 //! This command is the last caller of `SolvReportProblems`

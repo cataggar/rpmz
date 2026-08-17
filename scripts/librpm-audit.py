@@ -298,6 +298,7 @@ def elf_errors(prefix):
 def installed_surface_errors(prefix):
     errors = []
     rpmz = prefix / "bin" / "rpmz"
+    bin_dir = prefix / "bin"
     required = (
         rpmz,
         prefix / "libexec" / "rpmz" / "rpmz-history-util",
@@ -307,11 +308,25 @@ def installed_surface_errors(prefix):
         if not path.is_file():
             errors.append(f"{path}: required executable is missing")
 
-    retired_config = prefix / "bin" / "rpmz-config"
-    if retired_config.exists() or retired_config.is_symlink():
-        errors.append(
-            f"{retired_config}: retired standalone executable is installed"
-        )
+    if not bin_dir.is_dir():
+        errors.append(f"{bin_dir}: public executable directory is missing")
+    else:
+        bin_entries = sorted(path.name for path in bin_dir.iterdir())
+        if bin_entries != ["rpmz"]:
+            errors.append(
+                f"{bin_dir}: expected only rpmz, found {bin_entries}"
+            )
+        for retired in (
+            "tdnf",
+            "rpmz-config",
+            "rpmz-automatic",
+            "jsondumptest",
+        ):
+            retired_path = bin_dir / retired
+            if retired_path.exists() or retired_path.is_symlink():
+                errors.append(
+                    f"{retired_path}: retired public executable is installed"
+                )
 
     for path in sorted(prefix.rglob("*")):
         relative = path.relative_to(prefix)

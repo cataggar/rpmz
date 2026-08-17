@@ -107,10 +107,13 @@ jobs:
             ghr install cataggar/rpmz@v${{ steps.version.outputs.version }}
             ```
 
-            Binary archives contain the normal rpmz install layout, including
-            `bin/`, `lib/`, `libexec/`, and `etc/`, plus COPYING and README.md.
-            SHA-256 sidecars, SPDX SBOMs, and GitHub provenance attestations
-            are published with the archives.
+            Binary archives expose one public executable: `bin/rpmz`. Use
+            `rpmz tdnf [options] COMMAND` for dnf/yum-compatible operations,
+            `rpmz repo-config` for repository configuration, and `rpmz auto`
+            for scheduled updates. The archives also contain `lib/`,
+            `libexec/`, and `etc/`, plus COPYING and README.md. SHA-256
+            sidecars, SPDX SBOMs, and GitHub provenance attestations are
+            published with the archives.
           files: |
             release-assets/rpmz-*.tar.gz
             release-assets/rpmz-*.tar.xz

@@ -18,11 +18,14 @@ Place `.repo` files in `/etc/yum.repos.d`, or in the directory selected by
 After installing to `./out`, for example:
 
 ```sh
-./out/bin/rpmz list installed
-./out/bin/rpmz install PACKAGE
-./out/bin/rpmz remove PACKAGE
+./out/bin/rpmz tdnf list installed
+./out/bin/rpmz tdnf install PACKAGE
+./out/bin/rpmz tdnf remove PACKAGE
 ./out/bin/rpmz --help
 ```
 
-`rpmz repo-config` manages repository configuration, and `rpmz-automatic` supports
-scheduled operations using `/etc/rpmz/automatic.conf`.
+`rpmz repo-config` manages repository configuration, and `rpmz auto`
+supports scheduled operations using `/etc/rpmz/automatic.conf`. The installed
+public `bin/` directory contains only `rpmz`. To preserve a `tdnf [options]
+COMMAND` invocation shape, create a user-managed `tdnf -> rpmz` symlink in a
+directory on `PATH`.

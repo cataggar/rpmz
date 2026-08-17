@@ -85,7 +85,34 @@ COMPATIBILITY_CLI_ALLOWANCES = {
         'const compatibility_command = "tdnf";',
     ),
     "pytests/cli_testlib.py": (
-        "'repo-config', 'tdnf',",
+        "'tdnf'",
+    ),
+    "pytests/tests/test_cli_golden.py": (
+        "'tdnf',",
+    ),
+    "doc/configuration.md": (
+        "tdnf [options]\nCOMMAND",
+        "tdnf -> rpmz",
+    ),
+    "etc/bash_completion.d/rpmz-completion.bash": (
+        'compatibility_command="tdnf"',
+        '"auto repo-config replay tdnf --help --version -h"',
+    ),
+    "pytests/tests/test_bash_completion.py": (
+        "COMPATIBILITY_COMMAND = 'tdnf'",
+        "rpmz tdnf",
+    ),
+    "scripts/librpm-audit.py": (
+        '"tdnf",',
+    ),
+    "scripts/release.py": (
+        '"tdnf",',
+    ),
+    "scripts/release-smoke.py": (
+        '[path, "tdnf", "--version"]',
+    ),
+    "scripts/release-audit.py": (
+        'constant("tdnf")',
     ),
     "pytests/scripts/refresh_cli_golden.py": (
         "case['argv'].insert(1, 'tdnf')",
@@ -385,6 +412,7 @@ def scrub_allowed(source, relative, fixture_names, legacy_fixture_tokens):
     source = source.replace("tdnf-phase7", "")
     source = source.replace("tdnf-old-pretrans", "")
     source = source.replace("tdnf test spec", "")
+    source = re.sub(r"\brpmz\s+tdnf\b", "rpmz", source)
     if relative.as_posix() == "repomd/cache.zig":
         source = source.replace('"tdnf"', "")
     if relative.as_posix() in FIXTURE_QUERY_FILES:
