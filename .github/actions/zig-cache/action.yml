@@ -1,15 +1,10 @@
 name: 'Configure Zig caches'
 description: >-
-  Move ZIG_GLOBAL_CACHE_DIR and ZIG_LOCAL_CACHE_DIR out of $GITHUB_WORKSPACE.
-  mlugg/setup-zig unconditionally exports both to <workspace>/.zig-cache,
-  which (1) conflates the global and local cache and (2) puts the global
-  cache inside a checkout it does not belong in. This composite action runs
-  immediately after setup-zig and replaces those exports with sane values:
+  Keep ZIG_GLOBAL_CACHE_DIR and ZIG_LOCAL_CACHE_DIR outside
+  $GITHUB_WORKSPACE and separate from each other:
     * ZIG_GLOBAL_CACHE_DIR -> a stable path outside the workspace.
     * ZIG_LOCAL_CACHE_DIR  -> a separate per-job scratch path outside the
-                              workspace. We do not unset it (an empty value
-                              makes Zig dump its h/ o/ tmp/ z/ subdirs into
-                              the current working directory).
+                              workspace.
 
 inputs:
   global-cache-dir:
