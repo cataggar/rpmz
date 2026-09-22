@@ -19,6 +19,18 @@ PLATFORMS = [
     {"os": "ubuntu-24.04", "platform": "linux-x64"},
     {"os": "ubuntu-24.04-arm", "platform": "linux-arm64"},
 ]
+GHR_INSTALL_ACTION = (
+    "cataggar/ghr/actions/install@"
+    "c4be68b52d67d7acd2a7fe6c1e5f126e1754176e"
+)
+ZIG_INSTALL_ENV = {"GH_TOKEN": "${{ github.token }}"}
+ZIG_INSTALL_INPUTS = {
+    "ghr-version": "v0.8.1",
+    "tools": (
+        "cataggar/zig@v0.16.0 "
+        "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
+    ),
+}
 SIGNING_COMMANDS = {"gpg", "cosign", "minisign", "signify", "openssl"}
 
 
@@ -125,7 +137,7 @@ class WorkflowParser:
             return {}, index
         return self.parse_block(child, indentation(self.lines[child]))
 
-    def block_scalar(self, index, indent):
+    def block_scalar(self, index, indent, style, chomping):
         output = []
         while index < len(self.lines):
             line = self.lines[index]
@@ -134,11 +146,18 @@ class WorkflowParser:
             remove = min(len(line), indent + 2)
             output.append(line[remove:] if line.strip() else "")
             index += 1
-        return "\n".join(output) + "\n", index
+        value = "\n".join(output)
+        if style == ">":
+            value = re.sub(r"(?<=\S)\n(?=\S)", " ", value)
+        if chomping == "-":
+            value = value.rstrip("\n")
+        elif value and not value.endswith("\n"):
+            value += "\n"
+        return value, index
 
     def mapping_value(self, raw, index, indent):
-        if raw in ("|", "|-", "|+"):
-            return self.block_scalar(index, indent)
+        if raw in ("|", "|-", "|+", ">", ">-", ">+"):
+            return self.block_scalar(index, indent, raw[0], raw[1:])
         if raw == "":
             return self.nested_value(index, indent)
         return parse_scalar(raw), index
@@ -232,6 +251,21 @@ def action_step(job, prefix):
         and step["uses"].startswith(prefix)
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+def audit_zig_install(errors, job, context):
+    step = action_step(job, "cataggar/ghr/actions/install@")
+    expect(
+        errors,
+        step == {
+            "name": "Install Zig via ghr",
+            "uses": GHR_INSTALL_ACTION,
+            "env": ZIG_INSTALL_ENV,
+            "with": ZIG_INSTALL_INPUTS,
+        },
+        f"{context} must install Zig 0.16.0 with the pinned ghr action",
+    )
+    return step
 
 
 def scalar_lines(value):
@@ -762,8 +796,11 @@ def audit_release_workflow(errors, document):
     )
     expect(
         errors,
-        document.get("permissions") == {"contents": "read"},
-        "release workflow default permissions must be contents: read",
+        document.get("permissions") == {
+            "contents": "read",
+            "attestations": "read",
+        },
+        "release workflow default permissions must be read-only",
     )
     jobs = document.get("jobs")
     if not isinstance(jobs, dict):
@@ -824,7 +861,7 @@ def audit_release_workflow(errors, document):
     expected_steps = {
         "build": [
             ("uses", "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"),
-            ("uses", "mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29"),
+            ("uses", GHR_INSTALL_ACTION),
             ("uses", "./.github/actions/zig-cache"),
             ("name", "Get version"),
             ("name", "Build normal install layout"),
@@ -885,6 +922,8 @@ def audit_release_workflow(errors, document):
                         if name == "release"
                         else {"uses"}
                     )
+                elif step["uses"] == GHR_INSTALL_ACTION:
+                    expected_keys = {"name", "uses", "env", "with"}
                 elif step["uses"] == "./.github/actions/zig-cache":
                     expected_keys = {"uses"}
                 elif step["uses"].startswith(
@@ -949,16 +988,7 @@ def audit_release_workflow(errors, document):
         ],
         "release build command changed",
     )
-    setup_zig = action_step(build, "mlugg/setup-zig@")
-    expect(
-        errors,
-        setup_zig is not None
-        and setup_zig.get("with") == {
-            "version": "0.16.0",
-            "use-cache": False,
-        },
-        "release Zig setup inputs changed",
-    )
+    audit_zig_install(errors, build, "release build")
     source_package = named_step(source, "Package source archive and checksum")
     expect(
         errors,
@@ -1109,12 +1139,18 @@ def audit_release_workflow(errors, document):
     )
     for name, job in jobs.items():
         for step in job_steps(job):
-            expected_env = (
-                {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
-                if name == "post-release-smoke"
-                and step.get("name") == "Install and audit published release"
-                else None
-            )
+            if name == "build" and step.get("uses") == GHR_INSTALL_ACTION:
+                expected_env = ZIG_INSTALL_ENV
+            elif (
+                name == "post-release-smoke"
+                and step.get("name")
+                == "Install and audit published release"
+            ):
+                expected_env = {
+                    "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
+                }
+            else:
+                expected_env = None
             expect(
                 errors,
                 step.get("env") == expected_env
@@ -1159,10 +1195,24 @@ def audit_ci_workflow(errors, document):
     )
     expect(
         errors,
-        document.get("permissions") == {"contents": "read"},
-        "CI workflow default permissions must be contents: read",
+        document.get("permissions") == {
+            "contents": "read",
+            "attestations": "read",
+        },
+        "CI workflow default permissions must be read-only",
     )
     jobs = document.get("jobs", {})
+    for name in ("build-and-test", "no-rpm-development", "release-dry-run"):
+        job = jobs.get(name, {})
+        install = audit_zig_install(errors, job, f"CI {name}")
+        cache = action_step(job, "./.github/actions/zig-cache")
+        expect(
+            errors,
+            install is not None
+            and cache is not None
+            and job_steps(job).index(install) < job_steps(job).index(cache),
+            f"CI {name} must configure Zig caches after installation",
+        )
     dry_run = jobs.get("release-dry-run", {})
     expect(errors, "permissions" not in dry_run,
            "release dry-run must inherit read-only CI permissions")
@@ -1326,6 +1376,17 @@ def self_test(
         "permissions:\n  contents: write\n# contents: read",
         1,
     )
+    wrong_ghr_pin = release_source.replace(
+        GHR_INSTALL_ACTION,
+        "cataggar/ghr/actions/install@"
+        "0000000000000000000000000000000000000000",
+        1,
+    )
+    wrong_zig_version = ci_source.replace(
+        "cataggar/zig@v0.16.0",
+        "cataggar/zig@v0.15.2",
+        1,
+    )
     global_token_env = release_source.replace(
         "permissions:\n  contents: read",
         "env:\n"
@@ -1347,6 +1408,8 @@ def self_test(
         (draft_override, ci_source),
         (gpg_secret_step, ci_source),
         (release_source, wrong_ci_permissions),
+        (wrong_ghr_pin, ci_source),
+        (release_source, wrong_zig_version),
         (global_token_env, ci_source),
     ]
     for release_case, ci_case in cases:
