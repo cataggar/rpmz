@@ -51,6 +51,12 @@ zig build test
 zig build -Doptimize=safe test
 ```
 
+Cross-check the private variadic bridge without running a foreign executable:
+
+```sh
+zig build -j2 -Dtarget=aarch64-linux-gnu common-abi-check
+```
+
 The pytest integration suite requires an RPM-aware host with `rpm`, `rpmbuild`,
 `createrepo_c`, pytest, requests, and pyOpenSSL. Host RPM tools only generate
 fixtures and provide behavior oracles; production does not invoke them.

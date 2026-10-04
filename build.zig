@@ -1035,6 +1035,7 @@ pub fn build(b: *Build) void {
         });
         break :blk lib;
     };
+    b.step("common-abi-check", "Compile the private C variadic bridge for the selected target").dependOn(&common_lib.step);
 
     const llconf_lib = blk: {
         const mod = b.createModule(.{
