@@ -465,7 +465,7 @@ fn loadPluginConfig(
     if (isNullOrEmpty(config_file) or desc == null or output == null)
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (access(config_file, F_OK) != 0) {
-        if (std.c._errno().* == @intFromEnum(std.c.E.NOENT)) return 0;
+        if (std.c._errno().* == @backingInt(std.c.E.NOENT)) return 0;
         return systemError();
     }
     const module = find_cnfmodule("ini") orelse
@@ -491,7 +491,7 @@ fn loadPluginConfigAt(
         .NOFOLLOW = true,
     });
     if (fd < 0) {
-        if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT)) return 0;
+        if (std.c._errno().* == @backingInt(std.posix.E.NOENT)) return 0;
         return errors.ERROR_TDNF_INVALID_PARAMETER;
     }
     var stat = std.mem.zeroes(std.os.linux.Statx);
@@ -565,7 +565,7 @@ fn loadPluginConfigs(
         }
     }
     if (pinned_directory < 0 and access(conf.pszPluginConfPath, F_OK) != 0) {
-        if (std.c._errno().* == @intFromEnum(std.c.E.NOENT))
+        if (std.c._errno().* == @backingInt(std.c.E.NOENT))
             return ERROR_TDNF_NO_PLUGIN_CONF_DIR;
         return systemError();
     }
@@ -595,9 +595,10 @@ fn loadPluginConfigs(
             {
                 break :blk errors.ERROR_TDNF_INVALID_PARAMETER;
             }
-            const name_z = std.heap.c_allocator.dupeZ(
+            const name_z = std.heap.c_allocator.dupeSentinel(
                 u8,
                 basename,
+                0,
             ) catch break :blk errors.ERROR_TDNF_OUT_OF_MEMORY;
             defer std.heap.c_allocator.free(name_z);
             break :blk loadPluginConfigAt(
@@ -1194,10 +1195,11 @@ fn fixturePath(
     suffix: []const u8,
     buffer: []u8,
 ) [:0]u8 {
-    return std.fmt.bufPrintZ(
+    return std.fmt.bufPrintSentinel(
         buffer,
         ".zig-cache/tmp/{s}/{s}",
         .{ &tmp.sub_path, suffix },
+        0,
     ) catch @panic("fixture path too long");
 }
 

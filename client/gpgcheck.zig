@@ -101,17 +101,17 @@ extern fn rpmz_rpmdb_pubkeys_next(
 extern fn rpmz_rpmdb_string_free(value: ?*anyopaque) callconv(.c) void;
 extern fn rpmz_rpmdb_last_error() callconv(.c) [*:0]const u8;
 
-threadlocal var direct_error: [160]u8 = [_]u8{0} ** 160;
+threadlocal var direct_error: [160]u8 = @splat(0);
 
 const RemoteKey = struct {
     directory_fd: c_int = -1,
     file_fd: c_int = -1,
-    name: [80]u8 = [_]u8{0} ** 80,
+    name: [80]u8 = @splat(0),
     present: bool = false,
 };
 
 fn setDirectError(comptime format: []const u8, args: anytype) void {
-    _ = std.fmt.bufPrintZ(&direct_error, format, args) catch {
+    _ = std.fmt.bufPrintSentinel(&direct_error, format, args, 0) catch {
         const fallback = "direct verifier error";
         @memcpy(direct_error[0..fallback.len], fallback);
         direct_error[fallback.len] = 0;
@@ -364,7 +364,7 @@ fn productionVerifyDigests(
         setDirectError("verify package digests: {t}", .{err});
         return -1;
     };
-    outcome.* = @intFromEnum(result);
+    outcome.* = @backingInt(result);
     return 0;
 }
 
@@ -442,7 +442,7 @@ fn productionVerifySignatures(
         setDirectError("verify package signatures: {t}", .{err});
         return -1;
     };
-    outcome.* = @intFromEnum(result);
+    outcome.* = @backingInt(result);
     return 0;
 }
 
@@ -507,10 +507,10 @@ fn openDirectoryAt(
         .NOFOLLOW = true,
     });
     if (fd < 0 and create and
-        __errno_location().* == @intFromEnum(std.posix.E.NOENT))
+        __errno_location().* == @backingInt(std.posix.E.NOENT))
     {
         if (std.c.mkdirat(parent_fd, name, 0o755) != 0 and
-            __errno_location().* != @intFromEnum(std.posix.E.EXIST))
+            __errno_location().* != @backingInt(std.posix.E.EXIST))
         {
             return systemError();
         }
@@ -680,7 +680,7 @@ fn makeRemoteKeyName(
             0,
         );
         if (count < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+            std.c._errno().* == @backingInt(std.posix.E.INTR))
         {
             continue;
         }
@@ -689,10 +689,11 @@ fn makeRemoteKeyName(
     }
     const encoded_url = std.fmt.bytesToHex(url_tag, .lower);
     const encoded_nonce = std.fmt.bytesToHex(nonce, .lower);
-    return std.fmt.bufPrintZ(
+    return std.fmt.bufPrintSentinel(
         buffer,
         "key-{s}-{s}",
         .{ &encoded_url, &encoded_nonce },
+        0,
     );
 }
 
@@ -775,7 +776,7 @@ fn readRegularKeyFd(
             size - offset,
         );
         if (count < 0 and
-            __errno_location().* == @intFromEnum(std.posix.E.INTR))
+            __errno_location().* == @backingInt(std.posix.E.INTR))
         {
             continue;
         }
@@ -858,11 +859,11 @@ fn readGpgKeyFile(
 
 fn mapDigestOutcome(outcome: c_int) u32 {
     switch (outcome) {
-        @intFromEnum(rpm.Outcome.ok) => return 0,
-        @intFromEnum(rpm.Outcome.missing) => common.log(LOG_ERR, "RPM is missing required internal digest coverage\n", .{}),
-        @intFromEnum(rpm.Outcome.bad) => common.log(LOG_ERR, "RPM internal digest verification failed\n", .{}),
-        @intFromEnum(rpm.Outcome.unsupported) => common.log(LOG_ERR, "RPM uses an unsupported internal digest\n", .{}),
-        @intFromEnum(rpm.Outcome.malformed) => common.log(LOG_ERR, "RPM contains malformed internal digest metadata\n", .{}),
+        @backingInt(rpm.Outcome.ok) => return 0,
+        @backingInt(rpm.Outcome.missing) => common.log(LOG_ERR, "RPM is missing required internal digest coverage\n", .{}),
+        @backingInt(rpm.Outcome.bad) => common.log(LOG_ERR, "RPM internal digest verification failed\n", .{}),
+        @backingInt(rpm.Outcome.unsupported) => common.log(LOG_ERR, "RPM uses an unsupported internal digest\n", .{}),
+        @backingInt(rpm.Outcome.malformed) => common.log(LOG_ERR, "RPM contains malformed internal digest metadata\n", .{}),
         else => common.log(LOG_ERR, "RPM internal digest verification could not complete\n", .{}),
     }
     return ERROR_TDNF_RPM_CHECK;
@@ -870,20 +871,20 @@ fn mapDigestOutcome(outcome: c_int) u32 {
 
 fn mapSignatureOutcome(outcome: c_int) u32 {
     switch (outcome) {
-        @intFromEnum(rpm.Outcome.ok) => return 0,
-        @intFromEnum(rpm.Outcome.missing) => {
+        @backingInt(rpm.Outcome.ok) => return 0,
+        @backingInt(rpm.Outcome.missing) => {
             common.log(LOG_ERR, "RPM signature has no matching trusted key\n", .{});
             return ERROR_TDNF_RPM_GPG_NO_MATCH;
         },
-        @intFromEnum(rpm.Outcome.bad) => {
+        @backingInt(rpm.Outcome.bad) => {
             common.log(LOG_ERR, "RPM signature verification failed\n", .{});
             return ERROR_TDNF_RPM_GPG_NO_MATCH;
         },
-        @intFromEnum(rpm.Outcome.unsupported) => {
+        @backingInt(rpm.Outcome.unsupported) => {
             common.log(LOG_ERR, "RPM signature uses unsupported OpenPGP metadata\n", .{});
             return ERROR_TDNF_RPM_GPG_PARSE_FAILED;
         },
-        @intFromEnum(rpm.Outcome.malformed) => {
+        @backingInt(rpm.Outcome.malformed) => {
             common.log(LOG_ERR, "RPM contains malformed OpenPGP signature metadata\n", .{});
             return ERROR_TDNF_RPM_GPG_PARSE_FAILED;
         },
@@ -967,7 +968,7 @@ fn gpgCheckPackage(
 
     if (repo.nGPGCheck == 0) return 0;
 
-    var outcome: c_int = @intFromEnum(rpm.Outcome.internal);
+    var outcome: c_int = @backingInt(rpm.Outcome.internal);
     if (conf.nSkipDigest == 0) {
         if (ops.verify_digests(ops.context, file, &outcome) != 0) {
             common.log(LOG_ERR, "Unable to verify package digests for %s: %s\n", .{ path, lastVerifierError() });
@@ -976,7 +977,7 @@ fn gpgCheckPackage(
         const result = mapDigestOutcome(outcome);
         if (result != 0) {
             if (policy_rejected) |out| {
-                if (outcome != @intFromEnum(rpm.Outcome.internal))
+                if (outcome != @backingInt(rpm.Outcome.internal))
                     out.* = 1;
             }
             return result;
@@ -1004,11 +1005,11 @@ fn gpgCheckPackage(
         common.log(LOG_ERR, "Unable to verify package signature for %s: %s\n", .{ path, lastVerifierError() });
         return ERROR_TDNF_RPM_CHECK;
     }
-    if (outcome == @intFromEnum(rpm.Outcome.ok)) return 0;
-    if (outcome != @intFromEnum(rpm.Outcome.missing)) {
+    if (outcome == @backingInt(rpm.Outcome.ok)) return 0;
+    if (outcome != @backingInt(rpm.Outcome.missing)) {
         const result = mapSignatureOutcome(outcome);
         if (policy_rejected) |out| {
-            if (outcome != @intFromEnum(rpm.Outcome.internal))
+            if (outcome != @backingInt(rpm.Outcome.internal))
                 out.* = 1;
         }
         return result;
@@ -1142,7 +1143,7 @@ fn gpgCheckPackage(
     result = mapSignatureOutcome(outcome);
     if (result != 0) {
         if (policy_rejected) |out| {
-            if (outcome != @intFromEnum(rpm.Outcome.internal))
+            if (outcome != @backingInt(rpm.Outcome.internal))
                 out.* = 1;
         }
     }
@@ -1302,9 +1303,9 @@ comptime {
 
 const Mock = struct {
     keys: []const [*:0]const u8 = &.{},
-    digest_outcome: c_int = @intFromEnum(rpm.Outcome.ok),
-    initial_signature: c_int = @intFromEnum(rpm.Outcome.ok),
-    final_signature: c_int = @intFromEnum(rpm.Outcome.ok),
+    digest_outcome: c_int = @backingInt(rpm.Outcome.ok),
+    initial_signature: c_int = @backingInt(rpm.Outcome.ok),
+    final_signature: c_int = @backingInt(rpm.Outcome.ok),
     digest_rc: c_int = 0,
     signature_rc: c_int = 0,
     import_result: u32 = 0,
@@ -1317,7 +1318,7 @@ const Mock = struct {
     digest_calls: usize = 0,
     signature_calls: usize = 0,
     import_calls: usize = 0,
-    imported_lengths: [8]usize = [_]usize{0} ** 8,
+    imported_lengths: [8]usize = @splat(0),
     prompt_calls: usize = 0,
     fetch_calls: usize = 0,
     remote_remove_calls: usize = 0,
@@ -1610,9 +1611,9 @@ fn expectAlternateRootRemoteKey(conflicting_host: bool) !void {
     defer std.testing.allocator.free(target_cache);
     try cwd.createDirPath(io, target_cache);
 
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
-    const cache_z = try std.testing.allocator.dupeZ(u8, cache);
+    const cache_z = try std.testing.allocator.dupeSentinel(u8, cache, 0);
     defer std.testing.allocator.free(cache_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1647,7 +1648,7 @@ fn expectAlternateRootRemoteKey(conflicting_host: bool) !void {
         openRemoteKeyDirectory(&rpmz, &repo, &remote.directory_fd),
     );
     defer releaseRemoteGpgKey(&remote);
-    const name = try std.fmt.bufPrintZ(&remote.name, "key-test", .{});
+    const name = try std.fmt.bufPrintSentinel(&remote.name, "key-test", .{}, 0);
     remote.file_fd = std.c.openat(remote.directory_fd, name, .{
         .ACCMODE = .RDWR,
         .CREAT = true,
@@ -1786,7 +1787,7 @@ test "concurrent same-URL remote keys retain independent pinned inodes" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const directory_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1872,7 +1873,7 @@ test "gpg policy bypass and typed failures preserve rejection semantics" {
     try std.testing.expectEqual(@as(usize, 0), mock.digest_calls);
 
     context.repo.nGPGCheck = 1;
-    mock.digest_outcome = @intFromEnum(rpm.Outcome.bad);
+    mock.digest_outcome = @backingInt(rpm.Outcome.bad);
     try std.testing.expectEqual(ERROR_TDNF_RPM_CHECK, gpgCheckPackage(
         &ops,
         &context.rpmz,
@@ -1883,7 +1884,7 @@ test "gpg policy bypass and typed failures preserve rejection semantics" {
     ));
     try std.testing.expectEqual(@as(c_int, 1), rejected);
 
-    mock.digest_outcome = @intFromEnum(rpm.Outcome.internal);
+    mock.digest_outcome = @backingInt(rpm.Outcome.internal);
     try std.testing.expectEqual(ERROR_TDNF_RPM_CHECK, gpgCheckPackage(
         &ops,
         &context.rpmz,
@@ -1925,7 +1926,7 @@ test "signature policy handles unsigned skip and trusted rpmdb key" {
 
     context.conf.nSkipSignature = 0;
     mock.signed = 1;
-    mock.initial_signature = @intFromEnum(rpm.Outcome.ok);
+    mock.initial_signature = @backingInt(rpm.Outcome.ok);
     try std.testing.expectEqual(@as(u32, 0), gpgCheckPackage(
         &ops,
         &context.rpmz,
@@ -1983,9 +1984,10 @@ test "RepoSync key import acquires the shared pinned target lock" {
         &.{ base, "locks" },
     );
     defer std.testing.allocator.free(lock_directory);
-    const lock_directory_z = try std.testing.allocator.dupeZ(
+    const lock_directory_z = try std.testing.allocator.dupeSentinel(
         u8,
         lock_directory,
+        0,
     );
     defer std.testing.allocator.free(lock_directory_z);
     try std.testing.expectEqual(
@@ -2042,8 +2044,8 @@ test "approved keys retain binary lengths duplicates and verify after all import
     context.bind();
     var mock = Mock{
         .keys = &.{ "file:///one", "file:///one", "file:///two" },
-        .initial_signature = @intFromEnum(rpm.Outcome.missing),
-        .final_signature = @intFromEnum(rpm.Outcome.ok),
+        .initial_signature = @backingInt(rpm.Outcome.missing),
+        .final_signature = @backingInt(rpm.Outcome.ok),
     };
     const ops = mock.ops();
     var rejected: c_int = 0;
@@ -2066,7 +2068,7 @@ test "key acquisition failures preserve ordering and exact errors" {
     var context = TestContext.init();
     context.bind();
     var mock = Mock{
-        .initial_signature = @intFromEnum(rpm.Outcome.missing),
+        .initial_signature = @backingInt(rpm.Outcome.missing),
     };
     var ops = mock.ops();
 
@@ -2142,7 +2144,7 @@ test "key URL policy rejects plaintext before prompt fetch or import" {
     context.bind();
     var mock = Mock{
         .keys = &.{"HtTp://example.invalid/repository-key"},
-        .initial_signature = @intFromEnum(rpm.Outcome.missing),
+        .initial_signature = @backingInt(rpm.Outcome.missing),
     };
     const ops = mock.ops();
 
@@ -2242,7 +2244,7 @@ test "both entry points reset outputs and transfer parsed file ownership" {
     try std.testing.expect(file == fakeFile());
     try std.testing.expectEqual(@as(usize, 0), mock.close_calls);
 
-    mock.initial_signature = @intFromEnum(rpm.Outcome.bad);
+    mock.initial_signature = @backingInt(rpm.Outcome.bad);
     mock.signature_calls = 0;
     file = @ptrFromInt(0x3000);
     try std.testing.expectEqual(ERROR_TDNF_RPM_GPG_NO_MATCH, gpgCheckPackageEx(

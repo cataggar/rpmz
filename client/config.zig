@@ -554,7 +554,7 @@ fn readFdToStringArray(fd: c_int, lines: *?[*]?[*:0]u8) u32 {
     while (getline(&line, &capacity, stream) >= 0) {
         const raw = std.mem.sliceTo(line.?, 0);
         const value = std.mem.trimEnd(u8, raw, "\r\n");
-        const value_z = std.heap.c_allocator.dupeZ(u8, value) catch
+        const value_z = std.heap.c_allocator.dupeSentinel(u8, value, 0) catch
             return errors.ERROR_TDNF_OUT_OF_MEMORY;
         defer std.heap.c_allocator.free(value_z);
         const result = TDNFAddStringArray(lines, value_z.ptr);
@@ -604,7 +604,7 @@ fn readConfFilesFromPinnedDir(
             .NOFOLLOW = true,
         });
         if (fd < 0) {
-            if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+            if (std.c._errno().* == @backingInt(std.posix.E.NOENT))
                 continue;
             return errors.ERROR_TDNF_INVALID_PARAMETER;
         }
@@ -1502,9 +1502,9 @@ test "pinned config and os-release survive root replacement" {
         &.{ base, "parked" },
     );
     defer std.testing.allocator.free(parked);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
-    const parked_z = try std.testing.allocator.dupeZ(u8, parked);
+    const parked_z = try std.testing.allocator.dupeSentinel(u8, parked, 0);
     defer std.testing.allocator.free(parked_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1588,7 +1588,7 @@ test "pinned cachedir setopt repins only the final target path" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1672,7 +1672,7 @@ test "pinned config rejects absolute symlink escapes" {
         "root/etc/rpmz/rpmz.conf",
         .{},
     );
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,

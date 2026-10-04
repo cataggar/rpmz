@@ -1,6 +1,19 @@
 //! Canonical result materialization for completed native solver models.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const query_index = @import("index.zig");
 const metadata = @import("model.zig");
 const solver_model = @import("solver_model.zig");
@@ -93,7 +106,7 @@ pub fn materialize(
         }
     }
     for (input.skipped_jobs) |job_id| {
-        if (@intFromEnum(job_id) >= formula.jobs.len) {
+        if (@backingInt(job_id) >= formula.jobs.len) {
             return error.InvalidInput;
         }
     }
@@ -106,7 +119,7 @@ pub fn materialize(
     var removed = try arena.alloc(bool, package_count);
     @memset(removed, false);
     for (universe.packages) |package| {
-        const package_index: usize = @intFromEnum(package.id);
+        const package_index: usize = @backingInt(package.id);
         if (input.model.values[package_index]) {
             try selected.append(package.id);
         } else if (package.installed != null) {
@@ -118,7 +131,7 @@ pub fn materialize(
     @memset(referenced_priors, false);
     var actions = ActionList.init(arena);
     for (universe.packages) |package| {
-        const package_index: usize = @intFromEnum(package.id);
+        const package_index: usize = @backingInt(package.id);
         if (package.installed != null or
             !input.model.values[package_index])
         {
@@ -133,7 +146,7 @@ pub fn materialize(
         if (!multiversion) {
             for (universe.packages) |installed| {
                 const installed_index: usize =
-                    @intFromEnum(installed.id);
+                    @backingInt(installed.id);
                 if (!removed[installed_index]) continue;
                 if (packageObsoletes(
                     universe,
@@ -147,7 +160,7 @@ pub fn materialize(
         }
         if (multiversion) {
             for (universe.packages) |installed| {
-                const installed_index: usize = @intFromEnum(installed.id);
+                const installed_index: usize = @backingInt(installed.id);
                 if (!removed[installed_index] or
                     !sameMultiversionIdentity(package, installed))
                 {
@@ -163,7 +176,7 @@ pub fn materialize(
             if (!has_exact_multiversion_prior) priors.clearRetainingCapacity();
         } else {
             for (universe.packages) |installed| {
-                const installed_index: usize = @intFromEnum(installed.id);
+                const installed_index: usize = @backingInt(installed.id);
                 if (!removed[installed_index] or
                     solver_rules.isSource(
                         package.source.nevra.arch,
@@ -236,7 +249,7 @@ pub fn materialize(
     }
 
     for (universe.packages) |package| {
-        const package_index: usize = @intFromEnum(package.id);
+        const package_index: usize = @backingInt(package.id);
         if (!removed[package_index] or referenced_priors[package_index]) {
             continue;
         }
@@ -628,7 +641,7 @@ fn classifyCore(
             .job => |value| value,
             else => continue,
         };
-        const job_index: usize = @intFromEnum(job_id);
+        const job_index: usize = @backingInt(job_id);
         if (job_index >= core_jobs.len) return error.InvalidInput;
         core_jobs[job_index] = true;
         if (job_assert != null) continue;
@@ -676,7 +689,7 @@ fn classifyCore(
     for (core_jobs, 0..) |in_core, job_index| {
         if (!in_core) continue;
         core_job_count += 1;
-        only_core_job = @enumFromInt(@as(u32, @intCast(job_index)));
+        only_core_job = @fromBackingInt(@intCast(@as(u32, @intCast(job_index))));
     }
     const single_core_job = if (core_job_count == 1)
         only_core_job
@@ -905,7 +918,7 @@ fn libsolvRuleClass(origin: solver_rules.RuleOrigin) u8 {
 /// solvid order agree; the `+ 1` only keeps 0 free for the `w2 == 0` an
 /// assertion carries.
 fn signedLiteral(literal: solver_rules.Literal) i64 {
-    const value: i64 = @as(i64, @intFromEnum(literal.package())) + 1;
+    const value: i64 = @as(i64, @backingInt(literal.package())) + 1;
     return if (literal.positive()) value else -value;
 }
 
@@ -1252,7 +1265,7 @@ fn noCandidateProblem(
     formula: *const solver_rules.OwnedFormula,
     job_id: solver_model.JobId,
 ) DeriveProblemsError!solver_model.Problem {
-    const job_index: usize = @intFromEnum(job_id);
+    const job_index: usize = @backingInt(job_id);
     if (job_index >= formula.jobs.len) return error.InvalidInput;
     return .{
         .kind = .no_candidate,
@@ -1354,7 +1367,7 @@ fn decisionReason(
         if (group_job == job_id) group_matches += 1;
     }
     if (group_job) |job_id| {
-        const job_index: usize = @intFromEnum(job_id);
+        const job_index: usize = @backingInt(job_id);
         if (job_index < prepared.formula.jobs.len) {
             const job = prepared.formula.jobs[job_index];
             if (group_matches > 1 and job.action == .dist_sync) {
@@ -1380,7 +1393,7 @@ fn decisionReason(
         )) {
             continue;
         }
-        const job_index: usize = @intFromEnum(job_id);
+        const job_index: usize = @backingInt(job_id);
         if (job_index >= prepared.formula.jobs.len) continue;
         return .{
             .reason = requestReason(
@@ -1461,7 +1474,7 @@ fn decisionPolicyReason(
     decision: DecisionReason,
 ) bool {
     const job_id = decision.requested_by orelse return false;
-    const job_index: usize = @intFromEnum(job_id);
+    const job_index: usize = @backingInt(job_id);
     if (job_index >= formula.jobs.len) return false;
     return switch (formula.jobs[job_index].action) {
         .update, .dist_sync => true,
@@ -1501,7 +1514,7 @@ fn replacementKind(
                 );
                 if (!prior_same_arch and current_same_arch) continue;
                 if (prior_same_arch == current_same_arch and
-                    @intFromEnum(prior.id) > @intFromEnum(current.id))
+                    @backingInt(prior.id) > @backingInt(current.id))
                 {
                     continue;
                 }
@@ -1584,7 +1597,7 @@ fn packageIdLessThan(
     left: solver_model.PackageId,
     right: solver_model.PackageId,
 ) bool {
-    return @intFromEnum(left) < @intFromEnum(right);
+    return @backingInt(left) < @backingInt(right);
 }
 
 fn actionLessThan(
@@ -1592,7 +1605,7 @@ fn actionLessThan(
     left: solver_model.Action,
     right: solver_model.Action,
 ) bool {
-    return @intFromEnum(left.package) < @intFromEnum(right.package);
+    return @backingInt(left.package) < @backingInt(right.package);
 }
 
 /// The canonical problem order the libsolv oracle collapses its list with.
@@ -1601,8 +1614,8 @@ fn problemLessThan(
     left: solver_model.Problem,
     right: solver_model.Problem,
 ) bool {
-    if (@intFromEnum(left.kind) != @intFromEnum(right.kind)) {
-        return @intFromEnum(left.kind) < @intFromEnum(right.kind);
+    if (@backingInt(left.kind) != @backingInt(right.kind)) {
+        return @backingInt(left.kind) < @backingInt(right.kind);
     }
     const left_package = optionalIdValue(left.package);
     const right_package = optionalIdValue(right.package);
@@ -1636,14 +1649,14 @@ fn sameProblem(
 
 fn optionalIdValue(package_id: ?solver_model.PackageId) u32 {
     return if (package_id) |value|
-        @intFromEnum(value)
+        @backingInt(value)
     else
         std.math.maxInt(u32);
 }
 
 fn optionalJobValue(job_id: ?solver_model.JobId) u32 {
     return if (job_id) |value|
-        @intFromEnum(value)
+        @backingInt(value)
     else
         std.math.maxInt(u32);
 }
@@ -1666,8 +1679,8 @@ fn relationOrder(
     var order = std.mem.order(u8, left.name, right.name);
     if (order != .eq) return order;
     order = std.math.order(
-        @intFromEnum(left.comparison),
-        @intFromEnum(right.comparison),
+        @backingInt(left.comparison),
+        @backingInt(right.comparison),
     );
     if (order != .eq) return order;
     order = optionalU32Order(left.epoch, right.epoch);
@@ -1775,7 +1788,7 @@ fn materializerAllocationFailureCase(
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         .{ .native_arch = "x86_64" },
     );
@@ -1801,7 +1814,7 @@ fn materializerAllocationFailureCase(
 
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         materialized.selected,
     );
     try std.testing.expectEqual(@as(usize, 1), materialized.outcome.actions.len);
@@ -1815,13 +1828,13 @@ fn materializerAllocationFailureCase(
         action.reason,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(0)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(0))),
         action.requested_by,
     );
 }
 
 test "materializer cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         materializerAllocationFailureCase,
         .{},
@@ -1868,7 +1881,7 @@ fn problemDerivationAllocationFailureCase(
         problem.kind,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(0)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(0))),
         problem.job,
     );
     try std.testing.expectEqualStrings(
@@ -1914,7 +1927,7 @@ test "problem derivation attributes package failures to their core job" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         .{ .native_arch = "x86_64" },
     );
@@ -1938,11 +1951,11 @@ test "problem derivation attributes package failures to their core job" {
         problem.kind,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(0)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(0))),
         problem.package,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(0)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(0))),
         problem.job,
     );
     try std.testing.expectEqualStrings(
@@ -2045,7 +2058,7 @@ test "problem derivation scales with the proof, not the repository" {
 }
 
 test "problem derivation cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         problemDerivationAllocationFailureCase,
         .{},

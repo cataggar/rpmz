@@ -189,7 +189,7 @@ test "walker rejects malformed names" {
     var buf: [124]u8 = undefined;
     @memset(&buf, 0);
     @memcpy(buf[0..6], MAGIC);
-    @memcpy(buf[6..94], "00000000" ** 11);
+    @memset(buf[6..94], '0');
     @memcpy(buf[94..102], "00000000");
     @memcpy(buf[102..110], "00000000");
     var zero_name = Walker.init(&buf);

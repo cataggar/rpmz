@@ -121,7 +121,7 @@ fn acquireInDirectoryMode(
     wait: bool,
     finalize_rpmdb: bool,
 ) Error!Guard {
-    const root_path = try allocator.dupeZ(u8, config.installRoot());
+    const root_path = try allocator.dupeSentinel(u8, config.installRoot(), 0);
     defer allocator.free(root_path);
     const root_fd = std.c.open(root_path.ptr, .{
         .ACCMODE = .RDONLY,
@@ -291,10 +291,10 @@ fn openPrivateLockDirectory(path: []const u8) Error!c_int {
             .NOFOLLOW = true,
         });
         if (next < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+            std.c._errno().* == @backingInt(std.posix.E.NOENT))
         {
             if (std.c.mkdirat(current, name, 0o700) != 0 and
-                std.c._errno().* != @intFromEnum(std.posix.E.EXIST))
+                std.c._errno().* != @backingInt(std.posix.E.EXIST))
                 return error.LockFailed;
             next = std.c.openat(current, name, .{
                 .ACCMODE = .RDONLY,
@@ -335,12 +335,12 @@ fn openDedicatedLockDirectoryAt(
     });
     var created = false;
     if (directory_fd < 0 and
-        std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+        std.c._errno().* == @backingInt(std.posix.E.NOENT))
     {
         if (!create_missing) return error.LockFailed;
         if (std.c.mkdirat(parent_fd, name, 0o755) == 0) {
             created = true;
-        } else if (std.c._errno().* != @intFromEnum(std.posix.E.EXIST)) {
+        } else if (std.c._errno().* != @backingInt(std.posix.E.EXIST)) {
             return error.LockFailed;
         }
         directory_fd = std.c.openat(parent_fd, name, .{
@@ -399,11 +399,11 @@ fn openRootLockParentAt(path: []const u8) Error!c_int {
             .NOFOLLOW = true,
         });
         if (next < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+            std.c._errno().* == @backingInt(std.posix.E.NOENT))
         {
             if (!privilegedRoot()) return error.LockFailed;
             if (std.c.mkdirat(current, name, 0o755) != 0 and
-                std.c._errno().* != @intFromEnum(std.posix.E.EXIST))
+                std.c._errno().* != @backingInt(std.posix.E.EXIST))
             {
                 return error.LockFailed;
             }
@@ -437,10 +437,11 @@ fn ownerDirectoryName(
     target: Target,
     buffer: *[64]u8,
 ) Error![:0]u8 {
-    return std.fmt.bufPrintZ(
+    return std.fmt.bufPrintSentinel(
         buffer,
         "uid-{d}",
         .{target.owner_uid},
+        0,
     ) catch error.LockFailed;
 }
 
@@ -457,7 +458,7 @@ fn openGlobalOwnerDirectoryIfExists(
         .NOFOLLOW = true,
     });
     if (directory_fd < 0) {
-        if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+        if (std.c._errno().* == @backingInt(std.posix.E.NOENT))
             return null;
         return error.LockFailed;
     }
@@ -476,7 +477,7 @@ fn createGlobalOwnerDirectory(
     var name_buffer: [64]u8 = undefined;
     const name = try ownerDirectoryName(target, &name_buffer);
     const created = std.c.mkdirat(parent_fd, name, 0o700) == 0;
-    if (!created and std.c._errno().* != @intFromEnum(std.posix.E.EXIST))
+    if (!created and std.c._errno().* != @backingInt(std.posix.E.EXIST))
         return error.LockFailed;
     const directory_fd = std.c.openat(parent_fd, name, .{
         .ACCMODE = .RDONLY,
@@ -567,11 +568,11 @@ fn openOwnerHomeLockDirectory(target: Target) Error!c_int {
         });
         var created = false;
         if (next < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+            std.c._errno().* == @backingInt(std.posix.E.NOENT))
         {
             if (std.c.mkdirat(current, child, 0o700) == 0) {
                 created = true;
-            } else if (std.c._errno().* != @intFromEnum(std.posix.E.EXIST)) {
+            } else if (std.c._errno().* != @backingInt(std.posix.E.EXIST)) {
                 return error.LockFailed;
             }
             next = std.c.openat(current, child, .{
@@ -713,8 +714,8 @@ fn flockForMode(fd: c_int, wait: bool) Error!void {
         (if (wait) @as(c_int, 0) else lock_nonblocking);
     if (flock(fd, operation) == 0) return;
     if (!wait and
-        (std.c._errno().* == @intFromEnum(std.posix.E.AGAIN) or
-            std.c._errno().* == @intFromEnum(std.posix.E.ACCES)))
+        (std.c._errno().* == @backingInt(std.posix.E.AGAIN) or
+            std.c._errno().* == @backingInt(std.posix.E.ACCES)))
     {
         return error.WouldBlock;
     }
@@ -747,7 +748,7 @@ fn openProtectedLockAt(
         }, @as(std.c.mode_t, 0o600));
         const created = fd >= 0;
         if (fd < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.EXIST))
+            std.c._errno().* == @backingInt(std.posix.E.EXIST))
         {
             fd = openExistingLock(directory_fd, name.ptr);
         }
@@ -923,7 +924,7 @@ test "new root lock parent works with restrictive umask" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -934,7 +935,7 @@ test "new root lock parent works with restrictive umask" {
     try std.testing.expect(root_fd >= 0);
     defer _ = std.c.close(root_fd);
     const target = try fdTarget(root_fd);
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const base_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1005,16 +1006,17 @@ test "pre-existing root lock parent with wrong mode fails closed" {
         &.{ base, "locks" },
     );
     defer std.testing.allocator.free(lock_directory);
-    const lock_directory_z = try std.testing.allocator.dupeZ(
+    const lock_directory_z = try std.testing.allocator.dupeSentinel(
         u8,
         lock_directory,
+        0,
     );
     defer std.testing.allocator.free(lock_directory_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
         std.c.chmod(lock_directory_z.ptr, 0o700),
     );
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const base_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1049,7 +1051,7 @@ test "pre-existing root lock parent with wrong mode fails closed" {
 }
 
 fn protectTestLockDirectory(path: []const u8) !void {
-    const path_z = try std.testing.allocator.dupeZ(u8, path);
+    const path_z = try std.testing.allocator.dupeSentinel(u8, path, 0);
     defer std.testing.allocator.free(path_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -1077,7 +1079,7 @@ test "existing lock directory is validated without chmod" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const locks_z = try std.testing.allocator.dupeZ(u8, locks);
+    const locks_z = try std.testing.allocator.dupeSentinel(u8, locks, 0);
     defer std.testing.allocator.free(locks_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -1199,7 +1201,7 @@ test "aliases and database paths share one install-root lock" {
         true,
     );
     defer normal.deinit();
-    const root_probe_z = try std.testing.allocator.dupeZ(u8, root_a);
+    const root_probe_z = try std.testing.allocator.dupeSentinel(u8, root_a, 0);
     defer std.testing.allocator.free(root_probe_z);
     const root_probe = std.c.open(root_probe_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1214,7 +1216,7 @@ test "aliases and database paths share one install-root lock" {
     );
     _ = flock(root_probe, lock_unlock);
 
-    const lock_dir_z = try std.testing.allocator.dupeZ(u8, lock_directory);
+    const lock_dir_z = try std.testing.allocator.dupeSentinel(u8, lock_directory, 0);
     defer std.testing.allocator.free(lock_dir_z);
     const lock_dir_fd = std.c.open(lock_dir_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1327,9 +1329,9 @@ test "resolved symlink target stays pinned after alias retarget" {
     try tmp.dir.symLink(std.testing.io, "root-b", "root-link", .{});
 
     const pinned_fd = guard.config().pinnedInstallRootFd().?;
-    const root_a_z = try std.testing.allocator.dupeZ(u8, root_a);
+    const root_a_z = try std.testing.allocator.dupeSentinel(u8, root_a, 0);
     defer std.testing.allocator.free(root_a_z);
-    const root_b_z = try std.testing.allocator.dupeZ(u8, root_b);
+    const root_b_z = try std.testing.allocator.dupeSentinel(u8, root_b, 0);
     defer std.testing.allocator.free(root_b_z);
     const root_a_fd = std.c.open(root_a_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1381,7 +1383,7 @@ test "protected lock object rejects a preplaced symlink" {
     );
     defer std.testing.allocator.free(locks);
     try protectTestLockDirectory(locks);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1448,7 +1450,7 @@ test "authorized target owner uses a private owner-scoped namespace" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1503,9 +1505,9 @@ test "root target lock blocks unprivileged opens and precreation" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     try std.testing.expectEqual(@as(c_int, 0), std.c.chmod(base_z.ptr, 0o755));
     try std.testing.expectEqual(@as(c_int, 0), std.c.chmod(root_z.ptr, 0o755));
@@ -1589,9 +1591,9 @@ test "root and authorized target owner share one protected lock namespace" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     try std.testing.expectEqual(@as(c_int, 0), std.c.chmod(base_z.ptr, 0o755));
     try std.testing.expectEqual(
@@ -1695,11 +1697,11 @@ test "exclusive locking never falls back to a read-only descriptor" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
-    const locks_z = try std.testing.allocator.dupeZ(u8, locks);
+    const locks_z = try std.testing.allocator.dupeSentinel(u8, locks, 0);
     defer std.testing.allocator.free(locks_z);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     try std.testing.expectEqual(@as(c_int, 0), std.c.chmod(base_z.ptr, 0o755));
     try std.testing.expectEqual(

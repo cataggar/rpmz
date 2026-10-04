@@ -655,7 +655,7 @@ const Harness = struct {
         return .{
             .selection = &self.selection,
             .plan_json = plan_body,
-            .plan_digest = "a" ** 64,
+            .plan_digest = &@as([64]u8, @splat('a')),
             .plan_schema = transaction_plan.schema,
             .repositories = &.{.{
                 .id = "base",

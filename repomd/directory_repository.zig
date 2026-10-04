@@ -101,7 +101,7 @@ fn openErrno(err: anytype) c_int {
         error.NoDevice, error.NetworkNotFound => .NXIO,
         else => .IO,
     };
-    return @intFromEnum(value);
+    return @backingInt(value);
 }
 
 fn lessThanPath(_: void, lhs: [:0]const u8, rhs: [:0]const u8) bool {
@@ -233,7 +233,7 @@ test "missing directory is reported" {
         loadModelOrdered(arena_state.allocator(), "/nonexistent/repofromdir", .read),
     );
     try testing.expectEqual(
-        @intFromEnum(std.posix.E.NOENT),
+        @backingInt(std.posix.E.NOENT),
         last_open_errno,
     );
 }
@@ -261,7 +261,7 @@ test "a path that is a file reports ENOTDIR" {
         loadModelOrdered(arena, path, .read),
     );
     try testing.expectEqual(
-        @intFromEnum(std.posix.E.NOTDIR),
+        @backingInt(std.posix.E.NOTDIR),
         last_open_errno,
     );
 }

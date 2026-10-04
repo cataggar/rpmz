@@ -337,14 +337,14 @@ pub fn resolvePlan(
     const install_root = switch (input.installed) {
         .install_root => |path| path,
     };
-    const root_z = try arena.dupeZ(u8, install_root);
-    const arch_z = try arena.dupeZ(u8, input.environment.architecture);
-    const releasever_z = try arena.dupeZ(u8, input.environment.release_version);
+    const root_z = try arena.dupeSentinel(u8, install_root, 0);
+    const arch_z = try arena.dupeSentinel(u8, input.environment.architecture, 0);
+    const releasever_z = try arena.dupeSentinel(u8, input.environment.release_version, 0);
 
     var commands = try arena.alloc(?[*:0]u8, input.subjects.len + 2);
     commands[0] = @constCast(input.operation.verb().ptr);
     for (input.subjects, 0..) |subject, index| {
-        commands[index + 1] = (try arena.dupeZ(u8, subject)).ptr;
+        commands[index + 1] = (try arena.dupeSentinel(u8, subject, 0)).ptr;
     }
     commands[input.subjects.len + 1] = null;
 
@@ -1360,9 +1360,10 @@ test "resolver: aligned overlong config cannot inject repodir plugins or repos" 
         "repodir=/outside",
     );
     defer testing.allocator.free(cache);
-    const normal_config = try testing.allocator.dupeZ(
+    const normal_config = try testing.allocator.dupeSentinel(
         u8,
         "/scratch/rpmz-resolve-test/rpmz.conf",
+        0,
     );
     defer testing.allocator.free(normal_config);
     scratch.config = normal_config;
@@ -1436,7 +1437,7 @@ test "resolver: local snapshot file URI preserves exact path bytes" {
 }
 
 test "resolver: every public operation maps onto exactly one service operation" {
-    var seen = std.EnumSet(resolve_service.Operation).initEmpty();
+    var seen: std.EnumSet(resolve_service.Operation) = .empty;
     inline for (comptime std.enums.values(Operation)) |operation| {
         const mapped = operation.service();
         try testing.expect(!seen.contains(mapped));
@@ -1471,7 +1472,7 @@ test "resolver: every transaction verb maps to exactly one operation" {
         .{ .verb = "autoremove", .bare = .autoerase_all, .with_subject = .autoerase },
     };
 
-    var reachable = std.EnumSet(Operation).initEmpty();
+    var reachable: std.EnumSet(Operation) = .empty;
     for (cases) |case| {
         try testing.expectEqual(case.bare, Operation.fromVerb(case.verb, 0).?);
         try testing.expectEqual(

@@ -8,10 +8,7 @@ const std = @import("std");
 const jsondump = @import("jsondump_abi");
 const common = @import("rpmz_common");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-});
+const c = @import("c.tools.cli.lib.updateinfocmd");
 
 const LOG_CRIT: c_int = 2;
 

@@ -1,5 +1,18 @@
 const std = @import("std");
 
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
+
 const available_loader = @import("available_loader.zig");
 const cmdline_repository = @import("cmdline_repository.zig");
 const directory_repository = @import("directory_repository.zig");
@@ -53,7 +66,7 @@ pub const Repository = struct {
     installed_states: []const installed_repository.InstalledState,
     fields: []const PackageFields,
     handles: []u32,
-    cookie_sha256: [32]u8 = [_]u8{0} ** 32,
+    cookie_sha256: [32]u8 = @splat(0),
     cache_options: available_loader.CacheOptions = .{},
     has_cookie: bool = false,
     snapshot_fd: c_int = -1,
@@ -118,16 +131,16 @@ pub fn create(
     const impl = try allocator.create(Impl);
     errdefer allocator.destroy(impl);
     const owned_cache_dir = if (cache_dir) |value|
-        try allocator.dupeZ(u8, value)
+        try allocator.dupeSentinel(u8, value, 0)
     else
         null;
     errdefer if (owned_cache_dir) |value| allocator.free(value);
     const owned_root_dir = if (root_dir) |value|
-        try allocator.dupeZ(u8, value)
+        try allocator.dupeSentinel(u8, value, 0)
     else
         null;
     errdefer if (owned_root_dir) |value| allocator.free(value);
-    const owned_architecture = try allocator.dupeZ(u8, requested_architecture);
+    const owned_architecture = try allocator.dupeSentinel(u8, requested_architecture, 0);
     errdefer allocator.free(owned_architecture);
     impl.* = .{
         .allocator = allocator,
@@ -192,7 +205,7 @@ pub fn loadInstalled(
     errdefer arena_state.deinit();
     const repository = try context.impl.allocator.create(Repository);
     errdefer context.impl.allocator.destroy(repository);
-    const id = try arena_state.allocator().dupeZ(u8, "@System");
+    const id = try arena_state.allocator().dupeSentinel(u8, "@System", 0);
     const fields = try buildFields(
         arena_state.allocator(),
         id,
@@ -218,7 +231,7 @@ pub fn createCommandLine(context: *Context) error{OutOfMemory}!*Repository {
     errdefer arena_state.deinit();
     const repository = try context.impl.allocator.create(Repository);
     errdefer context.impl.allocator.destroy(repository);
-    const id = try arena_state.allocator().dupeZ(u8, "@cmdline");
+    const id = try arena_state.allocator().dupeSentinel(u8, "@cmdline", 0);
     repository.* = .{
         .arena_state = arena_state,
         .id = id,
@@ -375,7 +388,7 @@ fn finishAvailable(
     errdefer owned_arena.deinit();
     const repository = try context.impl.allocator.create(Repository);
     errdefer context.impl.allocator.destroy(repository);
-    const id = try owned_arena.allocator().dupeZ(u8, id_value);
+    const id = try owned_arena.allocator().dupeSentinel(u8, id_value, 0);
     const fields = try buildFields(
         owned_arena.allocator(),
         id,
@@ -493,7 +506,7 @@ pub fn addCommandLineRpmWithFd(
         if (retained_fd >= 0) _ = std.c.close(retained_fd);
     }
 
-    const owned_path = try context.impl.allocator.dupeZ(u8, path);
+    const owned_path = try context.impl.allocator.dupeSentinel(u8, path, 0);
     errdefer context.impl.allocator.free(owned_path);
     try repository.cmdline_paths.append(context.impl.allocator, owned_path);
     errdefer _ = repository.cmdline_paths.pop();
@@ -519,7 +532,7 @@ pub fn addCommandLineRpmWithFd(
         context.impl.allocator.free(discarded_path);
         return repository.handles[existing_index];
     }
-    const id = try arena_state.allocator().dupeZ(u8, repository.id);
+    const id = try arena_state.allocator().dupeSentinel(u8, repository.id, 0);
     const fields = try buildFields(
         arena_state.allocator(),
         id,
@@ -594,9 +607,10 @@ pub fn resetCommandLine(context: *Context) error{OutOfMemory}!*Repository {
     const current = context.impl.command_line orelse return createCommandLine(context);
     var replacement_arena = std.heap.ArenaAllocator.init(context.impl.allocator);
     errdefer replacement_arena.deinit();
-    const replacement_id = try replacement_arena.allocator().dupeZ(
+    const replacement_id = try replacement_arena.allocator().dupeSentinel(
         u8,
         "@cmdline",
+        0,
     );
     for (current.cmdline_paths.items) |path| context.impl.allocator.free(path);
     current.cmdline_paths.clearRetainingCapacity();
@@ -871,8 +885,8 @@ fn buildFields(
         const evr = try formatEvr(allocator, package.nevra);
         field.* = .{
             .repository = repository_id.ptr,
-            .name = (try allocator.dupeZ(u8, package.nevra.name)).ptr,
-            .arch = (try allocator.dupeZ(u8, package.nevra.arch)).ptr,
+            .name = (try allocator.dupeSentinel(u8, package.nevra.name, 0)).ptr,
+            .arch = (try allocator.dupeSentinel(u8, package.nevra.arch, 0)).ptr,
             .evr = evr.ptr,
             .nevra = (try std.fmt.allocPrintSentinel(
                 allocator,
@@ -1268,7 +1282,7 @@ pub export fn SolvGetPkgNameFromId(
 }
 
 fn allocateSlice(value: []const u8, output: *?[*:0]u8) u32 {
-    const copy = std.heap.c_allocator.dupeZ(u8, value) catch
+    const copy = std.heap.c_allocator.dupeSentinel(u8, value, 0) catch
         return abi.ERROR_TDNF_OUT_OF_MEMORY;
     defer std.heap.c_allocator.free(copy);
     return TDNFAllocateString(copy, output);
@@ -1694,7 +1708,7 @@ fn appendTestRepositoryPackagesWithStates(
         installed_state_values,
     );
     const repository_model = model.RepositoryModel{ .packages = packages };
-    const id = try arena.dupeZ(u8, id_value);
+    const id = try arena.dupeSentinel(u8, id_value, 0);
     const fields = try buildFields(arena, id, repository_model);
     const repository = try context.impl.allocator.create(Repository);
     errdefer context.impl.allocator.destroy(repository);
@@ -2210,10 +2224,11 @@ fn testRootPath(
     tmp: *const std.testing.TmpDir,
     buffer: *[std.Io.Dir.max_path_bytes]u8,
 ) [:0]const u8 {
-    return std.fmt.bufPrintZ(
+    return std.fmt.bufPrintSentinel(
         buffer,
         ".zig-cache/tmp/{s}",
         .{&tmp.sub_path},
+        0,
     ) catch @panic("test root path too long");
 }
 
@@ -2269,7 +2284,7 @@ test "context creation releases every allocation on installed load failures" {
     defer populated.cleanup();
     var populated_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const populated_root = populated.rootPath(&populated_buffer);
-    try testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         testing.allocator,
         contextCreationAllocationFailureCase,
         .{populated_root},

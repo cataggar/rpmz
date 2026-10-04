@@ -7,17 +7,7 @@ const txn_config = @import("txn_config.zig");
 const Allocator = std.mem.Allocator;
 const linux = std.os.linux;
 
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("signal.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("sys/stat.h");
-    @cInclude("sys/types.h");
-    @cInclude("sys/wait.h");
-    @cInclude("time.h");
-    @cInclude("unistd.h");
-});
+const c = @import("c.rpmzig.scriptlet");
 const rpmtrans = @import("trans_flags.zig");
 
 pub const Phase = enum(u32) {
@@ -82,43 +72,43 @@ fn phaseInfo(phase: Phase) PhaseInfo {
     return switch (phase) {
         .pre => .{
             .name = "%pre",
-            .script_tag = @intFromEnum(header.TagId.prein),
-            .prog_tag = @intFromEnum(header.TagId.preinprog),
+            .script_tag = @backingInt(header.TagId.prein),
+            .prog_tag = @backingInt(header.TagId.preinprog),
             .skip_flag = rpmtrans.TDNF_RPMTRANS_FLAG_NOPRE,
             .critical = true,
         },
         .post => .{
             .name = "%post",
-            .script_tag = @intFromEnum(header.TagId.postin),
-            .prog_tag = @intFromEnum(header.TagId.postinprog),
+            .script_tag = @backingInt(header.TagId.postin),
+            .prog_tag = @backingInt(header.TagId.postinprog),
             .skip_flag = rpmtrans.TDNF_RPMTRANS_FLAG_NOPOST,
             .critical = false,
         },
         .preun => .{
             .name = "%preun",
-            .script_tag = @intFromEnum(header.TagId.preun),
-            .prog_tag = @intFromEnum(header.TagId.preunprog),
+            .script_tag = @backingInt(header.TagId.preun),
+            .prog_tag = @backingInt(header.TagId.preunprog),
             .skip_flag = rpmtrans.TDNF_RPMTRANS_FLAG_NOPREUN,
             .critical = true,
         },
         .postun => .{
             .name = "%postun",
-            .script_tag = @intFromEnum(header.TagId.postun),
-            .prog_tag = @intFromEnum(header.TagId.postunprog),
+            .script_tag = @backingInt(header.TagId.postun),
+            .prog_tag = @backingInt(header.TagId.postunprog),
             .skip_flag = rpmtrans.TDNF_RPMTRANS_FLAG_NOPOSTUN,
             .critical = false,
         },
         .pretrans => .{
             .name = "%pretrans",
-            .script_tag = @intFromEnum(header.TagId.pretrans),
-            .prog_tag = @intFromEnum(header.TagId.pretransprog),
+            .script_tag = @backingInt(header.TagId.pretrans),
+            .prog_tag = @backingInt(header.TagId.pretransprog),
             .skip_flag = rpmtrans.TDNF_RPMTRANS_FLAG_NOPRETRANS,
             .critical = true,
         },
         .posttrans => .{
             .name = "%posttrans",
-            .script_tag = @intFromEnum(header.TagId.posttrans),
-            .prog_tag = @intFromEnum(header.TagId.posttransprog),
+            .script_tag = @backingInt(header.TagId.posttrans),
+            .prog_tag = @backingInt(header.TagId.posttransprog),
             .skip_flag = rpmtrans.TDNF_RPMTRANS_FLAG_NOPOSTTRANS,
             .critical = false,
         },
@@ -238,7 +228,7 @@ pub fn runPreparedScript(
     defer argv.deinit(arena_alloc);
 
     for (interpreter) |arg| {
-        const arg_z = try arena_alloc.dupeZ(u8, arg);
+        const arg_z = try arena_alloc.dupeSentinel(u8, arg, 0);
         try argv.append(arena_alloc, arg_z.ptr);
     }
 
@@ -249,24 +239,24 @@ pub fn runPreparedScript(
             &pinned_root,
             body,
         );
-        const exec_z = try arena_alloc.dupeZ(u8, script_file.?.exec_path);
+        const exec_z = try arena_alloc.dupeSentinel(u8, script_file.?.exec_path, 0);
         try argv.append(arena_alloc, exec_z.ptr);
     }
 
     if (options.arg1) |value| {
         const text = try std.fmt.allocPrint(arena_alloc, "{d}", .{value});
-        const text_z = try arena_alloc.dupeZ(u8, text);
+        const text_z = try arena_alloc.dupeSentinel(u8, text, 0);
         try argv.append(arena_alloc, text_z.ptr);
     }
     if (options.arg2) |value| {
         const text = try std.fmt.allocPrint(arena_alloc, "{d}", .{value});
-        const text_z = try arena_alloc.dupeZ(u8, text);
+        const text_z = try arena_alloc.dupeSentinel(u8, text, 0);
         try argv.append(arena_alloc, text_z.ptr);
     }
     try argv.append(arena_alloc, null);
 
     const expanded_path = try config.expandMacroAlloc(arena_alloc, .install_script_path);
-    const path_env = try arena_alloc.dupeZ(u8, expanded_path);
+    const path_env = try arena_alloc.dupeSentinel(u8, expanded_path, 0);
     const input_fd = try prepareInputFd(options.stdin_data);
     defer if (input_fd >= 0) {
         _ = linux.close(input_fd);
@@ -301,7 +291,7 @@ fn runLuaScriptProcess(
 ) RunError!Result {
     const expanded_path = try config.expandMacroAlloc(allocator, .install_script_path);
     defer allocator.free(expanded_path);
-    const path_env = try allocator.dupeZ(u8, expanded_path);
+    const path_env = try allocator.dupeSentinel(u8, expanded_path, 0);
     defer allocator.free(path_env);
     const input_fd = try prepareInputFd(options.stdin_data);
     defer if (input_fd >= 0) {
@@ -355,7 +345,7 @@ fn waitForChild(pid: c_int, critical: bool) RunError!Result {
             .ran = true,
             .critical = critical,
             .outcome = .signaled,
-            .signal_number = @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(@bitCast(status))))),
+            .signal_number = @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(@bitCast(status))))),
         };
     }
 
@@ -451,7 +441,7 @@ fn writeAll(fd: c_int, bytes: []const u8) c_int {
 
 fn ensureDirPathAbsolute(allocator: Allocator, dir_path: []const u8) RunError!void {
     if (dir_path.len == 0 or dir_path[0] != '/') return error.SyscallFailed;
-    const scratch = try allocator.dupeZ(u8, dir_path);
+    const scratch = try allocator.dupeSentinel(u8, dir_path, 0);
     defer allocator.free(scratch);
 
     var index: usize = 1;
@@ -462,7 +452,7 @@ fn ensureDirPathAbsolute(allocator: Allocator, dir_path: []const u8) RunError!vo
         scratch[index] = 0;
         if (scratch[1] != 0) {
             if (c.mkdir(scratch.ptr, 0o755) != 0) {
-                const err: std.c.E = @enumFromInt(std.c._errno().*);
+                const err: std.c.E = @fromBackingInt(@intCast(std.c._errno().*));
                 if (err != .EXIST) return error.SyscallFailed;
             }
         }
@@ -692,11 +682,11 @@ test "scriptlet temp files stay under pinned installroot after path swap" {
         null,
     );
     defer pinned_root.deinit();
-    const root_z = try allocator.dupeZ(u8, root_path);
+    const root_z = try allocator.dupeSentinel(u8, root_path, 0);
     defer allocator.free(root_z);
-    const parked_z = try allocator.dupeZ(u8, parked_path);
+    const parked_z = try allocator.dupeSentinel(u8, parked_path, 0);
     defer allocator.free(parked_z);
-    const outside_z = try allocator.dupeZ(u8, outside_path);
+    const outside_z = try allocator.dupeSentinel(u8, outside_path, 0);
     defer allocator.free(outside_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -795,7 +785,7 @@ fn writeBeU32(buf: []u8, value: u32) void {
 }
 
 fn writeAbsoluteFile(allocator: Allocator, path: []const u8, bytes: []const u8) !void {
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
 
     const open_rc = linux.openat(
@@ -825,7 +815,7 @@ fn writeAbsoluteFile(allocator: Allocator, path: []const u8, bytes: []const u8) 
 }
 
 fn createAbsoluteOutputFile(allocator: Allocator, path: []const u8) !c_int {
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
 
     const open_rc = linux.openat(
@@ -846,7 +836,7 @@ fn createAbsoluteOutputFile(allocator: Allocator, path: []const u8) !c_int {
 }
 
 fn readAbsoluteFile(allocator: Allocator, path: []const u8) ![]u8 {
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
 
     const open_rc = linux.openat(
@@ -892,7 +882,7 @@ test "runHeaderScript succeeds with default shell" {
     try ensureDirPathAbsolute(allocator, tmp_path);
 
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.prein), .typ = 6, .count = 1, .data = ":\n\x00" },
+        .{ .tag = @backingInt(header.TagId.prein), .typ = 6, .count = 1, .data = ":\n\x00" },
     });
     defer allocator.free(blob);
 
@@ -917,7 +907,7 @@ test "runHeaderScript surfaces non-zero exit" {
     try ensureDirPathAbsolute(allocator, tmp_path);
 
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.postin), .typ = 6, .count = 1, .data = "exit 7\n\x00" },
+        .{ .tag = @backingInt(header.TagId.postin), .typ = 6, .count = 1, .data = "exit 7\n\x00" },
     });
     defer allocator.free(blob);
 
@@ -943,7 +933,7 @@ test "runHeaderScript passes arg1" {
     try ensureDirPathAbsolute(allocator, tmp_path);
 
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.preun), .typ = 6, .count = 1, .data = "[ \"$1\" = \"5\" ]\n\x00" },
+        .{ .tag = @backingInt(header.TagId.preun), .typ = 6, .count = 1, .data = "[ \"$1\" = \"5\" ]\n\x00" },
     });
     defer allocator.free(blob);
 
@@ -1012,7 +1002,7 @@ test "exec and fork-only Lua scriptlets close inherited descriptors" {
     );
     defer allocator.free(marker_path);
     try writeAbsoluteFile(allocator, marker_path, "");
-    const marker_path_z = try allocator.dupeZ(u8, marker_path);
+    const marker_path_z = try allocator.dupeSentinel(u8, marker_path, 0);
     defer allocator.free(marker_path_z);
     defer _ = c.unlink(marker_path_z.ptr);
 
@@ -1198,7 +1188,7 @@ test "Lua contract maps failures and routes output" {
         .{ tmp_path, unique },
     );
     defer allocator.free(output_path);
-    const output_path_z = try allocator.dupeZ(u8, output_path);
+    const output_path_z = try allocator.dupeSentinel(u8, output_path, 0);
     defer allocator.free(output_path_z);
     defer _ = c.unlink(output_path_z.ptr);
     const output_fd = try createAbsoluteOutputFile(allocator, output_path);
@@ -1286,7 +1276,7 @@ test "Lua contract preserves process IO and state shutdown" {
         .{ tmp_path, unique },
     );
     defer allocator.free(unclosed_path);
-    const unclosed_path_z = try allocator.dupeZ(u8, unclosed_path);
+    const unclosed_path_z = try allocator.dupeSentinel(u8, unclosed_path, 0);
     defer allocator.free(unclosed_path_z);
     defer _ = c.unlink(unclosed_path_z.ptr);
     const remove_path = try std.fmt.allocPrint(
@@ -1296,7 +1286,7 @@ test "Lua contract preserves process IO and state shutdown" {
     );
     defer allocator.free(remove_path);
     try ensureDirPathAbsolute(allocator, remove_path);
-    const remove_path_z = try allocator.dupeZ(u8, remove_path);
+    const remove_path_z = try allocator.dupeSentinel(u8, remove_path, 0);
     defer allocator.free(remove_path_z);
     defer _ = c.rmdir(remove_path_z.ptr);
     const output_path = try std.fmt.allocPrint(
@@ -1305,7 +1295,7 @@ test "Lua contract preserves process IO and state shutdown" {
         .{ tmp_path, unique },
     );
     defer allocator.free(output_path);
-    const output_path_z = try allocator.dupeZ(u8, output_path);
+    const output_path_z = try allocator.dupeSentinel(u8, output_path, 0);
     defer allocator.free(output_path_z);
     defer _ = c.unlink(output_path_z.ptr);
     const output_fd = try createAbsoluteOutputFile(allocator, output_path);
@@ -1438,8 +1428,8 @@ test "runHeaderScript handles Lua bash-style postun" {
     defer allocator.free(script_data);
 
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.postun), .typ = 6, .count = 1, .data = script_data },
-        .{ .tag = @intFromEnum(header.TagId.postunprog), .typ = 6, .count = 1, .data = "<lua>\x00" },
+        .{ .tag = @backingInt(header.TagId.postun), .typ = 6, .count = 1, .data = script_data },
+        .{ .tag = @backingInt(header.TagId.postunprog), .typ = 6, .count = 1, .data = "<lua>\x00" },
     });
     defer allocator.free(blob);
 
@@ -1571,8 +1561,8 @@ test "runHeaderScript exposes Lua rpm and posix helpers" {
     defer allocator.free(script_data);
 
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.pretrans), .typ = 6, .count = 1, .data = script_data },
-        .{ .tag = @intFromEnum(header.TagId.pretransprog), .typ = 6, .count = 1, .data = "<lua>\x00" },
+        .{ .tag = @backingInt(header.TagId.pretrans), .typ = 6, .count = 1, .data = script_data },
+        .{ .tag = @backingInt(header.TagId.pretransprog), .typ = 6, .count = 1, .data = "<lua>\x00" },
     });
     defer allocator.free(blob);
 

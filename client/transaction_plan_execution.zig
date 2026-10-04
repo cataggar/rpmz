@@ -63,12 +63,12 @@ pub fn materialize(
                 "{s}-{s}",
                 .{ package.identity.version, package.identity.release },
             );
-        const evr = try arena.dupeZ(u8, evr_text);
+        const evr = try arena.dupeSentinel(u8, evr_text, 0);
         item.* = .{
             .dwOperation = operationValue(step.operation),
-            .pszName = (try arena.dupeZ(u8, package.identity.name)).ptr,
+            .pszName = (try arena.dupeSentinel(u8, package.identity.name, 0)).ptr,
             .pszEVR = evr.ptr,
-            .pszArch = (try arena.dupeZ(u8, package.identity.arch)).ptr,
+            .pszArch = (try arena.dupeSentinel(u8, package.identity.arch, 0)).ptr,
             .dwRpmDbHnum = package.rpmdb_hnum orelse 0,
         };
         if (step.operation != .erase) {
@@ -83,7 +83,7 @@ pub fn materialize(
         }
     }
 
-    const root_z = try arena.dupeZ(u8, install_root);
+    const root_z = try arena.dupeSentinel(u8, install_root, 0);
     var native_plan: [*c]abi.TDNF_REPOMD_NATIVE_TRANSACTION_PLAN = null;
     const rc = abi.TDNFRepoMdNativeTransactionPlanSolveV2(
         native_items.ptr,

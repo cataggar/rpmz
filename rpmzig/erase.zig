@@ -5,11 +5,7 @@ const install_engine = @import("install.zig");
 const txn_config = @import("txn_config.zig");
 const rpmtrans = @import("trans_flags.zig");
 
-const sysc = @cImport({
-    @cInclude("errno.h");
-    @cInclude("sys/stat.h");
-    @cInclude("unistd.h");
-});
+const sysc = @import("c.rpmzig.erase");
 
 pub const KeepPathFn = *const fn (ctx: ?*anyopaque, path: []const u8) i32;
 

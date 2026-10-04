@@ -420,7 +420,7 @@ fn canonicalText(
             allocator,
             "job {any} {t} selection=",
             .{
-                if (job.id) |value| @as(?u32, @intFromEnum(value)) else null,
+                if (job.id) |value| @as(?u32, @backingInt(value)) else null,
                 job.action,
             },
         );
@@ -448,7 +448,7 @@ fn canonicalText(
             allocator,
             "selected {d} {s}-{s}-{s}.{s}\n",
             .{
-                @intFromEnum(package_id),
+                @backingInt(package_id),
                 package.source.nevra.name,
                 package.source.nevra.version,
                 package.source.nevra.release,
@@ -462,7 +462,7 @@ fn canonicalText(
             allocator,
             "action {d} {t} priors=[",
             .{
-                @intFromEnum(action.package),
+                @backingInt(action.package),
                 action.kind,
             },
         );
@@ -473,7 +473,7 @@ fn canonicalText(
                 "{s}{d}",
                 .{
                     if (index == 0) "" else ",",
-                    @intFromEnum(prior),
+                    @backingInt(prior),
                 },
             );
         }
@@ -484,7 +484,7 @@ fn canonicalText(
             .{
                 action.reason,
                 if (action.requested_by) |value|
-                    @as(?u32, @intFromEnum(value))
+                    @as(?u32, @backingInt(value))
                 else
                     null,
             },
@@ -497,8 +497,8 @@ fn canonicalText(
             "problem {t} package={any} related={any} capability=",
             .{
                 problem.kind,
-                if (problem.package) |value| @as(?u32, @intFromEnum(value)) else null,
-                if (problem.related_package) |value| @as(?u32, @intFromEnum(value)) else null,
+                if (problem.package) |value| @as(?u32, @backingInt(value)) else null,
+                if (problem.related_package) |value| @as(?u32, @backingInt(value)) else null,
             },
         );
         if (problem.capability) |capability| {
@@ -511,7 +511,7 @@ fn canonicalText(
             allocator,
             " job={any} count={d}\n",
             .{
-                if (problem.job) |value| @as(?u32, @intFromEnum(value)) else null,
+                if (problem.job) |value| @as(?u32, @backingInt(value)) else null,
                 problem.count,
             },
         );
@@ -521,7 +521,7 @@ fn canonicalText(
             &out,
             allocator,
             "skipped_job {d}\n",
-            .{@intFromEnum(job_id)},
+            .{@backingInt(job_id)},
         );
     }
     for (observation.order, 0..) |step, index| {
@@ -529,7 +529,7 @@ fn canonicalText(
             &out,
             allocator,
             "order {d} {t} {d}\n",
-            .{ index, step.operation, @intFromEnum(step.package) },
+            .{ index, step.operation, @backingInt(step.package) },
         );
     }
     return out.toOwnedSlice();
@@ -546,7 +546,7 @@ fn appendSelection(
             out,
             allocator,
             "package:{d}",
-            .{@intFromEnum(package)},
+            .{@backingInt(package)},
         ),
         .name => |name| try appendFmt(
             out,
@@ -636,7 +636,7 @@ test "considered mask rejects hidden available packages and providers" {
 
     const consumer_goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     }} };
     var consumer = try oracle.solveProjected(
         testing.allocator,
@@ -660,7 +660,7 @@ test "considered mask rejects hidden available packages and providers" {
 
     const provider_goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
     }} };
     var provider = try oracle.solveProjected(
         testing.allocator,
@@ -707,7 +707,7 @@ test "considered mask retains hidden installed providers" {
 
     const consumer_goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     }} };
     var observation = try oracle.solveProjected(
         testing.allocator,
@@ -739,7 +739,7 @@ test "considered mask retains hidden installed providers" {
 
     const erase_goal = solver_model.Goal{ .jobs = &.{.{
         .action = .erase,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
     }} };
     var erase_policy = policy();
     erase_policy.allow_erasing = true;
@@ -783,7 +783,7 @@ test "oracle rejects policies whose semantics are not implemented" {
             &graph.universe,
             .{ .jobs = &.{.{
                 .action = .erase,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             }} },
             unsupported,
         ),
@@ -797,7 +797,7 @@ test "oracle rejects policies whose semantics are not implemented" {
             &graph.universe,
             .{ .jobs = &.{.{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             }} },
             unsupported,
         ),
@@ -808,7 +808,7 @@ test "oracle rejects policies whose semantics are not implemented" {
     for (&too_many_jobs) |*job| {
         job.* = .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         };
     }
     try testing.expectError(
@@ -842,11 +842,11 @@ test "skip broken keeps satisfiable exact install jobs" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
         } },
         skip_policy,
@@ -855,12 +855,12 @@ test "skip broken keeps satisfiable exact install jobs" {
 
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         observation.selected,
     );
     try testing.expectEqualSlices(
         solver_model.JobId,
-        &.{@enumFromInt(1)},
+        &.{@fromBackingInt(@intCast(1))},
         observation.outcome.skipped_jobs,
     );
     try testing.expectEqual(@as(usize, 0), observation.outcome.problems.len);
@@ -881,11 +881,11 @@ test "skip broken keeps satisfiable exact install jobs" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
         } },
         skip_policy,
@@ -914,11 +914,11 @@ test "skip broken drops every exact install job in a package conflict" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
         } },
         skip_policy,
@@ -928,7 +928,7 @@ test "skip broken drops every exact install job in a package conflict" {
     try testing.expectEqual(@as(usize, 0), observation.selected.len);
     try testing.expectEqualSlices(
         solver_model.JobId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         observation.outcome.skipped_jobs,
     );
     try testing.expectEqual(@as(usize, 0), observation.outcome.problems.len);
@@ -958,15 +958,15 @@ test "skip broken resolves multiple independent package failures" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             },
         } },
         skip_policy,
@@ -975,12 +975,12 @@ test "skip broken resolves multiple independent package failures" {
 
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(1)},
+        &.{@fromBackingInt(@intCast(1))},
         observation.selected,
     );
     try testing.expectEqualSlices(
         solver_model.JobId,
-        &.{ @enumFromInt(0), @enumFromInt(2) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(2)) },
         observation.outcome.skipped_jobs,
     );
     try testing.expectEqual(@as(usize, 0), observation.outcome.problems.len);
@@ -1012,23 +1012,23 @@ test "skip broken resolves independent conflicting job cores" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(3) },
+                .selection = .{ .package = @fromBackingInt(@intCast(3)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(4) },
+                .selection = .{ .package = @fromBackingInt(@intCast(4)) },
             },
         } },
         skip_policy,
@@ -1037,16 +1037,16 @@ test "skip broken resolves independent conflicting job cores" {
 
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(4)},
+        &.{@fromBackingInt(@intCast(4))},
         observation.selected,
     );
     try testing.expectEqualSlices(
         solver_model.JobId,
         &.{
-            @enumFromInt(0),
-            @enumFromInt(1),
-            @enumFromInt(2),
-            @enumFromInt(3),
+            @fromBackingInt(@intCast(0)),
+            @fromBackingInt(@intCast(1)),
+            @fromBackingInt(@intCast(2)),
+            @fromBackingInt(@intCast(3)),
         },
         observation.outcome.skipped_jobs,
     );
@@ -1151,7 +1151,7 @@ test "effective jobs own exact selections including synthetic user-installed job
     try testing.expect(synthetic.flags.clean_deps);
     try testing.expectEqual(
         @as(u32, 0),
-        @intFromEnum(switch (synthetic.selection) {
+        @backingInt(switch (synthetic.selection) {
             .package => |package| package,
             else => return error.TestExpectedEqual,
         }),
@@ -1184,7 +1184,7 @@ test "clean deps is a no-op for a fresh exact install" {
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     }} };
     var cleanup_policy = policy();
     cleanup_policy.best = true;
@@ -1230,7 +1230,7 @@ test "clean deps cleans up the closure displaced by an exact install replacement
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(2) },
+        .selection = .{ .package = @fromBackingInt(@intCast(2)) },
     }} };
     var cleanup_policy = policy();
     cleanup_policy.clean_deps = true;
@@ -1290,7 +1290,7 @@ test "clean deps removes an installed package that is no longer supplemented" {
     cleanup_policy.clean_deps = true;
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .erase,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         .flags = .{ .clean_deps = true },
     }} };
     var observation = try oracle.solve(
@@ -1336,7 +1336,7 @@ test "clean deps keeps a package supplemented by a surviving installed package" 
     cleanup_policy.clean_deps = true;
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .erase,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         .flags = .{ .clean_deps = true },
     }} };
     var observation = try oracle.solve(
@@ -1390,7 +1390,7 @@ test "clean deps cascades through a chain of unsupplemented packages" {
     cleanup_policy.clean_deps = true;
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .erase,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         .flags = .{ .clean_deps = true },
     }} };
     var observation = try oracle.solve(
@@ -1704,7 +1704,7 @@ test "clean deps removes only the automatic dependency closure of an exact erase
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .clean_deps = true },
         }} },
         cleanup_policy,
@@ -1713,13 +1713,13 @@ test "clean deps removes only the automatic dependency closure of an exact erase
 
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(3)},
+        &.{@fromBackingInt(@intCast(3))},
         observation.selected,
     );
     const requested = actionForName(&graph, &observation, "requested").?;
     try testing.expectEqual(solver_model.TransactionReason.user, requested.reason);
     try testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(0)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(0))),
         requested.requested_by,
     );
     const dependency = actionForName(&graph, &observation, "dependency").?;
@@ -1739,7 +1739,7 @@ test "clean deps removes only the automatic dependency closure of an exact erase
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .clean_deps = true },
         }} },
         cleanup_policy,
@@ -1783,7 +1783,7 @@ test "clean deps adds back every installed provider needed by a survivor" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .clean_deps = true },
         }} },
         cleanup_policy,
@@ -1793,9 +1793,9 @@ test "clean deps adds back every installed provider needed by a survivor" {
     try testing.expectEqualSlices(
         solver_model.PackageId,
         &.{
-            @enumFromInt(1),
-            @enumFromInt(2),
-            @enumFromInt(3),
+            @fromBackingInt(@intCast(1)),
+            @fromBackingInt(@intCast(2)),
+            @fromBackingInt(@intCast(3)),
         },
         observation.selected,
     );
@@ -1816,7 +1816,7 @@ test "protected policy rejects unsupported boundaries" {
     protected_policy.protected_names = &.{"protected"};
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(2) },
+        .selection = .{ .package = @fromBackingInt(@intCast(2)) },
     }} };
     try testing.expectError(
         error.UnsupportedPolicy,
@@ -1866,7 +1866,7 @@ test "clean deps without allow erasing leaves protection to the transaction chec
     protected_policy.protected_names = &.{"protected"};
     const clean_goal = solver_model.Goal{ .jobs = &.{.{
         .action = .erase,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         .flags = .{ .clean_deps = true },
     }} };
     var observation = try oracle.solve(
@@ -1885,7 +1885,7 @@ test "clean deps without allow erasing leaves protection to the transaction chec
         observation.outcome.problems[0].kind,
     );
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(1)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(1))),
         observation.outcome.problems[0].package,
     );
     try testing.expectError(
@@ -1920,7 +1920,7 @@ test "protected direct erase and obsoletion become protected problems" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         protected_policy,
     );
@@ -1931,7 +1931,7 @@ test "protected direct erase and obsoletion become protected problems" {
         erased.outcome.problems[0].kind,
     );
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(0)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(0))),
         erased.outcome.problems[0].package,
     );
 
@@ -1941,7 +1941,7 @@ test "protected direct erase and obsoletion become protected problems" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         protected_policy,
     );
@@ -1979,7 +1979,7 @@ test "protected allow erasing releases only unprotected packages" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         protected_policy,
     );
@@ -1987,7 +1987,7 @@ test "protected allow erasing releases only unprotected packages" {
     try testing.expectEqual(@as(usize, 0), allowed.outcome.problems.len);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(2) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(2)) },
         allowed.selected,
     );
 
@@ -1996,7 +1996,7 @@ test "protected allow erasing releases only unprotected packages" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         }} },
         protected_policy,
     );
@@ -2030,11 +2030,11 @@ test "protected same-name replacement remains allowed" {
         .{ .jobs = &.{
             .{
                 .action = .erase,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
         } },
         protected_policy,
@@ -2044,7 +2044,7 @@ test "protected same-name replacement remains allowed" {
     try testing.expectEqual(@as(usize, 0), observation.outcome.problems.len);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(1)},
+        &.{@fromBackingInt(@intCast(1))},
         observation.selected,
     );
     try testing.expectEqual(
@@ -2076,7 +2076,7 @@ test "protected automatic dependency is a clean-deps root" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .clean_deps = true },
         }} },
         protected_policy,
@@ -2086,7 +2086,7 @@ test "protected automatic dependency is a clean-deps root" {
     try testing.expectEqual(@as(usize, 0), observation.outcome.problems.len);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(1)},
+        &.{@fromBackingInt(@intCast(1))},
         observation.selected,
     );
 }
@@ -2110,7 +2110,7 @@ test "install-only first install is ordinary even with a zero limit" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         installonly_policy,
     );
@@ -2119,7 +2119,7 @@ test "install-only first install is ordinary even with a zero limit" {
     try testing.expectEqual(@as(usize, 0), observation.outcome.problems.len);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         observation.selected,
     );
     try testing.expectEqual(@as(usize, 1), observation.effective_jobs.len);
@@ -2128,7 +2128,7 @@ test "install-only first install is ordinary even with a zero limit" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         installonly_policy,
     );
@@ -2148,7 +2148,7 @@ test "install-only first install is ordinary even with a zero limit" {
             &graph.universe,
             .{ .jobs = &.{.{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             }} },
             installonly_policy,
         ),
@@ -2179,14 +2179,14 @@ test "install-only install and update retain the installed instance" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         installonly_policy,
     );
     defer installed_observation.deinit();
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         installed_observation.selected,
     );
     try testing.expectEqual(@as(usize, 2), installed_observation.effective_jobs.len);
@@ -2213,7 +2213,7 @@ test "install-only install and update retain the installed instance" {
     defer updated_observation.deinit();
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         updated_observation.selected,
     );
     var native = try coordinator.solveInstallonly(
@@ -2260,7 +2260,7 @@ test "install-only exact replacement materializes as reinstall" {
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .reinstall,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     }} };
     var installonly_policy = policy();
     installonly_policy.installonly_names = &.{"kernel"};
@@ -2317,7 +2317,7 @@ test "install-only exact replacement materializes as reinstall" {
     try testing.expectEqual(solver_model.ActionKind.reinstall, action.kind);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         action.priors,
     );
 }
@@ -2342,7 +2342,7 @@ test "install-only obsoletes materialize as install plus erase" {
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(2) },
+        .selection = .{ .package = @fromBackingInt(@intCast(2)) },
     }} };
     var installonly_policy = policy();
     installonly_policy.installonly_names = &.{"kernel"};
@@ -2372,14 +2372,14 @@ test "install-only obsoletes materialize as install plus erase" {
         solver_model.ActionKind.erase,
         actionForPackage(
             &observation,
-            @enumFromInt(1),
+            @fromBackingInt(@intCast(1)),
         ).?.kind,
     );
     try testing.expectEqual(
         solver_model.ActionKind.install,
         actionForPackage(
             &observation,
-            @enumFromInt(2),
+            @fromBackingInt(@intCast(2)),
         ).?.kind,
     );
 }
@@ -2416,12 +2416,12 @@ test "install-only update without a replacement still enforces the limit" {
         defer observation.deinit();
         try testing.expectEqualSlices(
             solver_model.PackageId,
-            &.{@enumFromInt(1)},
+            &.{@fromBackingInt(@intCast(1))},
             observation.selected,
         );
         const eviction = actionForPackage(
             &observation,
-            @enumFromInt(0),
+            @fromBackingInt(@intCast(0)),
         ) orelse return error.TestUnexpectedResult;
         try testing.expectEqual(
             solver_model.TransactionReason.installonly_limit,
@@ -2476,7 +2476,7 @@ test "install-only limit evicts install order across architectures" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         installonly_policy,
     );
@@ -2485,12 +2485,12 @@ test "install-only limit evicts install order across architectures" {
     try testing.expectEqual(@as(usize, 0), observation.outcome.problems.len);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(2) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)) },
         observation.selected,
     );
     const eviction = actionForPackage(
         &observation,
-        @enumFromInt(0),
+        @fromBackingInt(@intCast(0)),
     ) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(solver_model.ActionKind.erase, eviction.kind);
     try testing.expectEqual(
@@ -2503,7 +2503,7 @@ test "install-only limit evicts install order across architectures" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         installonly_policy,
     );
@@ -2524,11 +2524,11 @@ test "install-only limit evicts install order across architectures" {
     const explicit_goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
     } };
     var explicit = try oracle.solve(
@@ -2540,12 +2540,12 @@ test "install-only limit evicts install order across architectures" {
     defer explicit.deinit();
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(2)},
+        &.{@fromBackingInt(@intCast(2))},
         explicit.selected,
     );
     const second_eviction = actionForPackage(
         &explicit,
-        @enumFromInt(1),
+        @fromBackingInt(@intCast(1)),
     ) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(
         solver_model.TransactionReason.installonly_limit,
@@ -2598,7 +2598,7 @@ test "install-only residual overflow becomes a limit problem after one retry" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         installonly_policy,
     );
@@ -2619,7 +2619,7 @@ test "install-only residual overflow becomes a limit problem after one retry" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         installonly_policy,
     );
@@ -2654,7 +2654,7 @@ test "protected package takes precedence over install-only eviction" {
     combined_policy.protected_names = &.{"kernel"};
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     }} };
     var observation = try oracle.solve(
         testing.allocator,
@@ -2682,7 +2682,7 @@ test "protected package takes precedence over install-only eviction" {
         else => return error.TestUnexpectedResult,
     };
     try testing.expectEqual(
-        @as(solver_model.PackageId, @enumFromInt(0)),
+        @as(solver_model.PackageId, @fromBackingInt(@intCast(0))),
         package_id,
     );
 }
@@ -2708,7 +2708,7 @@ test "allow erasing replaces an installed conflict and preserves unrelated packa
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         allow_erasing,
     );
@@ -2752,7 +2752,7 @@ test "allow erasing permits reverse dependency cascades" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         allow_erasing,
     );
@@ -2931,7 +2931,7 @@ test "force-best preserves direct request provenance" {
 
     const action = actionForName(&graph, &observation, "requested").?;
     try testing.expectEqual(solver_model.TransactionReason.user, action.reason);
-    try testing.expectEqual(@as(u32, 0), @intFromEnum(action.requested_by.?));
+    try testing.expectEqual(@as(u32, 0), @backingInt(action.requested_by.?));
 }
 
 test "job problem flags never alias a related package" {
@@ -3492,7 +3492,7 @@ test "oracle records upgrade prior and newly required dependency" {
     try testing.expectEqual(solver_model.ActionKind.upgrade, action.kind);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         action.priors,
     );
     var native = try solveNative(
@@ -3525,7 +3525,7 @@ test "oracle exact replacement actions follow EVR rather than request label" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .downgrade,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         policy(),
     );
@@ -3539,7 +3539,7 @@ test "oracle exact replacement actions follow EVR rather than request label" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .downgrade,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         policy(),
     );
@@ -3551,7 +3551,7 @@ test "oracle exact replacement actions follow EVR rather than request label" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .reinstall,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         policy(),
     );
@@ -3565,7 +3565,7 @@ test "oracle exact replacement actions follow EVR rather than request label" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .reinstall,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         policy(),
     );
@@ -3577,7 +3577,7 @@ test "oracle exact replacement actions follow EVR rather than request label" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .downgrade,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         }} },
         policy(),
     );
@@ -3591,7 +3591,7 @@ test "oracle exact replacement actions follow EVR rather than request label" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .downgrade,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         }} },
         policy(),
     );
@@ -3633,12 +3633,12 @@ test "native and oracle retain every exact installed upgrade prior" {
 
     const action = actionForPackage(
         &observation,
-        @enumFromInt(2),
+        @fromBackingInt(@intCast(2)),
     ) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(solver_model.ActionKind.upgrade, action.kind);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         action.priors,
     );
     try testing.expectEqual(
@@ -3693,12 +3693,12 @@ test "replacement kind follows the highest same-name installed prior" {
 
     const action = actionForPackage(
         &observation,
-        @enumFromInt(2),
+        @fromBackingInt(@intCast(2)),
     ) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(solver_model.ActionKind.downgrade, action.kind);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         action.priors,
     );
     var native = try solveNative(
@@ -3731,7 +3731,7 @@ test "same-name replacement kind takes precedence over extra obsoletes" {
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(2) },
+        .selection = .{ .package = @fromBackingInt(@intCast(2)) },
     }} };
     var observation = try oracle.solve(
         testing.allocator,
@@ -3743,12 +3743,12 @@ test "same-name replacement kind takes precedence over extra obsoletes" {
 
     const action = actionForPackage(
         &observation,
-        @enumFromInt(2),
+        @fromBackingInt(@intCast(2)),
     ) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(solver_model.ActionKind.upgrade, action.kind);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         action.priors,
     );
     var native = try solveNative(
@@ -3775,7 +3775,7 @@ test "same-name replacement kind takes precedence over extra obsoletes" {
         protected.outcome.problems[0].kind,
     );
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(1)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(1))),
         protected.outcome.problems[0].package,
     );
 }
@@ -4236,7 +4236,7 @@ test "oracle records replacement as an obsolete action" {
     try testing.expectEqual(solver_model.ActionKind.obsolete, action.kind);
     try testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         action.priors,
     );
     try testing.expectEqual(solver_model.TransactionReason.obsoletes, action.reason);
@@ -4273,11 +4273,11 @@ test "each selected obsoleter retains a shared installed prior" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
     } };
     var observation = try oracle.solve(
@@ -4294,7 +4294,7 @@ test "each selected obsoleter retains a shared installed prior" {
         );
         try testing.expectEqualSlices(
             solver_model.PackageId,
-            &.{@enumFromInt(0)},
+            &.{@fromBackingInt(@intCast(0))},
             action.priors,
         );
     }
@@ -4462,7 +4462,7 @@ test "native and oracle normalize no-candidate jobs" {
         problem.kind,
     );
     try testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(0)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(0))),
         problem.job,
     );
     try testing.expectEqualStrings(
@@ -4484,7 +4484,7 @@ test "native and oracle normalize not-installable packages" {
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
     }} };
     var observation = try oracle.solve(
         testing.allocator,
@@ -4529,11 +4529,11 @@ test "native and oracle normalize same-name conflicts" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
     } };
     var observation = try oracle.solve(
@@ -4580,11 +4580,11 @@ test "native and oracle normalize obsoletes conflicts" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
     } };
     var observation = try oracle.solve(
@@ -4630,11 +4630,11 @@ test "native problem derivation enumerates multiple independent cores" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
     } };
     var observation = try oracle.solve(
@@ -4687,7 +4687,7 @@ test "native problem derivation names one core per broken job" {
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
     }} };
     var observation = try oracle.solve(
         testing.allocator,
@@ -4730,7 +4730,7 @@ test "native problem derivation names installed-retention cores" {
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     }} };
     var observation = try oracle.solve(
         testing.allocator,
@@ -4757,11 +4757,11 @@ test "native problem derivation names installed-retention cores" {
         native.problems[0].kind,
     );
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(1)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(1))),
         native.problems[0].package,
     );
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(0)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(0))),
         native.problems[0].related_package,
     );
 }
@@ -4788,15 +4788,15 @@ test "native problem derivation enumerates three independent cores" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
     } };
     var observation = try oracle.solve(
@@ -4841,11 +4841,11 @@ test "native problem derivation mixes an installed-retention core with a missing
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
     } };
     var observation = try oracle.solve(
@@ -4891,11 +4891,11 @@ test "native problem derivation enumerates cores across installed conflicts" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         },
     } };
     var observation = try oracle.solve(
@@ -4938,7 +4938,7 @@ test "native problem derivation enumerates a missing name job beside a package c
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
     } };
     var observation = try oracle.solve(
@@ -4982,15 +4982,15 @@ test "native problem derivation enumerates conflicting requests and a broken req
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
     } };
     var observation = try oracle.solve(
@@ -5032,7 +5032,7 @@ test "native problem derivation enumerates a transitively missing dependency cor
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     }} };
     var observation = try oracle.solve(
         testing.allocator,
@@ -5077,11 +5077,11 @@ test "native problem derivation enumerates duplicate cores into one counted prob
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
     } };
     var observation = try oracle.solve(
@@ -5132,7 +5132,7 @@ test "native problem derivation prefers the assertion rule of a chained core" {
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(2) },
+        .selection = .{ .package = @fromBackingInt(@intCast(2)) },
     }} };
     var observation = try oracle.solve(
         testing.allocator,
@@ -5155,7 +5155,7 @@ test "native problem derivation prefers the assertion rule of a chained core" {
     );
     try testing.expectEqual(@as(usize, 1), native.problems.len);
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(0)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(0))),
         native.problems[0].package,
     );
     try testing.expectEqualStrings(
@@ -5187,7 +5187,7 @@ test "native problem derivation names a core with two uninstallable providers" {
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(2) },
+        .selection = .{ .package = @fromBackingInt(@intCast(2)) },
     }} };
     var observation = try oracle.solve(
         testing.allocator,
@@ -5236,15 +5236,15 @@ test "native problem derivation enumerates three installed-retention cores" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(4) },
+            .selection = .{ .package = @fromBackingInt(@intCast(4)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(5) },
+            .selection = .{ .package = @fromBackingInt(@intCast(5)) },
         },
     } };
     var observation = try oracle.solve(
@@ -5294,7 +5294,7 @@ test "native problem derivation reports a conflict with the required installed p
 
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     }} };
     var observation = try oracle.solve(
         testing.allocator,
@@ -5351,11 +5351,11 @@ test "native problem derivation attributes each enumerated core to its own job" 
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
         } },
         policy(),
@@ -5364,11 +5364,11 @@ test "native problem derivation attributes each enumerated core to its own job" 
 
     try testing.expectEqual(@as(usize, 2), problems.problems.len);
     try testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(0)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(0))),
         problems.problems[0].job,
     );
     try testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(1)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(1))),
         problems.problems[1].job,
     );
 }
@@ -5393,7 +5393,7 @@ test "native problem derivation caps runaway core enumeration" {
         jobs[index] = .{
             .action = .install,
             .selection = .{
-                .package = @enumFromInt(@as(u32, @intCast(index))),
+                .package = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
             },
         };
     }
@@ -5844,10 +5844,10 @@ test "install-only erase with clean deps removes every installed instance" {
 
     const goal: solver_model.Goal = .{ .jobs = &.{ .{
         .action = .erase,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
     }, .{
         .action = .erase,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     } } };
 
     var observation = try oracle.solve(
@@ -5890,7 +5890,7 @@ test "clean deps keeps a locked automatic dependency" {
 
     const goal = solver_model.Goal{ .jobs = &.{ .{
         .action = .erase,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
     }, .{
         .action = .lock,
         .selection = .{ .name = "kept-dependency" },
@@ -6518,7 +6518,7 @@ test "native problem derivation matches the oracle across random universes" {
             try jobs.append(.{
                 .action = .install,
                 .selection = .{
-                    .package = @enumFromInt(@as(u32, @intCast(target))),
+                    .package = @fromBackingInt(@intCast(@as(u32, @intCast(target)))),
                 },
             });
         }
@@ -6658,19 +6658,19 @@ test "native problem derivation attributes a capability with two providers" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         },
     } };
     var observation = try oracle.solve(
@@ -6700,11 +6700,11 @@ test "native problem derivation attributes a capability with two providers" {
         native.problems[0].kind,
     );
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(1)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(1))),
         native.problems[0].package,
     );
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(3)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(3))),
         native.problems[0].related_package,
     );
     try testing.expectEqual(
@@ -6712,11 +6712,11 @@ test "native problem derivation attributes a capability with two providers" {
         native.problems[1].kind,
     );
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(2)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(2))),
         native.problems[1].package,
     );
     try testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(0)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(0))),
         native.problems[1].related_package,
     );
 }

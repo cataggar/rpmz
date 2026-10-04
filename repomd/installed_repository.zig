@@ -1,4 +1,17 @@
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const builtin = @import("builtin");
 const model = @import("model.zig");
 const repository_builder = @import("repository_builder.zig");
@@ -206,10 +219,11 @@ pub const TestFixture = struct {
         buffer: *[std.Io.Dir.max_path_bytes]u8,
         name: []const u8,
     ) [:0]const u8 {
-        return std.fmt.bufPrintZ(
+        return std.fmt.bufPrintSentinel(
             buffer,
             ".zig-cache/tmp/{s}/{s}",
             .{ &self.tmp.sub_path, name },
+            0,
         ) catch @panic("fixture path too long");
     }
 };
@@ -341,7 +355,7 @@ test "owning loader cleans every allocation failure" {
         .root_dir = fixture.rootPath(&root_buffer),
     };
 
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         loaderAllocationFailureCase,
         .{source},

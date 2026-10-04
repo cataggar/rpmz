@@ -1,9 +1,7 @@
 const std = @import("std");
 const header = @import("rpm_header");
 const txn_config = @import("txn_config.zig");
-const c = @cImport({
-    @cInclude("time.h");
-});
+const c = @import("c.rpmzig.queryformat");
 
 const Allocator = std.mem.Allocator;
 const MAX_FIELD_WIDTH: usize = 1024 * 1024;
@@ -361,9 +359,9 @@ fn parsePlaceholder(query: []const u8, start: usize) Error!Placeholder {
 }
 
 fn parseModifier(name: []const u8) Error!Modifier {
-    inline for (std.meta.fields(Modifier)) |field| {
-        if (std.mem.eql(u8, name, field.name)) {
-            return @enumFromInt(field.value);
+    inline for (@typeInfo(Modifier).@"enum".field_names) |field_name| {
+        if (std.mem.eql(u8, name, field_name)) {
+            return @field(Modifier, field_name);
         }
     }
     return error.UnsupportedQueryModifier;
@@ -508,13 +506,13 @@ fn resolveTag(raw_name: []const u8) Error!ResolvedTag {
         }
     }
 
-    inline for (std.meta.fields(header.TagId)) |field| {
-        if (!std.mem.eql(u8, field.name, "_") and
-            normalizedTagEqual(name, field.name))
+    inline for (@typeInfo(header.TagId).@"enum".field_names, @typeInfo(header.TagId).@"enum".field_values) |field_name, field_value| {
+        if (!std.mem.eql(u8, field_name, "_") and
+            normalizedTagEqual(name, field_name))
         {
             return .{
-                .id = field.value,
-                .canonical_name = field.name,
+                .id = field_value,
+                .canonical_name = field_name,
             };
         }
     }
@@ -577,7 +575,7 @@ fn tagElementCount(hdr: header.Header, tag: ResolvedTag) Error!usize {
         };
     }
     const entry = hdr.findRaw(tag.id) orelse return 0;
-    return switch (@as(header.TypeId, @enumFromInt(entry.typ))) {
+    return switch (@as(header.TypeId, @fromBackingInt(@intCast(entry.typ)))) {
         .string, .i18n_string, .bin => 1,
         .char_type, .int8, .int16, .int32, .int64, .string_array => std.math.cast(usize, entry.count) orelse
             error.InvalidQueryTagData,
@@ -597,11 +595,11 @@ fn tagValue(
     const entry = hdr.findRaw(tag.id) orelse
         return .{ .data = .missing };
     const count = try tagElementCount(hdr, tag);
-    const value_index = if (@as(header.TypeId, @enumFromInt(entry.typ)) ==
+    const value_index = if (@as(header.TypeId, @fromBackingInt(@intCast(entry.typ))) ==
         .i18n_string) 0 else index;
     if (value_index >= count) return error.InvalidQueryTagData;
 
-    return switch (@as(header.TypeId, @enumFromInt(entry.typ))) {
+    return switch (@as(header.TypeId, @fromBackingInt(@intCast(entry.typ)))) {
         .string, .i18n_string => .{
             .data = .{ .string = hdr.getStringRaw(tag.id) orelse
                 return error.InvalidQueryTagData },

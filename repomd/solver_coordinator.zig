@@ -1,6 +1,19 @@
 //! Multi-round policy coordination for the native package solver.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const query_index = @import("index.zig");
 const metadata = @import("model.zig");
 const solver_model = @import("solver_model.zig");
@@ -336,7 +349,7 @@ fn planInstallonlyLimit(
 
         var candidates = PackageIdList.init(allocator);
         for (universe.packages) |package| {
-            const package_index: usize = @intFromEnum(package.id);
+            const package_index: usize = @backingInt(package.id);
             if (package.installed == null or
                 planned[package_index] or
                 !std.mem.eql(u8, package.source.nevra.name, name) or
@@ -354,7 +367,7 @@ fn planInstallonlyLimit(
         );
         for (candidates.items) |package_id| {
             if (excess == 0) break;
-            planned[@intFromEnum(package_id)] = true;
+            planned[@backingInt(package_id)] = true;
             try evictions.append(package_id);
             excess -= 1;
         }
@@ -387,7 +400,7 @@ fn installedOrderLessThan(
     if (left.rpmdb_hnum != right.rpmdb_hnum) {
         return left.rpmdb_hnum < right.rpmdb_hnum;
     }
-    return @intFromEnum(left_id) < @intFromEnum(right_id);
+    return @backingInt(left_id) < @backingInt(right_id);
 }
 
 fn hasInstalledName(
@@ -605,10 +618,10 @@ const TestGraphBuilder = struct {
         package: TestPackage,
     ) !solver_model.PackageId {
         var repository = &self.repositories.items[repository_index];
-        const id: solver_model.PackageId = @enumFromInt(@as(
+        const id: solver_model.PackageId = @fromBackingInt(@intCast(@as(
             u32,
             @intCast(totalPackages(self.repositories.items)),
-        ));
+        )));
         try repository.packages.append(.{
             .pkg_id = package.name,
             .nevra = .{
@@ -710,7 +723,7 @@ test "first install does not activate install-only limit" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         testPolicy(0),
     );
@@ -752,7 +765,7 @@ test "install-only coordinator rejects unsupported policy boundaries" {
     defer universe.deinit();
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
     }} };
 
     var unsupported = testPolicy(1);
@@ -821,7 +834,7 @@ test "install-only limit evicts install order across architectures" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testPolicy(2),
     );
@@ -831,7 +844,7 @@ test "install-only limit evicts install order across architectures" {
     try std.testing.expect(solved.problem == null);
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         solved.eviction_packages,
     );
     try std.testing.expectEqualSlices(
@@ -872,7 +885,7 @@ test "install-only update retains the new package after eviction retry" {
     try std.testing.expect(solved.problem == null);
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         solved.eviction_packages,
     );
     try std.testing.expectEqualSlices(
@@ -913,7 +926,7 @@ test "install-only update without a replacement still enforces the limit" {
         try std.testing.expect(solved.problem == null);
         try std.testing.expectEqualSlices(
             solver_model.PackageId,
-            &.{@enumFromInt(0)},
+            &.{@fromBackingInt(@intCast(0))},
             solved.eviction_packages,
         );
         try std.testing.expectEqualSlices(
@@ -950,11 +963,11 @@ test "explicit erase is not selected again for install-only eviction" {
         .{ .jobs = &.{
             .{
                 .action = .erase,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             },
         } },
         testPolicy(1),
@@ -963,7 +976,7 @@ test "explicit erase is not selected again for install-only eviction" {
 
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(1)},
+        &.{@fromBackingInt(@intCast(1))},
         solved.eviction_packages,
     );
     try std.testing.expectEqualSlices(
@@ -1000,7 +1013,7 @@ test "install-only reinstall replaces the matching installed instance" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .reinstall,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testPolicy(3),
     );
@@ -1039,7 +1052,7 @@ test "zero install-only limit reports residual overflow after one retry" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         testPolicy(0),
     );
@@ -1080,7 +1093,7 @@ test "protected package blocks an install-only eviction" {
         &graph.universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         policy,
     );
@@ -1093,7 +1106,7 @@ test "protected package blocks an install-only eviction" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(
-        @as(solver_model.PackageId, @enumFromInt(0)),
+        @as(solver_model.PackageId, @fromBackingInt(@intCast(0))),
         package_id,
     );
 }
@@ -1158,7 +1171,7 @@ fn coordinatorAllocationFailureCase(allocator: std.mem.Allocator) !void {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         testPolicy(1),
     );
@@ -1166,7 +1179,7 @@ fn coordinatorAllocationFailureCase(allocator: std.mem.Allocator) !void {
 }
 
 test "install-only coordinator cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         coordinatorAllocationFailureCase,
         .{},

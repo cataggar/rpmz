@@ -8,9 +8,7 @@ const errors = @import("rpmz_error");
 const repomd = @import("repomd_client_exports");
 
 const c = abi.C;
-const libc = @cImport({
-    @cInclude("sys/vfs.h");
-});
+const libc = @import("c.client.package_query");
 const package_context = repomd.package_context;
 const pkgquery = repomd.package_query;
 const query_index = repomd.query_index;
@@ -122,7 +120,7 @@ fn free(value: anytype) void {
 
 fn duplicate(value: []const u8, output: *?[*:0]u8) u32 {
     output.* = null;
-    const copy = std.heap.c_allocator.dupeZ(u8, value) catch
+    const copy = std.heap.c_allocator.dupeSentinel(u8, value, 0) catch
         return errors.ERROR_TDNF_OUT_OF_MEMORY;
     output.* = copy.ptr;
     return 0;
@@ -844,9 +842,10 @@ pub export fn TDNFNativeQuerySerializeAutoInstalledRefs(
                 context,
                 @intCast(handle_id),
             ) orelse continue;
-            const name = std.heap.c_allocator.dupeZ(
+            const name = std.heap.c_allocator.dupeSentinel(
                 u8,
                 pkg.nevra.name,
+                0,
             ) catch {
                 TDNFFreeStringArray(@ptrCast(refs.?));
                 return errors.ERROR_TDNF_OUT_OF_MEMORY;

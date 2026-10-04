@@ -525,7 +525,7 @@ fn checkLocalPrepareError(
             }
             setError(
                 "unable to read the check-local directory: {s}",
-                .{@tagName(@as(std.posix.E, @enumFromInt(errno_value)))},
+                .{@tagName(@as(std.posix.E, @fromBackingInt(@intCast(errno_value))))},
             );
             return @intCast(abi.ERROR_TDNF_SYSTEM_BASE + errno_value);
         },

@@ -130,7 +130,7 @@ const PackageBuilder = struct {
     }
 
     fn relationBucket(self: *PackageBuilder, kind: model.DependencyKind) *std.array_list.Managed(model.Relation) {
-        return &self.relation_buckets[@intFromEnum(kind)];
+        return &self.relation_buckets[@backingInt(kind)];
     }
 
     fn appendRelation(self: *PackageBuilder, kind: model.DependencyKind, relation: model.Relation) Error!void {

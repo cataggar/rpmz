@@ -135,7 +135,7 @@ const Parser = struct {
                         const type_z = try model.dupZ(self.allocator, raw_type);
                         try self.records.append(.{
                             .pszType = type_z.ptr,
-                            .dwKind = @intFromEnum(model.kindFromRawType(raw_type)),
+                            .dwKind = @backingInt(model.kindFromRawType(raw_type)),
                         });
                         try self.record_xml_bases.append(null);
                         frame.kind = .data;

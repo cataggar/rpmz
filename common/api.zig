@@ -106,7 +106,7 @@ fn tupleFieldCount(comptime T: type) usize {
     if (info != .@"struct" or !info.@"struct".is_tuple) {
         @compileError("format arguments must be a tuple");
     }
-    return info.@"struct".fields.len;
+    return info.@"struct".field_names.len;
 }
 
 fn cString(value: anytype) []const u8 {
@@ -174,7 +174,7 @@ fn integerValue(value: anytype) switch (@typeInfo(@TypeOf(value))) {
 } {
     return switch (@typeInfo(@TypeOf(value))) {
         .int, .comptime_int => value,
-        .@"enum" => @intFromEnum(value),
+        .@"enum" => @backingInt(value),
         else => unreachable,
     };
 }

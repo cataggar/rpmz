@@ -495,9 +495,10 @@ fn runValidated(
         before.rows,
     )) orelse return error.ActionShapeMismatch;
 
-    const install_root_z = arena.dupeZ(
+    const install_root_z = arena.dupeSentinel(
         u8,
         locked_config.installRoot(),
+        0,
     ) catch return error.OutOfMemory;
     var args = abi.CmdArgs{
         .pszInstallRoot = @constCast(install_root_z.ptr),
@@ -664,8 +665,8 @@ fn runValidated(
 fn replayStageFailed(stage: ReplayStage) bool {
     if (!builtin.is_test) return false;
     if (replay_stage_test_hook) |hook|
-        hook(replay_stage_test_context, @intFromEnum(stage));
-    if (replay_failure_stage != @intFromEnum(stage)) return false;
+        hook(replay_stage_test_context, @backingInt(stage));
+    if (replay_failure_stage != @backingInt(stage)) return false;
     replay_failure_stage = 0;
     return true;
 }
@@ -1783,7 +1784,7 @@ test "result serialization never represents failure as success" {
         .status = .validation_failed,
         .validation_failure = .rpmdb_mismatch,
         .transaction_failure = null,
-        .plan_digest = "1" ** 64,
+        .plan_digest = &@as([64]u8, @splat('1')),
         .applied_plan_digest = null,
         .actions = &actions,
         .final_inventory = &.{},
@@ -1970,7 +1971,7 @@ test "manifest packages exact-match the plan selection before RPM open" {
         .checksum = .{
             .kind = "sha256",
             .is_pkgid = true,
-            .value = "1" ** 64,
+            .value = &@as([64]u8, @splat('1')),
         },
         .size = 42,
         .href = "packages/app.rpm",
@@ -2015,7 +2016,7 @@ test "manifest packages exact-match the plan selection before RPM open" {
             .epoch => changed.identity.epoch = 0,
             .checksum_kind => changed.checksum.kind = "sha512",
             .checksum_pkgid => changed.checksum.is_pkgid = false,
-            .checksum_value => changed.checksum.value = "2" ** 64,
+            .checksum_value => changed.checksum.value = &@as([64]u8, @splat('2')),
             .href => changed.href = "packages/other.rpm",
             .xml_base => changed.xml_base = null,
             .size => changed.size = 43,
@@ -2114,8 +2115,8 @@ test "rpmdb identity and prior validation reject every substitution" {
             .resolution_status = .resolved,
             .rpmdb = .{
                 .backend = .sqlite,
-                .cookie_sha256 = "1" ** 64,
-                .package_set_sha256 = "2" ** 64,
+                .cookie_sha256 = &@as([64]u8, @splat('1')),
+                .package_set_sha256 = &@as([64]u8, @splat('2')),
             },
         },
         .hidden_packages = &.{},
@@ -2689,8 +2690,8 @@ fn testEnvironment(
         .resolution_status = .resolved,
         .rpmdb = .{
             .backend = .sqlite,
-            .cookie_sha256 = "0" ** 64,
-            .package_set_sha256 = "0" ** 64,
+            .cookie_sha256 = &@as([64]u8, @splat('0')),
+            .package_set_sha256 = &@as([64]u8, @splat('0')),
         },
     };
 }

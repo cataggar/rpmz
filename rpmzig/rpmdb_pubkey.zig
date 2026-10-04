@@ -276,53 +276,53 @@ fn buildRecord(
             arena,
             &.{pubkeys},
         ), 1),
-        stringField(@intFromEnum(header.TagId.name), try stringBytes(
+        stringField(@backingInt(header.TagId.name), try stringBytes(
             arena,
             "gpg-pubkey",
         ), .string),
-        stringField(@intFromEnum(header.TagId.version), try stringBytes(
+        stringField(@backingInt(header.TagId.version), try stringBytes(
             arena,
             short_id,
         ), .string),
-        stringField(@intFromEnum(header.TagId.release), try stringBytes(
+        stringField(@backingInt(header.TagId.release), try stringBytes(
             arena,
             release,
         ), .string),
-        stringField(@intFromEnum(header.TagId.summary), try stringBytes(
+        stringField(@backingInt(header.TagId.summary), try stringBytes(
             arena,
             summary,
         ), .i18n_string),
-        stringField(@intFromEnum(header.TagId.description), try stringBytes(
+        stringField(@backingInt(header.TagId.description), try stringBytes(
             arena,
             description,
         ), .i18n_string),
-        u32Field(@intFromEnum(header.TagId.build_time), try u32Bytes(
+        u32Field(@backingInt(header.TagId.build_time), try u32Bytes(
             arena,
             cert.primary.created_at,
         )),
-        stringField(@intFromEnum(header.TagId.buildhost), try stringBytes(
+        stringField(@backingInt(header.TagId.buildhost), try stringBytes(
             arena,
             "localhost",
         ), .string),
-        u32Field(@intFromEnum(header.TagId.size), try u32Bytes(arena, 0)),
-        stringField(@intFromEnum(header.TagId.license), try stringBytes(
+        u32Field(@backingInt(header.TagId.size), try u32Bytes(arena, 0)),
+        stringField(@backingInt(header.TagId.license), try stringBytes(
             arena,
             "pubkey",
         ), .string),
-        stringField(@intFromEnum(header.TagId.packager), try stringBytes(
+        stringField(@backingInt(header.TagId.packager), try stringBytes(
             arena,
             packager,
         ), .string),
-        stringField(@intFromEnum(header.TagId.group), try stringBytes(
+        stringField(@backingInt(header.TagId.group), try stringBytes(
             arena,
             "Public Keys",
         ), .i18n_string),
-        stringField(@intFromEnum(header.TagId.source_rpm), try stringBytes(
+        stringField(@backingInt(header.TagId.source_rpm), try stringBytes(
             arena,
             "(none)",
         ), .string),
         stringArrayField(
-            @intFromEnum(header.TagId.providename),
+            @backingInt(header.TagId.providename),
             try stringArrayBytes(arena, provide_names),
             @intCast(provide_names.len),
         ),
@@ -331,12 +331,12 @@ fn buildRecord(
             "4.0.0",
         ), .string),
         int32ArrayField(
-            @intFromEnum(header.TagId.provideflags),
+            @backingInt(header.TagId.provideflags),
             try u32ArrayBytes(arena, provide_flags),
             @intCast(provide_flags.len),
         ),
         stringArrayField(
-            @intFromEnum(header.TagId.provideversion),
+            @backingInt(header.TagId.provideversion),
             try stringArrayBytes(arena, provide_versions),
             @intCast(provide_versions.len),
         ),
@@ -369,11 +369,11 @@ fn buildRecord(
             arena,
             try hexLower(arena, &sha256),
         ), .string),
-        u32Field(@intFromEnum(header.TagId.install_time), try u32Bytes(
+        u32Field(@backingInt(header.TagId.install_time), try u32Bytes(
             arena,
             timestamp,
         )),
-        u32Field(@intFromEnum(header.TagId.install_tid), try u32Bytes(
+        u32Field(@backingInt(header.TagId.install_tid), try u32Bytes(
             arena,
             timestamp,
         )),
@@ -562,7 +562,7 @@ fn encodeArmor(
 ) ![]u8 {
     const encoded = try encodeBase64Wrapped(allocator, bytes);
     defer allocator.free(encoded);
-    var crc = std.hash.crc.Crc24Openpgp.init();
+    var crc = std.hash.crc.@"CRC-24/OPENPGP".init();
     crc.update(bytes);
     const value = crc.final();
     const crc_bytes = [_]u8{
@@ -924,13 +924,16 @@ test "host rpm reads native pubkey package and fingerprint indexes" {
         @as(usize, 1),
         std.mem.count(u8, after_reimport.stdout, "\n"),
     );
+    // RPM 6 rewrites the version to the full fingerprint on reimport.
+    const reimported_nevr = std.mem.trim(u8, after_reimport.stdout, " \t\r\n");
+    try testing.expect(std.mem.startsWith(u8, reimported_nevr, "gpg-pubkey-"));
 
     try expectHostCommandSuccess(&.{
         "rpm",
         "--dbpath",
         db_dir,
         "-e",
-        "gpg-pubkey-3135ce90-5e6fda74",
+        reimported_nevr,
     });
     const after_erase = try runHostCommand(&.{
         "rpm",
@@ -960,7 +963,10 @@ fn expectHostCommandSuccess(argv: []const []const u8) !void {
     const result = try runHostCommand(argv);
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
-    try expectHostExitZero(result.term);
+    expectHostExitZero(result.term) catch |err| {
+        std.debug.print("host command {s}: {s}\n", .{ argv[0], result.stderr });
+        return err;
+    };
 }
 
 fn expectHostExitZero(term: std.process.Child.Term) !void {
@@ -1117,19 +1123,19 @@ fn insertMultiPubkeysTestRow(
             .bytes = pubkeys,
         },
         .{
-            .tag = @intFromEnum(header.TagId.name),
+            .tag = @backingInt(header.TagId.name),
             .typ = .string,
             .count = 1,
             .bytes = "gpg-pubkey\x00",
         },
         .{
-            .tag = @intFromEnum(header.TagId.version),
+            .tag = @backingInt(header.TagId.version),
             .typ = .string,
             .count = 1,
             .bytes = "00000000\x00",
         },
         .{
-            .tag = @intFromEnum(header.TagId.release),
+            .tag = @backingInt(header.TagId.release),
             .typ = .string,
             .count = 1,
             .bytes = "00000000\x00",

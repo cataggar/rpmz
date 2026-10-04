@@ -183,7 +183,7 @@ fn parseBodyWithMode(
     const version = try r.readU8();
     if (version != 4 and version != 6) return error.UnsupportedVersion;
     const created_at = try r.readU32Be();
-    const algo: Algorithm = @enumFromInt(try r.readU8());
+    const algo: Algorithm = @fromBackingInt(@intCast(try r.readU8()));
 
     var material_reader = if (version == 6) blk: {
         const material_len = try r.readU32Be();
@@ -510,7 +510,7 @@ test "v6 RSA key MPIs require canonical bit lengths" {
         0,
         0,
         0,
-        @intFromEnum(Algorithm.rsa_sign_and_encrypt),
+        @backingInt(Algorithm.rsa_sign_and_encrypt),
         0,
         0,
         0,
@@ -533,7 +533,7 @@ test "v6 RSA key MPIs require canonical bit lengths" {
         0,
         0,
         0,
-        @intFromEnum(Algorithm.rsa_sign_and_encrypt),
+        @backingInt(Algorithm.rsa_sign_and_encrypt),
         0,
         7,
         0x80,
@@ -633,7 +633,7 @@ test "strict import parser rejects trailing and truncated v4 material" {
     var complete: [1 + 4 + 1 + 32]u8 = undefined;
     complete[0] = 4;
     @memset(complete[1..5], 0);
-    complete[5] = @intFromEnum(Algorithm.ed25519);
+    complete[5] = @backingInt(Algorithm.ed25519);
     @memset(complete[6..], 0xA5);
 
     var trailing: [complete.len + 1]u8 = undefined;
@@ -655,7 +655,7 @@ test "strict import parser does not hide truncated legacy EdDSA" {
     var body: [1 + 4 + 1 + 1 + ED25519_OID.len + 1]u8 = undefined;
     body[0] = 4;
     @memset(body[1..5], 0);
-    body[5] = @intFromEnum(Algorithm.eddsa_legacy);
+    body[5] = @backingInt(Algorithm.eddsa_legacy);
     body[6] = ED25519_OID.len;
     @memcpy(body[7 .. 7 + ED25519_OID.len], &ED25519_OID);
     body[body.len - 1] = 0x01; // Truncated MPI bit-count.
@@ -861,7 +861,7 @@ test "unknown algorithm parses as Unsupported" {
     const body = [_]u8{ 0x04, 0x00, 0x00, 0x00, 0x00, 99 };
     const pk = try parseBody(&body);
     switch (pk.material) {
-        .unsupported => |a| try testing.expectEqual(@as(u8, 99), @intFromEnum(a)),
+        .unsupported => |a| try testing.expectEqual(@as(u8, 99), @backingInt(a)),
         else => return error.TestExpectedUnsupportedMaterial,
     }
 }

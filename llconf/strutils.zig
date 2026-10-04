@@ -6,12 +6,7 @@
 
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("ctype.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("strutils.h");
-});
+const c = @import("c.llconf.strutils");
 
 fn duplicateBytes(bytes: []const u8) [*c]u8 {
     const raw = c.malloc(bytes.len + 1) orelse return null;
@@ -41,7 +36,7 @@ fn copyLimit(n: c_int) usize {
 }
 
 export fn dup_next_word(pp: [*c][*c]const u8) [*c]u8 {
-    var tmpbuf = [_:0]u8{0} ** 1024;
+    var tmpbuf: [1024:0]u8 = @splat(0);
     _ = dup_next_word_b(pp, @ptrCast(&tmpbuf), @as(c_int, @intCast(tmpbuf.len - 1)));
     return duplicateCString(@ptrCast(&tmpbuf));
 }
@@ -68,7 +63,7 @@ export fn dup_next_word_b(pp: [*c][*c]const u8, buf: [*c]u8, n: c_int) [*c]u8 {
 }
 
 export fn dup_next_quoted(pp: [*c][*c]const u8, qchar: u8) [*c]u8 {
-    var tmpbuf = [_:0]u8{0} ** 1024;
+    var tmpbuf: [1024:0]u8 = @splat(0);
     if (dup_next_quoted_b(pp, @ptrCast(&tmpbuf), @as(c_int, @intCast(tmpbuf.len - 1)), qchar) == null) {
         return null;
     }
@@ -105,7 +100,7 @@ export fn dup_next_quoted_b(pp: [*c][*c]const u8, buf: [*c]u8, n: c_int, qchar: 
 }
 
 export fn dup_next_line(pp: [*c][*c]const u8) [*c]u8 {
-    var tmpbuf = [_:0]u8{0} ** 1024;
+    var tmpbuf: [1024:0]u8 = @splat(0);
     _ = dup_next_line_b(pp, @ptrCast(&tmpbuf), @as(c_int, @intCast(tmpbuf.len - 1)));
     return duplicateCString(@ptrCast(&tmpbuf));
 }
@@ -129,7 +124,7 @@ export fn dup_next_line_b(pp: [*c][*c]const u8, buf: [*c]u8, n: c_int) [*c]u8 {
 }
 
 export fn dup_line_until(pp: [*c][*c]const u8, until: u8) [*c]u8 {
-    var tmpbuf = [_:0]u8{0} ** 1024;
+    var tmpbuf: [1024:0]u8 = @splat(0);
     _ = dup_line_until_b(pp, until, @ptrCast(&tmpbuf), @as(c_int, @intCast(tmpbuf.len - 1)));
     return duplicateCString(@ptrCast(&tmpbuf));
 }
@@ -390,7 +385,7 @@ test "dup helpers preserve tokens and escapes" {
 
 test "copy, skip, and join helpers preserve existing behavior" {
     var source: [*c]const u8 = "  key \"value here\" rest";
-    var buf = [_:0]u8{0} ** 32;
+    var buf: [32:0]u8 = @splat(0);
     var dest: [*c]u8 = @ptrCast(&buf);
 
     cp_spaces(&source, &dest, 31);
@@ -399,7 +394,7 @@ test "copy, skip, and join helpers preserve existing behavior" {
     try std.testing.expectEqualStrings("  key", cString(@ptrCast(&buf)));
 
     skip_spaces(&source);
-    var quoted_buf = [_:0]u8{0} ** 32;
+    var quoted_buf: [32:0]u8 = @splat(0);
     var quoted_dest: [*c]u8 = @ptrCast(&quoted_buf);
     cp_quoted_ifquoted(&source, &quoted_dest, 31, '"');
     quoted_dest[0] = 0;

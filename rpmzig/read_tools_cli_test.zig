@@ -83,9 +83,9 @@ fn buildRegionHeader(
     }
 
     const trailer_offset: u32 = @intCast(data.items.len);
-    const region_tag = @intFromEnum(region);
+    const region_tag = @backingInt(region);
     try appendU32(&data, allocator, region_tag);
-    try appendU32(&data, allocator, @intFromEnum(header.TypeId.bin));
+    try appendU32(&data, allocator, @backingInt(header.TypeId.bin));
     const index_count: u32 = @intCast(entries.len + 1);
     const negative_span: i32 = -@as(i32, @intCast(index_count * 16));
     try appendU32(&data, allocator, @bitCast(negative_span));
@@ -97,12 +97,12 @@ fn buildRegionHeader(
     try appendU32(&result, allocator, index_count);
     try appendU32(&result, allocator, @intCast(data.items.len));
     try appendU32(&result, allocator, region_tag);
-    try appendU32(&result, allocator, @intFromEnum(header.TypeId.bin));
+    try appendU32(&result, allocator, @backingInt(header.TypeId.bin));
     try appendU32(&result, allocator, trailer_offset);
     try appendU32(&result, allocator, 16);
     for (entries, offsets.items) |entry, offset| {
         try appendU32(&result, allocator, entry.tag);
-        try appendU32(&result, allocator, @intFromEnum(entry.typ));
+        try appendU32(&result, allocator, @backingInt(entry.typ));
         try appendU32(&result, allocator, offset);
         try appendU32(&result, allocator, entry.count);
     }
@@ -113,7 +113,7 @@ fn buildRegionHeader(
 fn buildMalformedPayloadRpm(allocator: std.mem.Allocator) ![]u8 {
     const signature = try buildRegionHeader(allocator, .signatures, &.{
         .{
-            .tag = @intFromEnum(header.SigTagId.size),
+            .tag = @backingInt(header.SigTagId.size),
             .typ = .int32,
             .count = 1,
             .data = "\x00\x00\x00\x01",
@@ -121,11 +121,11 @@ fn buildMalformedPayloadRpm(allocator: std.mem.Allocator) ![]u8 {
     });
     defer allocator.free(signature);
     const main = try buildRegionHeader(allocator, .immutable, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = .string, .count = 1, .data = "pkg\x00" },
-        .{ .tag = @intFromEnum(header.TagId.version), .typ = .string, .count = 1, .data = "1\x00" },
-        .{ .tag = @intFromEnum(header.TagId.release), .typ = .string, .count = 1, .data = "1\x00" },
-        .{ .tag = @intFromEnum(header.TagId.arch), .typ = .string, .count = 1, .data = "noarch\x00" },
-        .{ .tag = @intFromEnum(header.TagId.payload_compressor), .typ = .string, .count = 1, .data = "none\x00" },
+        .{ .tag = @backingInt(header.TagId.name), .typ = .string, .count = 1, .data = "pkg\x00" },
+        .{ .tag = @backingInt(header.TagId.version), .typ = .string, .count = 1, .data = "1\x00" },
+        .{ .tag = @backingInt(header.TagId.release), .typ = .string, .count = 1, .data = "1\x00" },
+        .{ .tag = @backingInt(header.TagId.arch), .typ = .string, .count = 1, .data = "noarch\x00" },
+        .{ .tag = @backingInt(header.TagId.payload_compressor), .typ = .string, .count = 1, .data = "none\x00" },
     });
     defer allocator.free(main);
 
@@ -143,7 +143,7 @@ fn buildMalformedPayloadRpm(allocator: std.mem.Allocator) ![]u8 {
 
     const payload = rpm[payload_offset..];
     @memcpy(payload[0..6], "070701");
-    @memcpy(payload[6..110], "00000000" ** 13);
+    @memset(payload[6..110], '0');
     const name_size = try std.fmt.bufPrint(
         payload[94..102],
         "{x:0>8}",

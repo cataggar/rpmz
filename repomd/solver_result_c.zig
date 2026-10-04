@@ -154,7 +154,7 @@ pub fn buildOwned(input: Input) BuildError!*result_abi.Result {
         out.dwPriorOffset = prior_offset;
         out.dwPriorCount = @intCast(action.priors.len);
         if (action.requested_by) |job_id| {
-            out.dwRequestedJobId = @intFromEnum(job_id);
+            out.dwRequestedJobId = @backingInt(job_id);
             out.nHasRequestedJobId = 1;
         }
         for (action.priors) |prior| {
@@ -189,13 +189,13 @@ pub fn buildOwned(input: Input) BuildError!*result_abi.Result {
             out.nHasCapability = 1;
         }
         if (problem.job) |job_id| {
-            out.dwJobId = @intFromEnum(job_id);
+            out.dwJobId = @backingInt(job_id);
             out.nHasJobId = 1;
         }
     }
 
     for (input.outcome.skipped_jobs, 0..) |job_id, index| {
-        result.pdwSkippedJobIds[index] = @intFromEnum(job_id);
+        result.pdwSkippedJobIds[index] = @backingInt(job_id);
     }
 
     return result;
@@ -226,8 +226,8 @@ fn fillPackage(
     out.pszLocationHref = try dupCString(source.location.href);
     out.pszLocationBase = try dupOptionalCString(source.location.xml_base);
     out.pszSummary = try dupOptionalCString(source.summary);
-    out.dwPackageId = @intFromEnum(package.id);
-    out.dwRepositoryId = @intFromEnum(package.repository);
+    out.dwPackageId = @backingInt(package.id);
+    out.dwRepositoryId = @backingInt(package.repository);
     out.nRepositoryKind = mapRepositoryKind(repository.kind);
     if (source.nevra.epoch) |epoch| {
         out.dwEpoch = epoch;
@@ -311,21 +311,21 @@ fn markPackage(
     if (require_installed and package.installed == null) {
         return error.InvalidInput;
     }
-    referenced[@intFromEnum(package_id)] = 1;
+    referenced[@backingInt(package_id)] = 1;
 }
 
 fn validateJobId(
     job_count: usize,
     job_id: solver_model.JobId,
 ) BuildError!void {
-    if (@intFromEnum(job_id) >= job_count) return error.InvalidInput;
+    if (@backingInt(job_id) >= job_count) return error.InvalidInput;
 }
 
 fn getPackageRef(
     package_refs: []const u32,
     package_id: solver_model.PackageId,
 ) BuildError!u32 {
-    const package_index = @intFromEnum(package_id);
+    const package_index = @backingInt(package_id);
     if (package_index >= package_refs.len) return error.InvalidInput;
     const package_ref = package_refs[package_index];
     if (package_ref == invalid_package_ref) return error.InvalidInput;
@@ -504,11 +504,11 @@ const TestFixture = struct {
     installed_model: metadata.RepositoryModel = undefined,
     available_model: metadata.RepositoryModel = undefined,
     universe: solver_model.Universe = undefined,
-    priors: [1]solver_model.PackageId = .{@enumFromInt(0)},
-    selected: [1]solver_model.PackageId = .{@enumFromInt(1)},
+    priors: [1]solver_model.PackageId = .{@fromBackingInt(@intCast(0))},
+    selected: [1]solver_model.PackageId = .{@fromBackingInt(@intCast(1))},
     actions: [1]solver_model.Action = undefined,
     problems: [1]solver_model.Problem = undefined,
-    skipped_jobs: [1]solver_model.JobId = .{@enumFromInt(1)},
+    skipped_jobs: [1]solver_model.JobId = .{@fromBackingInt(@intCast(1))},
     outcome: solver_model.Outcome = undefined,
 
     fn init(self: *TestFixture, allocator: std.mem.Allocator) !void {
@@ -560,15 +560,15 @@ const TestFixture = struct {
         self.available_model = .{ .packages = &self.available_packages };
         self.actions = .{.{
             .kind = .upgrade,
-            .package = @enumFromInt(1),
+            .package = @fromBackingInt(@intCast(1)),
             .priors = &self.priors,
             .reason = .policy,
-            .requested_by = @enumFromInt(0),
+            .requested_by = @fromBackingInt(@intCast(0)),
         }};
         self.problems = .{.{
             .kind = .conflict,
-            .package = @enumFromInt(1),
-            .related_package = @enumFromInt(0),
+            .package = @fromBackingInt(@intCast(1)),
+            .related_package = @fromBackingInt(@intCast(0)),
             .capability = .{
                 .name = &self.relation_name,
                 .comparison = .ge,
@@ -579,7 +579,7 @@ const TestFixture = struct {
                 .pre = true,
                 .sense = 7,
             },
-            .job = @enumFromInt(0),
+            .job = @fromBackingInt(@intCast(0)),
         }};
         self.outcome = .{
             .actions = &self.actions,
@@ -696,10 +696,10 @@ test "C adapter rejects invalid exact prior and job identities" {
     try fixture.init(std.testing.allocator);
     defer fixture.deinit();
 
-    const available_prior = [_]solver_model.PackageId{@enumFromInt(1)};
+    const available_prior = [_]solver_model.PackageId{@fromBackingInt(@intCast(1))};
     const actions = [_]solver_model.Action{.{
         .kind = .upgrade,
-        .package = @enumFromInt(1),
+        .package = @fromBackingInt(@intCast(1)),
         .priors = &available_prior,
         .reason = .policy,
     }};
@@ -711,14 +711,14 @@ test "C adapter rejects invalid exact prior and job identities" {
     try std.testing.expectError(error.InvalidInput, buildOwned(.{
         .universe = &fixture.universe,
         .job_count = 0,
-        .selected = &.{@enumFromInt(1)},
+        .selected = &.{@fromBackingInt(@intCast(1))},
         .outcome = &outcome,
     }));
 
     outcome = .{
         .actions = &.{},
         .problems = &.{},
-        .skipped_jobs = &.{@enumFromInt(0)},
+        .skipped_jobs = &.{@fromBackingInt(@intCast(0))},
     };
     try std.testing.expectError(error.InvalidInput, buildOwned(.{
         .universe = &fixture.universe,
@@ -730,7 +730,7 @@ test "C adapter rejects invalid exact prior and job identities" {
     try std.testing.expectError(error.InvalidInput, buildOwned(.{
         .universe = &fixture.universe,
         .job_count = 0,
-        .selected = &.{@enumFromInt(99)},
+        .selected = &.{@fromBackingInt(@intCast(99))},
         .outcome = &outcome,
     }));
 }
@@ -741,7 +741,7 @@ test "C adapter rejects strings containing an embedded NUL" {
     defer fixture.deinit();
 
     fixture.available_packages[0].summary = "bad\x00summary";
-    const selected = [_]solver_model.PackageId{@enumFromInt(1)};
+    const selected = [_]solver_model.PackageId{@fromBackingInt(@intCast(1))};
     const outcome = solver_model.Outcome{
         .actions = &.{},
         .problems = &.{},

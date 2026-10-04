@@ -12,9 +12,7 @@ const cpio = @import("cpio.zig");
 const install = @import("install.zig");
 const txn_config = @import("txn_config.zig");
 const rpmtrans = @import("trans_flags.zig");
-const c = @cImport({
-    @cInclude("unistd.h");
-});
+const c = @import("c.rpmzig.source");
 
 const Allocator = std.mem.Allocator;
 const RPMFILE_SPECFILE: u32 = 1 << 5;
@@ -995,7 +993,7 @@ test "source plan path conflicts fail before any output" {
 
     const first_path = try std.fmt.allocPrint(allocator, "{s}/a", .{base});
     defer allocator.free(first_path);
-    const first_path_z = try allocator.dupeZ(u8, first_path);
+    const first_path_z = try allocator.dupeSentinel(u8, first_path, 0);
     defer allocator.free(first_path_z);
     try std.testing.expect(c.access(first_path_z.ptr, c.F_OK) != 0);
 }

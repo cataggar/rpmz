@@ -25,11 +25,7 @@
 const std = @import("std");
 const header = @import("rpm_header");
 
-const c = @cImport({
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("sys/stat.h");
-});
+const c = @import("c.rpmzig.pkgfile");
 
 extern fn pread(c_int, [*]u8, usize, std.c.off_t) isize;
 
@@ -160,7 +156,7 @@ pub const RpmFile = struct {
                 @intCast(offset),
             );
             if (got < 0) {
-                if (std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+                if (std.c._errno().* == @backingInt(std.posix.E.INTR))
                     continue;
                 return error.ReadFailed;
             }
@@ -275,13 +271,13 @@ pub const RpmFile = struct {
     /// deterministic RSA → DSA → PGP → GPG compatibility order.
     pub fn signatureKind(self: RpmFile) SignatureKind {
         const openpgp_count = self.sig.stringArrayCountRawChecked(
-            @intFromEnum(header.SigTagId.openpgp),
+            @backingInt(header.SigTagId.openpgp),
         ) catch null;
         if (openpgp_count != null and openpgp_count.? != 0) return .openpgp;
-        if (self.sig.getBinaryRaw(@intFromEnum(header.SigTagId.rsa)) != null) return .rsa;
-        if (self.sig.getBinaryRaw(@intFromEnum(header.SigTagId.dsa)) != null) return .dsa;
-        if (self.sig.getBinaryRaw(@intFromEnum(header.SigTagId.pgp)) != null) return .pgp;
-        if (self.sig.getBinaryRaw(@intFromEnum(header.SigTagId.gpg)) != null) return .gpg;
+        if (self.sig.getBinaryRaw(@backingInt(header.SigTagId.rsa)) != null) return .rsa;
+        if (self.sig.getBinaryRaw(@backingInt(header.SigTagId.dsa)) != null) return .dsa;
+        if (self.sig.getBinaryRaw(@backingInt(header.SigTagId.pgp)) != null) return .pgp;
+        if (self.sig.getBinaryRaw(@backingInt(header.SigTagId.gpg)) != null) return .gpg;
         return .none;
     }
 
@@ -304,7 +300,7 @@ pub const RpmFile = struct {
             .gpg,
         };
         for (known_tags) |tag| {
-            if (self.sig.findRaw(@intFromEnum(tag)) != null) return true;
+            if (self.sig.findRaw(@backingInt(tag)) != null) return true;
         }
         return false;
     }
@@ -322,10 +318,10 @@ pub const RpmFile = struct {
             kind: SignatureKind,
             tag: u32,
         }{
-            .{ .kind = .rsa, .tag = @intFromEnum(header.SigTagId.rsa) },
-            .{ .kind = .dsa, .tag = @intFromEnum(header.SigTagId.dsa) },
-            .{ .kind = .pgp, .tag = @intFromEnum(header.SigTagId.pgp) },
-            .{ .kind = .gpg, .tag = @intFromEnum(header.SigTagId.gpg) },
+            .{ .kind = .rsa, .tag = @backingInt(header.SigTagId.rsa) },
+            .{ .kind = .dsa, .tag = @backingInt(header.SigTagId.dsa) },
+            .{ .kind = .pgp, .tag = @backingInt(header.SigTagId.pgp) },
+            .{ .kind = .gpg, .tag = @backingInt(header.SigTagId.gpg) },
         };
         var kind: SignatureKind = .none;
         var sig_bytes: []const u8 = undefined;
@@ -417,7 +413,7 @@ pub fn classifyPackage(h: header.Header) MetadataError!PackageKind {
 }
 
 fn validateSignatureMetadata(h: header.Header) MetadataError!void {
-    if (h.findRaw(@intFromEnum(header.SigTagId.reserved)) != null and
+    if (h.findRaw(@backingInt(header.SigTagId.reserved)) != null and
         !h.hasStrictlyIncreasingDataTags())
     {
         return error.InvalidMetadata;
@@ -444,12 +440,12 @@ fn validatePackageMetadata(h: header.Header) MetadataError!PackageKind {
     const localized_strings = [_]header.TagId{ .summary, .description, .group };
     for (localized_strings) |tag| {
         const e = h.find(tag) orelse continue;
-        if (e.typ != @intFromEnum(header.TypeId.string) and
-            e.typ != @intFromEnum(header.TypeId.i18n_string))
+        if (e.typ != @backingInt(header.TypeId.string) and
+            e.typ != @backingInt(header.TypeId.i18n_string))
         {
             return error.InvalidMetadata;
         }
-        if (e.typ == @intFromEnum(header.TypeId.string) and e.count != 1)
+        if (e.typ == @backingInt(header.TypeId.string) and e.count != 1)
             return error.InvalidMetadata;
     }
 
@@ -506,7 +502,7 @@ fn optionalCount(
     typ: header.TypeId,
 ) MetadataError!?usize {
     const e = h.find(tag) orelse return null;
-    if (e.typ != @intFromEnum(typ)) return error.InvalidMetadata;
+    if (e.typ != @backingInt(typ)) return error.InvalidMetadata;
     return std.math.cast(usize, e.count) orelse error.InvalidMetadata;
 }
 
@@ -800,9 +796,9 @@ fn buildTestRegionHeader(
     }
 
     const trailer_offset: u32 = @intCast(data.items.len);
-    const region_tag = @intFromEnum(region);
+    const region_tag = @backingInt(region);
     try appendTestU32(&data, allocator, region_tag);
-    try appendTestU32(&data, allocator, @intFromEnum(header.TypeId.bin));
+    try appendTestU32(&data, allocator, @backingInt(header.TypeId.bin));
     const index_count: u32 = @intCast(entries.len + 1);
     const negative_span: i32 = -@as(i32, @intCast(index_count * 16));
     try appendTestU32(&data, allocator, @bitCast(negative_span));
@@ -817,12 +813,12 @@ fn buildTestRegionHeader(
     try appendTestU32(&out, allocator, index_count);
     try appendTestU32(&out, allocator, @intCast(data.items.len));
     try appendTestU32(&out, allocator, region_tag);
-    try appendTestU32(&out, allocator, @intFromEnum(header.TypeId.bin));
+    try appendTestU32(&out, allocator, @backingInt(header.TypeId.bin));
     try appendTestU32(&out, allocator, trailer_offset);
     try appendTestU32(&out, allocator, 16);
     for (entries, offsets.items) |entry, offset| {
-        try appendTestU32(&out, allocator, @intFromEnum(entry.tag));
-        try appendTestU32(&out, allocator, @intFromEnum(entry.typ));
+        try appendTestU32(&out, allocator, @backingInt(entry.tag));
+        try appendTestU32(&out, allocator, @backingInt(entry.typ));
         try appendTestU32(&out, allocator, offset);
         try appendTestU32(&out, allocator, entry.count);
     }
@@ -842,7 +838,7 @@ fn buildTestRpm(
 ) !BuiltTestRpm {
     const sig = try buildTestRegionHeader(allocator, .signatures, &.{
         .{
-            .tag = @enumFromInt(@intFromEnum(header.SigTagId.size)),
+            .tag = @fromBackingInt(@intCast(@backingInt(header.SigTagId.size))),
             .typ = .int32,
             .count = 1,
             .data = "\x00\x00\x00\x01",
@@ -1006,8 +1002,8 @@ test "rpm parser checks regions padding truncation and legacy lead fields" {
 test "RPM6 signature header tags must be sorted and unique" {
     const sha3 = "0000000000000000000000000000000000000000000000000000000000000000\x00";
     const sorted = try buildTestRegionHeader(std.testing.allocator, .signatures, &.{
-        .{ .tag = @enumFromInt(@intFromEnum(header.SigTagId.sha3_256)), .typ = .string, .count = 1, .data = sha3 },
-        .{ .tag = @enumFromInt(@intFromEnum(header.SigTagId.reserved)), .typ = .bin, .count = 1, .data = "\x00" },
+        .{ .tag = @fromBackingInt(@intCast(@backingInt(header.SigTagId.sha3_256))), .typ = .string, .count = 1, .data = sha3 },
+        .{ .tag = @fromBackingInt(@intCast(@backingInt(header.SigTagId.reserved))), .typ = .bin, .count = 1, .data = "\x00" },
     });
     defer std.testing.allocator.free(sorted);
     const sorted_header =
@@ -1015,8 +1011,8 @@ test "RPM6 signature header tags must be sorted and unique" {
     try validateSignatureMetadata(sorted_header);
 
     const unsorted = try buildTestRegionHeader(std.testing.allocator, .signatures, &.{
-        .{ .tag = @enumFromInt(@intFromEnum(header.SigTagId.reserved)), .typ = .bin, .count = 1, .data = "\x00" },
-        .{ .tag = @enumFromInt(@intFromEnum(header.SigTagId.sha3_256)), .typ = .string, .count = 1, .data = sha3 },
+        .{ .tag = @fromBackingInt(@intCast(@backingInt(header.SigTagId.reserved))), .typ = .bin, .count = 1, .data = "\x00" },
+        .{ .tag = @fromBackingInt(@intCast(@backingInt(header.SigTagId.sha3_256))), .typ = .string, .count = 1, .data = sha3 },
     });
     defer std.testing.allocator.free(unsorted);
     const unsorted_header =
@@ -1027,9 +1023,9 @@ test "RPM6 signature header tags must be sorted and unique" {
     );
 
     const duplicate = try buildTestRegionHeader(std.testing.allocator, .signatures, &.{
-        .{ .tag = @enumFromInt(@intFromEnum(header.SigTagId.sha3_256)), .typ = .string, .count = 1, .data = sha3 },
-        .{ .tag = @enumFromInt(@intFromEnum(header.SigTagId.sha3_256)), .typ = .string, .count = 1, .data = sha3 },
-        .{ .tag = @enumFromInt(@intFromEnum(header.SigTagId.reserved)), .typ = .bin, .count = 1, .data = "\x00" },
+        .{ .tag = @fromBackingInt(@intCast(@backingInt(header.SigTagId.sha3_256))), .typ = .string, .count = 1, .data = sha3 },
+        .{ .tag = @fromBackingInt(@intCast(@backingInt(header.SigTagId.sha3_256))), .typ = .string, .count = 1, .data = sha3 },
+        .{ .tag = @fromBackingInt(@intCast(@backingInt(header.SigTagId.reserved))), .typ = .bin, .count = 1, .data = "\x00" },
     });
     defer std.testing.allocator.free(duplicate);
     const duplicate_header =

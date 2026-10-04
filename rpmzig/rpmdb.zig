@@ -33,11 +33,7 @@ const trigger_engine = @import("trigger.zig");
 pub const standalone_verifier = @import("verify.zig");
 const c = sqlite.c;
 const libc = std.c;
-const pubkey_c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("time.h");
-    @cInclude("unistd.h");
-});
+const pubkey_c = @import("c.rpmzig.rpmdb");
 
 comptime {
     _ = integrity;
@@ -242,7 +238,7 @@ export fn rpmz_rpmdb_count_packages_config(config: ?*const TxnConfig) i64 {
 }
 
 fn countPackagesAtPath(db_path: []const u8) CountPackagesError!i64 {
-    const path_z = std.heap.c_allocator.dupeZ(u8, db_path) catch {
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, db_path, 0) catch {
         setError("out of memory", .{});
         return error.OutOfMemory;
     };
@@ -378,9 +374,10 @@ fn rpmConfigInstallRoot(
     config: ?*const TxnConfig,
 ) callconv(.c) ?[*:0]u8 {
     const cfg = config orelse return null;
-    return std.heap.c_allocator.dupeZ(
+    return std.heap.c_allocator.dupeSentinel(
         u8,
         cfg.installRoot(),
+        0,
     ) catch null;
 }
 
@@ -533,7 +530,7 @@ export fn rpmz_rpmdb_cookie_config(config: ?*const TxnConfig) ?[*:0]u8 {
 }
 
 fn cookieAtPath(db_path: []const u8) ?[*:0]u8 {
-    const path_z = std.heap.c_allocator.dupeZ(u8, db_path) catch {
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, db_path, 0) catch {
         setError("out of memory", .{});
         return null;
     };
@@ -686,7 +683,7 @@ pub const Iter = struct {
     }
 
     pub fn openAtPath(db_path: []const u8) OpenError!*Iter {
-        const path_z = std.heap.c_allocator.dupeZ(u8, db_path) catch return error.OutOfMemory;
+        const path_z = std.heap.c_allocator.dupeSentinel(u8, db_path, 0) catch return error.OutOfMemory;
         defer std.heap.c_allocator.free(path_z);
 
         const probe_fd = std.c.open(path_z.ptr, std.c.O{
@@ -871,72 +868,72 @@ fn transactionPlanSnapshotOpenConfig(
 pub fn transactionPlanTestFileProviderBlob(
     allocator: std.mem.Allocator,
 ) ![]u8 {
-    const zero = [_]u8{0} ** 4;
+    const zero: [4]u8 = @splat(0);
     return rpmdb_write.encodeImmutableHeader(
         allocator,
         &.{
             .{
-                .tag = @intFromEnum(header.TagId.name),
+                .tag = @backingInt(header.TagId.name),
                 .typ = .string,
                 .count = 1,
                 .bytes = "installed-file-provider\x00",
             },
             .{
-                .tag = @intFromEnum(header.TagId.version),
+                .tag = @backingInt(header.TagId.version),
                 .typ = .string,
                 .count = 1,
                 .bytes = "1\x00",
             },
             .{
-                .tag = @intFromEnum(header.TagId.release),
+                .tag = @backingInt(header.TagId.release),
                 .typ = .string,
                 .count = 1,
                 .bytes = "1\x00",
             },
             .{
-                .tag = @intFromEnum(header.TagId.arch),
+                .tag = @backingInt(header.TagId.arch),
                 .typ = .string,
                 .count = 1,
                 .bytes = "x86_64\x00",
             },
             .{
-                .tag = @intFromEnum(header.TagId.epoch),
+                .tag = @backingInt(header.TagId.epoch),
                 .typ = .int32,
                 .count = 1,
                 .bytes = &zero,
             },
             .{
-                .tag = @intFromEnum(header.TagId.requirename),
+                .tag = @backingInt(header.TagId.requirename),
                 .typ = .string_array,
                 .count = 1,
                 .bytes = "/usr/bin/tool\x00",
             },
             .{
-                .tag = @intFromEnum(header.TagId.requireversion),
+                .tag = @backingInt(header.TagId.requireversion),
                 .typ = .string_array,
                 .count = 1,
                 .bytes = "\x00",
             },
             .{
-                .tag = @intFromEnum(header.TagId.requireflags),
+                .tag = @backingInt(header.TagId.requireflags),
                 .typ = .int32,
                 .count = 1,
                 .bytes = &zero,
             },
             .{
-                .tag = @intFromEnum(header.TagId.basenames),
+                .tag = @backingInt(header.TagId.basenames),
                 .typ = .string_array,
                 .count = 1,
                 .bytes = "tool\x00",
             },
             .{
-                .tag = @intFromEnum(header.TagId.dirnames),
+                .tag = @backingInt(header.TagId.dirnames),
                 .typ = .string_array,
                 .count = 1,
                 .bytes = "/usr/bin/\x00",
             },
             .{
-                .tag = @intFromEnum(header.TagId.dirindexes),
+                .tag = @backingInt(header.TagId.dirindexes),
                 .typ = .int32,
                 .count = 1,
                 .bytes = &zero,
@@ -1207,19 +1204,19 @@ fn resolveProviderHeaderVersion(
 ) ProviderQueryError![]u8 {
     const version_entry = hdr.find(.version) orelse
         return error.MalformedProvider;
-    if (@as(header.TypeId, @enumFromInt(version_entry.typ)) != .string or
+    if (@as(header.TypeId, @fromBackingInt(@intCast(version_entry.typ))) != .string or
         version_entry.count != 1)
     {
         return error.MalformedProvider;
     }
     const name_entry = hdr.find(.providename) orelse
         return error.MalformedProvider;
-    if (@as(header.TypeId, @enumFromInt(name_entry.typ)) != .string_array) {
+    if (@as(header.TypeId, @fromBackingInt(@intCast(name_entry.typ))) != .string_array) {
         return error.MalformedProvider;
     }
     const provide_version_entry = hdr.find(.provideversion) orelse
         return error.MalformedProvider;
-    if (@as(header.TypeId, @enumFromInt(provide_version_entry.typ)) !=
+    if (@as(header.TypeId, @fromBackingInt(@intCast(provide_version_entry.typ))) !=
         .string_array)
     {
         return error.MalformedProvider;
@@ -1272,7 +1269,7 @@ fn resolveProviderVersionAtPath(
     db_path: []const u8,
     provide_name: []const u8,
 ) ProviderQueryError!?[]u8 {
-    const path_z = allocator.dupeZ(u8, db_path) catch return error.OutOfMemory;
+    const path_z = allocator.dupeSentinel(u8, db_path, 0) catch return error.OutOfMemory;
     defer allocator.free(path_z);
 
     const probe_fd = std.c.open(path_z.ptr, std.c.O{
@@ -1404,7 +1401,7 @@ export fn rpmz_rpmdb_write_install(
         return -1;
     };
     const path_slice = std.mem.span(path_ptr);
-    const path_z = std.heap.c_allocator.dupeZ(u8, path_slice) catch {
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, path_slice, 0) catch {
         setError("out of memory", .{});
         return -1;
     };
@@ -1459,7 +1456,7 @@ export fn rpmz_rpmdb_write_install_config(
         return -1;
     };
     const path_slice = std.mem.span(path_ptr);
-    const path_z = std.heap.c_allocator.dupeZ(u8, path_slice) catch {
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, path_slice, 0) catch {
         setError("out of memory", .{});
         return -1;
     };
@@ -1552,7 +1549,7 @@ export fn rpmz_rpmdb_write_replace(
         return -1;
     };
     const path_slice = std.mem.span(path_ptr);
-    const path_z = std.heap.c_allocator.dupeZ(u8, path_slice) catch {
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, path_slice, 0) catch {
         setError("out of memory", .{});
         return -1;
     };
@@ -1660,7 +1657,7 @@ export fn rpmz_rpmdb_write_replace_config(
         return -1;
     };
     const path_slice = std.mem.span(path_ptr);
-    const path_z = std.heap.c_allocator.dupeZ(u8, path_slice) catch {
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, path_slice, 0) catch {
         setError("out of memory", .{});
         return -1;
     };
@@ -2049,16 +2046,16 @@ export fn rpmz_rpmdb_find_label_matches_config(
             continue;
         }
 
-        const name_copy = std.heap.c_allocator.dupeZ(u8, actual_name) catch {
+        const name_copy = std.heap.c_allocator.dupeSentinel(u8, actual_name, 0) catch {
             setError("out of memory copying package name", .{});
             return -1;
         };
-        const evr_copy = std.heap.c_allocator.dupeZ(u8, actual_evr) catch {
+        const evr_copy = std.heap.c_allocator.dupeSentinel(u8, actual_evr, 0) catch {
             std.heap.c_allocator.free(name_copy);
             setError("out of memory copying package EVR", .{});
             return -1;
         };
-        const arch_copy = std.heap.c_allocator.dupeZ(u8, actual_arch) catch {
+        const arch_copy = std.heap.c_allocator.dupeSentinel(u8, actual_arch, 0) catch {
             std.heap.c_allocator.free(evr_copy);
             std.heap.c_allocator.free(name_copy);
             setError("out of memory copying package arch", .{});
@@ -2606,13 +2603,13 @@ fn nextPubkeyInternal(
         };
         parsed.deinit();
 
-        const key = allocator.dupeZ(u8, key_bytes) catch {
+        const key = allocator.dupeSentinel(u8, key_bytes, 0) catch {
             setError("out of memory", .{});
             return error.ReadFailed;
         };
         errdefer allocator.free(key);
         const id = if (include_keyid)
-            allocator.dupeZ(u8, keyid) catch {
+            allocator.dupeSentinel(u8, keyid, 0) catch {
                 setError("out of memory", .{});
                 return error.ReadFailed;
             }
@@ -2773,7 +2770,7 @@ const ChangedPathBridge = struct {
 fn conflictBridge(ctx: ?*anyopaque, path: []const u8) i32 {
     const bridge: *const ConflictBridge = @ptrCast(@alignCast(ctx orelse return -1));
     const cb = bridge.cb orelse return 0;
-    const path_z = std.heap.c_allocator.dupeZ(u8, path) catch return -1;
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, path, 0) catch return -1;
     defer std.heap.c_allocator.free(path_z);
     return cb(bridge.data, path_z);
 }
@@ -2781,7 +2778,7 @@ fn conflictBridge(ctx: ?*anyopaque, path: []const u8) i32 {
 fn changedPathBridge(ctx: ?*anyopaque, path: []const u8) i32 {
     const bridge: *const ChangedPathBridge = @ptrCast(@alignCast(ctx orelse return -1));
     const cb = bridge.cb orelse return 0;
-    const path_z = std.heap.c_allocator.dupeZ(u8, path) catch return -1;
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, path, 0) catch return -1;
     defer std.heap.c_allocator.free(path_z);
     return cb(bridge.data, path_z);
 }
@@ -2803,7 +2800,7 @@ const EraseKeepPathBridge = struct {
 fn eraseKeepPathBridge(ctx: ?*anyopaque, path: []const u8) i32 {
     const bridge: *const EraseKeepPathBridge = @ptrCast(@alignCast(ctx orelse return -1));
     const cb = bridge.cb orelse return 0;
-    const path_z = std.heap.c_allocator.dupeZ(u8, path) catch return -1;
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, path, 0) catch return -1;
     defer std.heap.c_allocator.free(path_z);
     return cb(bridge.data, path_z);
 }
@@ -2848,7 +2845,7 @@ export fn rpmz_rpm_file_open(path: ?[*:0]const u8) ?*FileHandle {
     };
     const path_slice = std.mem.span(p);
     // Convert to sentinel-terminated for libc.
-    const path_z = std.heap.c_allocator.dupeZ(u8, path_slice) catch {
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, path_slice, 0) catch {
         setError("out of memory", .{});
         return null;
     };
@@ -3365,7 +3362,7 @@ fn verifyFileDigests(
 
     if (integrity.rpm6SuppressesLegacySignatureHeader(&file.file))
         report.suppressLegacySignatureHeader();
-    out.* = @intFromEnum(classifyDigests(&report));
+    out.* = @backingInt(classifyDigests(&report));
     return 0;
 }
 
@@ -3399,7 +3396,7 @@ export fn rpmzig_verify_detached_armored(
     key_count: usize,
 ) c_int {
     if (key_count > 0 and (key_ptrs == null or key_lens == null))
-        return @intFromEnum(standalone_verifier.Status.internal);
+        return @backingInt(standalone_verifier.Status.internal);
 
     var keys = std.ArrayList([]const u8).empty;
     defer keys.deinit(std.heap.c_allocator);
@@ -3408,15 +3405,15 @@ export fn rpmzig_verify_detached_armored(
         const lens = key_lens.?;
         for (0..key_count) |index| {
             const key = ptrs[index] orelse
-                return @intFromEnum(standalone_verifier.Status.internal);
+                return @backingInt(standalone_verifier.Status.internal);
             keys.append(
                 std.heap.c_allocator,
                 key[0..lens[index]],
-            ) catch return @intFromEnum(standalone_verifier.Status.internal);
+            ) catch return @backingInt(standalone_verifier.Status.internal);
         }
     }
 
-    return @intFromEnum(standalone_verifier.verifyDetachedArmored(
+    return @backingInt(standalone_verifier.verifyDetachedArmored(
         std.heap.c_allocator,
         sig_bytes[0..sig_len],
         signed_bytes[0..signed_len],
@@ -3441,7 +3438,7 @@ fn verifyFileSignatures(
     };
     defer report.deinit(allocator);
 
-    out.* = @intFromEnum(classifySignatures(&report));
+    out.* = @backingInt(classifySignatures(&report));
     return 0;
 }
 
@@ -3521,7 +3518,7 @@ export fn rpmz_rpm_file_verify_signatures_keys(
     };
     defer report.deinit(std.heap.c_allocator);
 
-    out.* = @intFromEnum(classifySignatures(&report));
+    out.* = @backingInt(classifySignatures(&report));
 
     if (signer_index_out) |slot| slot.* = -1;
     if (signer_fingerprint_len_out) |slot| slot.* = 0;
@@ -3626,7 +3623,7 @@ test "integrity ABI digest outcomes retain typed policy failures" {
         .kind = .header_sha256,
         .range = .header,
         .algorithm = .sha256,
-        .tag = @intFromEnum(header.SigTagId.sha256),
+        .tag = @backingInt(header.SigTagId.sha256),
         .disabler = .sha256_header,
         .outcome = .bad_digest,
     }};
@@ -3634,7 +3631,7 @@ test "integrity ABI digest outcomes retain typed policy failures" {
         .kind = .header_sha256,
         .range = .header,
         .algorithm = .sha256,
-        .tag = @intFromEnum(header.SigTagId.sha256),
+        .tag = @backingInt(header.SigTagId.sha256),
         .disabler = .sha256_header,
         .outcome = .malformed_tag,
     }};
@@ -3642,7 +3639,7 @@ test "integrity ABI digest outcomes retain typed policy failures" {
         .kind = .header_sha3_256,
         .range = .header,
         .algorithm = .sha3_256,
-        .tag = @intFromEnum(header.SigTagId.sha3_256),
+        .tag = @backingInt(header.SigTagId.sha3_256),
         .disabler = .sha3_256_header,
         .outcome = .unsupported_digest,
     }};
@@ -3684,13 +3681,13 @@ test "digest ABI suppresses bad legacy MD5 for RPM6 coverage" {
     };
     defer file.file.close(std.testing.allocator);
 
-    var outcome: i32 = @intFromEnum(IntegrityOutcome.internal);
+    var outcome: i32 = @backingInt(IntegrityOutcome.internal);
     try std.testing.expectEqual(
         @as(i32, 0),
         rpmz_rpm_file_verify_digests(&file, &outcome),
     );
     try std.testing.expectEqual(
-        @intFromEnum(IntegrityOutcome.ok),
+        @backingInt(IntegrityOutcome.ok),
         outcome,
     );
 }
@@ -3703,13 +3700,13 @@ test "digest ABI accepts verified compressed digest with unsupported alternate" 
     };
     defer file.file.close(std.testing.allocator);
 
-    var outcome: i32 = @intFromEnum(IntegrityOutcome.internal);
+    var outcome: i32 = @backingInt(IntegrityOutcome.internal);
     try std.testing.expectEqual(
         @as(i32, 0),
         rpmz_rpm_file_verify_digests(&file, &outcome),
     );
     try std.testing.expectEqual(
-        @intFromEnum(IntegrityOutcome.ok),
+        @backingInt(IntegrityOutcome.ok),
         outcome,
     );
 }
@@ -3772,7 +3769,7 @@ test "integrity ABI signature outcomes retain typed policy failures" {
         .range = .header,
         .signed_start = 0,
         .signed_end = 1,
-        .tag = @intFromEnum(header.SigTagId.rsa),
+        .tag = @backingInt(header.SigTagId.rsa),
         .policy_enabled = true,
         .outcome = .no_key,
         .raw_outcome = .no_key,
@@ -3782,7 +3779,7 @@ test "integrity ABI signature outcomes retain typed policy failures" {
         .range = .header,
         .signed_start = 0,
         .signed_end = 1,
-        .tag = @intFromEnum(header.SigTagId.openpgp),
+        .tag = @backingInt(header.SigTagId.openpgp),
         .policy_enabled = true,
         .outcome = .malformed_openpgp,
         .raw_outcome = .malformed_openpgp,
@@ -3792,7 +3789,7 @@ test "integrity ABI signature outcomes retain typed policy failures" {
         .range = .header,
         .signed_start = 0,
         .signed_end = 1,
-        .tag = @intFromEnum(header.SigTagId.openpgp),
+        .tag = @backingInt(header.SigTagId.openpgp),
         .policy_enabled = true,
         .outcome = .unsupported_openpgp,
         .raw_outcome = .unsupported_openpgp,
@@ -3802,7 +3799,7 @@ test "integrity ABI signature outcomes retain typed policy failures" {
         .range = .header,
         .signed_start = 0,
         .signed_end = 1,
-        .tag = @intFromEnum(header.SigTagId.rsa),
+        .tag = @backingInt(header.SigTagId.rsa),
         .policy_enabled = true,
         .outcome = .verified,
         .raw_outcome = .verified,
@@ -4138,7 +4135,7 @@ export fn rpmz_rpm_header_run_scriptlet(
     out.* = .{
         .ran = if (result.ran) 1 else 0,
         .critical = if (result.critical) 1 else 0,
-        .outcome = @intFromEnum(result.outcome),
+        .outcome = @backingInt(result.outcome),
         .exit_status = result.exit_status,
         .signal_number = result.signal_number,
     };
@@ -4305,7 +4302,7 @@ export fn rpmz_rpm_header_run_triggers(
     out.* = .{
         .ran = if (result.ran) 1 else 0,
         .critical = if (result.critical) 1 else 0,
-        .outcome = @intFromEnum(result.outcome),
+        .outcome = @backingInt(result.outcome),
         .exit_status = result.exit_status,
         .signal_number = result.signal_number,
     };
@@ -4619,7 +4616,7 @@ export fn rpmz_rpm_run_file_triggers(
     out.* = .{
         .ran = if (result.ran) 1 else 0,
         .critical = if (result.critical) 1 else 0,
-        .outcome = @intFromEnum(result.outcome),
+        .outcome = @backingInt(result.outcome),
         .exit_status = result.exit_status,
         .signal_number = result.signal_number,
     };
@@ -4957,38 +4954,38 @@ pub fn insertProviderTestPackage(
     defer allocator.free(flags);
     const versions = try providerTestStringBytes(allocator, provide_versions);
     defer allocator.free(versions);
-    const package_name_z = try allocator.dupeZ(u8, package_name);
+    const package_name_z = try allocator.dupeSentinel(u8, package_name, 0);
     defer allocator.free(package_name_z);
-    const package_version_z = try allocator.dupeZ(u8, package_version);
+    const package_version_z = try allocator.dupeSentinel(u8, package_version, 0);
     defer allocator.free(package_version_z);
 
     const blob = try rpmdb_write.encodeImmutableHeader(allocator, &.{
         .{
-            .tag = @intFromEnum(header.TagId.name),
+            .tag = @backingInt(header.TagId.name),
             .typ = .string,
             .count = 1,
             .bytes = package_name_z[0 .. package_name_z.len + 1],
         },
         .{
-            .tag = @intFromEnum(header.TagId.version),
+            .tag = @backingInt(header.TagId.version),
             .typ = .string,
             .count = 1,
             .bytes = package_version_z[0 .. package_version_z.len + 1],
         },
         .{
-            .tag = @intFromEnum(header.TagId.providename),
+            .tag = @backingInt(header.TagId.providename),
             .typ = .string_array,
             .count = @intCast(provide_names.len),
             .bytes = names,
         },
         .{
-            .tag = @intFromEnum(header.TagId.provideflags),
+            .tag = @backingInt(header.TagId.provideflags),
             .typ = .int32,
             .count = @intCast(provide_flags.len),
             .bytes = flags,
         },
         .{
-            .tag = @intFromEnum(header.TagId.provideversion),
+            .tag = @backingInt(header.TagId.provideversion),
             .typ = .string_array,
             .count = @intCast(provide_versions.len),
             .bytes = versions,
@@ -5013,7 +5010,7 @@ fn corruptFirstProviderTestHeader(
     allocator: std.mem.Allocator,
     path: []const u8,
 ) !void {
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     var db: ?*c.sqlite3 = null;
     if (c.sqlite3_open_v2(
@@ -5295,9 +5292,9 @@ test "configured readers reject symlinked db parents and preserve absence" {
         .{root},
     );
     defer allocator.free(var_path);
-    const var_z = try allocator.dupeZ(u8, var_path);
+    const var_z = try allocator.dupeSentinel(u8, var_path, 0);
     defer allocator.free(var_z);
-    const outside_z = try allocator.dupeZ(u8, outside);
+    const outside_z = try allocator.dupeSentinel(u8, outside, 0);
     defer allocator.free(outside_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -5475,7 +5472,7 @@ fn insertPubkeyReaderTestRow(
     );
     defer fields.deinit();
     try fields.append(.{
-        .tag = @intFromEnum(header.TagId.name),
+        .tag = @backingInt(header.TagId.name),
         .typ = .string,
         .count = 1,
         .bytes = "gpg-pubkey\x00",
@@ -5484,14 +5481,14 @@ fn insertPubkeyReaderTestRow(
     var malformed_version = [_]u8{ 0, 0, 0, 0 };
     switch (version_kind) {
         .valid => try fields.append(.{
-            .tag = @intFromEnum(header.TagId.version),
+            .tag = @backingInt(header.TagId.version),
             .typ = .string,
             .count = 1,
             .bytes = "3135ce90\x00",
         }),
         .missing => {},
         .malformed => try fields.append(.{
-            .tag = @intFromEnum(header.TagId.version),
+            .tag = @backingInt(header.TagId.version),
             .typ = .int32,
             .count = 1,
             .bytes = &malformed_version,
@@ -5511,7 +5508,7 @@ fn insertPubkeyReaderTestRow(
             bytes[encoded_len] = 0;
             owned_data = bytes;
             try fields.append(.{
-                .tag = @intFromEnum(header.TagId.pubkeys),
+                .tag = @backingInt(header.TagId.pubkeys),
                 .typ = .string_array,
                 .count = 1,
                 .bytes = bytes,
@@ -5523,7 +5520,7 @@ fn insertPubkeyReaderTestRow(
             bytes[description.len] = 0;
             owned_data = bytes;
             try fields.append(.{
-                .tag = @intFromEnum(header.TagId.description),
+                .tag = @backingInt(header.TagId.description),
                 .typ = .string,
                 .count = 1,
                 .bytes = bytes,
@@ -5575,7 +5572,7 @@ test "key-set signature ABI names the signer and consults no rpmdb" {
     defer file.file.close(std.testing.allocator);
 
     // A decoy first so a reported index of 1 can only come from matching.
-    const decoy = [_]u8{0xff} ** 8;
+    const decoy: [8]u8 = @splat(0xff);
     var blobs = [_]?*const anyopaque{ &decoy, &fixture.key_packet };
     var lens = [_]usize{ decoy.len, fixture.key_packet.len };
 
@@ -5593,7 +5590,7 @@ test "key-set signature ABI names the signer and consults no rpmdb" {
         &fingerprint,
         &fingerprint_len,
     ));
-    try std.testing.expectEqual(@intFromEnum(IntegrityOutcome.ok), outcome);
+    try std.testing.expectEqual(@backingInt(IntegrityOutcome.ok), outcome);
     try std.testing.expectEqual(@as(isize, 1), signer_index);
     try std.testing.expectEqualSlices(
         u8,
@@ -5623,7 +5620,7 @@ test "key-set signature ABI grants no ambient trust" {
         null,
         &fingerprint_len,
     ));
-    try std.testing.expectEqual(@intFromEnum(IntegrityOutcome.missing), outcome);
+    try std.testing.expectEqual(@backingInt(IntegrityOutcome.missing), outcome);
     try std.testing.expectEqual(@as(isize, -1), signer_index);
     try std.testing.expectEqual(@as(usize, 0), fingerprint_len);
 }

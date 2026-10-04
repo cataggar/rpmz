@@ -2,16 +2,20 @@
     .name = .rpmz,
     .version = "0.1.0",
     .fingerprint = 0xd40052933730a1e4,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
+        .translate_c = .{
+            .url = "git+https://github.com/cataggar/translate-c#62d06a5d3e93c82727544e8113e4762a315ca0ed",
+            .hash = "translate_c-2.0.0-Q_BUWlpOBwBWvgGBM20tJq-GXgPio3v3UD39rXEn70KN",
+        },
         .sqlite = .{
-            .url = "https://github.com/cataggar/zig-sqlite/archive/ece9413ea140202696547f402a96df9dc9b89531.tar.gz",
-            .hash = "sqlite-0.4.0-3530100-djiKTqCBAABomylmlMLWtzm9bE_8NQ1O7qVu6l9x6aP1",
+            .url = "git+https://github.com/cataggar/zig-sqlite#699bc9751dc972d024c0191e696aa8a4a5bae09f",
+            .hash = "sqlite-0.4.0-3530100-djiKToCDAAAUmQd5EipaBRzJ7imgfXHm-jYpid-3aGrh",
             .lazy = true,
         },
         .tls = .{
-            .url = "https://github.com/cataggar/tls.zig/archive/2621e411af81c8b4d8fa5aaae08b9b183a80bb46.tar.gz",
-            .hash = "tls-0.1.0-ER2e0vpTBgCVdP6tvFCii9_PFjATLb23ht2_xbGy5mYU",
+            .url = "git+https://github.com/cataggar/tls.zig#481b2a677244b994d216eb02a73bad89623610a9",
+            .hash = "tls-0.1.0-ER2e0jFWBgCrVPpTRsqUiILFT0yFB4uykyvXg1Xbeqk3",
             .lazy = true,
         },
         .libsolv = .{
@@ -20,14 +24,15 @@
             .lazy = true,
         },
         .zlua = .{
-            .url = "https://github.com/cataggar/zlua/archive/e61de740dd87ad3ca7c2e2fd1f2bd211c74ab4b0.tar.gz",
-            .hash = "zlua-0.3.1-S9VpHPC5IQDZWPDCETqUS-uw6hwX4FO4LA5zGerj240E",
+            .url = "git+https://github.com/cataggar/zlua#b6b918ce2fab6345769d2a755c40383de2c7e7fc",
+            .hash = "zlua-0.3.1-S9VpHK27IQB0Y4qkdRWVb78zphv5bJA9-yu9fmBlQiv7",
             .lazy = true,
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "build",
         "rpmz.zig",
         "COPYING",
         "README.md",

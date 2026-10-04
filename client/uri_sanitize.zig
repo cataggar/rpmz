@@ -9,6 +9,19 @@
 //! Everything that prints, logs, or records a URI goes through here.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const Allocator = std.mem.Allocator;
 
 /// The text substituted for each removed part. It is deliberately visible so
@@ -75,7 +88,7 @@ pub fn redactAlloc(allocator: Allocator, value: []const u8) Allocator.Error![]u8
     errdefer out.deinit(allocator);
 
     const body_start = if (parts.userinfo_end) |at| blk: {
-        try out.appendSlice(allocator, value[0 .. parts.authority_start.?]);
+        try out.appendSlice(allocator, value[0..parts.authority_start.?]);
         try out.appendSlice(allocator, marker);
         try out.append(allocator, '@');
         break :blk at + 1;
@@ -107,7 +120,7 @@ pub fn recordableAlloc(allocator: Allocator, value: []const u8) Allocator.Error!
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     if (parts.userinfo_end != null) {
-        try out.appendSlice(allocator, value[0 .. parts.authority_start.?]);
+        try out.appendSlice(allocator, value[0..parts.authority_start.?]);
     }
     try out.appendSlice(allocator, value[body_start..body_end]);
     return out.toOwnedSlice(allocator);
@@ -230,7 +243,7 @@ test "redaction never leaks any byte of a removed part" {
 }
 
 test "redaction releases everything on allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, struct {
+    try checkAllocationFailures(testing.allocator, struct {
         fn run(allocator: Allocator) !void {
             const redacted = try redactAlloc(
                 allocator,

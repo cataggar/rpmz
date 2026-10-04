@@ -4,6 +4,20 @@ const Allocator = std.mem.Allocator;
 const canonical_json = @import("canonical_json");
 const secret_shape = @import("secret_shape");
 
+fn checkAllocationFailures(
+    allocator: Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Keep this test helper local to preserve the public module's pure closure.
+    // SafeAllocator remapping otherwise makes injected indices heap-dependent.
+    var vtable = allocator.vtable.*;
+    vtable.resize = Allocator.noResize;
+    vtable.remap = Allocator.noRemap;
+    const backing: Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
+
 pub const schema_v1 = "tdnf.transaction-plan/v1";
 pub const schema_v2 = "tdnf.transaction-plan/v2";
 /// The resolve-only schema retained for source compatibility. Replay-capable
@@ -4607,5 +4621,5 @@ fn allocationFailureCase(allocator: Allocator) !void {
 }
 
 test "owned plan and canonical writer clean up allocation failures" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationFailureCase, .{});
+    try checkAllocationFailures(std.testing.allocator, allocationFailureCase, .{});
 }

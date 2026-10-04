@@ -810,7 +810,7 @@ fn optionalTagCount(
     typ: header.TypeId,
 ) Error!?usize {
     const entry = hdr.find(tag) orelse return null;
-    if (entry.typ != @intFromEnum(typ)) return error.InvalidMetadata;
+    if (entry.typ != @backingInt(typ)) return error.InvalidMetadata;
     return std.math.cast(usize, entry.count) orelse error.InvalidMetadata;
 }
 
@@ -828,15 +828,15 @@ fn validateHeaderPaths(hdr: header.Header) Error!void {
     }
 
     if (hdr.find(.file_states)) |entry| {
-        if ((entry.typ != @intFromEnum(header.TypeId.char_type) and
-            entry.typ != @intFromEnum(header.TypeId.int8)) or
+        if ((entry.typ != @backingInt(header.TypeId.char_type) and
+            entry.typ != @backingInt(header.TypeId.int8)) or
             entry.count != basenames.?)
         {
             return error.InvalidMetadata;
         }
     }
     if (hdr.find(.fileflags)) |entry| {
-        if (entry.typ != @intFromEnum(header.TypeId.int32) or
+        if (entry.typ != @backingInt(header.TypeId.int32) or
             entry.count != basenames.?)
         {
             return error.InvalidMetadata;
@@ -1641,9 +1641,9 @@ fn buildTestHeaderBlob(
 
     for (entries) |entry| {
         const alignment: usize = switch (entry.typ) {
-            @intFromEnum(header.TypeId.int16) => 2,
-            @intFromEnum(header.TypeId.int32) => 4,
-            @intFromEnum(header.TypeId.int64) => 8,
+            @backingInt(header.TypeId.int16) => 2,
+            @backingInt(header.TypeId.int32) => 4,
+            @backingInt(header.TypeId.int64) => 8,
             else => 1,
         };
         while (data.items.len % alignment != 0) {
@@ -1724,20 +1724,20 @@ test "collectMatchingTriggerScriptIndices deduplicates and filters by version" {
     defer allocator.free(trigger_progs);
 
     const owner_blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = 6, .count = 1, .data = "owner\x00" },
-        .{ .tag = @intFromEnum(header.TagId.triggerscripts), .typ = 8, .count = 2, .data = trigger_scripts },
-        .{ .tag = @intFromEnum(header.TagId.triggername), .typ = 8, .count = 3, .data = trigger_names },
-        .{ .tag = @intFromEnum(header.TagId.triggerversion), .typ = 8, .count = 3, .data = trigger_versions },
-        .{ .tag = @intFromEnum(header.TagId.triggerflags), .typ = 4, .count = 3, .data = trigger_flags },
-        .{ .tag = @intFromEnum(header.TagId.triggerindex), .typ = 4, .count = 3, .data = trigger_indices },
-        .{ .tag = @intFromEnum(header.TagId.triggerscriptprog), .typ = 8, .count = 2, .data = trigger_progs },
+        .{ .tag = @backingInt(header.TagId.name), .typ = 6, .count = 1, .data = "owner\x00" },
+        .{ .tag = @backingInt(header.TagId.triggerscripts), .typ = 8, .count = 2, .data = trigger_scripts },
+        .{ .tag = @backingInt(header.TagId.triggername), .typ = 8, .count = 3, .data = trigger_names },
+        .{ .tag = @backingInt(header.TagId.triggerversion), .typ = 8, .count = 3, .data = trigger_versions },
+        .{ .tag = @backingInt(header.TagId.triggerflags), .typ = 4, .count = 3, .data = trigger_flags },
+        .{ .tag = @backingInt(header.TagId.triggerindex), .typ = 4, .count = 3, .data = trigger_indices },
+        .{ .tag = @backingInt(header.TagId.triggerscriptprog), .typ = 8, .count = 2, .data = trigger_progs },
     });
     defer allocator.free(owner_blob);
 
     const triggering_blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = 6, .count = 1, .data = "alpha\x00" },
-        .{ .tag = @intFromEnum(header.TagId.version), .typ = 6, .count = 1, .data = "2.1\x00" },
-        .{ .tag = @intFromEnum(header.TagId.release), .typ = 6, .count = 1, .data = "1\x00" },
+        .{ .tag = @backingInt(header.TagId.name), .typ = 6, .count = 1, .data = "alpha\x00" },
+        .{ .tag = @backingInt(header.TagId.version), .typ = 6, .count = 1, .data = "2.1\x00" },
+        .{ .tag = @backingInt(header.TagId.release), .typ = 6, .count = 1, .data = "1\x00" },
     });
     defer allocator.free(triggering_blob);
 
@@ -1758,10 +1758,10 @@ test "collectMatchingTriggerScriptIndices deduplicates and filters by version" {
 test "versionMatchesRequirement honours comparison sense bits" {
     const allocator = std.testing.allocator;
     const triggering_blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = 6, .count = 1, .data = "alpha\x00" },
-        .{ .tag = @intFromEnum(header.TagId.epoch), .typ = 4, .count = 1, .data = "\x00\x00\x00\x01" },
-        .{ .tag = @intFromEnum(header.TagId.version), .typ = 6, .count = 1, .data = "2.0\x00" },
-        .{ .tag = @intFromEnum(header.TagId.release), .typ = 6, .count = 1, .data = "3\x00" },
+        .{ .tag = @backingInt(header.TagId.name), .typ = 6, .count = 1, .data = "alpha\x00" },
+        .{ .tag = @backingInt(header.TagId.epoch), .typ = 4, .count = 1, .data = "\x00\x00\x00\x01" },
+        .{ .tag = @backingInt(header.TagId.version), .typ = 6, .count = 1, .data = "2.0\x00" },
+        .{ .tag = @backingInt(header.TagId.release), .typ = 6, .count = 1, .data = "3\x00" },
     });
     defer allocator.free(triggering_blob);
 
@@ -1805,14 +1805,14 @@ test "file trigger matching preserves overlapping prefix lines" {
     defer allocator.free(priorities);
 
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = 6, .count = 1, .data = "owner\x00" },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerscripts), .typ = 8, .count = 1, .data = scripts },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerscriptprog), .typ = 8, .count = 1, .data = programs },
-        .{ .tag = @intFromEnum(header.TagId.filetriggername), .typ = 8, .count = 2, .data = names },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerversion), .typ = 8, .count = 2, .data = versions },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerflags), .typ = 4, .count = 2, .data = flags },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerindex), .typ = 4, .count = 2, .data = indexes },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerpriorities), .typ = 4, .count = 1, .data = priorities },
+        .{ .tag = @backingInt(header.TagId.name), .typ = 6, .count = 1, .data = "owner\x00" },
+        .{ .tag = @backingInt(header.TagId.filetriggerscripts), .typ = 8, .count = 1, .data = scripts },
+        .{ .tag = @backingInt(header.TagId.filetriggerscriptprog), .typ = 8, .count = 1, .data = programs },
+        .{ .tag = @backingInt(header.TagId.filetriggername), .typ = 8, .count = 2, .data = names },
+        .{ .tag = @backingInt(header.TagId.filetriggerversion), .typ = 8, .count = 2, .data = versions },
+        .{ .tag = @backingInt(header.TagId.filetriggerflags), .typ = 4, .count = 2, .data = flags },
+        .{ .tag = @backingInt(header.TagId.filetriggerindex), .typ = 4, .count = 2, .data = indexes },
+        .{ .tag = @backingInt(header.TagId.filetriggerpriorities), .typ = 4, .count = 1, .data = priorities },
     });
     defer allocator.free(blob);
 
@@ -1883,9 +1883,9 @@ test "file trigger matching canonicalizes trusted root aliases" {
     const indexes = try testU32ArrayBytes(allocator, &.{0});
     defer allocator.free(indexes);
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.filetriggername), .typ = 8, .count = 1, .data = names },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerflags), .typ = 4, .count = 1, .data = flags },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerindex), .typ = 4, .count = 1, .data = indexes },
+        .{ .tag = @backingInt(header.TagId.filetriggername), .typ = 8, .count = 1, .data = names },
+        .{ .tag = @backingInt(header.TagId.filetriggerflags), .typ = 4, .count = 1, .data = flags },
+        .{ .tag = @backingInt(header.TagId.filetriggerindex), .typ = 4, .count = 1, .data = indexes },
     });
     defer allocator.free(blob);
     const hdr = try header.Header.parse(blob);
@@ -1922,11 +1922,11 @@ test "trigger metadata validation rejects mismatched file trigger arrays" {
     defer allocator.free(indexes);
 
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.filetriggerscripts), .typ = 8, .count = 1, .data = scripts },
-        .{ .tag = @intFromEnum(header.TagId.filetriggername), .typ = 8, .count = 1, .data = names },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerversion), .typ = 8, .count = 1, .data = versions },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerflags), .typ = 4, .count = 1, .data = flags },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerindex), .typ = 4, .count = 2, .data = indexes },
+        .{ .tag = @backingInt(header.TagId.filetriggerscripts), .typ = 8, .count = 1, .data = scripts },
+        .{ .tag = @backingInt(header.TagId.filetriggername), .typ = 8, .count = 1, .data = names },
+        .{ .tag = @backingInt(header.TagId.filetriggerversion), .typ = 8, .count = 1, .data = versions },
+        .{ .tag = @backingInt(header.TagId.filetriggerflags), .typ = 4, .count = 1, .data = flags },
+        .{ .tag = @backingInt(header.TagId.filetriggerindex), .typ = 4, .count = 2, .data = indexes },
     });
     defer allocator.free(blob);
 
@@ -1951,11 +1951,11 @@ test "trigger metadata validation requires a program per script" {
     defer allocator.free(indexes);
 
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.filetriggerscripts), .typ = 8, .count = 1, .data = scripts },
-        .{ .tag = @intFromEnum(header.TagId.filetriggername), .typ = 8, .count = 1, .data = names },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerversion), .typ = 8, .count = 1, .data = versions },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerflags), .typ = 4, .count = 1, .data = flags },
-        .{ .tag = @intFromEnum(header.TagId.filetriggerindex), .typ = 4, .count = 1, .data = indexes },
+        .{ .tag = @backingInt(header.TagId.filetriggerscripts), .typ = 8, .count = 1, .data = scripts },
+        .{ .tag = @backingInt(header.TagId.filetriggername), .typ = 8, .count = 1, .data = names },
+        .{ .tag = @backingInt(header.TagId.filetriggerversion), .typ = 8, .count = 1, .data = versions },
+        .{ .tag = @backingInt(header.TagId.filetriggerflags), .typ = 4, .count = 1, .data = flags },
+        .{ .tag = @backingInt(header.TagId.filetriggerindex), .typ = 4, .count = 1, .data = indexes },
     });
     defer allocator.free(blob);
 
@@ -1969,7 +1969,7 @@ test "trigger metadata validation requires a program per script" {
 test "fileless header has no trigger files" {
     const allocator = std.testing.allocator;
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = 6, .count = 1, .data = "fileless\x00" },
+        .{ .tag = @backingInt(header.TagId.name), .typ = 6, .count = 1, .data = "fileless\x00" },
     });
     defer allocator.free(blob);
 
@@ -1986,10 +1986,10 @@ test "fileless header has no trigger files" {
 test "trigger script flags expand macros before query format" {
     const allocator = std.testing.allocator;
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = 6, .count = 1, .data = "flag-owner\x00" },
-        .{ .tag = @intFromEnum(header.TagId.version), .typ = 6, .count = 1, .data = "2.0\x00" },
-        .{ .tag = @intFromEnum(header.TagId.release), .typ = 6, .count = 1, .data = "1\x00" },
-        .{ .tag = @intFromEnum(header.TagId.arch), .typ = 6, .count = 1, .data = "noarch\x00" },
+        .{ .tag = @backingInt(header.TagId.name), .typ = 6, .count = 1, .data = "flag-owner\x00" },
+        .{ .tag = @backingInt(header.TagId.version), .typ = 6, .count = 1, .data = "2.0\x00" },
+        .{ .tag = @backingInt(header.TagId.release), .typ = 6, .count = 1, .data = "1\x00" },
+        .{ .tag = @backingInt(header.TagId.arch), .typ = 6, .count = 1, .data = "noarch\x00" },
     });
     defer allocator.free(blob);
     const hdr = try header.Header.parse(blob);
@@ -2031,15 +2031,15 @@ test "trigger query format supports modifiers iterators and conditionals" {
     const fileflags = try testU32ArrayBytes(allocator, &.{ 17, 0 });
     defer allocator.free(fileflags);
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = 6, .count = 1, .data = "owner's\x00" },
-        .{ .tag = @intFromEnum(header.TagId.version), .typ = 6, .count = 1, .data = "2.0\x00" },
-        .{ .tag = @intFromEnum(header.TagId.release), .typ = 6, .count = 1, .data = "1\x00" },
-        .{ .tag = @intFromEnum(header.TagId.build_time), .typ = 4, .count = 1, .data = "\x00\x00\x03\xe8" },
-        .{ .tag = @intFromEnum(header.TagId.basenames), .typ = 8, .count = 2, .data = basenames },
-        .{ .tag = @intFromEnum(header.TagId.dirnames), .typ = 8, .count = 1, .data = dirnames },
-        .{ .tag = @intFromEnum(header.TagId.dirindexes), .typ = 4, .count = 2, .data = dirindexes },
-        .{ .tag = @intFromEnum(header.TagId.filemodes), .typ = 4, .count = 2, .data = filemodes },
-        .{ .tag = @intFromEnum(header.TagId.fileflags), .typ = 4, .count = 2, .data = fileflags },
+        .{ .tag = @backingInt(header.TagId.name), .typ = 6, .count = 1, .data = "owner's\x00" },
+        .{ .tag = @backingInt(header.TagId.version), .typ = 6, .count = 1, .data = "2.0\x00" },
+        .{ .tag = @backingInt(header.TagId.release), .typ = 6, .count = 1, .data = "1\x00" },
+        .{ .tag = @backingInt(header.TagId.build_time), .typ = 4, .count = 1, .data = "\x00\x00\x03\xe8" },
+        .{ .tag = @backingInt(header.TagId.basenames), .typ = 8, .count = 2, .data = basenames },
+        .{ .tag = @backingInt(header.TagId.dirnames), .typ = 8, .count = 1, .data = dirnames },
+        .{ .tag = @backingInt(header.TagId.dirindexes), .typ = 4, .count = 2, .data = dirindexes },
+        .{ .tag = @backingInt(header.TagId.filemodes), .typ = 4, .count = 2, .data = filemodes },
+        .{ .tag = @backingInt(header.TagId.fileflags), .typ = 4, .count = 2, .data = fileflags },
     });
     defer allocator.free(blob);
     const hdr = try header.Header.parse(blob);
@@ -2071,8 +2071,8 @@ test "trigger query format rejects invalid input explicitly" {
     );
     defer allocator.free(basenames);
     const blob = try buildTestHeaderBlob(allocator, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = 6, .count = 1, .data = "owner\x00" },
-        .{ .tag = @intFromEnum(header.TagId.basenames), .typ = 8, .count = 2, .data = basenames },
+        .{ .tag = @backingInt(header.TagId.name), .typ = 6, .count = 1, .data = "owner\x00" },
+        .{ .tag = @backingInt(header.TagId.basenames), .typ = 8, .count = 2, .data = basenames },
     });
     defer allocator.free(blob);
     const hdr = try header.Header.parse(blob);

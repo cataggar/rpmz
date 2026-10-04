@@ -8,12 +8,12 @@ package module and executable/tools; there is no public C SDK or installed
 
 ## Build, test, lint
 
-The build requires Zig 0.16+ and is driven by `build.zig`.
+The build requires Zig 0.17 and is driven by `build.zig`.
 
 ```sh
-zig build -Doptimize=ReleaseSafe install --prefix ./out
+zig build -Doptimize=safe install --prefix ./out
 zig build test
-zig build -Doptimize=ReleaseSafe test
+zig build -Doptimize=safe test
 zig build check
 zig build lint
 ```
@@ -105,7 +105,8 @@ running the integration suite.
   package-manager code.
 - Match surrounding naming while converting legacy code; internal exported
   symbols may retain `RPMZ*` names until their callers are migrated.
-- Keep remaining `@cImport` declarations private and narrow. Prefer canonical
+- Keep translated C bindings private and narrow in `build/c_bindings.zig`.
+  Preserve per-source macro/include scope and the pinned translator. Prefer canonical
   Zig declarations over adding another header.
 
 See `doc/coding-guidelines.md`.
@@ -117,10 +118,10 @@ Run:
 ```sh
 zig build migration-audit
 zig build dead-errdefer-audit
-zig build -Doptimize=ReleaseSafe install --prefix ./out
-zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
+zig build -Doptimize=safe install --prefix ./out
+zig build -Doptimize=safe native-dependency-audit --prefix ./out
+zig build -Doptimize=safe public-zig-api-audit --prefix ./out
+zig build -Doptimize=safe libsolv-confinement-audit --prefix ./out
 ```
 
 The migration audit permanently rejects project-owned C, public C headers,

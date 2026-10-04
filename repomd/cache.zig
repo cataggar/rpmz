@@ -316,7 +316,7 @@ pub fn serialize(
     out.appendSlice(&cookie) catch return error.OutOfMemory;
 
     for (sections) |section| {
-        try appendU32(&out, @intFromEnum(section.kind));
+        try appendU32(&out, @backingInt(section.kind));
         try appendU32(&out, 0);
         try appendU64(&out, section.offset);
         try appendU64(&out, section.bytes.len);
@@ -480,7 +480,7 @@ fn serializeRelation(
     try appendStringRef(out, try strings.maybeIntern(relation.version));
     try appendStringRef(out, try strings.maybeIntern(relation.release));
     try appendU32(out, relation.epoch orelse 0);
-    try appendU32(out, @intFromEnum(relation.comparison));
+    try appendU32(out, @backingInt(relation.comparison));
 
     var flags: u32 = 0;
     if (relation.flags != null) flags |= 1 << 0;
@@ -497,7 +497,7 @@ fn serializeFile(
     file: model.FileEntry,
 ) SerializeError!void {
     try appendStringRef(out, try strings.intern(file.path));
-    try appendU32(out, @intFromEnum(file.kind));
+    try appendU32(out, @backingInt(file.kind));
 }
 
 fn serializeChangelog(
@@ -528,7 +528,7 @@ fn serializeAdvisory(
     try appendStringRef(out, try strings.maybeIntern(advisory.issued));
     try appendStringRef(out, try strings.maybeIntern(advisory.updated));
     try appendStringRef(out, try strings.maybeIntern(advisory.description));
-    try appendU32(out, @intFromEnum(advisory.kind));
+    try appendU32(out, @backingInt(advisory.kind));
     try appendU32(out, @as(u32, if (advisory.reboot_suggested) 1 else 0));
     try appendRangeRef(out, try advisoryReferenceRangeRef(advisory.references, repository.advisory_references.len));
     try appendRangeRef(out, try advisoryPackageRangeRef(advisory.packages, repository.advisory_packages.len));
@@ -543,7 +543,7 @@ fn serializeAdvisoryReference(
     try appendStringRef(out, try strings.maybeIntern(reference.id));
     try appendStringRef(out, try strings.maybeIntern(reference.title));
     try appendStringRef(out, try strings.maybeIntern(reference.href));
-    try appendU32(out, @intFromEnum(reference.kind));
+    try appendU32(out, @backingInt(reference.kind));
 }
 
 fn serializeAdvisoryPackage(
@@ -986,7 +986,7 @@ fn parseLayout(data: []const u8) ParseLayoutError!Layout {
     @memcpy(&cookie, data[24 .. 24 + cookie_len]);
 
     var sections: [section_len]LayoutSection = std.mem.zeroes([section_len]LayoutSection);
-    var seen: [section_len]bool = [_]bool{false} ** section_len;
+    var seen: [section_len]bool = @splat(false);
     const section_table_offset = header_size;
     const section_table_end = header_size + section_entry_size * section_len;
 
@@ -1451,7 +1451,7 @@ fn appendRangeRef(out: *std.array_list.Managed(u8), ref: RangeRef) SerializeErro
 
 fn appendPaddingUntil(out: *std.array_list.Managed(u8), target_offset: usize) SerializeError!void {
     if (out.items.len > target_offset) return error.InvalidRepositoryModel;
-    const zeros = [_]u8{0} ** 16;
+    const zeros: [16]u8 = @splat(0);
     while (out.items.len < target_offset) {
         const remaining = target_offset - out.items.len;
         const take = @min(remaining, zeros.len);
@@ -1665,11 +1665,11 @@ const FixtureRepo = struct {
     }
 
     fn rootPath(self: *const FixtureRepo, buf: *[std.Io.Dir.max_path_bytes]u8) [:0]const u8 {
-        return std.fmt.bufPrintZ(buf, ".zig-cache/tmp/{s}", .{&self.tmp.sub_path}) catch @panic("path too long");
+        return std.fmt.bufPrintSentinel(buf, ".zig-cache/tmp/{s}", .{&self.tmp.sub_path}, 0) catch @panic("path too long");
     }
 
     fn path(self: *const FixtureRepo, buf: *[std.Io.Dir.max_path_bytes]u8, rel: []const u8) [:0]const u8 {
-        return std.fmt.bufPrintZ(buf, ".zig-cache/tmp/{s}/{s}", .{ &self.tmp.sub_path, rel }) catch @panic("path too long");
+        return std.fmt.bufPrintSentinel(buf, ".zig-cache/tmp/{s}/{s}", .{ &self.tmp.sub_path, rel }, 0) catch @panic("path too long");
     }
 };
 

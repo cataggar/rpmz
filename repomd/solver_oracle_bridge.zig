@@ -7,18 +7,7 @@ const rpm_add_with_changelog = 1 << 17;
 const rpmdb_keep_gpg_pubkey = 1 << 19;
 
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("time.h");
-    @cInclude("rpmdb.h");
-    @cInclude("solv/chksum.h");
-    @cInclude("solv/poolarch.h");
-    @cInclude("solv/repodata.h");
-    @cInclude("solv/solver.h");
-});
+const c = @import("c.repomd.solver_oracle_bridge");
 
 pub const libsolv = c;
 
@@ -315,7 +304,7 @@ pub export fn TDNFRepoMdNativeAddRpm(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const rpm_path_z = arena.dupeZ(u8, rpm_path_slice) catch {
+    const rpm_path_z = arena.dupeSentinel(u8, rpm_path_slice, 0) catch {
         setError("out of memory", .{});
         return abi.ERROR_TDNF_OUT_OF_MEMORY;
     };
@@ -1517,7 +1506,7 @@ fn buildRpmFileHdrid(
     allocator: std.mem.Allocator,
     rpm: *const rpm_pkgfile.RpmFile,
 ) BuildError!model.PackageChecksum {
-    if (rpm.sig.getString(@enumFromInt(@intFromEnum(rpm_header.SigTagId.sha1)))) |value| {
+    if (rpm.sig.getString(@fromBackingInt(@intCast(@backingInt(rpm_header.SigTagId.sha1))))) |value| {
         if (value.len == 40) {
             return .{
                 .kind = "sha1",
@@ -1525,7 +1514,7 @@ fn buildRpmFileHdrid(
             };
         }
     }
-    if (rpm.sig.getString(@enumFromInt(@intFromEnum(rpm_header.SigTagId.sha256)))) |value| {
+    if (rpm.sig.getString(@fromBackingInt(@intCast(@backingInt(rpm_header.SigTagId.sha256))))) |value| {
         if (value.len == 64) {
             return .{
                 .kind = "sha256",
@@ -1540,8 +1529,8 @@ fn buildRpmFileHdrid(
 }
 
 fn rpmHeaderArchOverride(hdr: rpm_header.Header) ?c.Id {
-    const sourcepackage_tag: rpm_header.TagId = @enumFromInt(1106);
-    const nosource_tag: rpm_header.TagId = @enumFromInt(1051);
+    const sourcepackage_tag: rpm_header.TagId = @fromBackingInt(@intCast(1106));
+    const nosource_tag: rpm_header.TagId = @fromBackingInt(@intCast(1051));
     const source_rpm = hdr.getString(.source_rpm);
 
     if ((source_rpm == null or source_rpm.?.len == 0) and hdr.getU32(sourcepackage_tag) != null) {
@@ -1605,7 +1594,7 @@ fn hexDigit(value: u8) u8 {
 }
 
 fn z(allocator: std.mem.Allocator, value: []const u8) BuildError![*:0]const u8 {
-    const duped = allocator.dupeZ(u8, value) catch return error.OutOfMemory;
+    const duped = allocator.dupeSentinel(u8, value, 0) catch return error.OutOfMemory;
     return duped.ptr;
 }
 

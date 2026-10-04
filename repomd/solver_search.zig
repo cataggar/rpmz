@@ -4,6 +4,19 @@
 //! weak metadata is ignored, and the result exposes only SAT or UNSAT.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const metadata = @import("model.zig");
 const solver_model = @import("solver_model.zig");
 const solver_rules = @import("solver_rules.zig");
@@ -97,7 +110,7 @@ pub const IncrementalSolver = struct {
         package_id: solver_model.PackageId,
     ) ?bool {
         if (self.state != .preferred_completion) return null;
-        const variable: usize = @intFromEnum(package_id);
+        const variable: usize = @backingInt(package_id);
         if (variable >= self.engine.variable_count) return null;
         return switch (self.engine.assignments[variable]) {
             .true_value => true,
@@ -117,7 +130,7 @@ pub const IncrementalSolver = struct {
         if (self.state != .preferred_completion) {
             return error.InternalSolverFailure;
         }
-        const variable: usize = @intFromEnum(package_id);
+        const variable: usize = @backingInt(package_id);
         if (variable >= self.engine.variable_count) {
             return error.InvalidAssumption;
         }
@@ -185,7 +198,7 @@ pub const Model = struct {
         self: Model,
         package_id: solver_model.PackageId,
     ) ?bool {
-        const package_index: usize = @intFromEnum(package_id);
+        const package_index: usize = @backingInt(package_id);
         if (package_index >= self.values.len) return null;
         return self.values[package_index];
     }
@@ -491,7 +504,7 @@ const Engine = struct {
             }
         } else {
             for (decision_policy.order, 0..) |package_id, position| {
-                const package_index: usize = @intFromEnum(package_id);
+                const package_index: usize = @backingInt(package_id);
                 if (package_index >= variable_count or seen[package_index]) {
                     return error.InvalidDecisionPolicy;
                 }
@@ -796,7 +809,7 @@ const Engine = struct {
                 package_id,
                 rank,
             | {
-                const package_index: usize = @intFromEnum(package_id);
+                const package_index: usize = @backingInt(package_id);
                 if (package_index >= self.variable_count or
                     candidate_ranks[package_index] !=
                         std.math.maxInt(usize))
@@ -843,7 +856,7 @@ const Engine = struct {
                 .unassigned_candidates = len,
             };
             for (policy.candidates[start .. start + len]) |package_id| {
-                candidate_ranks[@intFromEnum(package_id)] =
+                candidate_ranks[@backingInt(package_id)] =
                     std.math.maxInt(usize);
             }
         }
@@ -904,7 +917,7 @@ const Engine = struct {
                         const package_id = packages[
                             group.candidates_start + group.candidate_cursor
                         ];
-                        if (self.assignments[@intFromEnum(package_id)] ==
+                        if (self.assignments[@backingInt(package_id)] ==
                             .unassigned)
                         {
                             break;
@@ -1064,7 +1077,7 @@ const Engine = struct {
             try self.trail_limits.append(self.trail.items.len);
             self.statistics.decisions += 1;
             const decision_literal = Literal.init(
-                @enumFromInt(@as(u32, @intCast(decision.variable))),
+                @fromBackingInt(@intCast(@as(u32, @intCast(decision.variable)))),
                 decision.positive,
             );
             if (!try self.enqueue(decision_literal, null)) {
@@ -1266,7 +1279,7 @@ const Engine = struct {
         }
 
         self.analysis_scratch.clearRetainingCapacity();
-        const placeholder = Literal.init(@enumFromInt(0), true);
+        const placeholder = Literal.init(@fromBackingInt(@intCast(0)), true);
         try self.analysis_scratch.append(placeholder);
         @memset(self.seen, false);
         defer @memset(self.seen, false);
@@ -1454,7 +1467,7 @@ const Engine = struct {
                 const package_id = packages[
                     group.candidates_start + group.candidate_cursor
                 ];
-                const variable: usize = @intFromEnum(package_id);
+                const variable: usize = @backingInt(package_id);
                 if (self.assignments[variable] == .unassigned) {
                     return .{ .variable = variable, .positive = true };
                 }
@@ -1516,7 +1529,7 @@ const Engine = struct {
         }
         const variable = literalVariable(literal);
         const preferred_literal = Literal.init(
-            @enumFromInt(@as(u32, @intCast(variable))),
+            @fromBackingInt(@intCast(@as(u32, @intCast(variable)))),
             self.preferred_values[variable],
         );
         for (self.literal_occurrences[
@@ -1542,7 +1555,7 @@ const Engine = struct {
         }
         const variable = literalVariable(literal);
         const preferred_literal = Literal.init(
-            @enumFromInt(@as(u32, @intCast(variable))),
+            @fromBackingInt(@intCast(@as(u32, @intCast(variable)))),
             self.preferred_values[variable],
         );
         for (self.literal_occurrences[
@@ -1721,23 +1734,23 @@ fn initializeEngine(
 }
 
 fn validLiteral(literal: Literal, variable_count: usize) bool {
-    return @intFromEnum(literal) >> 1 < variable_count;
+    return @backingInt(literal) >> 1 < variable_count;
 }
 
 fn literalVariable(literal: Literal) usize {
-    return @intCast(@intFromEnum(literal) >> 1);
+    return @intCast(@backingInt(literal) >> 1);
 }
 
 fn literalIndex(literal: Literal) usize {
-    return @intCast(@intFromEnum(literal));
+    return @intCast(@backingInt(literal));
 }
 
 fn literalLessThan(_: void, left: Literal, right: Literal) bool {
-    return @intFromEnum(left) < @intFromEnum(right);
+    return @backingInt(left) < @backingInt(right);
 }
 
 fn testLiteral(variable: u32, positive: bool) Literal {
-    return Literal.init(@enumFromInt(variable), positive);
+    return Literal.init(@fromBackingInt(@intCast(variable)), positive);
 }
 
 fn testPackage(name: []const u8) metadata.Package {
@@ -1819,7 +1832,7 @@ fn testSolveCandidatePolicy(
         clause.* = .{
             .literals = range,
             .origin = .{
-                .job = @enumFromInt(@as(u32, @intCast(clause_index))),
+                .job = @fromBackingInt(@intCast(@as(u32, @intCast(clause_index)))),
             },
         };
     }
@@ -1872,7 +1885,7 @@ fn testRefute(
         clause.* = .{
             .literals = range,
             .origin = .{
-                .job = @enumFromInt(@as(u32, @intCast(clause_index))),
+                .job = @fromBackingInt(@intCast(@as(u32, @intCast(clause_index)))),
             },
         };
     }
@@ -1964,7 +1977,7 @@ fn testIncrementalSolve(
         clause.* = .{
             .literals = range,
             .origin = .{
-                .job = @enumFromInt(@as(u32, @intCast(clause_index))),
+                .job = @fromBackingInt(@intCast(@as(u32, @intCast(clause_index)))),
             },
         };
     }
@@ -2293,9 +2306,9 @@ test "decision policy controls complete order and preferred polarity" {
         .{ .start = 0, .len = 3 },
     };
     const order = [_]solver_model.PackageId{
-        @enumFromInt(2),
-        @enumFromInt(0),
-        @enumFromInt(1),
+        @fromBackingInt(@intCast(2)),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(1)),
     };
     const preferred = [_]bool{ false, false, false };
     var result = try testSolvePolicy(
@@ -2338,9 +2351,9 @@ test "decision policy controls complete order and preferred polarity" {
     );
 
     const duplicate_order = [_]solver_model.PackageId{
-        @enumFromInt(0),
-        @enumFromInt(0),
-        @enumFromInt(2),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(2)),
     };
     try std.testing.expectError(
         error.InvalidDecisionPolicy,
@@ -2366,9 +2379,9 @@ test "contextual group chooses its best positive candidate" {
         .{ .start = 0, .len = 3 },
     };
     const candidates = [_]solver_model.PackageId{
-        @enumFromInt(1),
-        @enumFromInt(2),
-        @enumFromInt(0),
+        @fromBackingInt(@intCast(1)),
+        @fromBackingInt(@intCast(2)),
+        @fromBackingInt(@intCast(0)),
     };
     var result = try testSolveCandidatePolicy(
         std.testing.allocator,
@@ -2403,8 +2416,8 @@ test "contextual requirement activates only after its owner is selected" {
         .{ .start = 0, .len = 3 },
     };
     const candidates = [_]solver_model.PackageId{
-        @enumFromInt(2),
-        @enumFromInt(1),
+        @fromBackingInt(@intCast(2)),
+        @fromBackingInt(@intCast(1)),
     };
     const policy = CandidateDecisionPolicy{
         .groups = &.{.{
@@ -2461,8 +2474,8 @@ test "contextual group falls back after its preferred candidate conflicts" {
         .{ .start = 4, .len = 2 },
     };
     const candidates = [_]solver_model.PackageId{
-        @enumFromInt(0),
-        @enumFromInt(1),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(1)),
     };
     var statistics: Statistics = .{};
     var result = try testSolveCandidatePolicy(
@@ -2510,7 +2523,7 @@ test "contextual candidate rejection probes each rank once" {
 
     for (0..candidate_count) |candidate| {
         literals[candidate] = testLiteral(@intCast(candidate), true);
-        candidates[candidate] = @enumFromInt(candidate);
+        candidates[candidate] = @fromBackingInt(@intCast(candidate));
     }
     ranges[0] = .{ .start = 0, .len = candidate_count };
     var next_literal: usize = candidate_count;
@@ -2575,10 +2588,10 @@ test "contextual groups use stable input priority" {
         .{ .start = 4, .len = 2 },
     };
     const first_candidates = [_]solver_model.PackageId{
-        @enumFromInt(0),
-        @enumFromInt(1),
-        @enumFromInt(2),
-        @enumFromInt(3),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(1)),
+        @fromBackingInt(@intCast(2)),
+        @fromBackingInt(@intCast(3)),
     };
     var first = try testSolveCandidatePolicy(
         std.testing.allocator,
@@ -2609,10 +2622,10 @@ test "contextual groups use stable input priority" {
     );
 
     const second_candidates = [_]solver_model.PackageId{
-        @enumFromInt(2),
-        @enumFromInt(3),
-        @enumFromInt(0),
-        @enumFromInt(1),
+        @fromBackingInt(@intCast(2)),
+        @fromBackingInt(@intCast(3)),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(1)),
     };
     var second = try testSolveCandidatePolicy(
         std.testing.allocator,
@@ -2655,10 +2668,10 @@ test "contextual rankings remain local to their clauses" {
         .{ .start = 2, .len = 2 },
     };
     const first_candidates = [_]solver_model.PackageId{
-        @enumFromInt(0),
-        @enumFromInt(1),
-        @enumFromInt(1),
-        @enumFromInt(0),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(1)),
+        @fromBackingInt(@intCast(1)),
+        @fromBackingInt(@intCast(0)),
     };
     var first = try testSolveCandidatePolicy(
         std.testing.allocator,
@@ -2689,10 +2702,10 @@ test "contextual rankings remain local to their clauses" {
     );
 
     const second_candidates = [_]solver_model.PackageId{
-        @enumFromInt(1),
-        @enumFromInt(0),
-        @enumFromInt(0),
-        @enumFromInt(1),
+        @fromBackingInt(@intCast(1)),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(1)),
     };
     var second = try testSolveCandidatePolicy(
         std.testing.allocator,
@@ -2777,8 +2790,8 @@ test "malformed contextual candidate groups are rejected" {
         .{ .start = 0, .len = 2 },
     };
     const duplicate = [_]solver_model.PackageId{
-        @enumFromInt(0),
-        @enumFromInt(0),
+        @fromBackingInt(@intCast(0)),
+        @fromBackingInt(@intCast(0)),
     };
     try std.testing.expectError(
         error.InvalidCandidatePolicy,
@@ -2812,7 +2825,7 @@ test "malformed contextual candidate groups are rejected" {
                     .clause_index = 0,
                     .candidates = .{ .start = 0, .len = 1 },
                 }},
-                .candidates = &.{@enumFromInt(0)},
+                .candidates = &.{@fromBackingInt(@intCast(0))},
             },
             null,
         ),
@@ -2826,7 +2839,7 @@ test "malformed contextual candidate groups are rejected" {
             &ranges,
             &literals,
             &.{},
-            .{ .candidates = &.{@enumFromInt(0)} },
+            .{ .candidates = &.{@fromBackingInt(@intCast(0))} },
             null,
         ),
     );
@@ -2844,7 +2857,7 @@ test "malformed contextual candidate groups are rejected" {
                     .clause_index = 1,
                     .candidates = .{ .start = 0, .len = 2 },
                 }},
-                .candidates = &.{ @enumFromInt(0), @enumFromInt(1) },
+                .candidates = &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
             },
             null,
         ),
@@ -2863,7 +2876,7 @@ test "malformed contextual candidate groups are rejected" {
                     .clause_index = 0,
                     .candidates = .{ .start = 1, .len = 2 },
                 }},
-                .candidates = &.{ @enumFromInt(0), @enumFromInt(1) },
+                .candidates = &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
             },
             null,
         ),
@@ -2882,7 +2895,7 @@ test "malformed contextual candidate groups are rejected" {
                     .clause_index = 0,
                     .candidates = .{ .start = 0, .len = 3 },
                 }},
-                .candidates = &.{ @enumFromInt(0), @enumFromInt(1) },
+                .candidates = &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
             },
             null,
         ),
@@ -2901,7 +2914,7 @@ test "malformed contextual candidate groups are rejected" {
                     .clause_index = 0,
                     .candidates = .{ .start = 0, .len = 2 },
                 }},
-                .candidates = &.{ @enumFromInt(0), @enumFromInt(2) },
+                .candidates = &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(2)) },
             },
             null,
         ),
@@ -2931,10 +2944,10 @@ test "malformed contextual candidate groups are rejected" {
                     },
                 },
                 .candidates = &.{
-                    @enumFromInt(0),
-                    @enumFromInt(1),
-                    @enumFromInt(0),
-                    @enumFromInt(1),
+                    @fromBackingInt(@intCast(0)),
+                    @fromBackingInt(@intCast(1)),
+                    @fromBackingInt(@intCast(0)),
+                    @fromBackingInt(@intCast(1)),
                 },
             },
             null,
@@ -2957,7 +2970,7 @@ test "malformed contextual candidate groups are rejected" {
                     .clause_index = 0,
                     .candidates = .{ .start = 0, .len = 1 },
                 }},
-                .candidates = &.{ @enumFromInt(0), @enumFromInt(1) },
+                .candidates = &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
             },
             null,
         ),
@@ -2980,7 +2993,7 @@ test "malformed contextual candidate groups are rejected" {
                     .clause_index = 0,
                     .candidates = .{ .start = 0, .len = 2 },
                 }},
-                .candidates = &.{ @enumFromInt(0), @enumFromInt(1) },
+                .candidates = &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
             },
             null,
         ),
@@ -3049,7 +3062,7 @@ test "malformed formula ranges and literals are rejected" {
     };
     const bad_range_clause = [_]solver_rules.Clause{.{
         .literals = .{ .start = 1, .len = 1 },
-        .origin = .{ .job = @enumFromInt(0) },
+        .origin = .{ .job = @fromBackingInt(@intCast(0)) },
     }};
     var formula = OwnedFormula{
         .allocator = std.testing.allocator,
@@ -3067,7 +3080,7 @@ test "malformed formula ranges and literals are rejected" {
 
     formula.clauses = &.{.{
         .literals = .{ .start = 0, .len = 1 },
-        .origin = .{ .job = @enumFromInt(0) },
+        .origin = .{ .job = @fromBackingInt(@intCast(0)) },
     }};
     formula.literals = &.{testLiteral(1, true)};
     try std.testing.expectError(
@@ -3087,13 +3100,13 @@ test "relaxable clauses remain hard and weak metadata does not affect search" {
     };
     const empty_clause = [_]solver_rules.Clause{.{
         .literals = .{},
-        .origin = .{ .job = @enumFromInt(0) },
+        .origin = .{ .job = @fromBackingInt(@intCast(0)) },
         .disposition = .relaxable_job,
     }};
     const weak_request = [_]solver_rules.WeakRequest{.{
-        .owner = @enumFromInt(0),
+        .owner = @fromBackingInt(@intCast(0)),
         .dependency = .{
-            .package = @enumFromInt(0),
+            .package = @fromBackingInt(@intCast(0)),
             .kind = .recommends,
             .index = 0,
         },
@@ -3219,8 +3232,8 @@ test "legal contextual groups preserve exhaustive satisfiability" {
     var ranges: [3]solver_rules.LiteralRange = undefined;
     var assumptions: [2]Literal = undefined;
     const candidates = [_]solver_model.PackageId{
-        @enumFromInt(1),
-        @enumFromInt(0),
+        @fromBackingInt(@intCast(1)),
+        @fromBackingInt(@intCast(0)),
     };
 
     for (0..9) |second_clause| {
@@ -3407,7 +3420,7 @@ test "wide clauses and unconstrained decisions advance linearly" {
 
 test "incremental optional decisions preserve the hard provider choice" {
     var packages: [3]solver_model.UniversePackage = undefined;
-    var states = [_]solver_rules.PackageState{.{}} ** 3;
+    var states: [3]solver_rules.PackageState = @splat(.{});
     var universe = solver_model.Universe{
         .allocator = std.testing.allocator,
         .repositories = &.{},
@@ -3423,11 +3436,11 @@ test "incremental optional decisions preserve the hard provider choice" {
     const clauses = [_]solver_rules.Clause{
         .{
             .literals = .{ .start = 0, .len = 2 },
-            .origin = .{ .job = @enumFromInt(0) },
+            .origin = .{ .job = @fromBackingInt(@intCast(0)) },
         },
         .{
             .literals = .{ .start = 2, .len = 2 },
-            .origin = .{ .job = @enumFromInt(1) },
+            .origin = .{ .job = @fromBackingInt(@intCast(1)) },
         },
     };
     const formula = OwnedFormula{
@@ -3448,17 +3461,17 @@ test "incremental optional decisions preserve the hard provider choice" {
                 .clause_index = 0,
                 .candidates = .{ .start = 0, .len = 2 },
             }},
-            .candidates = &.{ @enumFromInt(0), @enumFromInt(1) },
+            .candidates = &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         },
     );
     defer session.deinit();
 
     try std.testing.expect(try session.solveHard());
-    try std.testing.expect(session.selected(@enumFromInt(0)).?);
-    try std.testing.expect(!session.selected(@enumFromInt(1)).?);
-    try std.testing.expect(!try session.trySelect(@enumFromInt(2)));
-    try std.testing.expect(session.selected(@enumFromInt(0)).?);
-    try std.testing.expect(!session.selected(@enumFromInt(1)).?);
+    try std.testing.expect(session.selected(@fromBackingInt(@intCast(0))).?);
+    try std.testing.expect(!session.selected(@fromBackingInt(@intCast(1))).?);
+    try std.testing.expect(!try session.trySelect(@fromBackingInt(@intCast(2))));
+    try std.testing.expect(session.selected(@fromBackingInt(@intCast(0))).?);
+    try std.testing.expect(!session.selected(@fromBackingInt(@intCast(1))).?);
 
     var result = try session.finish();
     defer result.deinit();
@@ -3471,7 +3484,7 @@ test "incremental optional decisions preserve the hard provider choice" {
 
 test "incremental optional packages activate contextual requirements" {
     var packages: [3]solver_model.UniversePackage = undefined;
-    var states = [_]solver_rules.PackageState{.{}} ** 3;
+    var states: [3]solver_rules.PackageState = @splat(.{});
     var universe = solver_model.Universe{
         .allocator = std.testing.allocator,
         .repositories = &.{},
@@ -3486,12 +3499,12 @@ test "incremental optional packages activate contextual requirements" {
     const clauses = [_]solver_rules.Clause{
         .{
             .literals = .{ .start = 0, .len = 1 },
-            .origin = .{ .job = @enumFromInt(0) },
+            .origin = .{ .job = @fromBackingInt(@intCast(0)) },
         },
         .{
             .literals = .{ .start = 1, .len = 2 },
             .origin = .{ .requirement = .{
-                .package = @enumFromInt(1),
+                .package = @fromBackingInt(@intCast(1)),
                 .kind = .requires,
                 .index = 0,
             } },
@@ -3515,17 +3528,17 @@ test "incremental optional packages activate contextual requirements" {
                 .clause_index = 1,
                 .candidates = .{ .start = 0, .len = 1 },
             }},
-            .candidates = &.{@enumFromInt(2)},
+            .candidates = &.{@fromBackingInt(@intCast(2))},
         },
     );
     defer session.deinit();
 
     try std.testing.expect(try session.solveHard());
-    try std.testing.expect(session.selected(@enumFromInt(0)).?);
-    try std.testing.expect(!session.selected(@enumFromInt(1)).?);
-    try std.testing.expect(!session.selected(@enumFromInt(2)).?);
-    try std.testing.expect(try session.trySelect(@enumFromInt(1)));
-    try std.testing.expect(session.selected(@enumFromInt(2)).?);
+    try std.testing.expect(session.selected(@fromBackingInt(@intCast(0))).?);
+    try std.testing.expect(!session.selected(@fromBackingInt(@intCast(1))).?);
+    try std.testing.expect(!session.selected(@fromBackingInt(@intCast(2))).?);
+    try std.testing.expect(try session.trySelect(@fromBackingInt(@intCast(1))));
+    try std.testing.expect(session.selected(@fromBackingInt(@intCast(2))).?);
 
     var result = try session.finish();
     defer result.deinit();
@@ -3538,7 +3551,7 @@ test "incremental optional packages activate contextual requirements" {
 
 test "rejected optional decisions preserve earlier accepted selections" {
     var packages: [4]solver_model.UniversePackage = undefined;
-    var states = [_]solver_rules.PackageState{.{}} ** 4;
+    var states: [4]solver_rules.PackageState = @splat(.{});
     var universe = solver_model.Universe{
         .allocator = std.testing.allocator,
         .repositories = &.{},
@@ -3556,15 +3569,15 @@ test "rejected optional decisions preserve earlier accepted selections" {
     const clauses = [_]solver_rules.Clause{
         .{
             .literals = .{ .start = 0, .len = 2 },
-            .origin = .{ .job = @enumFromInt(0) },
+            .origin = .{ .job = @fromBackingInt(@intCast(0)) },
         },
         .{
             .literals = .{ .start = 2, .len = 2 },
-            .origin = .{ .job = @enumFromInt(1) },
+            .origin = .{ .job = @fromBackingInt(@intCast(1)) },
         },
         .{
             .literals = .{ .start = 4, .len = 2 },
-            .origin = .{ .job = @enumFromInt(2) },
+            .origin = .{ .job = @fromBackingInt(@intCast(2)) },
         },
     };
     const formula = OwnedFormula{
@@ -3585,11 +3598,11 @@ test "rejected optional decisions preserve earlier accepted selections" {
     defer session.deinit();
 
     try std.testing.expect(try session.solveHard());
-    try std.testing.expect(try session.trySelect(@enumFromInt(0)));
-    try std.testing.expect(session.selected(@enumFromInt(1)).?);
-    try std.testing.expect(!try session.trySelect(@enumFromInt(2)));
-    try std.testing.expect(session.selected(@enumFromInt(0)).?);
-    try std.testing.expect(session.selected(@enumFromInt(1)).?);
+    try std.testing.expect(try session.trySelect(@fromBackingInt(@intCast(0))));
+    try std.testing.expect(session.selected(@fromBackingInt(@intCast(1))).?);
+    try std.testing.expect(!try session.trySelect(@fromBackingInt(@intCast(2))));
+    try std.testing.expect(session.selected(@fromBackingInt(@intCast(0))).?);
+    try std.testing.expect(session.selected(@fromBackingInt(@intCast(1))).?);
 
     var result = try session.finish();
     defer result.deinit();
@@ -3648,8 +3661,8 @@ fn allocationFailureCase(allocator: std.mem.Allocator) !void {
     defer unsatisfiable.deinit();
 
     const candidates = [_]solver_model.PackageId{
-        @enumFromInt(1),
-        @enumFromInt(0),
+        @fromBackingInt(@intCast(1)),
+        @fromBackingInt(@intCast(0)),
     };
     var contextual = try testSolveCandidatePolicy(
         allocator,
@@ -3669,7 +3682,7 @@ fn allocationFailureCase(allocator: std.mem.Allocator) !void {
     defer contextual.deinit();
 
     var packages: [2]solver_model.UniversePackage = undefined;
-    var states = [_]solver_rules.PackageState{.{}} ** 2;
+    var states: [2]solver_rules.PackageState = @splat(.{});
     var universe = solver_model.Universe{
         .allocator = allocator,
         .repositories = &.{},
@@ -3678,7 +3691,7 @@ fn allocationFailureCase(allocator: std.mem.Allocator) !void {
     };
     const incremental_clauses = [_]solver_rules.Clause{.{
         .literals = .{ .start = 0, .len = 2 },
-        .origin = .{ .job = @enumFromInt(0) },
+        .origin = .{ .job = @fromBackingInt(@intCast(0)) },
     }};
     const incremental = OwnedFormula{
         .allocator = allocator,
@@ -3703,13 +3716,13 @@ fn allocationFailureCase(allocator: std.mem.Allocator) !void {
     );
     defer session.deinit();
     if (!try session.solveHard()) return error.TestUnexpectedResult;
-    _ = try session.trySelect(@enumFromInt(0));
+    _ = try session.trySelect(@fromBackingInt(@intCast(0)));
     var incremental_result = try session.finish();
     defer incremental_result.deinit();
 }
 
 test "search cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         allocationFailureCase,
         .{},

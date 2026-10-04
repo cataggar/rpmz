@@ -2,14 +2,19 @@
 
 ## Prerequisites and builds
 
-Building requires Zig 0.16 or newer. SQLite, libsolv, TLS, and the pure-Zig Lua
+Building requires Zig 0.17. SQLite, libsolv, TLS, and the pure-Zig Lua
 runtime are pinned in `build.zig.zon`; system RPM, Lua, SQLite, and libsolv
 development packages are not build dependencies. Installed-binary audits also
 use `binutils`, and Python lint uses `flake8`.
 
+Private C bindings use the exact pinned `translate-c` dependency. Each original
+translation unit retains its headers and macros; libsolv remains oracle-only.
+Install-prefix options and templates are generated during the maker phase,
+including escaped Zig strings for prefixes containing spaces or quotes.
+
 ```sh
-zig build -Doptimize=ReleaseSafe install --prefix ./out
-zig build -Doptimize=Debug install --prefix ./out
+zig build -Doptimize=safe install --prefix ./out
+zig build -Doptimize=debug install --prefix ./out
 ```
 
 The install's public `bin/` directory contains only `rpmz`. Use `rpmz tdnf`
@@ -43,7 +48,19 @@ Run Zig unit tests with:
 
 ```sh
 zig build test
-zig build -Doptimize=ReleaseSafe test
+zig build -Doptimize=safe test
+```
+
+Allocation-failure sweeps use test-only allocation-backed growth. Zig 0.17's
+SafeAllocator can otherwise remap in place depending on heap state, making
+failure indices nondeterministic. Every allocation-failure index and leak check
+remains covered; production allocator behavior is unchanged. The helpers stay
+module-local so standalone tests and the pure public module closure are retained.
+
+Cross-check the private variadic bridge without running a foreign executable:
+
+```sh
+zig build -j2 -Dtarget=aarch64-linux-gnu common-abi-check
 ```
 
 The pytest integration suite requires an RPM-aware host with `rpm`, `rpmbuild`,
@@ -51,7 +68,7 @@ The pytest integration suite requires an RPM-aware host with `rpm`, `rpmbuild`,
 fixtures and provide behavior oracles; production does not invoke them.
 
 ```sh
-zig build -Doptimize=ReleaseSafe install --prefix ./out
+zig build -Doptimize=safe install --prefix ./out
 cd pytests && pytest -v
 ```
 
@@ -80,14 +97,14 @@ zig build migration-audit
 zig build rebrand-audit
 zig build replay-docs-audit
 zig build replay-confinement-audit
-zig build -Doptimize=ReleaseSafe dead-errdefer-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
-zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
+zig build -Doptimize=safe dead-errdefer-audit --prefix ./out
+zig build -Doptimize=safe native-dependency-audit --prefix ./out
+zig build -Doptimize=safe public-zig-api-audit --prefix ./out
+zig build -Doptimize=safe libsolv-confinement-audit --prefix ./out
 zig build lint
 ```
 
-Use `-Doptimize=ReleaseSafe` for installed-artifact audits, as CI does. When
+Use `-Doptimize=safe` for installed-artifact audits, as CI does. When
 changing libsolv-facing code, also follow
 [migration verification](migration-verification.md).
 

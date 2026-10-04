@@ -263,7 +263,7 @@ test "a solve that fails for its own reasons keeps its diagnostic when packages 
     });
 
     var result = try root.run(&.{
-        "-y",           "--nogpgcheck", "install",
+        "-y",        "--nogpgcheck", "install",
         conflicts_0, conflicts_1,
     });
     defer result.deinit();
@@ -339,7 +339,7 @@ test "--skip-broken still resolves when --allowerasing adds user-installed marks
     defer eraseBestEffort(&root, satisfiable);
 
     var result = try root.run(&.{
-        "install",       "-y",       "--nogpgcheck", "--skip-broken",
+        "install",        "-y",        "--nogpgcheck", "--skip-broken",
         "--allowerasing", satisfiable, missing_dep,
     });
     defer result.deinit();

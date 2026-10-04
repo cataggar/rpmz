@@ -360,7 +360,7 @@ const BuildState = struct {
         self: *BuildState,
         id: solver_model.PackageId,
     ) CaptureError!void {
-        const index: usize = @intFromEnum(id);
+        const index: usize = @backingInt(id);
         if (index >= self.referenced.len) return error.UnsupportedResult;
         self.referenced[index] = true;
     }
@@ -405,7 +405,7 @@ const BuildState = struct {
         for (self.referenced, 0..) |referenced, index| {
             if (!referenced) continue;
             const package = self.universe.package(
-                @enumFromInt(index),
+                @fromBackingInt(@intCast(index)),
             ) orelse return error.UnsupportedResult;
             var found = false;
             for (repositories.items) |existing| {
@@ -452,7 +452,7 @@ const BuildState = struct {
         var packages = std.ArrayList(RawPackage).empty;
         for (self.referenced, 0..) |referenced, index| {
             if (!referenced) continue;
-            const id: solver_model.PackageId = @enumFromInt(index);
+            const id: solver_model.PackageId = @fromBackingInt(@intCast(index));
             const package = self.universe.package(id) orelse
                 return error.UnsupportedResult;
             const repository = self.universe.repository(
@@ -568,7 +568,7 @@ const BuildState = struct {
         const refs = try self.arena.alloc(u32, self.referenced.len);
         @memset(refs, std.math.maxInt(u32));
         for (packages, 0..) |package, index| {
-            refs[@intFromEnum(package.id)] = try countU32(index);
+            refs[@backingInt(package.id)] = try countU32(index);
         }
         return refs;
     }
@@ -974,7 +974,7 @@ const BuildState = struct {
         self: *BuildState,
         job_id: solver_model.JobId,
     ) CaptureError!?u32 {
-        const job_ref: usize = @intFromEnum(job_id);
+        const job_ref: usize = @backingInt(job_id);
         if (job_ref >= self.input.job_origins.len) {
             return error.UnsupportedResult;
         }
@@ -1190,7 +1190,7 @@ fn packageRef(
     refs: []const u32,
     id: solver_model.PackageId,
 ) CaptureError!u32 {
-    const index: usize = @intFromEnum(id);
+    const index: usize = @backingInt(id);
     if (index >= refs.len) return error.UnsupportedResult;
     const ref = refs[index];
     if (ref == std.math.maxInt(u32)) return error.UnsupportedResult;
@@ -1202,7 +1202,7 @@ fn priorRefLessThan(
     left: solver_model.PackageId,
     right: solver_model.PackageId,
 ) bool {
-    return refs[@intFromEnum(left)] < refs[@intFromEnum(right)];
+    return refs[@backingInt(left)] < refs[@backingInt(right)];
 }
 
 const ActionSort = struct {
@@ -1237,7 +1237,7 @@ fn executionCandidateLessThan(
     if (left.requested_by) |left_job| {
         const right_job = right.requested_by.?;
         if (left_job != right_job) {
-            return @intFromEnum(left_job) < @intFromEnum(right_job);
+            return @backingInt(left_job) < @backingInt(right_job);
         }
     }
     const left_package = universe.package(left.package).?;
@@ -1261,14 +1261,14 @@ fn executionCandidateLessThan(
         const order = std.mem.order(u8, pair[0], pair[1]);
         if (order != .eq) return order == .lt;
     }
-    return @intFromEnum(left.package) < @intFromEnum(right.package);
+    return @backingInt(left.package) < @backingInt(right.package);
 }
 
 fn actionOrderLessThan(context: ActionSort, left: u32, right: u32) bool {
     const a = context.actions[left];
     const b = context.actions[right];
-    const left_ref = context.package_refs[@intFromEnum(a.package)];
-    const right_ref = context.package_refs[@intFromEnum(b.package)];
+    const left_ref = context.package_refs[@backingInt(a.package)];
+    const right_ref = context.package_refs[@backingInt(b.package)];
     if (left_ref != right_ref) return left_ref < right_ref;
     const left_kind = actionKind(a.kind);
     const right_kind = actionKind(b.kind);
@@ -2048,7 +2048,7 @@ test "a capture publishes only the packages the transaction references" {
     });
     defer harness.deinit();
 
-    const wanted: solver_model.PackageId = @enumFromInt(1);
+    const wanted: solver_model.PackageId = @fromBackingInt(@intCast(1));
     const jobs = [_]solver_model.Job{
         .{ .action = .install, .selection = .{ .package = wanted } },
     };
@@ -2057,7 +2057,7 @@ test "a capture publishes only the packages the transaction references" {
             .package = wanted,
             .kind = .install,
             .reason = .user,
-            .requested_by = @enumFromInt(0),
+            .requested_by = @fromBackingInt(@intCast(0)),
         },
     };
     const outcome = solver_model.Outcome{
@@ -2152,8 +2152,8 @@ test "installed packages sort ahead of available ones and carry their rpmdb row"
     });
     defer harness.deinit();
 
-    const old: solver_model.PackageId = @enumFromInt(0);
-    const new: solver_model.PackageId = @enumFromInt(1);
+    const old: solver_model.PackageId = @fromBackingInt(@intCast(0));
+    const new: solver_model.PackageId = @fromBackingInt(@intCast(1));
     const priors = [_]solver_model.PackageId{old};
     const actions = [_]solver_model.Action{
         .{
@@ -2216,7 +2216,7 @@ test "a problem transaction publishes problems and no actions" {
     });
     defer harness.deinit();
 
-    const broken: solver_model.PackageId = @enumFromInt(0);
+    const broken: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const jobs = [_]solver_model.Job{
         .{ .action = .install, .selection = .{ .name = "broken" } },
     };
@@ -2225,7 +2225,7 @@ test "a problem transaction publishes problems and no actions" {
             .kind = .unsatisfied_requirement,
             .package = broken,
             .capability = .{ .name = "missing-capability" },
-            .job = @enumFromInt(0),
+            .job = @fromBackingInt(@intCast(0)),
             .count = 1,
         },
     };
@@ -2289,18 +2289,18 @@ test "accepted problems resolve with skips and keep the transaction" {
     });
     defer harness.deinit();
 
-    const wanted: solver_model.PackageId = @enumFromInt(0);
+    const wanted: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const jobs = [_]solver_model.Job{
         .{ .action = .install, .selection = .{ .package = wanted } },
         .{ .action = .install, .selection = .{ .name = "absent" } },
     };
     const problems = [_]solver_model.Problem{
-        .{ .kind = .no_candidate, .job = @enumFromInt(1), .count = 1 },
+        .{ .kind = .no_candidate, .job = @fromBackingInt(@intCast(1)), .count = 1 },
     };
     const actions = [_]solver_model.Action{
         .{ .package = wanted, .kind = .install, .reason = .user },
     };
-    const skipped = [_]solver_model.JobId{@enumFromInt(1)};
+    const skipped = [_]solver_model.JobId{@fromBackingInt(@intCast(1))};
     const outcome = solver_model.Outcome{
         .actions = &actions,
         .problems = &problems,
@@ -2341,7 +2341,7 @@ test "a solve that only skipped a job still records a partial plan" {
     });
     defer harness.deinit();
 
-    const wanted: solver_model.PackageId = @enumFromInt(0);
+    const wanted: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const jobs = [_]solver_model.Job{
         .{ .action = .install, .selection = .{ .package = wanted } },
         .{ .action = .install, .selection = .{ .name = "absent" } },
@@ -2349,7 +2349,7 @@ test "a solve that only skipped a job still records a partial plan" {
     const actions = [_]solver_model.Action{
         .{ .package = wanted, .kind = .install, .reason = .user },
     };
-    const skipped = [_]solver_model.JobId{@enumFromInt(1)};
+    const skipped = [_]solver_model.JobId{@fromBackingInt(@intCast(1))};
     // `--skip-broken` drops the job without raising a problem for it.
     const outcome = solver_model.Outcome{
         .actions = &actions,
@@ -2390,7 +2390,7 @@ test "a request that never solved publishes its jobs and no transaction" {
     });
     defer harness.deinit();
 
-    const wanted: solver_model.PackageId = @enumFromInt(0);
+    const wanted: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const jobs = [_]solver_model.Job{
         .{ .action = .install, .selection = .{ .package = wanted } },
     };
@@ -2435,7 +2435,7 @@ test "a refuted native request publishes derived problems and no transaction" {
     });
     defer harness.deinit();
 
-    const broken: solver_model.PackageId = @enumFromInt(0);
+    const broken: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const jobs = [_]solver_model.Job{
         .{ .action = .install, .selection = .{ .package = broken } },
     };
@@ -2445,7 +2445,7 @@ test "a refuted native request publishes derived problems and no transaction" {
             .kind = .unsatisfied_requirement,
             .package = broken,
             .capability = .{ .name = "missing-capability" },
-            .job = @enumFromInt(0),
+            .job = @fromBackingInt(@intCast(0)),
             .count = 1,
         },
     };
@@ -2503,7 +2503,7 @@ test "hidden packages are published even though no action names them" {
     });
     defer harness.deinit();
 
-    const excluded: solver_model.PackageId = @enumFromInt(0);
+    const excluded: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const hidden = [_]solver_model.PackageId{excluded};
     const outcome = solver_model.Outcome{
         .actions = &.{},
@@ -2539,7 +2539,7 @@ test "a policy job the request layer never queued is absent from the plan" {
     });
     defer harness.deinit();
 
-    const wanted: solver_model.PackageId = @enumFromInt(0);
+    const wanted: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const jobs = [_]solver_model.Job{
         .{ .action = .install, .selection = .{ .package = wanted } },
         .{ .action = .lock, .selection = .{ .name = "wanted" }, .reason = .policy },
@@ -2549,7 +2549,7 @@ test "a policy job the request layer never queued is absent from the plan" {
             .package = wanted,
             .kind = .install,
             .reason = .user,
-            .requested_by = @enumFromInt(1),
+            .requested_by = @fromBackingInt(@intCast(1)),
         },
     };
     const outcome = solver_model.Outcome{
@@ -2610,8 +2610,8 @@ test "an erase expanded across duplicate rpmdb rows keeps one published job" {
     });
     defer harness.deinit();
 
-    const first: solver_model.PackageId = @enumFromInt(0);
-    const second: solver_model.PackageId = @enumFromInt(1);
+    const first: solver_model.PackageId = @fromBackingInt(@intCast(0));
+    const second: solver_model.PackageId = @fromBackingInt(@intCast(1));
     // One erase request naming a NEVRA the rpmdb holds twice becomes two
     // native jobs, both built from the same queue pair.
     const jobs = [_]solver_model.Job{
@@ -2623,13 +2623,13 @@ test "an erase expanded across duplicate rpmdb rows keeps one published job" {
             .package = first,
             .kind = .erase,
             .reason = .user,
-            .requested_by = @enumFromInt(0),
+            .requested_by = @fromBackingInt(@intCast(0)),
         },
         .{
             .package = second,
             .kind = .erase,
             .reason = .user,
-            .requested_by = @enumFromInt(1),
+            .requested_by = @fromBackingInt(@intCast(1)),
         },
     };
     const outcome = solver_model.Outcome{
@@ -2773,7 +2773,7 @@ test "a command line package publishes a checksum but no location" {
     });
     defer harness.deinit();
 
-    const local: solver_model.PackageId = @enumFromInt(0);
+    const local: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const actions = [_]solver_model.Action{
         .{ .package = local, .kind = .install, .reason = .user },
     };
@@ -2850,9 +2850,9 @@ test "repository priorities use rpmz semantics by repository kind" {
     });
     defer harness.deinit();
 
-    const old: solver_model.PackageId = @enumFromInt(0);
-    const remote: solver_model.PackageId = @enumFromInt(1);
-    const local: solver_model.PackageId = @enumFromInt(2);
+    const old: solver_model.PackageId = @fromBackingInt(@intCast(0));
+    const remote: solver_model.PackageId = @fromBackingInt(@intCast(1));
+    const local: solver_model.PackageId = @fromBackingInt(@intCast(2));
     const jobs = [_]solver_model.Job{
         .{ .action = .erase, .selection = .{ .package = old } },
         .{ .action = .install, .selection = .{ .package = remote } },
@@ -2938,7 +2938,7 @@ test "repository priorities use rpmz semantics by repository kind" {
         },
     });
     defer invalid_harness.deinit();
-    const invalid_id: solver_model.PackageId = @enumFromInt(0);
+    const invalid_id: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const invalid_actions = [_]solver_model.Action{
         .{ .package = invalid_id, .kind = .install, .reason = .user },
     };
@@ -2986,8 +2986,8 @@ fn replacementCaseNative(
     });
     defer harness.deinit();
 
-    const old: solver_model.PackageId = @enumFromInt(0);
-    const new: solver_model.PackageId = @enumFromInt(1);
+    const old: solver_model.PackageId = @fromBackingInt(@intCast(0));
+    const new: solver_model.PackageId = @fromBackingInt(@intCast(1));
     const priors = [_]solver_model.PackageId{old};
     const native_action = switch (job_action) {
         abi.job_action.downgrade => solver_model.JobAction.downgrade,
@@ -3007,7 +3007,7 @@ fn replacementCaseNative(
                 else => .upgrade,
             },
             .reason = .user,
-            .requested_by = @enumFromInt(0),
+            .requested_by = @fromBackingInt(@intCast(0)),
         },
     };
     const outcome = solver_model.Outcome{
@@ -3112,10 +3112,10 @@ test "highest same-name prior determines replacement kind with extra obsoletes" 
     });
     defer harness.deinit();
 
-    const low: solver_model.PackageId = @enumFromInt(0);
-    const high: solver_model.PackageId = @enumFromInt(1);
-    const legacy: solver_model.PackageId = @enumFromInt(2);
-    const replacement: solver_model.PackageId = @enumFromInt(3);
+    const low: solver_model.PackageId = @fromBackingInt(@intCast(0));
+    const high: solver_model.PackageId = @fromBackingInt(@intCast(1));
+    const legacy: solver_model.PackageId = @fromBackingInt(@intCast(2));
+    const replacement: solver_model.PackageId = @fromBackingInt(@intCast(3));
     const priors = [_]solver_model.PackageId{ low, high, legacy };
     const jobs = [_]solver_model.Job{
         .{ .action = .downgrade, .selection = .{ .package = replacement } },
@@ -3126,7 +3126,7 @@ test "highest same-name prior determines replacement kind with extra obsoletes" 
             .priors = &priors,
             .kind = .downgrade,
             .reason = .user,
-            .requested_by = @enumFromInt(0),
+            .requested_by = @fromBackingInt(@intCast(0)),
         },
     };
     const outcome = solver_model.Outcome{
@@ -3233,9 +3233,9 @@ test "obsoletes retain multiple priors and permit a shared prior" {
         });
         defer harness.deinit();
 
-        const old_a: solver_model.PackageId = @enumFromInt(0);
-        const old_b: solver_model.PackageId = @enumFromInt(1);
-        const replacement: solver_model.PackageId = @enumFromInt(2);
+        const old_a: solver_model.PackageId = @fromBackingInt(@intCast(0));
+        const old_b: solver_model.PackageId = @fromBackingInt(@intCast(1));
+        const replacement: solver_model.PackageId = @fromBackingInt(@intCast(2));
         const priors = [_]solver_model.PackageId{ old_b, old_a };
         const jobs = [_]solver_model.Job{
             .{ .action = .install, .selection = .{ .package = replacement } },
@@ -3246,7 +3246,7 @@ test "obsoletes retain multiple priors and permit a shared prior" {
                 .priors = &priors,
                 .kind = .obsolete,
                 .reason = .obsoletes,
-                .requested_by = @enumFromInt(0),
+                .requested_by = @fromBackingInt(@intCast(0)),
             },
         };
         const outcome = solver_model.Outcome{
@@ -3362,9 +3362,9 @@ test "obsoletes retain multiple priors and permit a shared prior" {
         });
         defer harness.deinit();
 
-        const old: solver_model.PackageId = @enumFromInt(0);
-        const first: solver_model.PackageId = @enumFromInt(1);
-        const second: solver_model.PackageId = @enumFromInt(2);
+        const old: solver_model.PackageId = @fromBackingInt(@intCast(0));
+        const first: solver_model.PackageId = @fromBackingInt(@intCast(1));
+        const second: solver_model.PackageId = @fromBackingInt(@intCast(2));
         const first_priors = [_]solver_model.PackageId{old};
         const second_priors = [_]solver_model.PackageId{old};
         const jobs = [_]solver_model.Job{
@@ -3377,14 +3377,14 @@ test "obsoletes retain multiple priors and permit a shared prior" {
                 .priors = &first_priors,
                 .kind = .obsolete,
                 .reason = .obsoletes,
-                .requested_by = @enumFromInt(0),
+                .requested_by = @fromBackingInt(@intCast(0)),
             },
             .{
                 .package = second,
                 .priors = &second_priors,
                 .kind = .obsolete,
                 .reason = .obsoletes,
-                .requested_by = @enumFromInt(1),
+                .requested_by = @fromBackingInt(@intCast(1)),
             },
         };
         const outcome = solver_model.Outcome{
@@ -3496,8 +3496,8 @@ test "weak dependency and clean-dependency erases have exact reasons" {
         });
         defer harness.deinit();
 
-        const app: solver_model.PackageId = @enumFromInt(0);
-        const weak: solver_model.PackageId = @enumFromInt(1);
+        const app: solver_model.PackageId = @fromBackingInt(@intCast(0));
+        const weak: solver_model.PackageId = @fromBackingInt(@intCast(1));
         const jobs = [_]solver_model.Job{
             .{ .action = .install, .selection = .{ .package = app } },
         };
@@ -3506,7 +3506,7 @@ test "weak dependency and clean-dependency erases have exact reasons" {
                 .package = app,
                 .kind = .install,
                 .reason = .user,
-                .requested_by = @enumFromInt(0),
+                .requested_by = @fromBackingInt(@intCast(0)),
             },
             .{
                 .package = weak,
@@ -3581,8 +3581,8 @@ test "weak dependency and clean-dependency erases have exact reasons" {
         });
         defer harness.deinit();
 
-        const dependency: solver_model.PackageId = @enumFromInt(0);
-        const app: solver_model.PackageId = @enumFromInt(1);
+        const dependency: solver_model.PackageId = @fromBackingInt(@intCast(0));
+        const app: solver_model.PackageId = @fromBackingInt(@intCast(1));
         const jobs = [_]solver_model.Job{
             .{ .action = .user_installed, .selection = .{ .package = app } },
             .{
@@ -3601,7 +3601,7 @@ test "weak dependency and clean-dependency erases have exact reasons" {
                 .package = app,
                 .kind = .erase,
                 .reason = .user,
-                .requested_by = @enumFromInt(1),
+                .requested_by = @fromBackingInt(@intCast(1)),
             },
         };
         const outcome = solver_model.Outcome{
@@ -3686,8 +3686,8 @@ test "erase and installonly retry erase retain exact reasons" {
     });
     defer harness.deinit();
 
-    const old: solver_model.PackageId = @enumFromInt(0);
-    const new: solver_model.PackageId = @enumFromInt(1);
+    const old: solver_model.PackageId = @fromBackingInt(@intCast(0));
+    const new: solver_model.PackageId = @fromBackingInt(@intCast(1));
     const jobs = [_]solver_model.Job{
         .{ .action = .multiversion, .selection = .{ .name = "kernel" } },
         .{ .action = .install, .selection = .{ .package = new } },
@@ -3702,13 +3702,13 @@ test "erase and installonly retry erase retain exact reasons" {
             .package = new,
             .kind = .install,
             .reason = .user,
-            .requested_by = @enumFromInt(1),
+            .requested_by = @fromBackingInt(@intCast(1)),
         },
         .{
             .package = old,
             .kind = .erase,
             .reason = .installonly_limit,
-            .requested_by = @enumFromInt(2),
+            .requested_by = @fromBackingInt(@intCast(2)),
         },
     };
     const outcome = solver_model.Outcome{
@@ -3806,8 +3806,8 @@ test "installonly terminal accepts only an attributed erase tail" {
     });
     defer harness.deinit();
 
-    const old: solver_model.PackageId = @enumFromInt(0);
-    const new: solver_model.PackageId = @enumFromInt(1);
+    const old: solver_model.PackageId = @fromBackingInt(@intCast(0));
+    const new: solver_model.PackageId = @fromBackingInt(@intCast(1));
     const jobs = [_]solver_model.Job{
         .{ .action = .multiversion, .selection = .{ .name = "kernel" } },
         .{ .action = .install, .selection = .{ .package = new } },
@@ -3821,7 +3821,7 @@ test "installonly terminal accepts only an attributed erase tail" {
         .{
             .kind = .installonly_limit,
             .package = old,
-            .job = @enumFromInt(2),
+            .job = @fromBackingInt(@intCast(2)),
             .count = 1,
         },
     };
@@ -3913,7 +3913,7 @@ test "no-candidate unsatisfied and conflict problems are structured" {
             .{
                 .kind = .no_candidate,
                 .capability = .{ .name = "missing" },
-                .job = @enumFromInt(0),
+                .job = @fromBackingInt(@intCast(0)),
                 .count = 1,
             },
         };
@@ -3983,7 +3983,7 @@ test "no-candidate unsatisfied and conflict problems are structured" {
         });
         defer harness.deinit();
 
-        const broken: solver_model.PackageId = @enumFromInt(0);
+        const broken: solver_model.PackageId = @fromBackingInt(@intCast(0));
         const jobs = [_]solver_model.Job{
             .{ .action = .install, .selection = .{ .package = broken } },
         };
@@ -3992,7 +3992,7 @@ test "no-candidate unsatisfied and conflict problems are structured" {
                 .kind = .unsatisfied_requirement,
                 .package = broken,
                 .capability = .{ .name = "missing-dependency" },
-                .job = @enumFromInt(0),
+                .job = @fromBackingInt(@intCast(0)),
                 .count = 1,
             },
         };
@@ -4057,8 +4057,8 @@ test "no-candidate unsatisfied and conflict problems are structured" {
         });
         defer harness.deinit();
 
-        const first: solver_model.PackageId = @enumFromInt(0);
-        const second: solver_model.PackageId = @enumFromInt(1);
+        const first: solver_model.PackageId = @fromBackingInt(@intCast(0));
+        const second: solver_model.PackageId = @fromBackingInt(@intCast(1));
         const jobs = [_]solver_model.Job{
             .{ .action = .install, .selection = .{ .package = first } },
             .{ .action = .install, .selection = .{ .package = second } },
@@ -4068,7 +4068,7 @@ test "no-candidate unsatisfied and conflict problems are structured" {
                 .kind = .conflict,
                 .package = first,
                 .related_package = second,
-                .job = @enumFromInt(0),
+                .job = @fromBackingInt(@intCast(0)),
                 .count = 1,
             },
         };
@@ -4151,7 +4151,7 @@ test "package and capability EVRs recognize only complete decimal epochs" {
         var job_origins: [vectors.len]?u32 = undefined;
         for (vectors, 0..) |vector, index| {
             const package_id: solver_model.PackageId =
-                @enumFromInt(@as(u32, @intCast(index)));
+                @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             packages[index] = testPackageFromEvr(
                 vector.name,
                 vector.evr,
@@ -4165,7 +4165,7 @@ test "package and capability EVRs recognize only complete decimal epochs" {
                 .package = package_id,
                 .kind = .install,
                 .reason = .user,
-                .requested_by = @enumFromInt(@as(u32, @intCast(index))),
+                .requested_by = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
             };
             selected[index] = package_id;
             requests[index] = testRequest(
@@ -4258,7 +4258,7 @@ test "package and capability EVRs recognize only complete decimal epochs" {
         var job_origins: [vectors.len]?u32 = undefined;
         for (vectors, 0..) |vector, index| {
             const package_id: solver_model.PackageId =
-                @enumFromInt(@as(u32, @intCast(index)));
+                @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const relation = capabilityRelation(
                 vector.capability_name,
                 vector.epoch,
@@ -4273,7 +4273,7 @@ test "package and capability EVRs recognize only complete decimal epochs" {
                 .package = package_id,
                 .kind = .install,
                 .reason = .user,
-                .requested_by = @enumFromInt(@as(u32, @intCast(index))),
+                .requested_by = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
             };
             selected[index] = package_id;
             requests[index] = testRequest(
@@ -4368,7 +4368,7 @@ test "thousands of selected actions capture without quadratic deduplication" {
             .{index},
         );
         const package_id: solver_model.PackageId =
-            @enumFromInt(@as(u32, @intCast(index)));
+            @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         packages[index] = testPackage(name, "1", "x86_64");
         jobs[index] = .{
             .action = .install,
@@ -4378,7 +4378,7 @@ test "thousands of selected actions capture without quadratic deduplication" {
             .package = package_id,
             .kind = .install,
             .reason = .policy,
-            .requested_by = @enumFromInt(@as(u32, @intCast(index))),
+            .requested_by = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
         };
         selected[index] = package_id;
         requests[index] = testRequest(

@@ -6,15 +6,7 @@
 
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("dlfcn.h");
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("nodes.h");
-    @cInclude("modules.h");
-});
+const c = @import("c.llconf.modules");
 
 export var cnfmodules: [*c]c.struct_cnfmodule = null;
 
@@ -138,7 +130,7 @@ export fn parse_options(string: ?[*:0]const u8) [*c]c.struct_cnfnode {
     const input = string orelse return cn_top;
     var p = input;
     while (p[0] != 0) {
-        var buf = [_:0]u8{0} ** 256;
+        var buf: [256:0]u8 = @splat(0);
         var q_idx: usize = 0;
         var cn: [*c]c.struct_cnfnode = null;
 
@@ -236,7 +228,7 @@ export fn cnfmodule_register_plugin(nameOpt: ?[*:0]const u8, pathOpt: ?[*:0]cons
         return -1;
     }
 
-    var fname = [_:0]u8{0} ** 256;
+    var fname: [256:0]u8 = @splat(0);
     _ = c.snprintf(@ptrCast(&fname), fname.len, "llconf_register_%s", name);
     _ = c.dlerror();
 

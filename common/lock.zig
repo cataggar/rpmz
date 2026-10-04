@@ -7,11 +7,7 @@
 const std = @import("std");
 const common = @import("api.zig");
 
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-    @cInclude("string.h");
-});
+const c = @import("c.common.lock");
 
 extern fn flock(nFd: c_int, nOperation: c_int) c_int;
 extern fn close(nFd: c_int) c_int;
@@ -138,7 +134,7 @@ export fn rpmzLockAcquire(pszLockPathOpt: ?[*:0]const u8) c_int {
     }
 
     {
-        var szPidBuf = [_]u8{0} ** 128;
+        var szPidBuf: [128]u8 = @splat(0);
         const nWritten = c.snprintf(
             &szPidBuf[0],
             szPidBuf.len,
@@ -214,11 +210,12 @@ export fn rpmzLockFree(pszLockPathOpt: ?[*:0]const u8, nLockFd: c_int) void {
 }
 
 test "rpmzLockAcquire writes the pid and keeps a stable lock inode" {
-    var szLockPath = [_]u8{0} ** 128;
-    const pszLockPath = try std.fmt.bufPrintZ(
+    var szLockPath: [128]u8 = @splat(0);
+    const pszLockPath = try std.fmt.bufPrintSentinel(
         &szLockPath,
         "zig-test-lock-{d}.lock",
         .{std.c.getpid()},
+        0,
     );
 
     _ = c.remove(pszLockPath);
@@ -231,11 +228,11 @@ test "rpmzLockAcquire writes the pid and keeps a stable lock inode" {
     try std.testing.expect(pLockFile != null);
     defer _ = c.fclose(pLockFile);
 
-    var szContents = [_]u8{0} ** 128;
+    var szContents: [128]u8 = @splat(0);
     const nRead = c.fread(&szContents[0], 1, szContents.len - 1, pLockFile);
     const pszContents = szContents[0..nRead];
 
-    var szExpectedPid = [_]u8{0} ** 32;
+    var szExpectedPid: [32]u8 = @splat(0);
     const pszExpectedPid = try std.fmt.bufPrint(&szExpectedPid, "{d}\n", .{std.c.getpid()});
     try std.testing.expectEqualStrings(pszExpectedPid, pszContents);
 
@@ -248,10 +245,11 @@ test "safe lock creates an empty stable lock inode" {
     defer tmp.cleanup();
 
     var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(
+    const path = try std.fmt.bufPrintSentinel(
         &path_buffer,
         ".zig-cache/tmp/{s}/lock",
         .{tmp.sub_path},
+        0,
     );
     const fd = rpmzLockAcquireSafe(path);
     try std.testing.expect(fd >= 0);
@@ -277,10 +275,11 @@ test "safe lock rejects symlinks without altering their target" {
     try tmp.dir.symLink(std.testing.io, "victim", "lock", .{});
 
     var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(
+    const path = try std.fmt.bufPrintSentinel(
         &path_buffer,
         ".zig-cache/tmp/{s}/lock",
         .{tmp.sub_path},
+        0,
     );
     try std.testing.expect(rpmzLockAcquireSafe(path) < 0);
 
@@ -299,10 +298,11 @@ test "safe lock rejects non-regular and foreign entries" {
     defer tmp.cleanup();
 
     var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(
+    const path = try std.fmt.bufPrintSentinel(
         &path_buffer,
         ".zig-cache/tmp/{s}/lock",
         .{tmp.sub_path},
+        0,
     );
     try std.testing.expectEqual(
         @as(c_int, 0),

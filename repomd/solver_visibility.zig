@@ -1,4 +1,17 @@
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const model = @import("model.zig");
 const query_index = @import("index.zig");
 const solver_model = @import("solver_model.zig");
@@ -155,7 +168,7 @@ pub const Projection = struct {
         self: *const Projection,
         package: solver_model.PackageId,
     ) ?bool {
-        const index: usize = @intFromEnum(package);
+        const index: usize = @backingInt(package);
         if (index >= self.visible.len) return null;
         return self.visible[index];
     }
@@ -164,7 +177,7 @@ pub const Projection = struct {
         self: *const Projection,
         package: solver_model.PackageId,
     ) ?HiddenReason {
-        const index: usize = @intFromEnum(package);
+        const index: usize = @backingInt(package);
         if (index >= self.hidden_reasons.len) return null;
         return self.hidden_reasons[index];
     }
@@ -551,13 +564,13 @@ test "visibility copies an authoritative considered mask" {
     defer projection.deinit();
     considered[1] = true;
 
-    try std.testing.expect(projection.isVisible(@enumFromInt(0)).?);
-    try std.testing.expect(!projection.isVisible(@enumFromInt(1)).?);
+    try std.testing.expect(projection.isVisible(@fromBackingInt(@intCast(0))).?);
+    try std.testing.expect(!projection.isVisible(@fromBackingInt(@intCast(1))).?);
     try std.testing.expect(
-        projection.hiddenReason(@enumFromInt(1)).?.considered,
+        projection.hiddenReason(@fromBackingInt(@intCast(1))).?.considered,
     );
     try std.testing.expect(
-        !projection.hiddenReason(@enumFromInt(1)).?.snapshot,
+        !projection.hiddenReason(@fromBackingInt(@intCast(1))).?.snapshot,
     );
 }
 
@@ -601,7 +614,7 @@ test "visibility projection cleans every allocation failure" {
     );
     defer universe.deinit();
 
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         allocationFailureCase,
         .{&universe},

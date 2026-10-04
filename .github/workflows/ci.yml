@@ -47,18 +47,18 @@ jobs:
         with:
           ghr-version: v0.8.1
           tools: >-
-            cataggar/zig@v0.16.0
+            cataggar/zig@v0.17.0
             RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 
       - name: Configure Zig caches
         uses: ./.github/actions/zig-cache
 
       - name: Build (Debug)
-        run: zig build install --prefix ./out
+        run: zig build -j2 install --prefix ./out
 
       - name: Prove product build does not fetch libsolv
         if: matrix.name == 'linux-x64'
-        run: zig build product-no-libsolv-fetch-audit
+        run: zig build -j2 product-no-libsolv-fetch-audit
 
       - name: Smoke test (Debug)
         run: |
@@ -67,20 +67,20 @@ jobs:
 
       - name: Zig unit tests
         run: |
-          zig build test --prefix ./out
-          zig build -Dlibsolv-oracle=true libsolv-oracle-test --prefix ./out
+          zig build -j2 test --prefix ./out
+          zig build -j2 -Dlibsolv-oracle=true libsolv-oracle-test --prefix ./out
           # Also run them optimized. Debug masks whole classes of bug:
           # dangling stack pointers stay readable and the safety
           # allocator hides use-after-free. A segfault in
           # transaction_plan_native passed Debug CI for exactly this
           # reason. The ReleaseSafe build below starts with `rm -rf out`,
           # so this step cannot disturb the measured artifact.
-          zig build -Doptimize=ReleaseSafe test --prefix ./out
+          zig build -j2 -Doptimize=safe test --prefix ./out
 
       - name: Build (ReleaseSafe)
         run: |
           rm -rf out
-          zig build -Doptimize=ReleaseSafe install --prefix ./out
+          zig build -j2 -Doptimize=safe install --prefix ./out
 
       - name: Smoke test (ReleaseSafe)
         run: |
@@ -89,15 +89,15 @@ jobs:
 
       - name: Migration audits
         run: |
-          zig build migration-audit --prefix ./out
-          zig build rebrand-audit --prefix ./out
-          zig build dead-errdefer-audit --prefix ./out
+          zig build -j2 migration-audit --prefix ./out
+          zig build -j2 rebrand-audit --prefix ./out
+          zig build -j2 dead-errdefer-audit --prefix ./out
 
       - name: Native dependency and public Zig API audits
         run: |
-          zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
-          zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
-          zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
+          zig build -j2 -Doptimize=safe native-dependency-audit --prefix ./out
+          zig build -j2 -Doptimize=safe public-zig-api-audit --prefix ./out
+          zig build -j2 -Doptimize=safe libsolv-confinement-audit --prefix ./out
 
       - name: Generate ztest repository seed
         run: |
@@ -107,12 +107,12 @@ jobs:
 
       - name: Offline replay acceptance tests
         run: |
-          zig build -Doptimize=ReleaseSafe replay-acceptance-export --prefix ./out
+          zig build -j2 -Doptimize=safe replay-acceptance-export --prefix ./out
           cd pytests
           sudo -E env "PATH=$PATH" python3 -m pytest -v tests/test_replay_acceptance.py
 
       - name: Zig integration tests
-        run: sudo -E env "PATH=$PATH" zig build -Doptimize=ReleaseSafe ztest --prefix ./out --summary all
+        run: sudo -E env "PATH=$PATH" zig build -j2 -Doptimize=safe ztest --prefix ./out --summary all
 
   no-rpm-development:
     name: Build without RPM development files
@@ -144,7 +144,7 @@ jobs:
         with:
           ghr-version: v0.8.1
           tools: >-
-            cataggar/zig@v0.16.0
+            cataggar/zig@v0.17.0
             RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 
       - name: Configure Zig caches
@@ -152,20 +152,20 @@ jobs:
 
       - name: Build, test, and lint
         run: |
-          zig build -Doptimize=ReleaseSafe install --prefix ./out
-          zig build test --prefix ./out
-          zig build -Doptimize=ReleaseSafe test --prefix ./out
-          zig build lint --prefix ./out
-          zig build -Doptimize=ReleaseSafe install --prefix ./out
+          zig build -j2 -Doptimize=safe install --prefix ./out
+          zig build -j2 test --prefix ./out
+          zig build -j2 -Doptimize=safe test --prefix ./out
+          zig build -j2 lint --prefix ./out
+          zig build -j2 -Doptimize=safe install --prefix ./out
 
       - name: Audit migration, dependencies, and public Zig API
         run: |
-          zig build migration-audit --prefix ./out
-          zig build rebrand-audit --prefix ./out
-          zig build dead-errdefer-audit --prefix ./out
-          zig build -Doptimize=ReleaseSafe native-dependency-audit --prefix ./out
-          zig build -Doptimize=ReleaseSafe public-zig-api-audit --prefix ./out
-          zig build -Doptimize=ReleaseSafe libsolv-confinement-audit --prefix ./out
+          zig build -j2 migration-audit --prefix ./out
+          zig build -j2 rebrand-audit --prefix ./out
+          zig build -j2 dead-errdefer-audit --prefix ./out
+          zig build -j2 -Doptimize=safe native-dependency-audit --prefix ./out
+          zig build -j2 -Doptimize=safe public-zig-api-audit --prefix ./out
+          zig build -j2 -Doptimize=safe libsolv-confinement-audit --prefix ./out
 
   lint:
     name: Source policy
@@ -215,10 +215,10 @@ jobs:
         with:
           ghr-version: v0.8.1
           tools: >-
-            cataggar/zig@v0.16.0
+            cataggar/zig@v0.17.0
             RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
       - uses: ./.github/actions/zig-cache
       - name: Package and verify v0.1.0 locally
         run: |
-          zig build -Doptimize=ReleaseSafe -Dversion=0.1.0 \
+          zig build -j2 -Doptimize=safe -Dversion=0.1.0 \
             release-dry-run --prefix ./release-install

@@ -309,7 +309,7 @@ test "certificate import parser rejects malformed primary and subkey material" {
     var key_body: [1 + 4 + 1 + 32]u8 = undefined;
     key_body[0] = 4;
     @memset(key_body[1..5], 0);
-    key_body[5] = @intFromEnum(pubkey.Algorithm.ed25519);
+    key_body[5] = @backingInt(pubkey.Algorithm.ed25519);
     @memset(key_body[6..], 0xA5);
 
     var bad_primary: [2 + key_body.len + 1]u8 = undefined;

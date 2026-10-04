@@ -52,7 +52,7 @@ pub export fn TDNFRepoMdCalculateCookieForFd(
     while (true) {
         const got = std.c.read(fd, &buffer, buffer.len);
         if (got < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+            std.c._errno().* == @backingInt(std.posix.E.INTR))
         {
             continue;
         }
@@ -283,10 +283,11 @@ test "repo cache file cookie includes legacy ident and file bytes" {
             .data = case.data,
         });
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const path = try std.fmt.bufPrintZ(
+        const path = try std.fmt.bufPrintSentinel(
             &path_buf,
             ".zig-cache/tmp/{s}/{s}",
             .{ &tmp.sub_path, case.sub_path },
+            0,
         );
         var actual: [cookie_len]u8 = undefined;
         try std.testing.expectEqual(
@@ -308,10 +309,11 @@ test "repo cache file cookie preserves legacy error codes" {
     );
 
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const missing_path = try std.fmt.bufPrintZ(
+    const missing_path = try std.fmt.bufPrintSentinel(
         &path_buf,
         ".zig-cache/tmp/{s}/missing",
         .{&tmp.sub_path},
+        0,
     );
     try std.testing.expectEqual(
         @as(u32, error_codes.ERROR_TDNF_SOLV_IO),

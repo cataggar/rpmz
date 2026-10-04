@@ -761,7 +761,7 @@ test "history context allocation failure closes the opened database" {
             std.c.fcntl(dir_fd, std.c.F.GETFD),
         );
         try std.testing.expectEqual(
-            @intFromEnum(std.posix.E.BADF),
+            @backingInt(std.posix.E.BADF),
             std.c._errno().*,
         );
     }

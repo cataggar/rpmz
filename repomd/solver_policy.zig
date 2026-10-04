@@ -8,6 +8,19 @@
 //! cleanup, and rule-class-aware skipping of broken exact install jobs.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const query_index = @import("index.zig");
 const metadata = @import("model.zig");
 const solver_model = @import("solver_model.zig");
@@ -403,7 +416,7 @@ pub fn prepareWithOptions(
                     );
                     if (base.universe.packages[package_index].installed != null) {
                         directly_erased[package_index] = true;
-                        const job_index: usize = @intFromEnum(job_id);
+                        const job_index: usize = @backingInt(job_id);
                         if (job_index >= base.jobs.len) {
                             return error.InvalidFormula;
                         }
@@ -439,7 +452,7 @@ pub fn prepareWithOptions(
     // Multiversion removes distinct-EVRA same-name clauses, so rebuild the
     // update pool that those clauses normally provide.
     for (base.universe.packages) |package| {
-        const package_index: usize = @intFromEnum(package.id);
+        const package_index: usize = @backingInt(package.id);
         const state = base.package_states[package_index];
         if (package.installed == null or
             !state.multiversion or
@@ -448,7 +461,7 @@ pub fn prepareWithOptions(
             continue;
         }
         for (base.universe.packages) |candidate| {
-            const candidate_index: usize = @intFromEnum(candidate.id);
+            const candidate_index: usize = @backingInt(candidate.id);
             if (candidate.installed != null or
                 !base.package_states[candidate_index].multiversion or
                 solver_rules.isSource(candidate.source.nevra.arch) or
@@ -505,7 +518,7 @@ pub fn prepareWithOptions(
     for (base.universe.packages) |package| {
         const installed = package.installed orelse continue;
         _ = installed;
-        const package_index: usize = @intFromEnum(package.id);
+        const package_index: usize = @backingInt(package.id);
         const installonly_update_eviction =
             directly_erased[package_index] and
             installonly_erased[package_index] and
@@ -713,7 +726,7 @@ pub fn prepareWithOptions(
     ) |package, *decision, *preferred| {
         decision.* = package.id;
         preferred.* = package.installed != null and
-            !cleanup_removals[@intFromEnum(package.id)];
+            !cleanup_removals[@backingInt(package.id)];
     }
     var cleanup_packages = PackageIdList.init(allocator);
     defer cleanup_packages.deinit();
@@ -724,7 +737,7 @@ pub fn prepareWithOptions(
     | {
         if (cleanup and !direct) {
             try cleanup_packages.append(
-                @enumFromInt(@as(u32, @intCast(package_index))),
+                @fromBackingInt(@intCast(@as(u32, @intCast(package_index)))),
             );
         }
     }
@@ -735,7 +748,7 @@ pub fn prepareWithOptions(
     for (protected, 0..) |is_protected, package_index| {
         if (is_protected) {
             try protected_packages.append(
-                @enumFromInt(@as(u32, @intCast(package_index))),
+                @fromBackingInt(@intCast(@as(u32, @intCast(package_index)))),
             );
         }
     }
@@ -875,7 +888,7 @@ fn computeInstallCleanupSeeds(
             .job => |value| value,
             else => continue,
         };
-        const job_index: usize = @intFromEnum(job_id);
+        const job_index: usize = @backingInt(job_id);
         if (job_index >= base.jobs.len) return error.InvalidFormula;
         const job = base.jobs[job_index];
         if (job.action != .install) continue;
@@ -961,7 +974,7 @@ fn collectObsoletedInstalled(
             .obsoletes => |value| value,
             else => continue,
         };
-        if (@intFromEnum(origin.dependency.package) != package_index) continue;
+        if (@backingInt(origin.dependency.package) != package_index) continue;
         const target_index = try packageIndex(
             origin.target,
             base.universe.packages.len,
@@ -1152,14 +1165,14 @@ fn computeCleanupRemovals(
     for (cleanup_seeds, 0..) |seed, package_index| {
         if (!seed) continue;
         scheduled[package_index] = true;
-        try queue.append(@enumFromInt(@as(u32, @intCast(package_index))));
+        try queue.append(@fromBackingInt(@intCast(@as(u32, @intCast(package_index)))));
     }
 
     var cursor: usize = 0;
     while (true) {
         while (cursor < queue.items.len) : (cursor += 1) {
             const package_id = queue.items[cursor];
-            const package_index: usize = @intFromEnum(package_id);
+            const package_index: usize = @backingInt(package_id);
             const package = base.universe.package(package_id) orelse
                 return error.InvalidFormula;
             if (package.installed == null) continue;
@@ -1240,7 +1253,7 @@ fn computeCleanupRemovals(
         for (seeds, replacements) |seed, candidates| {
             if (!seed) continue;
             for (candidates.items) |candidate| {
-                const candidate_index: usize = @intFromEnum(candidate);
+                const candidate_index: usize = @backingInt(candidate);
                 if (kept[candidate_index]) continue;
                 kept[candidate_index] = true;
                 try addback.append(candidate);
@@ -1349,7 +1362,7 @@ fn supplementsSatisfied(
         const request = base.weak_requests[request_index];
         if (request.system_satisfied) return true;
         for (request.candidates.slice(base.weak_candidates)) |candidate| {
-            const candidate_index: usize = @intFromEnum(candidate);
+            const candidate_index: usize = @backingInt(candidate);
             if (candidate_index >= base.universe.packages.len) continue;
             if (base.universe.packages[candidate_index].installed == null) {
                 continue;
@@ -1373,7 +1386,7 @@ fn supplementsSatisfiedByKept(
         const request = base.weak_requests[request_index];
         if (request.system_satisfied) return true;
         for (request.candidates.slice(base.weak_candidates)) |candidate| {
-            const candidate_index: usize = @intFromEnum(candidate);
+            const candidate_index: usize = @backingInt(candidate);
             if (candidate_index >= kept.len) continue;
             if (kept[candidate_index]) return true;
         }
@@ -1513,7 +1526,7 @@ fn filterUnneededCandidates(
     defer allocator.free(slot);
     @memset(slot, -1);
     for (candidates, 0..) |package_id, index| {
-        slot[@intFromEnum(package_id)] = @intCast(index);
+        slot[@backingInt(package_id)] = @intCast(index);
     }
 
     var edges = std.array_list.Managed(i32).init(allocator);
@@ -1527,7 +1540,7 @@ fn filterUnneededCandidates(
     @memset(requires_counts, 0);
 
     for (candidates, 0..) |owner, index| {
-        const owner_index: usize = @intFromEnum(owner);
+        const owner_index: usize = @backingInt(owner);
         const list_start: i32 = @intCast(edges.items.len);
         edges.items[index + 1] = list_start;
         for (dependencies.requirements[owner_index].items) |clause_index| {
@@ -1556,7 +1569,7 @@ fn filterUnneededCandidates(
     // in the supplementing one, so the edge is inserted into the supplemented
     // package's list, right behind its requires.
     for (candidates, 0..) |owner, index| {
-        const owner_index: usize = @intFromEnum(owner);
+        const owner_index: usize = @backingInt(owner);
         for (dependencies.supplements[owner_index].items) |request_index| {
             const request = base.weak_requests[request_index];
             const providers = request.candidates.slice(base.weak_candidates);
@@ -1564,7 +1577,7 @@ fn filterUnneededCandidates(
             if (providers.len != 1) continue;
             for (providers) |provider| {
                 if (provider == owner) continue;
-                const provider_index: usize = @intFromEnum(provider);
+                const provider_index: usize = @backingInt(provider);
                 if (base.universe.packages[provider_index].installed == null) {
                     continue;
                 }
@@ -1692,7 +1705,7 @@ fn appendUnneededEdges(
         if (!literal.positive()) continue;
         const package = literal.package();
         if (package == owner) continue;
-        if (base.universe.packages[@intFromEnum(package)].installed == null) {
+        if (base.universe.packages[@backingInt(package)].installed == null) {
             continue;
         }
         installed_providers += 1;
@@ -1714,7 +1727,7 @@ fn appendUnneededCandidateEdges(
     var installed_providers: usize = 0;
     for (providers) |provider| {
         if (provider == owner) continue;
-        if (base.universe.packages[@intFromEnum(provider)].installed == null) {
+        if (base.universe.packages[@backingInt(provider)].installed == null) {
             continue;
         }
         installed_providers += 1;
@@ -1733,7 +1746,7 @@ fn appendUnneededEdge(
     edges: *std.array_list.Managed(i32),
 ) PrepareError!void {
     if (provider == owner) return;
-    const provider_index: usize = @intFromEnum(provider);
+    const provider_index: usize = @backingInt(provider);
     if (base.universe.packages[provider_index].installed == null) return;
     const target = slot[provider_index];
     if (target < 0) return;
@@ -1749,7 +1762,7 @@ fn supplementsRequestSatisfied(
 ) bool {
     if (request.system_satisfied) return true;
     for (providers) |provider| {
-        if (base.universe.packages[@intFromEnum(provider)].installed != null) {
+        if (base.universe.packages[@backingInt(provider)].installed != null) {
             return true;
         }
     }
@@ -1785,7 +1798,7 @@ fn computeUpdateSeeds(
     errdefer allocator.free(seeds);
     @memset(seeds, false);
     for (candidates.items, pruned) |package_id, is_pruned| {
-        const package_index: usize = @intFromEnum(package_id);
+        const package_index: usize = @backingInt(package_id);
         if (is_pruned) continue;
         if (installedIsUserRoot(base, package_index, protected)) continue;
         seeds[package_index] = true;
@@ -2117,7 +2130,7 @@ fn validateSkipBrokenGoal(
             return error.UnsupportedPolicy;
         }
         const package_id = job.selection.package;
-        if (@intFromEnum(package_id) >= prepared.formula.universe.packages.len) {
+        if (@backingInt(package_id) >= prepared.formula.universe.packages.len) {
             return error.InvalidFormula;
         }
     }
@@ -2126,7 +2139,7 @@ fn validateSkipBrokenGoal(
             .job => |value| value,
             else => continue,
         };
-        const job_index: usize = @intFromEnum(job_id);
+        const job_index: usize = @backingInt(job_id);
         if (job_index >= seen_jobs.len or
             seen_jobs[job_index] or
             clause.disposition != .hard)
@@ -2171,7 +2184,7 @@ fn solveFiltered(
     defer clauses.deinit();
     for (prepared.formula.clauses, 0..) |clause, clause_index| {
         if (clause.origin == .job) {
-            const job_index: usize = @intFromEnum(clause.origin.job);
+            const job_index: usize = @backingInt(clause.origin.job);
             if (job_index >= excluded_jobs.len) return error.InvalidFormula;
             if (excluded_jobs[job_index]) continue;
         } else if (package_rules == .omit and
@@ -2269,14 +2282,14 @@ pub fn isolateJob(
     allocator: std.mem.Allocator,
     job: solver_model.JobId,
 ) SkipBrokenError!OwnedJobFormula {
-    const job_index: usize = @intFromEnum(job);
+    const job_index: usize = @backingInt(job);
     if (job_index >= prepared.formula.jobs.len) return error.InvalidFormula;
 
     var clauses = std.array_list.Managed(solver_rules.Clause).init(allocator);
     errdefer clauses.deinit();
     for (prepared.formula.clauses) |clause| {
         if (clause.origin == .job) {
-            const origin_index: usize = @intFromEnum(clause.origin.job);
+            const origin_index: usize = @backingInt(clause.origin.job);
             if (origin_index >= prepared.formula.jobs.len) {
                 return error.InvalidFormula;
             }
@@ -2331,7 +2344,7 @@ fn collectSkippedJobIds(
     if (include_skipped) {
         for (skipped, 0..) |is_skipped, job_index| {
             if (!is_skipped) continue;
-            ids[cursor] = @enumFromInt(@as(u32, @intCast(job_index)));
+            ids[cursor] = @fromBackingInt(@intCast(@as(u32, @intCast(job_index))));
             cursor += 1;
         }
     }
@@ -2488,10 +2501,10 @@ fn containsPackageId(
 ) bool {
     var low: usize = 0;
     var high = packages.len;
-    const target_value = @intFromEnum(target);
+    const target_value = @backingInt(target);
     while (low < high) {
         const middle = low + (high - low) / 2;
-        const value = @intFromEnum(packages[middle]);
+        const value = @backingInt(packages[middle]);
         if (value < target_value) {
             low = middle + 1;
         } else {
@@ -2630,7 +2643,7 @@ fn relationSetFingerprint(relations: []const metadata.Relation) u64 {
     for (relations) |relation| {
         var hash = std.hash.Wyhash.init(0);
         hash.update(relation.name);
-        hash.update(&.{@intFromEnum(relation.comparison)});
+        hash.update(&.{@backingInt(relation.comparison)});
         const epoch = relation.epoch orelse 0;
         hash.update(std.mem.asBytes(&epoch));
         if (relation.version) |version| hash.update(version);
@@ -2895,11 +2908,11 @@ const WeakObsoleteGraph = struct {
                         continue;
                     }
                     try targets[
-                        @intFromEnum(
+                        @backingInt(
                             origin.dependency.package,
                         )
                     ].append(origin.target);
-                    try sources[@intFromEnum(origin.target)].append(
+                    try sources[@backingInt(origin.target)].append(
                         origin.dependency.package,
                     );
                 },
@@ -2966,19 +2979,19 @@ const WeakObsoleteGraph = struct {
         self.node_stack.clearRetainingCapacity();
         self.dfs_stack.clearRetainingCapacity();
         for (candidates) |candidate| {
-            self.active[@intFromEnum(candidate)] = true;
+            self.active[@backingInt(candidate)] = true;
         }
 
         for (candidates) |root| {
-            if (self.visited[@intFromEnum(root)]) continue;
-            self.visited[@intFromEnum(root)] = true;
+            if (self.visited[@backingInt(root)]) continue;
+            self.visited[@backingInt(root)] = true;
             self.dfs_stack.appendAssumeCapacity(.{ .package = root });
             while (self.dfs_stack.items.len != 0) {
                 const frame = &self.dfs_stack.items[
                     self.dfs_stack.items.len - 1
                 ];
                 const edges = self.targets[
-                    @intFromEnum(
+                    @backingInt(
                         frame.package,
                     )
                 ].items;
@@ -2986,7 +2999,7 @@ const WeakObsoleteGraph = struct {
                 while (frame.next_target < edges.len) {
                     const target = edges[frame.next_target];
                     frame.next_target += 1;
-                    const target_index: usize = @intFromEnum(target);
+                    const target_index: usize = @backingInt(target);
                     if (!self.active[target_index] or
                         self.visited[target_index])
                     {
@@ -3010,17 +3023,17 @@ const WeakObsoleteGraph = struct {
         while (finish_index != 0) {
             finish_index -= 1;
             const root = self.finish_order.items[finish_index];
-            if (self.component[@intFromEnum(root)] !=
+            if (self.component[@backingInt(root)] !=
                 std.math.maxInt(usize))
             {
                 continue;
             }
-            self.component[@intFromEnum(root)] = component_count;
+            self.component[@backingInt(root)] = component_count;
             self.node_stack.appendAssumeCapacity(root);
             while (self.node_stack.items.len != 0) {
                 const package = self.node_stack.pop().?;
-                for (self.sources[@intFromEnum(package)].items) |source| {
-                    const source_index: usize = @intFromEnum(source);
+                for (self.sources[@backingInt(package)].items) |source| {
+                    const source_index: usize = @backingInt(source);
                     if (!self.active[source_index] or
                         self.component[source_index] !=
                             std.math.maxInt(usize))
@@ -3035,11 +3048,11 @@ const WeakObsoleteGraph = struct {
         }
 
         for (candidates) |source| {
-            const source_component = self.component[@intFromEnum(source)];
-            for (self.targets[@intFromEnum(source)].items) |target| {
-                if (!self.active[@intFromEnum(target)]) continue;
+            const source_component = self.component[@backingInt(source)];
+            for (self.targets[@backingInt(source)].items) |target| {
+                if (!self.active[@backingInt(target)]) continue;
                 const target_component =
-                    self.component[@intFromEnum(target)];
+                    self.component[@backingInt(target)];
                 if (source_component != target_component) {
                     self.component_incoming[target_component] = true;
                 }
@@ -3048,13 +3061,13 @@ const WeakObsoleteGraph = struct {
         var write_index: usize = 0;
         for (candidates) |candidate| {
             const candidate_component =
-                self.component[@intFromEnum(candidate)];
+                self.component[@backingInt(candidate)];
             if (self.component_incoming[candidate_component]) continue;
             candidates[write_index] = candidate;
             write_index += 1;
         }
         for (self.finish_order.items) |candidate| {
-            const candidate_index: usize = @intFromEnum(candidate);
+            const candidate_index: usize = @backingInt(candidate);
             self.active[candidate_index] = false;
             self.visited[candidate_index] = false;
             self.component[candidate_index] = std.math.maxInt(usize);
@@ -3081,7 +3094,7 @@ fn resolveWeakRequests(
     for (formula.clauses) |clause| {
         switch (clause.origin) {
             .not_installable => |package_id| {
-                not_installable[@intFromEnum(package_id)] = true;
+                not_installable[@backingInt(package_id)] = true;
             },
             else => {},
         }
@@ -3134,7 +3147,7 @@ fn resolveWeakRequests(
             {
                 continue;
             }
-            const owner_index: usize = @intFromEnum(request.owner);
+            const owner_index: usize = @backingInt(request.owner);
             if (not_installable[owner_index] or
                 !supplementActive(formula, request, session, options))
             {
@@ -3171,7 +3184,7 @@ fn resolveWeakRequests(
             }
             active_recommendations[request_index] = true;
             for (candidates) |candidate| {
-                const candidate_index: usize = @intFromEnum(candidate);
+                const candidate_index: usize = @backingInt(candidate);
                 if (not_installable[candidate_index] or
                     pool_seen[candidate_index])
                 {
@@ -3193,11 +3206,11 @@ fn resolveWeakRequests(
         );
         @memset(eligible, false);
         for (weak_pool.items) |candidate| {
-            eligible[@intFromEnum(candidate)] = true;
+            eligible[@backingInt(candidate)] = true;
         }
         var write_index: usize = 0;
         for (supplements.items) |candidate| {
-            const candidate_index: usize = @intFromEnum(candidate);
+            const candidate_index: usize = @backingInt(candidate);
             if (!eligible[candidate_index] or probed[candidate_index]) {
                 continue;
             }
@@ -3223,7 +3236,7 @@ fn resolveWeakRequests(
             weakPreferredLessThan,
         );
         for (supplements.items) |candidate| {
-            const candidate_index: usize = @intFromEnum(candidate);
+            const candidate_index: usize = @backingInt(candidate);
             probed[candidate_index] = true;
             if (!try session.trySelect(candidate)) continue;
             try accepted.append(.{
@@ -3248,7 +3261,7 @@ fn resolveWeakRequests(
             }
             recommendation_candidates.clearRetainingCapacity();
             for (candidates) |candidate| {
-                const candidate_index: usize = @intFromEnum(candidate);
+                const candidate_index: usize = @backingInt(candidate);
                 if (!eligible[candidate_index] or probed[candidate_index]) {
                     continue;
                 }
@@ -3261,7 +3274,7 @@ fn resolveWeakRequests(
                 weakPreferredLessThan,
             );
             for (recommendation_candidates.items) |candidate| {
-                const candidate_index: usize = @intFromEnum(candidate);
+                const candidate_index: usize = @backingInt(candidate);
                 probed[candidate_index] = true;
                 if (!try session.trySelect(candidate)) continue;
                 try accepted.append(.{
@@ -3300,7 +3313,7 @@ fn rankSupplementCandidates(
         try ranked.append(.{
             .package = candidate,
             .original_order = original_order,
-            .old_version = old_versions[@intFromEnum(candidate)],
+            .old_version = old_versions[@backingInt(candidate)],
             .installed_name = false,
         });
     }
@@ -3440,7 +3453,7 @@ fn weakVersionLessThan(
     {
         return left_package.installed != null;
     }
-    return @intFromEnum(left) < @intFromEnum(right);
+    return @backingInt(left) < @backingInt(right);
 }
 
 fn markWeakPreferred(
@@ -3451,7 +3464,7 @@ fn markWeakPreferred(
     @memset(preferred, false);
     for (formula.universe.packages) |package| {
         if (package.installed != null) {
-            preferred[@intFromEnum(package.id)] = true;
+            preferred[@backingInt(package.id)] = true;
         }
     }
     for (formula.weak_requests) |request| {
@@ -3459,14 +3472,14 @@ fn markWeakPreferred(
             .suggests => {
                 if (!session.selected(request.owner).?) continue;
                 for (formula.weakCandidates(request)) |candidate| {
-                    preferred[@intFromEnum(candidate)] = true;
+                    preferred[@backingInt(candidate)] = true;
                 }
             },
             .enhances => {
                 if (request.system_satisfied or
                     anySelected(formula.weakCandidates(request), session))
                 {
-                    preferred[@intFromEnum(request.owner)] = true;
+                    preferred[@backingInt(request.owner)] = true;
                 }
             },
             else => {},
@@ -3479,8 +3492,8 @@ fn weakPreferredLessThan(
     left: solver_model.PackageId,
     right: solver_model.PackageId,
 ) bool {
-    return preferred[@intFromEnum(left)] and
-        !preferred[@intFromEnum(right)];
+    return preferred[@backingInt(left)] and
+        !preferred[@backingInt(right)];
 }
 
 fn supplementActive(
@@ -3526,14 +3539,14 @@ fn appendCandidateGroup(
     errdefer candidates.shrinkRetainingCapacity(start);
     defer for (literals) |literal| {
         if (literal.positive()) {
-            seen[@intFromEnum(literal.package())] = false;
+            seen[@backingInt(literal.package())] = false;
         }
     };
 
     var control_count: usize = 0;
     for (literals) |literal| {
         const package_id = literal.package();
-        const package_index: usize = @intFromEnum(package_id);
+        const package_index: usize = @backingInt(package_id);
         if (literal.positive()) {
             if (seen[package_index]) return error.InvalidFormula;
             seen[package_index] = true;
@@ -3545,7 +3558,7 @@ fn appendCandidateGroup(
     switch (clause.origin) {
         .requirement => |origin| {
             if (control_count != 1 or
-                seen[@intFromEnum(origin.package)])
+                seen[@backingInt(origin.package)])
             {
                 return error.InvalidFormula;
             }
@@ -3736,17 +3749,17 @@ fn rankCandidateGroups(
                 group_cursors[group_count] = candidate_index;
                 group_count += 1;
             }
-            group_by_package[@intFromEnum(candidate.package)] =
+            group_by_package[@backingInt(candidate.package)] =
                 group_count - 1;
         }
         for (ranked, group_candidates) |candidate, *output| {
             const version_group =
-                group_by_package[@intFromEnum(candidate.package)];
+                group_by_package[@backingInt(candidate.package)];
             output.* = by_version[group_cursors[version_group]].package;
             group_cursors[version_group] += 1;
         }
         for (ranked) |candidate| {
-            group_by_package[@intFromEnum(candidate.package)] =
+            group_by_package[@backingInt(candidate.package)] =
                 candidate.architecture_tier;
         }
         try rankCommonProvides(
@@ -3792,7 +3805,7 @@ fn rankCommonProvides(
             best_available_priority,
         );
         const bucket_architecture =
-            architecture_tiers[@intFromEnum(first.id)];
+            architecture_tiers[@backingInt(first.id)];
         var bucket_end = bucket_start + 1;
         while (bucket_end < candidates.len) : (bucket_end += 1) {
             const package = universe.package(
@@ -3803,7 +3816,7 @@ fn rankCommonProvides(
                 package.*,
                 best_available_priority,
             ) != bucket_priority or
-                architecture_tiers[@intFromEnum(package.id)] !=
+                architecture_tiers[@backingInt(package.id)] !=
                     bucket_architecture)
             {
                 break;
@@ -3826,7 +3839,7 @@ fn rankCommonProvides(
                 try frontier.append(.{
                     .package = package_id,
                     .original_order = original_order,
-                    .old_version = old_versions[@intFromEnum(package_id)],
+                    .old_version = old_versions[@backingInt(package_id)],
                     .installed_name = installed_names.contains(
                         package.source.nevra.name,
                     ),
@@ -3961,7 +3974,7 @@ fn identifyOldVersions(
         for (ranked[group_start..group_end]) |candidate| {
             const package = universe.package(candidate.package).?;
             if (package.installed != null) continue;
-            old_versions[@intFromEnum(candidate.package)] =
+            old_versions[@backingInt(candidate.package)] =
                 candidate.priority > best.priority or
                 (candidate.priority == best.priority and
                     query_index.comparePackageVersions(
@@ -4024,7 +4037,7 @@ fn universeVersionLessThan(
         right_package.source.*,
     );
     if (version_order != 0) return version_order > 0;
-    return @intFromEnum(left.package) < @intFromEnum(right.package);
+    return @backingInt(left.package) < @backingInt(right.package);
 }
 
 fn currentVersionLessThan(
@@ -4309,7 +4322,7 @@ fn validateBaseFormula(
     }
     var package_cursor: usize = 0;
     for (formula.universe.repositories, 0..) |repository, repository_index| {
-        if (@intFromEnum(repository.id) != repository_index) {
+        if (@backingInt(repository.id) != repository_index) {
             return error.InvalidFormula;
         }
         const start: usize = @intCast(repository.packages.start);
@@ -4331,7 +4344,7 @@ fn validateBaseFormula(
     }
     if (package_cursor != package_count) return error.InvalidFormula;
     for (formula.universe.packages, 0..) |package, package_index| {
-        if (@intFromEnum(package.id) != package_index) {
+        if (@backingInt(package.id) != package_index) {
             return error.InvalidFormula;
         }
         const repository = formula.universe.repository(package.repository) orelse
@@ -4343,7 +4356,7 @@ fn validateBaseFormula(
         }
     }
     for (formula.literals) |literal| {
-        if (@intFromEnum(literal) >> 1 >= package_count) {
+        if (@backingInt(literal) >> 1 >= package_count) {
             return error.InvalidFormula;
         }
     }
@@ -4421,7 +4434,7 @@ fn packageIndex(
     package_id: solver_model.PackageId,
     package_count: usize,
 ) PrepareError!usize {
-    const package_index: usize = @intFromEnum(package_id);
+    const package_index: usize = @backingInt(package_id);
     if (package_index >= package_count) return error.InvalidFormula;
     return package_index;
 }
@@ -4431,7 +4444,7 @@ fn packageIdLessThan(
     left: solver_model.PackageId,
     right: solver_model.PackageId,
 ) bool {
-    return @intFromEnum(left) < @intFromEnum(right);
+    return @backingInt(left) < @backingInt(right);
 }
 
 fn testPackage(
@@ -4519,7 +4532,7 @@ test "contextual install ranking applies repository priority before EVR" {
     );
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(0) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)) },
         prepared.decision_policy.groups[0].candidates.slice(
             prepared.decision_policy.candidates,
         ),
@@ -4595,7 +4608,7 @@ test "installed candidate competes by EVR with the best repository tier" {
 
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(2), @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(2)), @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         prepared.decision_policy.groups[0].candidates.slice(
             prepared.decision_policy.candidates,
         ),
@@ -4652,7 +4665,7 @@ test "contextual requirement ranks package EVR not provide EVR" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -4675,7 +4688,7 @@ test "contextual requirement ranks package EVR not provide EVR" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(0) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)) },
         requirement_candidates.?,
     );
     var result = try prepared.solve(std.testing.allocator);
@@ -4730,7 +4743,7 @@ test "contextual ranking uses common provide EVR across package names" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -4753,7 +4766,7 @@ test "contextual ranking uses common provide EVR across package names" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(0) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)) },
         requirement_candidates.?,
     );
     var result = try prepared.solve(std.testing.allocator);
@@ -4805,7 +4818,7 @@ test "common provide ranking is not limited to the required capability" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -4828,7 +4841,7 @@ test "common provide ranking is not limited to the required capability" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(0) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)) },
         requirement_candidates.?,
     );
 }
@@ -4867,7 +4880,7 @@ test "common provide ranking includes implicit package self provides" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -4890,7 +4903,7 @@ test "common provide ranking includes implicit package self provides" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(0) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)) },
         requirement_candidates.?,
     );
 }
@@ -4950,7 +4963,7 @@ test "explicit package self provides are not scored twice" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(4) },
+            .selection = .{ .package = @fromBackingInt(@intCast(4)) },
         }} },
         testArchitecture(),
     );
@@ -4974,10 +4987,10 @@ test "explicit package self provides are not scored twice" {
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
         &.{
-            @enumFromInt(0),
-            @enumFromInt(1),
-            @enumFromInt(2),
-            @enumFromInt(3),
+            @fromBackingInt(@intCast(0)),
+            @fromBackingInt(@intCast(1)),
+            @fromBackingInt(@intCast(2)),
+            @fromBackingInt(@intCast(3)),
         },
         requirement_candidates.?,
     );
@@ -5030,7 +5043,7 @@ test "common provide ranking ignores hexadecimal equality hashes" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -5053,7 +5066,7 @@ test "common provide ranking ignores hexadecimal equality hashes" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         requirement_candidates.?,
     );
 }
@@ -5099,7 +5112,7 @@ test "common provide badness ignores missing-release boundaries" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -5122,7 +5135,7 @@ test "common provide badness ignores missing-release boundaries" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         requirement_candidates.?,
     );
 }
@@ -5184,7 +5197,7 @@ test "installed package names move matching available providers to front" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         }} },
         testArchitecture(),
     );
@@ -5207,7 +5220,7 @@ test "installed package names move matching available providers to front" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(2), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(2)), @fromBackingInt(@intCast(1)) },
         requirement_candidates.?,
     );
 }
@@ -5260,7 +5273,7 @@ test "installed-name movement leaves old same-name versions as fallbacks" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(4) },
+            .selection = .{ .package = @fromBackingInt(@intCast(4)) },
         }} },
         testArchitecture(),
     );
@@ -5283,7 +5296,7 @@ test "installed-name movement leaves old same-name versions as fallbacks" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(3), @enumFromInt(1), @enumFromInt(2) },
+        &.{ @fromBackingInt(@intCast(3)), @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)) },
         requirement_candidates.?,
     );
 }
@@ -5317,7 +5330,7 @@ test "newer package outside the candidate queue demotes an old provider" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         }} },
         testArchitecture(),
     );
@@ -5340,7 +5353,7 @@ test "newer package outside the candidate queue demotes an old provider" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(0) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)) },
         requirement_candidates.?,
     );
 }
@@ -5368,7 +5381,7 @@ test "weak recommendations are optional and policy controlled" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         testArchitecture(),
     );
@@ -5391,7 +5404,7 @@ test "weak recommendations are optional and policy controlled" {
     );
     try std.testing.expectEqual(@as(usize, 1), enabled.accepted.len);
     try std.testing.expectEqual(
-        @as(solver_model.PackageId, @enumFromInt(0)),
+        @as(solver_model.PackageId, @fromBackingInt(@intCast(0))),
         enabled.accepted[0].package,
     );
     try std.testing.expectEqual(
@@ -5514,11 +5527,11 @@ test "weak recommendation falls back after its best provider conflicts" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(3) },
+                .selection = .{ .package = @fromBackingInt(@intCast(3)) },
             },
         } },
         testArchitecture(),
@@ -5538,7 +5551,7 @@ test "weak recommendation falls back after its best provider conflicts" {
         result.result.satisfiable.values,
     );
     try std.testing.expectEqual(
-        @as(solver_model.PackageId, @enumFromInt(1)),
+        @as(solver_model.PackageId, @fromBackingInt(@intCast(1))),
         result.accepted[0].package,
     );
 }
@@ -5594,11 +5607,11 @@ test "weak recommendations do not cross repository or version pruning" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             },
         } },
         testArchitecture(),
@@ -5646,11 +5659,11 @@ test "weak recommendations do not cross repository or version pruning" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(3) },
+                .selection = .{ .package = @fromBackingInt(@intCast(3)) },
             },
         } },
         testArchitecture(),
@@ -5727,11 +5740,11 @@ test "rejected weak candidates remain in later pruning frontiers" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(3) },
+                .selection = .{ .package = @fromBackingInt(@intCast(3)) },
             },
         } },
         testArchitecture(),
@@ -5752,7 +5765,7 @@ test "rejected weak candidates remain in later pruning frontiers" {
     );
     try std.testing.expectEqual(@as(usize, 1), result.accepted.len);
     try std.testing.expectEqual(
-        @as(solver_model.PackageId, @enumFromInt(1)),
+        @as(solver_model.PackageId, @fromBackingInt(@intCast(1))),
         result.accepted[0].package,
     );
 }
@@ -5782,7 +5795,7 @@ test "weak pruning applies architecture and obsoletes policy" {
         &architecture_universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -5833,7 +5846,7 @@ test "weak pruning applies architecture and obsoletes policy" {
         &obsolete_universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -5888,7 +5901,7 @@ test "weak obsoletes pruning preserves mutual replacement cycles" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -5931,7 +5944,7 @@ test "weak supplements require a newly selected condition by default" {
         &available_universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         testArchitecture(),
     );
@@ -6034,7 +6047,7 @@ test "suggestions order conflicting active supplements" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -6053,7 +6066,7 @@ test "suggestions order conflicting active supplements" {
         result.result.satisfiable.values,
     );
     try std.testing.expectEqual(
-        @as(solver_model.PackageId, @enumFromInt(1)),
+        @as(solver_model.PackageId, @fromBackingInt(@intCast(1))),
         result.accepted[0].package,
     );
 }
@@ -6090,7 +6103,7 @@ test "weak recommendation closure ignores suggestions and enhances" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(4) },
+            .selection = .{ .package = @fromBackingInt(@intCast(4)) },
         }} },
         testArchitecture(),
     );
@@ -6140,11 +6153,11 @@ test "contextual requirement falls back after the best provider conflicts" {
     const jobs = [_]solver_model.Job{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         },
     };
     var base = try solver_rules.generateBase(
@@ -6197,7 +6210,7 @@ test "contextual ranking keeps unrelated provider names stable" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -6220,7 +6233,7 @@ test "contextual ranking keeps unrelated provider names stable" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         requirement_candidates.?,
     );
     var result = try prepared.solve(std.testing.allocator);
@@ -6265,7 +6278,7 @@ test "contextual ranking co-ranks noarch and best machine architecture" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         }} },
         testArchitecture(),
     );
@@ -6288,7 +6301,7 @@ test "contextual ranking co-ranks noarch and best machine architecture" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1), @enumFromInt(2) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)) },
         requirement_candidates.?,
     );
     var result = try prepared.solve(std.testing.allocator);
@@ -6337,7 +6350,7 @@ test "contextual ranking honors forced architecture policy" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         }} },
         architecture,
     );
@@ -6364,7 +6377,7 @@ test "contextual ranking honors forced architecture policy" {
     }
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(2) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)) },
         requirement_candidates.?,
     );
 }
@@ -6417,7 +6430,7 @@ test "contextual ranking maps command-line repository priority to zero" {
 
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(0) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(0)) },
         prepared.decision_policy.groups[0].candidates.slice(
             prepared.decision_policy.candidates,
         ),
@@ -6468,7 +6481,7 @@ test "clauses without positive candidates do not create contextual groups" {
 
     const valid_policy = prepared.decision_policy;
     prepared.decision_policy = .{
-        .candidates = &.{@enumFromInt(0)},
+        .candidates = &.{@fromBackingInt(@intCast(0))},
     };
     try std.testing.expectError(
         error.InvalidDecisionPolicy,
@@ -6495,17 +6508,17 @@ test "formula without architecture policy preserves raw architecture order" {
     var states = [_]solver_rules.PackageState{ .{}, .{}, .{} };
     states[0].replacement = .{
         .kind = .update,
-        .job = @enumFromInt(0),
+        .job = @fromBackingInt(@intCast(0)),
         .force_best = true,
     };
     const literals = [_]solver_rules.Literal{
-        solver_rules.Literal.init(@enumFromInt(0), true),
-        solver_rules.Literal.init(@enumFromInt(1), true),
-        solver_rules.Literal.init(@enumFromInt(2), true),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(0)), true),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(1)), true),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(2)), true),
     };
     const clauses = [_]solver_rules.Clause{.{
         .literals = .{ .start = 0, .len = 3 },
-        .origin = .{ .job = @enumFromInt(0) },
+        .origin = .{ .job = @fromBackingInt(@intCast(0)) },
     }};
     const formula = solver_rules.OwnedFormula{
         .allocator = std.testing.allocator,
@@ -6524,7 +6537,7 @@ test "formula without architecture policy preserves raw architecture order" {
 
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1), @enumFromInt(2) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)) },
         prepared.decision_policy.candidates,
     );
 }
@@ -6544,12 +6557,12 @@ test "malformed contextual source clauses are rejected during preparation" {
     defer universe.deinit();
     var states = [_]solver_rules.PackageState{ .{}, .{} };
     const duplicate_literals = [_]solver_rules.Literal{
-        solver_rules.Literal.init(@enumFromInt(0), true),
-        solver_rules.Literal.init(@enumFromInt(0), true),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(0)), true),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(0)), true),
     };
     const duplicate_clause = [_]solver_rules.Clause{.{
         .literals = .{ .start = 0, .len = 2 },
-        .origin = .{ .job = @enumFromInt(0) },
+        .origin = .{ .job = @fromBackingInt(@intCast(0)) },
     }};
     var formula = solver_rules.OwnedFormula{
         .allocator = std.testing.allocator,
@@ -6568,13 +6581,13 @@ test "malformed contextual source clauses are rejected during preparation" {
     formula.clauses = &.{.{
         .literals = .{ .start = 0, .len = 1 },
         .origin = .{ .requirement = .{
-            .package = @enumFromInt(0),
+            .package = @fromBackingInt(@intCast(0)),
             .kind = .requires,
             .index = 0,
         } },
     }};
     formula.literals = &.{solver_rules.Literal.init(
-        @enumFromInt(1),
+        @fromBackingInt(@intCast(1)),
         true,
     )};
     try std.testing.expectError(
@@ -6624,12 +6637,12 @@ test "installed orphan is retained" {
         prepared.formula.clauses.len - 1
     ];
     try std.testing.expectEqual(
-        @as(solver_model.PackageId, @enumFromInt(0)),
+        @as(solver_model.PackageId, @fromBackingInt(@intCast(0))),
         retention.origin.installed_keep,
     );
     try std.testing.expectEqualSlices(
         solver_rules.Literal,
-        &.{solver_rules.Literal.init(@enumFromInt(0), true)},
+        &.{solver_rules.Literal.init(@fromBackingInt(@intCast(0)), true)},
         prepared.formula.clauseLiterals(retention),
     );
 
@@ -6672,7 +6685,7 @@ test "exact replacement satisfies installed retention" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         testArchitecture(),
     );
@@ -6689,8 +6702,8 @@ test "exact replacement satisfies installed retention" {
     try std.testing.expectEqualSlices(
         solver_rules.Literal,
         &.{
-            solver_rules.Literal.init(@enumFromInt(0), true),
-            solver_rules.Literal.init(@enumFromInt(1), true),
+            solver_rules.Literal.init(@fromBackingInt(@intCast(0)), true),
+            solver_rules.Literal.init(@fromBackingInt(@intCast(1)), true),
         },
         prepared.formula.clauseLiterals(retention),
     );
@@ -6763,7 +6776,7 @@ test "update all prefers upgrades and falls back to installed" {
 
     var fallback = try prepared.solveAssuming(
         std.testing.allocator,
-        &.{solver_rules.Literal.init(@enumFromInt(2), false)},
+        &.{solver_rules.Literal.init(@fromBackingInt(@intCast(2)), false)},
     );
     defer fallback.deinit();
     try std.testing.expectEqualSlices(
@@ -6780,7 +6793,7 @@ test "update all prefers upgrades and falls back to installed" {
     defer best.deinit();
     var blocked = try best.solveAssuming(
         std.testing.allocator,
-        &.{solver_rules.Literal.init(@enumFromInt(2), false)},
+        &.{solver_rules.Literal.init(@fromBackingInt(@intCast(2)), false)},
     );
     defer blocked.deinit();
     try std.testing.expect(blocked == .unsatisfiable);
@@ -6842,7 +6855,7 @@ test "force best retains equivalent update alternatives" {
 
     var result = try prepared.solveAssuming(
         std.testing.allocator,
-        &.{solver_rules.Literal.init(@enumFromInt(1), false)},
+        &.{solver_rules.Literal.init(@fromBackingInt(@intCast(1)), false)},
     );
     defer result.deinit();
     try std.testing.expectEqualSlices(
@@ -6901,7 +6914,7 @@ test "force best prevents distro sync version fallback" {
 
     var result = try prepared.solveAssuming(
         std.testing.allocator,
-        &.{solver_rules.Literal.init(@enumFromInt(1), false)},
+        &.{solver_rules.Literal.init(@fromBackingInt(@intCast(1)), false)},
     );
     defer result.deinit();
     try std.testing.expect(result == .unsatisfiable);
@@ -6963,7 +6976,7 @@ test "force best does not retain an explicitly obsoleted install" {
 
     var result = try prepared.solveAssuming(
         std.testing.allocator,
-        &.{solver_rules.Literal.init(@enumFromInt(1), false)},
+        &.{solver_rules.Literal.init(@fromBackingInt(@intCast(1)), false)},
     );
     defer result.deinit();
     try std.testing.expectEqualSlices(
@@ -7069,7 +7082,7 @@ test "update with allow uninstall remains an explicit policy boundary" {
         .{ .action = .update, .selection = .all },
         .{
             .action = .allow_uninstall,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
     };
     var base = try solver_rules.generateBase(
@@ -7567,7 +7580,7 @@ test "direct erase disables retention and blocks implicit replacement" {
         &universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         testArchitecture(),
     );
@@ -7629,7 +7642,7 @@ test "retention blocks conflicts unless uninstall is explicitly allowed" {
 
     const install_job = solver_model.Job{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     };
     var blocked_base = try solver_rules.generateBase(
         std.testing.allocator,
@@ -7651,7 +7664,7 @@ test "retention blocks conflicts unless uninstall is explicitly allowed" {
         install_job,
         .{
             .action = .allow_uninstall,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
     };
     var allowed_base = try solver_rules.generateBase(
@@ -7716,7 +7729,7 @@ test "global allow erasing removes conflicts and retains unrelated packages" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -7778,7 +7791,7 @@ test "global allow erasing permits reverse dependency cascades" {
         &universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         testArchitecture(),
     );
@@ -7850,7 +7863,7 @@ test "clean deps removes an exact erase dependency closure but not old orphans" 
         &universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .clean_deps = true },
         }} },
         testArchitecture(),
@@ -7865,7 +7878,7 @@ test "clean deps removes an exact erase dependency closure but not old orphans" 
     defer prepared.deinit();
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(1), @enumFromInt(2), @enumFromInt(4) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)), @fromBackingInt(@intCast(4)) },
         prepared.cleanup_packages,
     );
     var result = try prepared.solve(std.testing.allocator);
@@ -7919,7 +7932,7 @@ test "clean deps preserves user roots and all providers needed by survivors" {
         &universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .clean_deps = true },
         }} },
         testArchitecture(),
@@ -7983,12 +7996,12 @@ test "clean deps honors explicit user-installed roots alongside supplements" {
     const jobs = [_]solver_model.Job{
         .{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .clean_deps = true },
         },
         .{
             .action = .user_installed,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
     };
     var base = try solver_rules.generateBase(
@@ -8041,11 +8054,11 @@ test "clean deps honors explicit user-installed roots alongside supplements" {
         .{ .action = .user_installed, .selection = .{ .name = "dependency" } },
         .{
             .action = .user_installed,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
         .{
             .action = .user_installed,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             .flags = .{ .targeted = true },
         },
     };
@@ -8113,7 +8126,7 @@ test "clean deps seeds cleanup from a same-name replacement install" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             .flags = .{ .clean_deps = true },
         }} },
         testArchitecture(),
@@ -8128,7 +8141,7 @@ test "clean deps seeds cleanup from a same-name replacement install" {
     defer prepared.deinit();
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         prepared.cleanup_packages,
     );
     var result = try prepared.solve(std.testing.allocator);
@@ -8186,7 +8199,7 @@ test "clean deps seeds cleanup from an explicit obsoletes install" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             .flags = .{ .clean_deps = true },
         }} },
         testArchitecture(),
@@ -8201,7 +8214,7 @@ test "clean deps seeds cleanup from an explicit obsoletes install" {
     defer prepared.deinit();
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         prepared.cleanup_packages,
     );
     var result = try prepared.solve(std.testing.allocator);
@@ -8248,7 +8261,7 @@ test "clean deps stays inert for installs that obsolete nothing" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             .flags = .{ .clean_deps = true },
         }} },
         testArchitecture(),
@@ -8316,15 +8329,15 @@ test "clean deps skips install-only literals when seeding cleanup" {
         .{ .jobs = &.{
             .{
                 .action = .multiversion,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .multiversion,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
                 .flags = .{ .clean_deps = true },
             },
         } },
@@ -8394,7 +8407,7 @@ test "protected policy catches direct erase obsoletion and indirect removal" {
         &universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         testArchitecture(),
     );
@@ -8410,13 +8423,13 @@ test "protected policy catches direct erase obsoletion and indirect removal" {
     defer erased.deinit();
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         erased.protected_packages,
     );
     var erased_result = try erased.solve(std.testing.allocator);
     defer erased_result.deinit();
     try std.testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(0)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(0))),
         erased.protectedRemoval(erased_result.satisfiable),
     );
 
@@ -8425,7 +8438,7 @@ test "protected policy catches direct erase obsoletion and indirect removal" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         testArchitecture(),
     );
@@ -8444,7 +8457,7 @@ test "protected policy catches direct erase obsoletion and indirect removal" {
     switch (conflict_result) {
         .unsatisfiable => {},
         .satisfiable => |model| try std.testing.expectEqual(
-            @as(?solver_model.PackageId, @enumFromInt(0)),
+            @as(?solver_model.PackageId, @fromBackingInt(@intCast(0))),
             conflict.protectedRemoval(model),
         ),
     }
@@ -8454,7 +8467,7 @@ test "protected policy catches direct erase obsoletion and indirect removal" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -8473,7 +8486,7 @@ test "protected policy catches direct erase obsoletion and indirect removal" {
         obsoleted_result.satisfiable.values,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(0)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(0))),
         obsoleted.protectedRemoval(obsoleted_result.satisfiable),
     );
 }
@@ -8523,7 +8536,7 @@ test "protected allow erasing releases only unprotected packages" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -8554,7 +8567,7 @@ test "protected allow erasing releases only unprotected packages" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         }} },
         testArchitecture(),
     );
@@ -8608,11 +8621,11 @@ test "protected policy allows a paired same-name replacement" {
         .{ .jobs = &.{
             .{
                 .action = .erase,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
         } },
         testArchitecture(),
@@ -8673,7 +8686,7 @@ test "protected automatic dependencies remain clean-deps roots" {
         &universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .clean_deps = true },
         }} },
         testArchitecture(),
@@ -8699,7 +8712,7 @@ test "protected automatic dependencies remain clean-deps roots" {
     var unguarded_result = try unguarded.solve(std.testing.allocator);
     defer unguarded_result.deinit();
     try std.testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(1)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(1))),
         unguarded.protectedRemoval(unguarded_result.satisfiable),
     );
     var prepared = try prepareWithOptions(
@@ -8763,7 +8776,7 @@ test "protected policy rejects multiple installed instances and skip broken" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -8783,7 +8796,7 @@ test "protected policy rejects multiple installed instances and skip broken" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         }} },
         testArchitecture(),
     );
@@ -8821,11 +8834,11 @@ test "skip broken keeps satisfiable exact install jobs" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
     } };
     var base = try solver_rules.generateBase(
@@ -8856,7 +8869,7 @@ test "skip broken keeps satisfiable exact install jobs" {
     );
     try std.testing.expectEqualSlices(
         solver_model.JobId,
-        &.{@enumFromInt(1)},
+        &.{@fromBackingInt(@intCast(1))},
         skipped.skipped_jobs,
     );
 }
@@ -8882,11 +8895,11 @@ test "skip broken drops every exact install job in a package conflict" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
     } };
     var base = try solver_rules.generateBase(
@@ -8913,7 +8926,7 @@ test "skip broken drops every exact install job in a package conflict" {
     );
     try std.testing.expectEqualSlices(
         solver_model.JobId,
-        &.{ @enumFromInt(0), @enumFromInt(1) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(1)) },
         skipped.skipped_jobs,
     );
 }
@@ -8942,15 +8955,15 @@ test "skip broken resolves multiple independent package failures" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
     } };
     var base = try solver_rules.generateBase(
@@ -8977,7 +8990,7 @@ test "skip broken resolves multiple independent package failures" {
     );
     try std.testing.expectEqualSlices(
         solver_model.JobId,
-        &.{ @enumFromInt(0), @enumFromInt(2) },
+        &.{ @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(2)) },
         skipped.skipped_jobs,
     );
 }
@@ -9008,23 +9021,23 @@ test "skip broken resolves independent conflicting job cores" {
     const goal = solver_model.Goal{ .jobs = &.{
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(3) },
+            .selection = .{ .package = @fromBackingInt(@intCast(3)) },
         },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(4) },
+            .selection = .{ .package = @fromBackingInt(@intCast(4)) },
         },
     } };
     var base = try solver_rules.generateBase(
@@ -9052,10 +9065,10 @@ test "skip broken resolves independent conflicting job cores" {
     try std.testing.expectEqualSlices(
         solver_model.JobId,
         &.{
-            @enumFromInt(0),
-            @enumFromInt(1),
-            @enumFromInt(2),
-            @enumFromInt(3),
+            @fromBackingInt(@intCast(0)),
+            @fromBackingInt(@intCast(1)),
+            @fromBackingInt(@intCast(2)),
+            @fromBackingInt(@intCast(3)),
         },
         skipped.skipped_jobs,
     );
@@ -9097,7 +9110,7 @@ test "allow erasing resolves package conflicts before skip broken" {
     defer universe.deinit();
     const goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(1) },
+        .selection = .{ .package = @fromBackingInt(@intCast(1)) },
     }} };
     var base = try solver_rules.generateBase(
         std.testing.allocator,
@@ -9140,10 +9153,10 @@ test "skip broken rejects non-exact and policy-changing jobs" {
 
     const cases = [_]solver_model.Job{
         .{ .action = .install, .selection = .{ .name = "package" } },
-        .{ .action = .erase, .selection = .{ .package = @enumFromInt(0) } },
+        .{ .action = .erase, .selection = .{ .package = @fromBackingInt(@intCast(0)) } },
         .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .force_best = true },
         },
     };
@@ -9169,7 +9182,7 @@ test "skip broken rejects non-exact and policy-changing jobs" {
 
     const best_goal = solver_model.Goal{ .jobs = &.{.{
         .action = .install,
-        .selection = .{ .package = @enumFromInt(0) },
+        .selection = .{ .package = @fromBackingInt(@intCast(0)) },
     }} };
     var best_base = try solver_rules.generateBase(
         std.testing.allocator,
@@ -9193,7 +9206,7 @@ test "skip broken rejects non-exact and policy-changing jobs" {
     for (&too_many_jobs) |*job| {
         job.* = .{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         };
     }
     var too_many_base = try solver_rules.generateBase(
@@ -9215,11 +9228,11 @@ test "skip broken rejects non-exact and policy-changing jobs" {
 
     var malformed_states = [_]solver_rules.PackageState{.{}};
     const malformed_literals = [_]solver_rules.Literal{
-        solver_rules.Literal.init(@enumFromInt(0), false),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(0)), false),
     };
     const malformed_clauses = [_]solver_rules.Clause{.{
         .literals = .{ .start = 0, .len = 1 },
-        .origin = .{ .job = @enumFromInt(0) },
+        .origin = .{ .job = @fromBackingInt(@intCast(0)) },
     }};
     const malformed_base = solver_rules.OwnedFormula{
         .allocator = std.testing.allocator,
@@ -9268,7 +9281,7 @@ test "multiversion state remains an explicit policy boundary" {
         &universe,
         .{ .jobs = &.{.{
             .action = .multiversion,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         testArchitecture(),
     );
@@ -9312,7 +9325,7 @@ test "malformed package IDs and literal encodings are rejected" {
     var sources = [_]metadata.Package{testPackage("package", "1")};
     var source_model = metadata.RepositoryModel{ .packages = &sources };
     var repositories = [_]solver_model.UniverseRepository{.{
-        .id = @enumFromInt(0),
+        .id = @fromBackingInt(@intCast(0)),
         .input_index = 0,
         .name = "@System",
         .kind = .installed,
@@ -9322,8 +9335,8 @@ test "malformed package IDs and literal encodings are rejected" {
         .packages = .{ .start = 0, .len = 1 },
     }};
     var packages = [_]solver_model.UniversePackage{.{
-        .id = @enumFromInt(1),
-        .repository = @enumFromInt(0),
+        .id = @fromBackingInt(@intCast(1)),
+        .repository = @fromBackingInt(@intCast(0)),
         .repository_package_index = 0,
         .source = &sources[0],
         .installed = .{ .rpmdb_hnum = 1 },
@@ -9349,8 +9362,8 @@ test "malformed package IDs and literal encodings are rejected" {
         prepareInstalledRetention(std.testing.allocator, &formula),
     );
 
-    packages[0].id = @enumFromInt(0);
-    formula.literals = &.{@enumFromInt(std.math.maxInt(u64))};
+    packages[0].id = @fromBackingInt(@intCast(0));
+    formula.literals = &.{@fromBackingInt(@intCast(std.math.maxInt(u64)))};
     try std.testing.expectError(
         error.InvalidFormula,
         prepareInstalledRetention(std.testing.allocator, &formula),
@@ -9368,7 +9381,7 @@ test "overlapping repository package ranges are rejected" {
     };
     var repositories = [_]solver_model.UniverseRepository{
         .{
-            .id = @enumFromInt(0),
+            .id = @fromBackingInt(@intCast(0)),
             .input_index = 0,
             .name = "one",
             .kind = .available,
@@ -9378,7 +9391,7 @@ test "overlapping repository package ranges are rejected" {
             .packages = .{ .start = 0, .len = 2 },
         },
         .{
-            .id = @enumFromInt(1),
+            .id = @fromBackingInt(@intCast(1)),
             .input_index = 1,
             .name = "two",
             .kind = .available,
@@ -9390,15 +9403,15 @@ test "overlapping repository package ranges are rejected" {
     };
     var packages = [_]solver_model.UniversePackage{
         .{
-            .id = @enumFromInt(0),
-            .repository = @enumFromInt(0),
+            .id = @fromBackingInt(@intCast(0)),
+            .repository = @fromBackingInt(@intCast(0)),
             .repository_package_index = 0,
             .source = &sources[0],
             .installed = null,
         },
         .{
-            .id = @enumFromInt(1),
-            .repository = @enumFromInt(1),
+            .id = @fromBackingInt(@intCast(1)),
+            .repository = @fromBackingInt(@intCast(1)),
             .repository_package_index = 0,
             .source = &sources[1],
             .installed = null,
@@ -9450,22 +9463,22 @@ fn allocationFailureCase(allocator: std.mem.Allocator) !void {
     sources[2].provides = .{ .start = 1, .len = 1 };
     var packages = [_]solver_model.UniversePackage{
         .{
-            .id = @enumFromInt(0),
-            .repository = @enumFromInt(0),
+            .id = @fromBackingInt(@intCast(0)),
+            .repository = @fromBackingInt(@intCast(0)),
             .repository_package_index = 0,
             .source = &sources[0],
             .installed = .{ .rpmdb_hnum = 1 },
         },
         .{
-            .id = @enumFromInt(1),
-            .repository = @enumFromInt(1),
+            .id = @fromBackingInt(@intCast(1)),
+            .repository = @fromBackingInt(@intCast(1)),
             .repository_package_index = 0,
             .source = &sources[1],
             .installed = null,
         },
         .{
-            .id = @enumFromInt(2),
-            .repository = @enumFromInt(1),
+            .id = @fromBackingInt(@intCast(2)),
+            .repository = @fromBackingInt(@intCast(1)),
             .repository_package_index = 1,
             .source = &sources[2],
             .installed = null,
@@ -9480,7 +9493,7 @@ fn allocationFailureCase(allocator: std.mem.Allocator) !void {
     };
     var repositories = [_]solver_model.UniverseRepository{
         .{
-            .id = @enumFromInt(0),
+            .id = @fromBackingInt(@intCast(0)),
             .input_index = 0,
             .name = "@System",
             .kind = .installed,
@@ -9490,7 +9503,7 @@ fn allocationFailureCase(allocator: std.mem.Allocator) !void {
             .packages = .{ .start = 0, .len = 1 },
         },
         .{
-            .id = @enumFromInt(1),
+            .id = @fromBackingInt(@intCast(1)),
             .input_index = 1,
             .name = "available",
             .kind = .available,
@@ -9508,24 +9521,24 @@ fn allocationFailureCase(allocator: std.mem.Allocator) !void {
     };
     var states = [_]solver_rules.PackageState{ .{}, .{}, .{} };
     const literals = [_]solver_rules.Literal{
-        solver_rules.Literal.init(@enumFromInt(0), false),
-        solver_rules.Literal.init(@enumFromInt(1), false),
-        solver_rules.Literal.init(@enumFromInt(1), true),
-        solver_rules.Literal.init(@enumFromInt(2), true),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(0)), false),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(1)), false),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(1)), true),
+        solver_rules.Literal.init(@fromBackingInt(@intCast(2)), true),
     };
     const clauses = [_]solver_rules.Clause{
         .{
             .literals = .{ .start = 0, .len = 2 },
             .origin = .{
                 .same_name = .{
-                    .left = @enumFromInt(0),
-                    .right = @enumFromInt(1),
+                    .left = @fromBackingInt(@intCast(0)),
+                    .right = @fromBackingInt(@intCast(1)),
                 },
             },
         },
         .{
             .literals = .{ .start = 2, .len = 1 },
-            .origin = .{ .job = @enumFromInt(0) },
+            .origin = .{ .job = @fromBackingInt(@intCast(0)) },
         },
     };
     const base = solver_rules.OwnedFormula{
@@ -9533,7 +9546,7 @@ fn allocationFailureCase(allocator: std.mem.Allocator) !void {
         .universe = &universe,
         .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }},
         .architecture = testArchitecture(),
         .clauses = &clauses,
@@ -9586,7 +9599,7 @@ fn cleanupAllocationFailureCase(allocator: std.mem.Allocator) !void {
         &universe,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             .flags = .{ .clean_deps = true },
         }} },
         testArchitecture(),
@@ -9604,12 +9617,12 @@ fn cleanupAllocationFailureCase(allocator: std.mem.Allocator) !void {
 }
 
 test "policy preparation cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         allocationFailureCase,
         .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         cleanupAllocationFailureCase,
         .{},

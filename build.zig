@@ -9,6 +9,8 @@
 //! retained set is the strict subset clang accepts.
 
 const std = @import("std");
+const install_paths = @import("build/install_paths.zig");
+const c_bindings = @import("build/c_bindings.zig");
 const Build = std.Build;
 const LazyPath = Build.LazyPath;
 const ResolvedTarget = Build.ResolvedTarget;
@@ -70,6 +72,9 @@ const rpmz_cflags = [_][]const u8{
 pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const prefix_runner = install_paths.runner(b);
+    defer install_paths.wire(b, prefix_runner);
+    defer c_bindings.wire(b);
     const enable_libsolv_oracle = b.option(
         bool,
         "libsolv-oracle",
@@ -213,21 +218,11 @@ pub fn build(b: *Build) void {
         "plugin-dir",
         "Plugin install directory (relative to prefix, default: lib/rpmz-plugins)",
     ) orelse "lib/rpmz-plugins";
-    const prefix = b.install_prefix;
     const libdir = "lib";
-    // `b.install_prefix` is the literal `--prefix` argument (e.g. `./out`)
-    // and is left relative when the caller passes a relative path — unlike
-    // the default `zig-out`, which build.zig resolves to an absolute path
-    // itself. pytest runs with cwd=`pytests/`, so a relative prefix baked
-    // into pytests/config.json (`build_dir`, `bin_dir`, ...) would resolve
-    // against the wrong directory. Make it absolute, anchored at the
-    // build root (zig build is always invoked from there in practice).
-    const abs_prefix = if (std.fs.path.isAbsolute(prefix))
-        prefix
-    else
-        b.pathJoin(&.{ b.build_root.path.?, prefix });
+    // Zig 0.17 resolves --prefix in the maker, not the configurer.
+    const abs_prefix = install_paths.prefix_marker;
     const replay_acceptance_export_path = b.pathJoin(&.{
-        b.build_root.path.?,
+        install_paths.rootPath(b),
         ".zig-cache",
         "replay-acceptance",
         "rpmz-replay-export",
@@ -235,10 +230,11 @@ pub fn build(b: *Build) void {
     const full_libdir = b.fmt("{s}/{s}", .{ abs_prefix, libdir });
     const client_config_options = b.addOptions();
     client_config_options.addOption([]const u8, "history_db_dir", history_db_dir);
-    client_config_options.addOption([]const u8, "source_root", b.build_root.path.?);
+    client_config_options.addOption([]const u8, "source_root", install_paths.rootPath(b));
     client_config_options.addOption([]const u8, "system_libdir", full_libdir);
     client_config_options.addOption([]const u8, "project_name", project_name);
     client_config_options.addOption([]const u8, "project_version", project_version);
+    const client_config_module = install_paths.options(b, prefix_runner, client_config_options.getOutput());
     // Vendored sqlite backs the Zig-side history and rpmdb code paths.
     const sqlite_dep_optional = b.lazyDependency("sqlite", .{});
     const tls_dep_optional = b.lazyDependency("tls", .{});
@@ -286,11 +282,12 @@ pub fn build(b: *Build) void {
 
     // Generated into the source tree, so only the root build may write
     // them: a dependency's copy of this package is read-only.
+    var automatic_source: ?LazyPath = null;
     if (root_build) {
         // pytests/mount-small-cache is referenced by tests/test_cache.py; ship a
         // ready-to-run copy in the source tree (gitignored) so `pytest -v` works
         // without an extra configure step.
-        writeTemplate(b, "pytests/mount-small-cache.in", "pytests/mount-small-cache", &.{
+        _ = writeTemplate(b, "pytests/mount-small-cache.in", "pytests/mount-small-cache", &.{
             .{ .key = "CMAKE_CURRENT_BINARY_DIR", .value = abs_prefix },
         });
 
@@ -308,10 +305,10 @@ pub fn build(b: *Build) void {
         // used here rather than a hardcoded `zig-out` so this works with the
         // documented `--prefix ./out` build invocation, not just the default
         // `zig-out`, and resolves correctly regardless of pytest's cwd.
-        writeTemplate(b, "pytests/config.json.in", "pytests/config.json", &.{
+        _ = writeTemplate(b, "pytests/config.json.in", "pytests/config.json", &.{
             .{ .key = "PROJECT_NAME", .value = project_name },
             .{ .key = "VERSION", .value = project_version },
-            .{ .key = "CMAKE_SOURCE_DIR", .value = b.build_root.path.? },
+            .{ .key = "CMAKE_SOURCE_DIR", .value = install_paths.rootPath(b) },
             .{ .key = "CMAKE_CURRENT_BINARY_DIR", .value = abs_prefix },
             .{ .key = "CMAKE_BINARY_DIR", .value = abs_prefix },
             .{ .key = "PLUGIN_PATH", .value = b.fmt("{s}/{s}", .{ abs_prefix, plugin_dir_rel }) },
@@ -325,7 +322,7 @@ pub fn build(b: *Build) void {
             .{ .key = "AUTOMATIC_COMMAND", .value = b.fmt("{s}/bin/rpmz", .{abs_prefix}) },
         });
 
-        writeTemplateExecutable(
+        automatic_source = writeTemplateExecutable(
             b,
             "libexec/rpmz-auto.in",
             "libexec/rpmz-auto",
@@ -334,6 +331,17 @@ pub fn build(b: *Build) void {
     }
 
     const zig_test_step = b.step("test", "Run Zig unit tests");
+    const prefix_tests = b.addTest(.{
+        .name = "prefix-runner-test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("build/prefix_runner.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const run_prefix_tests = b.addRunArtifact(prefix_tests);
+    b.step("prefix-runner-test", "Test maker-phase install-prefix substitution").dependOn(&run_prefix_tests.step);
+    zig_test_step.dependOn(&run_prefix_tests.step);
     const docs_audit_step = b.step(
         "docs-audit",
         "Verify the minimal README and migration documentation",
@@ -437,7 +445,7 @@ pub fn build(b: *Build) void {
             "python3",
             "scripts/librpm-audit.py",
             "--prefix",
-            b.getInstallPath(.prefix, ""),
+            install_paths.path(b, .prefix, ""),
         },
     );
     run_native_dependency_audit.setCwd(b.path("."));
@@ -453,9 +461,9 @@ pub fn build(b: *Build) void {
             "scripts/release.py",
             "dry-run",
             "--prefix",
-            b.getInstallPath(.prefix, ""),
+            install_paths.path(b, .prefix, ""),
             "--output",
-            b.pathJoin(&.{ b.build_root.path.?, ".zig-cache", "release-dry-run" }),
+            b.pathJoin(&.{ install_paths.rootPath(b), ".zig-cache", "release-dry-run" }),
             "--version",
             project_version,
         },
@@ -473,7 +481,7 @@ pub fn build(b: *Build) void {
             "python3",
             "scripts/sqlite-confined-singleton-audit.py",
             "--prefix",
-            b.getInstallPath(.prefix, ""),
+            install_paths.path(b, .prefix, ""),
         },
     );
     run_sqlite_singleton_audit.setCwd(b.path("."));
@@ -1027,6 +1035,7 @@ pub fn build(b: *Build) void {
         });
         break :blk lib;
     };
+    b.step("common-abi-check", "Compile the private C variadic bridge for the selected target").dependOn(&common_lib.step);
 
     const llconf_lib = blk: {
         const mod = b.createModule(.{
@@ -1404,7 +1413,7 @@ pub fn build(b: *Build) void {
             .link_libc = true,
         });
         test_mod.addImport("client_abi", client_abi_mod);
-        test_mod.addImport("client_config_options", client_config_options.createModule());
+        test_mod.addImport("client_config_options", client_config_module);
         test_mod.addImport("client_varsdir", client_varsdir_mod);
         test_mod.addImport("rpm_txn_config", rpmzig_txn_config_mod);
         test_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
@@ -1707,21 +1716,24 @@ pub fn build(b: *Build) void {
         const run_tests = b.addRunArtifact(tests);
         run_tests.setEnvironmentVariable(
             "TDNF_RPMDB_PUBKEYS_TEST_BINARY",
-            b.getInstallPath(
+            install_paths.path(
+                b,
                 .{ .custom = "libexec/rpmz" },
                 "rpmz-rpmdb-pubkeys",
             ),
         );
         run_tests.setEnvironmentVariable(
             "TDNF_RPMDB_IMPORT_PUBKEYS_TEST_BINARY",
-            b.getInstallPath(
+            install_paths.path(
+                b,
                 .{ .custom = "libexec/rpmz" },
                 "rpmz-rpmdb-import-pubkeys",
             ),
         );
         run_tests.setEnvironmentVariable(
             "TDNF_RPMDB_WRITE_TEST_BINARY",
-            b.getInstallPath(
+            install_paths.path(
+                b,
                 .{ .custom = "libexec/rpmz" },
                 "rpmz-rpmdb-write",
             ),
@@ -1793,7 +1805,7 @@ pub fn build(b: *Build) void {
         ) |binary, environment_name| {
             run_tests.setEnvironmentVariable(
                 environment_name,
-                b.getInstallPath(.{ .custom = "libexec/rpmz" }, binary),
+                install_paths.path(b, .{ .custom = "libexec/rpmz" }, binary),
             );
         }
         for (&read_tool_install_steps) |install_step| {
@@ -1947,7 +1959,8 @@ pub fn build(b: *Build) void {
         const run_cli_tests = b.addRunArtifact(cli_tests);
         run_cli_tests.setEnvironmentVariable(
             "TDNF_RPM_VERIFY_TEST_BINARY",
-            b.getInstallPath(
+            install_paths.path(
+                b,
                 .{ .custom = "libexec/rpmz" },
                 "rpmz-rpm-verify",
             ),
@@ -2087,7 +2100,7 @@ pub fn build(b: *Build) void {
     client_mod.addImport("client_history", client_history_mod);
     client_mod.addImport("client_abi", client_abi_mod);
     client_mod.addImport("client_download", client_download_mod);
-    client_mod.addImport("client_config_options", client_config_options.createModule());
+    client_mod.addImport("client_config_options", client_config_module);
     client_mod.addImport("client_varsdir", client_varsdir_mod);
     client_mod.addImport("rpmtrans_flags", rpmtrans_flags_mod);
     client_mod.addImport("rpm_header", rpmzig_header_mod);
@@ -2389,7 +2402,7 @@ pub fn build(b: *Build) void {
         &.{
             "python3",
             "scripts/libsolv-artifact-audit.py",
-            b.getInstallPath(.prefix, ""),
+            install_paths.path(b, .prefix, ""),
         },
     );
     run_libsolv_artifact_audit.setCwd(b.path("."));
@@ -2607,7 +2620,7 @@ pub fn build(b: *Build) void {
         const run_plan_cli_tests = b.addRunArtifact(plan_cli_tests);
         run_plan_cli_tests.setEnvironmentVariable(
             "RPMZ_CLI_TEST_PREFIX",
-            b.getInstallPath(.prefix, ""),
+            install_paths.path(b, .prefix, ""),
         );
         run_plan_cli_tests.step.dependOn(b.getInstallStep());
         run_plan_cli_tests.has_side_effects = true;
@@ -2632,7 +2645,7 @@ pub fn build(b: *Build) void {
         const run_replay_cli_tests = b.addRunArtifact(replay_cli_tests);
         run_replay_cli_tests.setEnvironmentVariable(
             "RPMZ_CLI_TEST_PREFIX",
-            b.getInstallPath(.prefix, ""),
+            install_paths.path(b, .prefix, ""),
         );
         run_replay_cli_tests.step.dependOn(b.getInstallStep());
         run_replay_cli_tests.has_side_effects = true;
@@ -2659,7 +2672,7 @@ pub fn build(b: *Build) void {
         const run_dispatcher_cli_tests = b.addRunArtifact(dispatcher_cli_tests);
         run_dispatcher_cli_tests.setEnvironmentVariable(
             "RPMZ_DISPATCHER_TEST_PREFIX",
-            b.getInstallPath(.prefix, ""),
+            install_paths.path(b, .prefix, ""),
         );
         run_dispatcher_cli_tests.step.dependOn(b.getInstallStep());
         run_dispatcher_cli_tests.has_side_effects = true;
@@ -2713,7 +2726,8 @@ pub fn build(b: *Build) void {
         const run_tests = b.addRunArtifact(tests);
         run_tests.setEnvironmentVariable(
             "TDNF_HISTORY_UTIL_TEST_BINARY",
-            b.getInstallPath(
+            install_paths.path(
+                b,
                 .{ .custom = "libexec/rpmz" },
                 "rpmz-history-util",
             ),
@@ -2960,7 +2974,7 @@ pub fn build(b: *Build) void {
         // internal hash paths; match packaged libsolv's release behaviour.
         const libsolv_dep_optional = b.lazyDependency("libsolv", .{
             .target = target,
-            .optimize = OptimizeMode.ReleaseFast,
+            .optimize = OptimizeMode.fast,
             .ext = true,
             .zlib = false,
         });
@@ -3022,12 +3036,12 @@ pub fn build(b: *Build) void {
 
     const automatic_install_dir: Build.InstallDir = .{ .custom = "libexec/rpmz" };
     const install_automatic = b.addInstallFileWithDir(
-        b.path("libexec/rpmz-auto"),
+        automatic_source.?,
         automatic_install_dir,
         "rpmz-auto",
     );
     b.getInstallStep().dependOn(&install_automatic.step);
-    const chmod_automatic = b.addSystemCommand(&.{ "chmod", "+x", b.getInstallPath(automatic_install_dir, "rpmz-auto") });
+    const chmod_automatic = b.addSystemCommand(&.{ "chmod", "+x", install_paths.path(b, automatic_install_dir, "rpmz-auto") });
     chmod_automatic.step.dependOn(&install_automatic.step);
     b.getInstallStep().dependOn(&chmod_automatic.step);
 
@@ -3117,7 +3131,7 @@ pub fn build(b: *Build) void {
         "Run Zig integration tests against the installed tree",
     );
     {
-        const ztest_prefix = b.getInstallPath(.prefix, "");
+        const ztest_prefix = install_paths.path(b, .prefix, "");
         const ztest_preflight_script =
             \\prefix=$1
             \\repo_script=$2
@@ -3158,8 +3172,8 @@ pub fn build(b: *Build) void {
             ztest_preflight_script,
             "ztest-preflight",
             ztest_prefix,
-            b.pathJoin(&.{ b.build_root.path.?, "pytests/repo/setup-repo.sh" }),
-            b.pathJoin(&.{ b.build_root.path.?, "pytests/repo" }),
+            b.pathJoin(&.{ install_paths.rootPath(b), "pytests/repo/setup-repo.sh" }),
+            b.pathJoin(&.{ install_paths.rootPath(b), "pytests/repo" }),
         });
         run_ztest_preflight.setCwd(b.path("."));
 
@@ -3180,7 +3194,7 @@ pub fn build(b: *Build) void {
         );
         run_ztests.setEnvironmentVariable(
             "TDNF_ZTEST_PLUGIN_DIR",
-            b.getInstallPath(.{ .custom = plugin_dir_rel }, ""),
+            install_paths.path(b, .{ .custom = plugin_dir_rel }, ""),
         );
         run_ztests.step.dependOn(&ztest_install_rpmz.step);
         run_ztests.has_side_effects = true;
@@ -3207,7 +3221,7 @@ pub fn build(b: *Build) void {
         );
         run_plugin_ztests.setEnvironmentVariable(
             "TDNF_ZTEST_PLUGIN_DIR",
-            b.getInstallPath(.{ .custom = plugin_dir_rel }, ""),
+            install_paths.path(b, .{ .custom = plugin_dir_rel }, ""),
         );
         run_plugin_ztests.step.dependOn(&ztest_install_rpmz.step);
         run_plugin_ztests.has_side_effects = true;
@@ -3364,16 +3378,28 @@ const TemplateVar = struct {
 /// (cmake-style `@VAR@`) and `#cmakedefine FOO …` directive, and writes the
 /// result to `<repo>/<out_rel>`. Output files are gitignored.
 ///
-/// This is configure-time generation and runs every time `build.zig` is
-/// evaluated. It is used only for source-tree runtime fixtures and scripts.
+/// Prefix-dependent output is finalized during the make phase, including
+/// source-tree runtime fixtures needed by pytest after a normal install.
 fn writeTemplate(
     b: *Build,
     in_rel: []const u8,
     out_rel: []const u8,
     vars: []const TemplateVar,
-) void {
+) LazyPath {
+    return writeTemplateMode(b, in_rel, out_rel, vars, "regular");
+}
+
+fn writeTemplateMode(
+    b: *Build,
+    in_rel: []const u8,
+    out_rel: []const u8,
+    vars: []const TemplateVar,
+    mode: []const u8,
+) LazyPath {
     const io = b.graph.io;
-    const root = b.build_root.handle;
+    const root = b.root.openDir(io, ".", .{}) catch @panic("unable to open package root");
+    defer root.close(io);
+    b.dependOnFileContents(b.path(in_rel));
     const in_bytes = root.readFileAlloc(io, in_rel, b.allocator, .limited(2 * 1024 * 1024)) catch |err|
         std.debug.panic("unable to read template '{s}': {t}", .{ in_rel, err });
     defer b.allocator.free(in_bytes);
@@ -3389,8 +3415,16 @@ fn writeTemplate(
         renderTemplateLine(&out, line, vars);
     }
 
-    root.writeFile(io, .{ .sub_path = out_rel, .data = out.items }) catch |err|
-        std.debug.panic("unable to write generated file '{s}': {t}", .{ out_rel, err });
+    const source = b.addWriteFiles().add(std.fs.path.basename(in_rel), out.items);
+    const run = b.addRunArtifact(install_paths.runner(b));
+    run.addDirectoryArg2(install_paths.prefix_path, .{ .make_absolute = true });
+    run.addArg(mode);
+    run.addFileArg(source);
+    const output = run.addOutputFileArg(std.fs.path.basename(out_rel));
+    run.addArg(b.pathJoin(&.{ install_paths.rootPath(b), out_rel }));
+    run.has_side_effects = true;
+    b.getInstallStep().dependOn(&run.step);
+    return output;
 }
 
 fn writeTemplateExecutable(
@@ -3398,18 +3432,8 @@ fn writeTemplateExecutable(
     in_rel: []const u8,
     out_rel: []const u8,
     vars: []const TemplateVar,
-) void {
-    writeTemplate(b, in_rel, out_rel, vars);
-    b.build_root.handle.setFilePermissions(
-        b.graph.io,
-        out_rel,
-        .executable_file,
-        .{},
-    ) catch |err|
-        std.debug.panic(
-            "unable to mark generated file '{s}' executable: {t}",
-            .{ out_rel, err },
-        );
+) LazyPath {
+    return writeTemplateMode(b, in_rel, out_rel, vars, "executable");
 }
 
 fn renderTemplateLine(

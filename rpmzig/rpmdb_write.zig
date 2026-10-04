@@ -8,14 +8,7 @@ const pkgfile = @import("rpm_pkgfile");
 const txn_config = @import("txn_config.zig");
 
 const c = sqlite.c;
-const sysc = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdint.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("sys/stat.h");
-    @cInclude("unistd.h");
-});
+const sysc = @import("c.rpmzig.rpmdb_write");
 
 const PKG_TABLE = "Packages";
 pub const DEFAULT_INSTALL_COLOR: u32 = 3;
@@ -105,23 +98,23 @@ const SigTagMap = struct {
 };
 
 const sig_tag_maps = [_]SigTagMap{
-    .{ .stag = 1000, .xtag = @intFromEnum(header.TagId.sigsize), .expected_count = 1, .quirk = false },
-    .{ .stag = 1002, .xtag = @intFromEnum(header.TagId.sigpgp), .expected_count = 0, .quirk = false },
-    .{ .stag = 1004, .xtag = @intFromEnum(header.TagId.sigmd5), .expected_count = 16, .quirk = false },
-    .{ .stag = 1005, .xtag = @intFromEnum(header.TagId.siggpg), .expected_count = 0, .quirk = false },
-    .{ .stag = 1007, .xtag = @intFromEnum(header.TagId.archive_size), .expected_count = 1, .quirk = true },
-    .{ .stag = 274, .xtag = @intFromEnum(header.TagId.filesignatures), .expected_count = 0, .quirk = true },
-    .{ .stag = 275, .xtag = @intFromEnum(header.TagId.filesignaturelength), .expected_count = 1, .quirk = true },
+    .{ .stag = 1000, .xtag = @backingInt(header.TagId.sigsize), .expected_count = 1, .quirk = false },
+    .{ .stag = 1002, .xtag = @backingInt(header.TagId.sigpgp), .expected_count = 0, .quirk = false },
+    .{ .stag = 1004, .xtag = @backingInt(header.TagId.sigmd5), .expected_count = 16, .quirk = false },
+    .{ .stag = 1005, .xtag = @backingInt(header.TagId.siggpg), .expected_count = 0, .quirk = false },
+    .{ .stag = 1007, .xtag = @backingInt(header.TagId.archive_size), .expected_count = 1, .quirk = true },
+    .{ .stag = 274, .xtag = @backingInt(header.TagId.filesignatures), .expected_count = 0, .quirk = true },
+    .{ .stag = 275, .xtag = @backingInt(header.TagId.filesignaturelength), .expected_count = 1, .quirk = true },
     .{ .stag = 276, .xtag = 276, .expected_count = 0, .quirk = false },
     .{ .stag = 277, .xtag = 277, .expected_count = 1, .quirk = false },
-    .{ .stag = 269, .xtag = @intFromEnum(header.TagId.sha1header), .expected_count = 1, .quirk = false },
-    .{ .stag = 273, .xtag = @intFromEnum(header.TagId.sha256header), .expected_count = 1, .quirk = false },
-    .{ .stag = 279, .xtag = @intFromEnum(header.TagId.sha3_256header), .expected_count = 1, .quirk = false },
-    .{ .stag = 267, .xtag = @intFromEnum(header.TagId.dsaheader), .expected_count = 0, .quirk = false },
-    .{ .stag = 268, .xtag = @intFromEnum(header.TagId.rsaheader), .expected_count = 0, .quirk = false },
-    .{ .stag = 270, .xtag = @intFromEnum(header.TagId.longsigsize), .expected_count = 1, .quirk = false },
-    .{ .stag = 271, .xtag = @intFromEnum(header.TagId.longarchivesize), .expected_count = 1, .quirk = false },
-    .{ .stag = 278, .xtag = @intFromEnum(header.TagId.openpgp), .expected_count = 0, .quirk = false },
+    .{ .stag = 269, .xtag = @backingInt(header.TagId.sha1header), .expected_count = 1, .quirk = false },
+    .{ .stag = 273, .xtag = @backingInt(header.TagId.sha256header), .expected_count = 1, .quirk = false },
+    .{ .stag = 279, .xtag = @backingInt(header.TagId.sha3_256header), .expected_count = 1, .quirk = false },
+    .{ .stag = 267, .xtag = @backingInt(header.TagId.dsaheader), .expected_count = 0, .quirk = false },
+    .{ .stag = 268, .xtag = @backingInt(header.TagId.rsaheader), .expected_count = 0, .quirk = false },
+    .{ .stag = 270, .xtag = @backingInt(header.TagId.longsigsize), .expected_count = 1, .quirk = false },
+    .{ .stag = 271, .xtag = @backingInt(header.TagId.longarchivesize), .expected_count = 1, .quirk = false },
+    .{ .stag = 278, .xtag = @backingInt(header.TagId.openpgp), .expected_count = 0, .quirk = false },
 };
 
 const SecondaryTable = struct {
@@ -717,7 +710,7 @@ pub const Writer = struct {
     }
 
     fn execSql(self: *Writer, sql: []const u8) Error!void {
-        const sql_z = try std.heap.c_allocator.dupeZ(u8, sql);
+        const sql_z = try std.heap.c_allocator.dupeSentinel(u8, sql, 0);
         defer std.heap.c_allocator.free(sql_z);
 
         var err: [*c]u8 = null;
@@ -980,9 +973,9 @@ test "rpmdb writer confines database and sidecars beneath pinned root" {
         .{root_path},
     );
     defer allocator.free(var_path);
-    const var_z = try allocator.dupeZ(u8, var_path);
+    const var_z = try allocator.dupeSentinel(u8, var_path, 0);
     defer allocator.free(var_z);
-    const outside_z = try allocator.dupeZ(u8, outside_path);
+    const outside_z = try allocator.dupeSentinel(u8, outside_path, 0);
     defer allocator.free(outside_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -1015,9 +1008,9 @@ test "rpmdb writer confines database and sidecars beneath pinned root" {
         .{root_path},
     );
     defer allocator.free(parked_db_dir);
-    const db_dir_z = try allocator.dupeZ(u8, db_dir);
+    const db_dir_z = try allocator.dupeSentinel(u8, db_dir, 0);
     defer allocator.free(db_dir_z);
-    const parked_db_dir_z = try allocator.dupeZ(u8, parked_db_dir);
+    const parked_db_dir_z = try allocator.dupeSentinel(u8, parked_db_dir, 0);
     defer allocator.free(parked_db_dir_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -1136,7 +1129,7 @@ test "pinned config rejects regular rpmdb substitution across opens" {
     var initial = try Writer.openConfig(&config);
     initial.close();
 
-    const root_z = try allocator.dupeZ(u8, root_path);
+    const root_z = try allocator.dupeSentinel(u8, root_path, 0);
     defer allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1193,7 +1186,7 @@ test "pinned absent rpmdb is created exclusively before schema initialization" {
         &.{ base, "root" },
     );
     defer allocator.free(root_path);
-    const root_z = try allocator.dupeZ(u8, root_path);
+    const root_z = try allocator.dupeSentinel(u8, root_path, 0);
     defer allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1292,7 +1285,7 @@ test "rpmdb writer retains its lease across fallible initialization" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root_path);
-    const root_z = try std.testing.allocator.dupeZ(u8, root_path);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root_path, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1422,7 +1415,7 @@ fn collectTranslatedSignatureDrips(
         const bytes = sig.rawEntryBytes(entry) orelse return error.InvalidHeaderBlob;
         try drips.append(.{
             .tag = mapping.xtag,
-            .typ = @enumFromInt(entry.typ),
+            .typ = @fromBackingInt(@intCast(entry.typ)),
             .count = entry.count,
             .bytes = bytes,
         });
@@ -1516,7 +1509,7 @@ pub fn encodeImmutableHeader(
         out,
         8,
         region_tag,
-        @intFromEnum(header.TypeId.bin),
+        @backingInt(header.TypeId.bin),
         @intCast(trailer_offset),
         16,
     );
@@ -1529,7 +1522,7 @@ pub fn encodeImmutableHeader(
             out,
             8 + (index + 1) * 16,
             field.tag,
-            @intFromEnum(field.typ),
+            @backingInt(field.typ),
             @intCast(cursor),
             field.count,
         );
@@ -1545,7 +1538,7 @@ pub fn encodeImmutableHeader(
         out,
         data_off + trailer_offset,
         region_tag,
-        @intFromEnum(header.TypeId.bin),
+        @backingInt(header.TypeId.bin),
         @bitCast(-signed_span),
         16,
     );
@@ -1591,7 +1584,7 @@ pub fn appendHeaderFields(
             out,
             8 + (base.index_count + @as(u32, @intCast(drip_index))) * 16,
             drip.tag,
-            @intFromEnum(drip.typ),
+            @backingInt(drip.typ),
             @intCast(offset),
             drip.count,
         );
@@ -2013,7 +2006,7 @@ fn ensureCompatibleBackendFd(
         if (sysc.fstatat(dir_fd, marker, &st, 0x100) == 0) {
             return error.UnsupportedBackend;
         }
-        if (std.c._errno().* != @intFromEnum(std.posix.E.NOENT))
+        if (std.c._errno().* != @backingInt(std.posix.E.NOENT))
             return error.SyscallFailed;
     }
 }
@@ -2083,7 +2076,7 @@ fn buildHeaderBlobForTest(
         }
 
         try appendBeU32(&index, tag);
-        try appendBeU32(&index, @intFromEnum(typ));
+        try appendBeU32(&index, @backingInt(typ));
         try appendBeU32(&index, offset);
         try appendBeU32(&index, count);
     }
@@ -2126,15 +2119,15 @@ const TestHeaderEntry = union(enum) {
 
 test "appendHeaderFields appends aligned fields" {
     const base = try buildHeaderBlobForTest(std.testing.allocator, &.{
-        .{ .string = .{ .tag = @intFromEnum(header.TagId.name), .value = "pkg" } },
-        .{ .string = .{ .tag = @intFromEnum(header.TagId.version), .value = "1" } },
+        .{ .string = .{ .tag = @backingInt(header.TagId.name), .value = "pkg" } },
+        .{ .string = .{ .tag = @backingInt(header.TagId.version), .value = "1" } },
     });
     defer std.testing.allocator.free(base);
 
     var int_bytes: [4]u8 = undefined;
     writeU32BE(&int_bytes, 0, 42);
     const out = try appendHeaderFields(std.testing.allocator, base, &.{
-        .{ .tag = @intFromEnum(header.TagId.install_time), .typ = .int32, .count = 1, .bytes = &int_bytes },
+        .{ .tag = @backingInt(header.TagId.install_time), .typ = .int32, .count = 1, .bytes = &int_bytes },
     });
     defer std.testing.allocator.free(out);
 
@@ -2149,13 +2142,13 @@ test "encodeImmutableHeader emits a complete reusable region" {
     const version = "12345678\x00";
     const out = try encodeImmutableHeader(std.testing.allocator, &.{
         .{
-            .tag = @intFromEnum(header.TagId.name),
+            .tag = @backingInt(header.TagId.name),
             .typ = .string,
             .count = 1,
             .bytes = name,
         },
         .{
-            .tag = @intFromEnum(header.TagId.version),
+            .tag = @backingInt(header.TagId.version),
             .typ = .string,
             .count = 1,
             .bytes = version,

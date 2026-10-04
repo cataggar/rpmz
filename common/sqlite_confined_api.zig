@@ -133,7 +133,7 @@ pub fn openAt(
         dir_fd,
         basename.ptr,
         basename.len,
-        @intFromEnum(options.mode),
+        @backingInt(options.mode),
         @intFromBool(options.create),
         options.pinned_main_fd orelse -1,
         &raw,

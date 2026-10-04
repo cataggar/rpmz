@@ -8,13 +8,7 @@ const std = @import("std");
 const variadic = @import("variadic.zig");
 
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdarg.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-});
+const c = @import("c.common.memory");
 
 const default_max_string_len: usize = 16_384_000;
 
@@ -274,7 +268,7 @@ fn callVsnprintf(
     args: *variadic.VaList,
 ) c_int {
     const va_list_param =
-        @typeInfo(@TypeOf(c.vsnprintf)).@"fn".params[3].type.?;
+        @typeInfo(@TypeOf(c.vsnprintf)).@"fn".param_types[3].?;
     return c.vsnprintf(
         buffer,
         size,
@@ -289,7 +283,7 @@ export fn commonVfprintf(
     args: *variadic.VaList,
 ) c_int {
     const va_list_param =
-        @typeInfo(@TypeOf(c.vfprintf)).@"fn".params[2].type.?;
+        @typeInfo(@TypeOf(c.vfprintf)).@"fn".param_types[2].?;
     return c.vfprintf(
         @ptrCast(@alignCast(stream)),
         format,

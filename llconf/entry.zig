@@ -6,15 +6,7 @@
 
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("ctype.h");
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("nodes.h");
-    @cInclude("entry.h");
-});
+const c = @import("c.llconf.entry");
 
 const FIND_ENTRY_FLAG_NOPATH: c_int = 0x01;
 const FIND_ENTRY_FLAG_FIRST: c_int = 0x02;
@@ -75,7 +67,7 @@ fn cnf_find_entry_impl(
     }
 
     const path_slice = std.mem.span(path);
-    var dname = [_:0]u8{0} ** 256;
+    var dname: [256:0]u8 = @splat(0);
     var value: [*c]u8 = null;
     var index: c_int = -1;
     var idx: usize = 0;
@@ -103,7 +95,7 @@ fn cnf_find_entry_impl(
     dname[q_idx] = 0;
 
     if (idx < path_slice.len and path_slice[idx] == '[') {
-        var tmp = [_:0]u8{0} ** 4;
+        var tmp: [4:0]u8 = @splat(0);
         var tmp_idx: usize = 0;
 
         idx += 1;
@@ -133,7 +125,7 @@ fn cnf_find_entry_impl(
             if (c.strcmp(@ptrCast(cn[0].name), dname_ptr) == 0) {
                 if (value == null or (cn[0].value != null and c.strcmp(@ptrCast(cn[0].value), @ptrCast(value)) == 0)) {
                     if (index == -1 or i == index) {
-                        var tmp = [_:0]u8{0} ** 1024;
+                        var tmp: [1024:0]u8 = @splat(0);
 
                         if (fullpath != null) {
                             _ = c.snprintf(@ptrCast(&tmp), tmp.len, "%s%s[]%d]/", fullpath, dname_ptr, j);
@@ -155,7 +147,7 @@ fn cnf_find_entry_impl(
             if (c.strcmp(@ptrCast(cn[0].name), dname_ptr) == 0) {
                 if (value == null or (cn[0].value != null and c.strcmp(@ptrCast(cn[0].value), @ptrCast(value)) == 0)) {
                     if (index == -1 or i == index) {
-                        var tmp = [_:0]u8{0} ** 1024;
+                        var tmp: [1024:0]u8 = @splat(0);
                         const cr = create_cnfresult(cn, blk: {
                             if (fullpath != null) {
                                 _ = c.snprintf(@ptrCast(&tmp), tmp.len, "%s%s[%d]", fullpath, dname_ptr, j);
@@ -195,7 +187,7 @@ fn cnf_find_entry_f(cn_root: [*c]c.struct_cnfnode, path: ?[*:0]const u8, flags: 
     }
 
     var cnf_res: [*c]c.struct_cnfresult = null;
-    var fullpath = [_:0]u8{0} ** 256;
+    var fullpath: [256:0]u8 = @splat(0);
 
     if (c.strcmp(@ptrCast(needle), ".") == 0) {
         cnf_res = create_cnfresult(cn_root, needle);
@@ -246,7 +238,7 @@ export fn cnf_add_branch(cn_root: [*c]c.struct_cnfnode, path: ?[*:0]const u8, do
     var p = needle;
 
     while (p[0] != 0) {
-        var dname = [_:0]u8{0} ** 256;
+        var dname: [256:0]u8 = @splat(0);
         var q_idx: usize = 0;
         var idx: usize = 0;
 
@@ -280,7 +272,7 @@ export fn cnf_add_branch(cn_root: [*c]c.struct_cnfnode, path: ?[*:0]const u8, do
         if (p[0] == '=') {
             p += 1;
             if (p[0] != 0) {
-                var buf = [_:0]u8{0} ** 256;
+                var buf: [256:0]u8 = @splat(0);
                 c.cnfnode_setval(cn, copyUntilNewline(p, buf[0..]));
             } else {
                 c.cnfnode_setval(cn, "");

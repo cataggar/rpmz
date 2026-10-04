@@ -11,18 +11,7 @@ const AT_SYMLINK_NOFOLLOW: c_int = 0x100;
 const AT_REMOVEDIR: c_int = 0x200;
 const AT_EMPTY_PATH: u32 = 0x1000;
 
-const c = @cImport({
-    @cInclude("grp.h");
-    @cInclude("pwd.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("sys/stat.h");
-    @cInclude("sys/sysmacros.h");
-    @cInclude("sys/time.h");
-    @cInclude("sys/types.h");
-    @cInclude("unistd.h");
-});
+const c = @import("c.rpmzig.install");
 
 const RPMFILE_CONFIG: u32 = 1 << 0;
 const RPMFILE_DOC: u32 = 1 << 1;
@@ -1285,7 +1274,7 @@ pub const RootDir = struct {
                 {
                     return error.UnsafeExtractionPath;
                 }
-                const nested_z = try self.allocator.dupeZ(u8, nested_target);
+                const nested_z = try self.allocator.dupeSentinel(u8, nested_target, 0);
                 defer self.allocator.free(nested_z);
                 next_fd = std.c.openat(current_fd, nested_z.ptr, .{
                     .ACCMODE = .RDONLY,
@@ -1408,7 +1397,7 @@ pub const RootDir = struct {
         if (basename.len == 0 or basename.len > std.fs.max_name_bytes) {
             return error.UnsafeExtractionPath;
         }
-        return self.allocator.dupeZ(u8, basename);
+        return self.allocator.dupeSentinel(u8, basename, 0);
     }
 
     fn statAt(
@@ -1675,7 +1664,7 @@ pub const RootDir = struct {
         defer parent.deinit();
         const basename_z = try self.basenameZ(parent.basename);
         defer self.allocator.free(basename_z);
-        const target_z = try self.allocator.dupeZ(u8, target);
+        const target_z = try self.allocator.dupeSentinel(u8, target, 0);
         defer self.allocator.free(target_z);
         self.mutationHook();
         try self.unlinkAt(&parent, basename_z.ptr);
@@ -2142,12 +2131,12 @@ const DigestAlgo = enum(u32) {
 fn normalizeDigestAlgo(algo: u32, digest_hex: []const u8) InstallError!DigestAlgo {
     if (algo != 0) {
         return switch (algo) {
-            @intFromEnum(DigestAlgo.md5) => .md5,
-            @intFromEnum(DigestAlgo.sha1) => .sha1,
-            @intFromEnum(DigestAlgo.sha224) => .sha224,
-            @intFromEnum(DigestAlgo.sha256) => .sha256,
-            @intFromEnum(DigestAlgo.sha384) => .sha384,
-            @intFromEnum(DigestAlgo.sha512) => .sha512,
+            @backingInt(DigestAlgo.md5) => .md5,
+            @backingInt(DigestAlgo.sha1) => .sha1,
+            @backingInt(DigestAlgo.sha224) => .sha224,
+            @backingInt(DigestAlgo.sha256) => .sha256,
+            @backingInt(DigestAlgo.sha384) => .sha384,
+            @backingInt(DigestAlgo.sha512) => .sha512,
             else => error.UnsupportedDigestAlgorithm,
         };
     }
@@ -2250,7 +2239,7 @@ fn parseNumericId(text: []const u8) ?u32 {
 }
 
 fn readFileOwned(allocator: Allocator, path: []const u8) Allocator.Error!?[]u8 {
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
 
     var st: c.struct_stat = undefined;
@@ -2397,7 +2386,7 @@ test "RootDir duplicates a pinned config descriptor with CLOEXEC" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root_path);
-    const root_z = try std.testing.allocator.dupeZ(u8, root_path);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root_path, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2468,9 +2457,9 @@ test "special file metadata stays on pinned created object" {
         .{root_path},
     );
     defer allocator.free(outside_path);
-    const object_z = try allocator.dupeZ(u8, object_path);
+    const object_z = try allocator.dupeSentinel(u8, object_path, 0);
     defer allocator.free(object_z);
-    const outside_z = try allocator.dupeZ(u8, outside_path);
+    const outside_z = try allocator.dupeSentinel(u8, outside_path, 0);
     defer allocator.free(outside_z);
     var symlink_swap = ObjectSwap{
         .object = object_z.ptr,
@@ -2510,9 +2499,9 @@ test "special file metadata stays on pinned created object" {
         .{root_path},
     );
     defer allocator.free(victim_path);
-    const fifo_z = try allocator.dupeZ(u8, fifo_path);
+    const fifo_z = try allocator.dupeSentinel(u8, fifo_path, 0);
     defer allocator.free(fifo_z);
-    const victim_z = try allocator.dupeZ(u8, victim_path);
+    const victim_z = try allocator.dupeSentinel(u8, victim_path, 0);
     defer allocator.free(victim_z);
     var fifo_swap = ObjectSwap{
         .object = fifo_z.ptr,
@@ -2592,11 +2581,11 @@ test "fd rooted mutations survive intermediate symlink swaps" {
         .{root_path},
     );
     defer allocator.free(write_outside);
-    const write_parent_z = try allocator.dupeZ(u8, write_parent);
+    const write_parent_z = try allocator.dupeSentinel(u8, write_parent, 0);
     defer allocator.free(write_parent_z);
-    const write_parked_z = try allocator.dupeZ(u8, write_parked);
+    const write_parked_z = try allocator.dupeSentinel(u8, write_parked, 0);
     defer allocator.free(write_parked_z);
-    const write_outside_z = try allocator.dupeZ(u8, write_outside);
+    const write_outside_z = try allocator.dupeSentinel(u8, write_outside, 0);
     defer allocator.free(write_outside_z);
     var write_swap = MutationSwap{
         .parent = write_parent_z.ptr,
@@ -2648,11 +2637,11 @@ test "fd rooted mutations survive intermediate symlink swaps" {
         .{root_path},
     );
     defer allocator.free(hard_outside);
-    const hard_parent_z = try allocator.dupeZ(u8, hard_parent);
+    const hard_parent_z = try allocator.dupeSentinel(u8, hard_parent, 0);
     defer allocator.free(hard_parent_z);
-    const hard_parked_z = try allocator.dupeZ(u8, hard_parked);
+    const hard_parked_z = try allocator.dupeSentinel(u8, hard_parked, 0);
     defer allocator.free(hard_parked_z);
-    const hard_outside_z = try allocator.dupeZ(u8, hard_outside);
+    const hard_outside_z = try allocator.dupeSentinel(u8, hard_outside, 0);
     defer allocator.free(hard_outside_z);
     var hard_swap = MutationSwap{
         .parent = hard_parent_z.ptr,
@@ -2683,9 +2672,9 @@ test "fd rooted mutations survive intermediate symlink swaps" {
         .{root_path},
     );
     defer allocator.free(source_path);
-    const source_z = try allocator.dupeZ(u8, source_path);
+    const source_z = try allocator.dupeSentinel(u8, source_path, 0);
     defer allocator.free(source_z);
-    const parked_link_z = try allocator.dupeZ(u8, parked_link);
+    const parked_link_z = try allocator.dupeSentinel(u8, parked_link, 0);
     defer allocator.free(parked_link_z);
     try std.testing.expectEqual(@as(c_int, 0), c.stat(source_z.ptr, &source_st));
     try std.testing.expectEqual(
@@ -2719,11 +2708,11 @@ test "fd rooted mutations survive intermediate symlink swaps" {
         .{root_path},
     );
     defer allocator.free(remove_outside);
-    const remove_parent_z = try allocator.dupeZ(u8, remove_parent);
+    const remove_parent_z = try allocator.dupeSentinel(u8, remove_parent, 0);
     defer allocator.free(remove_parent_z);
-    const remove_parked_z = try allocator.dupeZ(u8, remove_parked);
+    const remove_parked_z = try allocator.dupeSentinel(u8, remove_parked, 0);
     defer allocator.free(remove_parked_z);
-    const remove_outside_z = try allocator.dupeZ(u8, remove_outside);
+    const remove_outside_z = try allocator.dupeSentinel(u8, remove_outside, 0);
     defer allocator.free(remove_outside_z);
     var remove_swap = MutationSwap{
         .parent = remove_parent_z.ptr,
@@ -2780,11 +2769,11 @@ test "fd rooted mutations survive intermediate symlink swaps" {
         .{root_path},
     );
     defer allocator.free(upgrade_outside);
-    const upgrade_parent_z = try allocator.dupeZ(u8, upgrade_parent);
+    const upgrade_parent_z = try allocator.dupeSentinel(u8, upgrade_parent, 0);
     defer allocator.free(upgrade_parent_z);
-    const upgrade_parked_z = try allocator.dupeZ(u8, upgrade_parked);
+    const upgrade_parked_z = try allocator.dupeSentinel(u8, upgrade_parked, 0);
     defer allocator.free(upgrade_parked_z);
-    const upgrade_outside_z = try allocator.dupeZ(u8, upgrade_outside);
+    const upgrade_outside_z = try allocator.dupeSentinel(u8, upgrade_outside, 0);
     defer allocator.free(upgrade_outside_z);
     var upgrade_swap = MutationSwap{
         .parent = upgrade_parent_z.ptr,
@@ -2860,7 +2849,7 @@ test "canonical directory symlinks stay beneath installroot" {
     try safe_root.ensureDirectory("/usr/lib");
     const lib = try std.fmt.allocPrint(allocator, "{s}/lib", .{root});
     defer allocator.free(lib);
-    const lib_z = try allocator.dupeZ(u8, lib);
+    const lib_z = try allocator.dupeSentinel(u8, lib, 0);
     defer allocator.free(lib_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -2935,7 +2924,7 @@ test "canonical directory symlinks stay beneath installroot" {
     try safe_root.ensureDirectory("/usr/bin");
     const bin = try std.fmt.allocPrint(allocator, "{s}/bin", .{root});
     defer allocator.free(bin);
-    const bin_z = try allocator.dupeZ(u8, bin);
+    const bin_z = try allocator.dupeSentinel(u8, bin, 0);
     defer allocator.free(bin_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -2965,14 +2954,14 @@ test "canonical directory symlinks stay beneath installroot" {
         .{ root, tmp.sub_path },
     );
     defer allocator.free(outside);
-    const outside_z = try allocator.dupeZ(u8, outside);
+    const outside_z = try allocator.dupeSentinel(u8, outside, 0);
     defer allocator.free(outside_z);
     try std.testing.expectEqual(@as(c_int, 0), c.mkdir(outside_z.ptr, 0o755));
     defer _ = c.rmdir(outside_z.ptr);
 
     const sbin = try std.fmt.allocPrint(allocator, "{s}/sbin", .{root});
     defer allocator.free(sbin);
-    const sbin_z = try allocator.dupeZ(u8, sbin);
+    const sbin_z = try allocator.dupeSentinel(u8, sbin, 0);
     defer allocator.free(sbin_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -2993,7 +2982,7 @@ test "canonical directory symlinks stay beneath installroot" {
 
     const lib64 = try std.fmt.allocPrint(allocator, "{s}/lib64", .{root});
     defer allocator.free(lib64);
-    const lib64_z = try allocator.dupeZ(u8, lib64);
+    const lib64_z = try allocator.dupeSentinel(u8, lib64, 0);
     defer allocator.free(lib64_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -3097,12 +3086,12 @@ test "source write helper rejects symlink escapes and hardlinked targets" {
 
     const outside = try std.fmt.allocPrint(allocator, "{s}/outside", .{root});
     defer allocator.free(outside);
-    const outside_z = try allocator.dupeZ(u8, outside);
+    const outside_z = try allocator.dupeSentinel(u8, outside, 0);
     defer allocator.free(outside_z);
     try std.testing.expectEqual(@as(c_int, 0), c.mkdir(outside_z.ptr, 0o755));
     const link_path = try std.fmt.allocPrint(allocator, "{s}/escape", .{base});
     defer allocator.free(link_path);
-    const link_z = try allocator.dupeZ(u8, link_path);
+    const link_z = try allocator.dupeSentinel(u8, link_path, 0);
     defer allocator.free(link_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -3144,9 +3133,9 @@ test "source write helper rejects symlink escapes and hardlinked targets" {
     defer allocator.free(original);
     const hardlink = try std.fmt.allocPrint(allocator, "{s}/hardlink", .{base});
     defer allocator.free(hardlink);
-    const original_z = try allocator.dupeZ(u8, original);
+    const original_z = try allocator.dupeSentinel(u8, original, 0);
     defer allocator.free(original_z);
-    const hardlink_z = try allocator.dupeZ(u8, hardlink);
+    const hardlink_z = try allocator.dupeSentinel(u8, hardlink, 0);
     defer allocator.free(hardlink_z);
     try std.testing.expectEqual(
         @as(c_int, 0),

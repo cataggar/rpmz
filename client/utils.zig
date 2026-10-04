@@ -15,12 +15,12 @@ const HistoryInfo = abi.HistoryInfo;
 const HistoryInfoItem = abi.HistoryInfoItem;
 const Stat = std.os.linux.Statx;
 
-const EEXIST: c_int = @intFromEnum(std.posix.E.EXIST);
-const EINVAL: c_int = @intFromEnum(std.posix.E.INVAL);
-const ELOOP: c_int = @intFromEnum(std.posix.E.LOOP);
-const ENAMETOOLONG: c_int = @intFromEnum(std.posix.E.NAMETOOLONG);
-const ENOENT: c_int = @intFromEnum(std.posix.E.NOENT);
-const ENOTDIR: c_int = @intFromEnum(std.posix.E.NOTDIR);
+const EEXIST: c_int = @backingInt(std.posix.E.EXIST);
+const EINVAL: c_int = @backingInt(std.posix.E.INVAL);
+const ELOOP: c_int = @backingInt(std.posix.E.LOOP);
+const ENAMETOOLONG: c_int = @backingInt(std.posix.E.NAMETOOLONG);
+const ENOENT: c_int = @backingInt(std.posix.E.NOENT);
+const ENOTDIR: c_int = @backingInt(std.posix.E.NOTDIR);
 const LOG_ERR: c_int = 1;
 const stderr_fileno: c_int = 2;
 const path_type_mask: u16 = 0o170000;
@@ -991,7 +991,7 @@ fn testReleaseVersionFixture(macro_override: bool) !void {
     try tmp.dir.createDirPath(testing.io, "root");
 
     const original_home = if (libc.getenv("HOME")) |home|
-        try testing.allocator.dupeZ(u8, std.mem.span(home))
+        try testing.allocator.dupeSentinel(u8, std.mem.span(home), 0)
     else
         null;
     defer {
@@ -1340,7 +1340,7 @@ test "append path preserves slash byte and allocation contracts" {
 }
 
 const FreeTracker = struct {
-    pointers: [16]usize = [_]usize{0} ** 16,
+    pointers: [16]usize = @splat(0),
     count: usize = 0,
 };
 

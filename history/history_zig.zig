@@ -100,7 +100,7 @@ const RealRpmdb = struct {
     pub fn cookie(root: ?[*:0]const u8) ![:0]u8 {
         const raw = rpmz_rpmdb_cookie(root) orelse return error.RpmdbError;
         defer rpmz_rpmdb_string_free(raw);
-        return try std.heap.c_allocator.dupeZ(u8, std.mem.span(raw));
+        return try std.heap.c_allocator.dupeSentinel(u8, std.mem.span(raw), 0);
     }
 
     pub fn collectNevras(allocator: std.mem.Allocator, root: ?[*:0]const u8) ![][:0]u8 {
@@ -116,7 +116,7 @@ const ConfigRpmdb = struct {
     pub fn cookie(config: Source) ![:0]u8 {
         const raw = rpmz_rpmdb_cookie_config(config) orelse return error.RpmdbError;
         defer rpmz_rpmdb_string_free(raw);
-        return try std.heap.c_allocator.dupeZ(u8, std.mem.span(raw));
+        return try std.heap.c_allocator.dupeSentinel(u8, std.mem.span(raw), 0);
     }
 
     pub fn collectNevras(allocator: std.mem.Allocator, config: Source) ![][:0]u8 {
@@ -145,7 +145,7 @@ fn collectNevrasFromIter(
         if (rc < 0 or raw == null) return error.RpmdbError;
 
         defer rpmz_rpmdb_string_free(raw);
-        try nevras.append(allocator, try allocator.dupeZ(u8, std.mem.span(raw.?)));
+        try nevras.append(allocator, try allocator.dupeSentinel(u8, std.mem.span(raw.?), 0));
     }
     return try nevras.toOwnedSlice(allocator);
 }

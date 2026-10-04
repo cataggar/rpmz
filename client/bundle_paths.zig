@@ -322,7 +322,7 @@ test "an href with no path at all is refused" {
 }
 
 test "over-long components and paths are refused" {
-    const long_component = "a" ** (max_component_len + 1);
+    const long_component = &@as([max_component_len + 1]u8, @splat('a'));
     try testing.expectError(
         error.PathTooLong,
         mapHref(testing.allocator, long_component),

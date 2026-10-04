@@ -238,7 +238,9 @@ const StdHttpTransport = struct {
         };
         if (request.proxy_url) |proxy_url| {
             const parsed = try parseProxy(allocator, proxy_url, request.proxy_userpwd);
-            const host = try parsed.uri.getHostAlloc(allocator);
+            var host_buffer: [Io.net.HostName.max_len]u8 = undefined;
+            const borrowed_host = try Io.net.HostName.fromUri(parsed.uri, &host_buffer);
+            const host: Io.net.HostName = .{ .bytes = try allocator.dupe(u8, borrowed_host.bytes) };
             const protocol = std.http.Client.Protocol.fromUri(parsed.uri) orelse return error.UnsupportedConfiguration;
             const proxy = try allocator.create(std.http.Client.Proxy);
             proxy.* = .{
@@ -336,7 +338,7 @@ const StdHttpTransport = struct {
         };
         deadline.activity();
 
-        const status = @as(u16, @intFromEnum(response.head.status));
+        const status = @as(u16, @backingInt(response.head.status));
         if (response.head.status.class() == .redirect) {
             const location = response.head.location orelse {
                 setError("redirect response is missing Location", .{});
@@ -509,7 +511,7 @@ const CustomHttpTransport = struct {
         try self.ensureRootCa(uri);
 
         var host_buf: [Io.net.HostName.max_len]u8 = undefined;
-        const host_name = uri.getHost(&host_buf) catch {
+        const host_name = Io.net.HostName.fromUri(uri, &host_buf) catch {
             setError("download URL is missing a host", .{});
             return error.InvalidUrl;
         };
@@ -569,7 +571,7 @@ const CustomHttpTransport = struct {
                 return error.UnsupportedConfiguration;
             if (protocol == .tls) {
                 var proxy_host_buf: [Io.net.HostName.max_len]u8 = undefined;
-                const proxy_host = proxy.uri.getHost(&proxy_host_buf) catch
+                const proxy_host = Io.net.HostName.fromUri(proxy.uri, &proxy_host_buf) catch
                     return error.InvalidUrl;
                 proxy_tls = tls.client(
                     tunnel_input,
@@ -705,7 +707,7 @@ const CustomHttpTransport = struct {
         tcp_reader: *Io.net.Stream.Reader,
         transport_name: []const u8,
     ) !DownloadOutcome {
-        const status = @as(u16, @intFromEnum(response.head.status));
+        const status = @as(u16, @backingInt(response.head.status));
         if (response.head.status.class() == .redirect) {
             const location = response.head.location orelse {
                 setError("redirect response is missing Location", .{});
@@ -1194,7 +1196,7 @@ fn secureHttpsOrigin(allocator: Allocator, uri: Uri) !HttpsOrigin {
     }
 
     var host_buffer: [Io.net.HostName.max_len]u8 = undefined;
-    const host_name = uri.getHost(&host_buffer) catch return error.InvalidUrl;
+    const host_name = Io.net.HostName.fromUri(uri, &host_buffer) catch return error.InvalidUrl;
     try validateOriginHost(host_name.bytes);
 
     const normalized = try allocator.alloc(u8, host_name.bytes.len);
@@ -1352,7 +1354,7 @@ fn connectTcp(
 ) !Io.net.Stream {
     if (proxy) |parsed| {
         var proxy_host_buf: [Io.net.HostName.max_len]u8 = undefined;
-        const proxy_host = parsed.uri.getHost(&proxy_host_buf) catch return error.InvalidUrl;
+        const proxy_host = Io.net.HostName.fromUri(parsed.uri, &proxy_host_buf) catch return error.InvalidUrl;
         const protocol = std.http.Client.Protocol.fromUri(parsed.uri) orelse
             return error.UnsupportedConfiguration;
         const proxy_port: u16 = parsed.uri.port orelse switch (protocol) {
@@ -1575,7 +1577,7 @@ fn sendConnectRequest(
     user_agent: ?[]const u8,
 ) !void {
     var host_buf: [Io.net.HostName.max_len]u8 = undefined;
-    const host_name = uri.getHost(&host_buf) catch return error.InvalidUrl;
+    const host_name = Io.net.HostName.fromUri(uri, &host_buf) catch return error.InvalidUrl;
     const port = uri.port orelse 443;
 
     var req_buf: [2048]u8 = undefined;
@@ -1592,7 +1594,7 @@ fn sendConnectRequest(
     try writer.flush();
 
     const response = try receiveResponseHead(reader);
-    const status = @as(u16, @intFromEnum(response.head.status));
+    const status = @as(u16, @backingInt(response.head.status));
     if (status < 200 or status >= 300) {
         setError("proxy CONNECT failed with status {d}", .{status});
         return error.ProxyConnectFailed;
@@ -1756,7 +1758,7 @@ fn filePathFromUri(allocator: Allocator, uri: Uri) ![]u8 {
     }
     if (uri.host) |host| {
         var host_buffer: [Io.net.HostName.max_len]u8 = undefined;
-        const host_name = uri.getHost(&host_buffer) catch return error.InvalidUrl;
+        const host_name = Io.net.HostName.fromUri(uri, &host_buffer) catch return error.InvalidUrl;
         if (!std.ascii.eqlIgnoreCase(host_name.bytes, "localhost")) {
             _ = host;
             return error.InvalidUrl;
@@ -1955,8 +1957,8 @@ fn schemeEq(actual: []const u8, expected: []const u8) bool {
 fn sameCredentialOrigin(left: Uri, right: Uri) bool {
     var left_host_buf: [Io.net.HostName.max_len]u8 = undefined;
     var right_host_buf: [Io.net.HostName.max_len]u8 = undefined;
-    const left_host = left.getHost(&left_host_buf) catch return false;
-    const right_host = right.getHost(&right_host_buf) catch return false;
+    const left_host = Io.net.HostName.fromUri(left, &left_host_buf) catch return false;
+    const right_host = Io.net.HostName.fromUri(right, &right_host_buf) catch return false;
     if (!std.ascii.eqlIgnoreCase(left_host.bytes, right_host.bytes)) {
         return false;
     }
@@ -2500,7 +2502,7 @@ fn scratchPath(allocator: Allocator, name: []const u8) ![]u8 {
 }
 
 fn dupeZ(allocator: Allocator, value: []const u8) ![:0]u8 {
-    return allocator.dupeZ(u8, value);
+    return allocator.dupeSentinel(u8, value, 0);
 }
 
 fn writeScratchFile(io: Io, path: []const u8, data: []const u8) !void {
@@ -4497,7 +4499,7 @@ test "slow responses honor the total timeout" {
 test "total timeout interrupts a longer throttle delay" {
     const io = std.testing.io;
     try ensureScratchDir(io);
-    const body = [_]u8{'x'} ** 4096;
+    const body: [4096]u8 = @splat('x');
     const server = try spawnServer(.{
         .tls_mode = false,
         .body = &body,

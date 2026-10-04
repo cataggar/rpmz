@@ -137,8 +137,8 @@ test "an install that eviction cannot bring under the limit is refused" {
     // One installed instance plus two new ones is three, and evicting the one
     // installed instance still leaves two against a limit of one.
     var result = try root.run(&.{
-        "install",                       "-y",
-        "--nogpgcheck",                  multi ++ "=" ++ versions[1],
+        "install",                   "-y",
+        "--nogpgcheck",              multi ++ "=" ++ versions[1],
         multi ++ "=" ++ versions[2],
     });
     defer result.deinit();

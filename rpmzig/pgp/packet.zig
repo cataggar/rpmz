@@ -71,7 +71,7 @@ pub const PacketIterator = struct {
     fn parseNewFormat(self: *PacketIterator) HeaderError!Packet {
         const packet_start = self.rest;
         const first = self.rest[0];
-        const tag: Tag = @enumFromInt(@as(u6, @truncate(first & 0x3F)));
+        const tag: Tag = @fromBackingInt(@intCast(@as(u6, @truncate(first & 0x3F))));
 
         if (self.rest.len < 2) return error.TruncatedHeader;
         const b1 = self.rest[1];
@@ -111,7 +111,7 @@ pub const PacketIterator = struct {
     fn parseOldFormat(self: *PacketIterator) HeaderError!Packet {
         const packet_start = self.rest;
         const first = self.rest[0];
-        const tag: Tag = @enumFromInt(@as(u6, @truncate((first >> 2) & 0x0F)));
+        const tag: Tag = @fromBackingInt(@intCast(@as(u6, @truncate((first >> 2) & 0x0F))));
         const len_type: u2 = @truncate(first & 0x03);
 
         var body_len: usize = undefined;

@@ -1,5 +1,18 @@
 const std = @import("std");
 
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
+
 pub const RecordKind = enum(u32) {
     unknown = 0,
     primary = 1,
@@ -15,7 +28,7 @@ pub const Checksum = extern struct {
 
 pub const Record = extern struct {
     pszType: ?[*:0]const u8 = null,
-    dwKind: u32 = @intFromEnum(RecordKind.unknown),
+    dwKind: u32 = @backingInt(RecordKind.unknown),
     pszLocationHref: ?[*:0]const u8 = null,
     checksum: Checksum = .{},
     openChecksum: Checksum = .{},
@@ -886,7 +899,7 @@ test "package location resolver preserves terminal and relative parent paths" {
 }
 
 test "package location resolution releases intermediate allocations" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         uriResolutionAllocationFailureCase,
         .{},
