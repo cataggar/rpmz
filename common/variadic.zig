@@ -31,7 +31,7 @@ pub const needs_manual_start =
     builtin.cpu.arch == .aarch64 and
     builtin.zig_backend == .stage2_llvm;
 
-// Zig 0.16 disables std.builtin.VaList on AArch64 under the LLVM backend
+// Zig disables std.builtin.VaList on AArch64 under the LLVM backend
 // because @cVaArg lowers to LLVM's va_arg instruction, which is not ABI-correct
 // there. Clang uses these intrinsics for va_start/copy/end, while pointer
 // extraction follows AAPCS64 explicitly below. Other supported combinations
@@ -86,7 +86,7 @@ pub fn cArgument(comptime T: type, list: *VaList) T {
             {
                 @compileError("unexpected AArch64 C va_list parameter type");
             }
-            break :blk @bitCast(list.*);
+            break :blk @as(*const T, @ptrCast(list)).*;
         },
         else => unreachable,
     };

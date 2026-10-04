@@ -71,6 +71,7 @@ HEADER_RECORD = re.compile(
 # __has_include(<solv/pool.h>) is deliberately NOT matched: it is a
 # predicate and brings no declaration into the translation unit.
 
+
 def source_units(rel, text):
     if rel != REGISTRY:
         return [(rel, text)]
