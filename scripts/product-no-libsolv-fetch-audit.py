@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
 import os
 from pathlib import Path
 import re
@@ -37,11 +36,15 @@ def extract_dependency_closure(package_cache, system_packages, initial_hashes):
             continue
         if package_hash.startswith("libsolv-"):
             raise RuntimeError("product dependency closure requested libsolv")
+        source = package_cache / package_hash
         archive = package_cache / f"{package_hash}.tar.gz"
-        if not archive.is_file():
+        if source.is_dir():
+            shutil.copytree(source, system_packages / package_hash, symlinks=True)
+        elif archive.is_file():
+            with tarfile.open(archive, "r:gz") as package:
+                package.extractall(system_packages, filter="data")
+        else:
             raise RuntimeError(f"missing cached package archive: {archive}")
-        with tarfile.open(archive, "r:gz") as package:
-            package.extractall(system_packages, filter="data")
         extracted.add(package_hash)
         manifest = system_packages / package_hash / "build.zig.zon"
         if manifest.is_file():
@@ -52,27 +55,6 @@ def extract_dependency_closure(package_cache, system_packages, initial_hashes):
                     manifest.read_text(),
                 )
             )
-
-
-def zig_package_cache(zig):
-    result = subprocess.run(
-        [zig, "env"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    output = result.stdout or result.stderr
-    try:
-        global_cache = json.loads(output)["global_cache_dir"]
-    except (json.JSONDecodeError, KeyError):
-        match = re.search(
-            r'\.global_cache_dir\s*=\s*"([^"]+)"',
-            output,
-        )
-        if match is None:
-            raise RuntimeError("unable to determine Zig global cache path")
-        global_cache = match.group(1)
-    return Path(global_cache) / "p"
 
 
 def main():
@@ -88,7 +70,7 @@ def main():
     package_cache = (
         Path(package_cache_arg)
         if package_cache_arg
-        else zig_package_cache(args.zig)
+        else root / "zig-pkg"
     )
     scratch = root / ".product-no-libsolv-fetch"
     shutil.rmtree(scratch, ignore_errors=True)
