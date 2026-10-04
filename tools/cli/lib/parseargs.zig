@@ -8,13 +8,7 @@ const std = @import("std");
 const common = @import("rpmz_common");
 const getopt = @import("getopt_c.zig").c;
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("strings.h");
-    @cInclude("nodes.h");
-});
+const c = @import("c.tools.cli.lib.parseargs");
 const argparse = @import("argparse.zig");
 const help = @import("help.zig");
 const options = @import("options.zig");

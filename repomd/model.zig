@@ -15,7 +15,7 @@ pub const Checksum = extern struct {
 
 pub const Record = extern struct {
     pszType: ?[*:0]const u8 = null,
-    dwKind: u32 = @intFromEnum(RecordKind.unknown),
+    dwKind: u32 = @backingInt(RecordKind.unknown),
     pszLocationHref: ?[*:0]const u8 = null,
     checksum: Checksum = .{},
     openChecksum: Checksum = .{},

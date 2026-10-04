@@ -398,11 +398,11 @@ fn appendFiles(
     if (dirindex_entry.count != basename_count) return .{};
 
     const mode_entry = if (hdr.find(.filemodes)) |entry|
-        if (@as(rpm_header.TypeId, @enumFromInt(entry.typ)) == .int16) entry else null
+        if (@as(rpm_header.TypeId, @fromBackingInt(@intCast(entry.typ))) == .int16) entry else null
     else
         null;
     const flag_entry = if (hdr.find(.fileflags)) |entry|
-        if (@as(rpm_header.TypeId, @enumFromInt(entry.typ)) == .int32) entry else null
+        if (@as(rpm_header.TypeId, @fromBackingInt(@intCast(entry.typ))) == .int32) entry else null
     else
         null;
 
@@ -782,7 +782,7 @@ fn buildHeaderBlob(
         }
 
         try appendBeU32(&index, tag);
-        try appendBeU32(&index, @intFromEnum(typ));
+        try appendBeU32(&index, @backingInt(typ));
         try appendBeU32(&index, offset);
         try appendBeU32(&index, count);
     }
@@ -814,8 +814,8 @@ fn buildStandaloneHeader(
     const raw = standalone[magic.len..];
     writeBeU32(raw[0..4], new_index_count);
     writeBeU32(raw[4..8], new_data_size);
-    writeBeU32(raw[8..12], @intFromEnum(region_tag));
-    writeBeU32(raw[12..16], @intFromEnum(rpm_header.TypeId.bin));
+    writeBeU32(raw[8..12], @backingInt(region_tag));
+    writeBeU32(raw[12..16], @backingInt(rpm_header.TypeId.bin));
     writeBeU32(raw[16..20], data_size);
     writeBeU32(raw[20..24], 16);
 
@@ -827,8 +827,8 @@ fn buildStandaloneHeader(
         header_blob[8 + old_index_len ..][0..data_size],
     );
     const trailer = raw[data_start + data_size ..][0..16];
-    writeBeU32(trailer[0..4], @intFromEnum(region_tag));
-    writeBeU32(trailer[4..8], @intFromEnum(rpm_header.TypeId.bin));
+    writeBeU32(trailer[0..4], @backingInt(region_tag));
+    writeBeU32(trailer[4..8], @backingInt(rpm_header.TypeId.bin));
     writeBeU32(
         trailer[8..12],
         @bitCast(-@as(i32, @intCast(new_index_count * 16))),
@@ -861,15 +861,15 @@ fn buildMinimalRpmBytes(
     md5_hasher.final(&md5);
     const sig_header_blob = try buildHeaderBlob(allocator, &.{
         .{ .int32 = .{
-            .tag = @intFromEnum(rpm_header.SigTagId.size),
+            .tag = @backingInt(rpm_header.SigTagId.size),
             .value = 0,
         } },
         .{ .string = .{
-            .tag = @intFromEnum(rpm_header.SigTagId.sha256),
+            .tag = @backingInt(rpm_header.SigTagId.sha256),
             .value = &header_hex,
         } },
         .{ .bin = .{
-            .tag = @intFromEnum(rpm_header.SigTagId.md5),
+            .tag = @backingInt(rpm_header.SigTagId.md5),
             .value = &md5,
         } },
     });
@@ -954,14 +954,14 @@ pub fn makeMinimalRpmBytesForTest(
     const payload_hex = std.fmt.bytesToHex(payload_digest, .lower);
     const payload_values = [_][]const u8{&payload_hex};
     const header_blob = try buildHeaderBlob(allocator, &.{
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.name), .value = name } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.version), .value = version } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.release), .value = release } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.arch), .value = arch } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.payload_format), .value = "cpio" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.payload_compressor), .value = "none" } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.payloadsha256), .values = &payload_values } },
-        .{ .int32 = .{ .tag = @intFromEnum(rpm_header.TagId.payloadsha256algo), .value = 8 } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.name), .value = name } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.version), .value = version } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.release), .value = release } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.arch), .value = arch } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.payload_format), .value = "cpio" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.payload_compressor), .value = "none" } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.payloadsha256), .values = &payload_values } },
+        .{ .int32 = .{ .tag = @backingInt(rpm_header.TagId.payloadsha256algo), .value = 8 } },
     });
     defer allocator.free(header_blob);
     return buildMinimalRpmBytes(allocator, header_blob);
@@ -976,13 +976,13 @@ pub fn makeMinimalRpmBytesWithRequiresForTest(
 ) ![]u8 {
     const requires_values = [_][]const u8{ "dep-one", "dep-two" };
     const header_blob = try buildHeaderBlob(allocator, &.{
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.name), .value = name } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.version), .value = version } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.release), .value = release } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.arch), .value = arch } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.requirename), .values = &requires_values } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.requireversion), .values = &[_][]const u8{ "1:1.0-2", "0:3.1" } } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.requireflags), .values = &[_]u32{ dep_greater | dep_equal | dep_pre_in, dep_less } } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.name), .value = name } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.version), .value = version } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.release), .value = release } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.arch), .value = arch } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.requirename), .values = &requires_values } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.requireversion), .values = &[_][]const u8{ "1:1.0-2", "0:3.1" } } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.requireflags), .values = &[_]u32{ dep_greater | dep_equal | dep_pre_in, dep_less } } },
     });
     defer allocator.free(header_blob);
     return buildMinimalRpmBytes(allocator, header_blob);
@@ -1008,10 +1008,10 @@ pub fn makeMinimalHeaderForTest(
     arch: []const u8,
 ) ![]u8 {
     const header_blob = try buildHeaderBlob(allocator, &.{
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.name), .value = name } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.version), .value = version } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.release), .value = release } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.arch), .value = arch } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.name), .value = name } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.version), .value = version } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.release), .value = release } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.arch), .value = arch } },
     });
     defer allocator.free(header_blob);
     const standalone = try buildStandaloneHeader(
@@ -1034,54 +1034,54 @@ test "builds package from rpm header tags" {
     const changelog_texts = [_][]const u8{ "Initial build", "Fixes" };
 
     const header_blob = try buildHeaderBlob(testing.allocator, &.{
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.name), .value = "pkg-one" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.version), .value = "2.3.4" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.release), .value = "5" } },
-        .{ .int32 = .{ .tag = @intFromEnum(rpm_header.TagId.epoch), .value = 7 } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.arch), .value = "x86_64" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.summary), .value = "Package one" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.description), .value = "Package one description" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.packager), .value = "Pkg Builder" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.url), .value = "https://example.test/pkg-one" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.vendor), .value = "Example Co" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.license), .value = "MIT" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.name), .value = "pkg-one" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.version), .value = "2.3.4" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.release), .value = "5" } },
+        .{ .int32 = .{ .tag = @backingInt(rpm_header.TagId.epoch), .value = 7 } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.arch), .value = "x86_64" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.summary), .value = "Package one" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.description), .value = "Package one description" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.packager), .value = "Pkg Builder" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.url), .value = "https://example.test/pkg-one" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.vendor), .value = "Example Co" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.license), .value = "MIT" } },
         .{ .string = .{
-            .tag = @intFromEnum(rpm_header.TagId.group),
+            .tag = @backingInt(rpm_header.TagId.group),
             .value = "Applications/System",
             .typ = .i18n_string,
         } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.buildhost), .value = "builder.example" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.source_rpm), .value = "pkg-one-2.3.4-5.src.rpm" } },
-        .{ .int32 = .{ .tag = @intFromEnum(rpm_header.TagId.build_time), .value = 1234567890 } },
-        .{ .int64 = .{ .tag = @intFromEnum(rpm_header.TagId.longsize), .value = 9876543210 } },
-        .{ .int32 = .{ .tag = @intFromEnum(rpm_header.TagId.archive_size), .value = 4321 } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.sha1header), .value = "0123456789abcdef0123456789abcdef01234567" } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.providename), .values = &provides_values } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.provideversion), .values = &[_][]const u8{ "7:2.3.4-5", "" } } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.provideflags), .values = &[_]u32{ dep_equal, 0 } } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.requirename), .values = &requires_values } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.requireversion), .values = &[_][]const u8{ "1:1.0-2", "0:3.1" } } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.requireflags), .values = &[_]u32{ dep_greater | dep_equal | dep_pre_in, dep_less } } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.conflictname), .values = &[_][]const u8{"old-pkg"} } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.conflictversion), .values = &[_][]const u8{"4.0-1"} } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.conflictflags), .values = &[_]u32{dep_less} } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.obsoletename), .values = &[_][]const u8{"older-pkg"} } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.obsoleteversion), .values = &[_][]const u8{""} } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.obsoleteflags), .values = &[_]u32{0} } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.oldsuggestsname), .values = &[_][]const u8{ "strong-addon", "weak-addon" } } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.oldsuggestsversion), .values = &[_][]const u8{ "", "" } } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.oldsuggestsflags), .values = &[_]u32{ dep_strong, 0 } } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.oldenhancesname), .values = &[_][]const u8{ "strong-extra", "weak-extra" } } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.oldenhancesversion), .values = &[_][]const u8{ "", "" } } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.oldenhancesflags), .values = &[_]u32{ dep_strong, 0 } } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.basenames), .values = &basename_values } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.dirnames), .values = &dirname_values } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.dirindexes), .values = &[_]u32{ 0, 1, 2 } } },
-        .{ .int16_array = .{ .tag = @intFromEnum(rpm_header.TagId.filemodes), .values = &[_]u16{ 0o100755, 0o100644, 0o040755 } } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.fileflags), .values = &[_]u32{ 0, 0, fileflag_ghost } } },
-        .{ .int32_array = .{ .tag = @intFromEnum(rpm_header.TagId.changelogtime), .values = &[_]u32{ 100, 200 } } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.changelogname), .values = &changelog_authors } },
-        .{ .string_array = .{ .tag = @intFromEnum(rpm_header.TagId.changelogtext), .values = &changelog_texts } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.buildhost), .value = "builder.example" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.source_rpm), .value = "pkg-one-2.3.4-5.src.rpm" } },
+        .{ .int32 = .{ .tag = @backingInt(rpm_header.TagId.build_time), .value = 1234567890 } },
+        .{ .int64 = .{ .tag = @backingInt(rpm_header.TagId.longsize), .value = 9876543210 } },
+        .{ .int32 = .{ .tag = @backingInt(rpm_header.TagId.archive_size), .value = 4321 } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.sha1header), .value = "0123456789abcdef0123456789abcdef01234567" } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.providename), .values = &provides_values } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.provideversion), .values = &[_][]const u8{ "7:2.3.4-5", "" } } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.provideflags), .values = &[_]u32{ dep_equal, 0 } } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.requirename), .values = &requires_values } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.requireversion), .values = &[_][]const u8{ "1:1.0-2", "0:3.1" } } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.requireflags), .values = &[_]u32{ dep_greater | dep_equal | dep_pre_in, dep_less } } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.conflictname), .values = &[_][]const u8{"old-pkg"} } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.conflictversion), .values = &[_][]const u8{"4.0-1"} } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.conflictflags), .values = &[_]u32{dep_less} } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.obsoletename), .values = &[_][]const u8{"older-pkg"} } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.obsoleteversion), .values = &[_][]const u8{""} } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.obsoleteflags), .values = &[_]u32{0} } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.oldsuggestsname), .values = &[_][]const u8{ "strong-addon", "weak-addon" } } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.oldsuggestsversion), .values = &[_][]const u8{ "", "" } } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.oldsuggestsflags), .values = &[_]u32{ dep_strong, 0 } } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.oldenhancesname), .values = &[_][]const u8{ "strong-extra", "weak-extra" } } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.oldenhancesversion), .values = &[_][]const u8{ "", "" } } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.oldenhancesflags), .values = &[_]u32{ dep_strong, 0 } } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.basenames), .values = &basename_values } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.dirnames), .values = &dirname_values } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.dirindexes), .values = &[_]u32{ 0, 1, 2 } } },
+        .{ .int16_array = .{ .tag = @backingInt(rpm_header.TagId.filemodes), .values = &[_]u16{ 0o100755, 0o100644, 0o040755 } } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.fileflags), .values = &[_]u32{ 0, 0, fileflag_ghost } } },
+        .{ .int32_array = .{ .tag = @backingInt(rpm_header.TagId.changelogtime), .values = &[_]u32{ 100, 200 } } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.changelogname), .values = &changelog_authors } },
+        .{ .string_array = .{ .tag = @backingInt(rpm_header.TagId.changelogtext), .values = &changelog_texts } },
     });
     defer testing.allocator.free(header_blob);
 
@@ -1175,13 +1175,13 @@ test "builds packages from rpm file and rpmdb iterator" {
     const testing = std.testing;
 
     const header_blob = try buildHeaderBlob(testing.allocator, &.{
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.name), .value = "pkg-two" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.version), .value = "1.0" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.release), .value = "2" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.arch), .value = "noarch" } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.summary), .value = "Package two" } },
-        .{ .int32 = .{ .tag = @intFromEnum(rpm_header.TagId.size), .value = 1234 } },
-        .{ .string = .{ .tag = @intFromEnum(rpm_header.TagId.sha256header), .value = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.name), .value = "pkg-two" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.version), .value = "1.0" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.release), .value = "2" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.arch), .value = "noarch" } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.summary), .value = "Package two" } },
+        .{ .int32 = .{ .tag = @backingInt(rpm_header.TagId.size), .value = 1234 } },
+        .{ .string = .{ .tag = @backingInt(rpm_header.TagId.sha256header), .value = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } },
     });
     defer testing.allocator.free(header_blob);
 
@@ -1214,10 +1214,11 @@ test "builds packages from rpm file and rpmdb iterator" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var db_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const db_path = try std.fmt.bufPrintZ(
+    const db_path = try std.fmt.bufPrintSentinel(
         &db_path_buffer,
         ".zig-cache/tmp/{s}/rpmdb.sqlite",
         .{&tmp.sub_path},
+        0,
     );
 
     const db = try sqlite.Database.open(.{ .path = db_path });

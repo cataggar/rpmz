@@ -13,11 +13,7 @@
 //! a constant for downstream consumers.
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("glob.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-});
+const c = @import("c.rpmzig.txn_config");
 
 extern fn mkfifo(path: [*:0]const u8, mode: std.c.mode_t) c_int;
 extern fn fork() c_int;
@@ -249,7 +245,7 @@ fn verifyAbsentRpmDbEntries(dir_fd: c_int) InitError!void {
             std.os.linux.STATX.BASIC_STATS,
             &st,
         ) == 0) return error.RpmDbPinFailed;
-        if (std.c._errno().* != @intFromEnum(std.posix.E.NOENT))
+        if (std.c._errno().* != @backingInt(std.posix.E.NOENT))
             return error.RpmDbPinFailed;
     }
 }
@@ -341,8 +337,8 @@ pub const TxnConfig = struct {
         };
         errdefer config.deinit();
 
-        inline for (std.meta.fields(Macro)) |field| {
-            const macro_name: Macro = @enumFromInt(field.value);
+        inline for (@typeInfo(Macro).@"enum".field_values) |field_value| {
+            const macro_name: Macro = @fromBackingInt(@intCast(field_value));
             config.setMacroByName(macro_name.name(), macro_name.defaultValue()) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
@@ -960,10 +956,10 @@ pub const TxnConfig = struct {
                 .NOFOLLOW = true,
             });
             if (next < 0 and create and
-                std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+                std.c._errno().* == @backingInt(std.posix.E.NOENT))
             {
                 if (std.c.mkdirat(current, name, 0o755) != 0 and
-                    std.c._errno().* != @intFromEnum(std.posix.E.EXIST))
+                    std.c._errno().* != @backingInt(std.posix.E.EXIST))
                 {
                     return error.SyscallFailed;
                 }
@@ -976,9 +972,9 @@ pub const TxnConfig = struct {
             }
             if (next < 0) {
                 return switch (std.c._errno().*) {
-                    @intFromEnum(std.posix.E.NOENT) => error.NotFound,
-                    @intFromEnum(std.posix.E.LOOP),
-                    @intFromEnum(std.posix.E.NOTDIR),
+                    @backingInt(std.posix.E.NOENT) => error.NotFound,
+                    @backingInt(std.posix.E.LOOP),
+                    @backingInt(std.posix.E.NOTDIR),
                     => error.UnsafeTargetPath,
                     else => error.SyscallFailed,
                 };
@@ -1018,9 +1014,9 @@ pub const TxnConfig = struct {
         });
         if (fd < 0) {
             return switch (std.c._errno().*) {
-                @intFromEnum(std.posix.E.NOENT) => error.NotFound,
-                @intFromEnum(std.posix.E.LOOP),
-                @intFromEnum(std.posix.E.NOTDIR),
+                @backingInt(std.posix.E.NOENT) => error.NotFound,
+                @backingInt(std.posix.E.LOOP),
+                @backingInt(std.posix.E.NOTDIR),
                 => error.UnsafeTargetPath,
                 else => error.SyscallFailed,
             };
@@ -1169,7 +1165,7 @@ pub const TxnConfig = struct {
     }
 
     fn loadMacroGlob(self: *TxnConfig, pattern: []const u8) LoadMacrosError!void {
-        const pattern_z = self.allocator.dupeZ(u8, pattern) catch return error.OutOfMemory;
+        const pattern_z = self.allocator.dupeSentinel(u8, pattern, 0) catch return error.OutOfMemory;
         defer self.allocator.free(pattern_z);
 
         var matches: c.glob_t = std.mem.zeroes(c.glob_t);
@@ -1184,7 +1180,7 @@ pub const TxnConfig = struct {
     }
 
     fn loadMacroFile(self: *TxnConfig, path: []const u8) LoadMacrosError!void {
-        const path_z = self.allocator.dupeZ(u8, path) catch return error.OutOfMemory;
+        const path_z = self.allocator.dupeSentinel(u8, path, 0) catch return error.OutOfMemory;
         defer self.allocator.free(path_z);
 
         const file = c.fopen(path_z.ptr, "rb") orelse return error.MacroFileOpenFailed;
@@ -1250,7 +1246,7 @@ pub const TxnConfig = struct {
                 if (!isValidMacroName(env_name)) {
                     return error.InvalidMacroExpression;
                 }
-                const env_name_z = try allocator.dupeZ(u8, env_name);
+                const env_name_z = try allocator.dupeSentinel(u8, env_name, 0);
                 defer allocator.free(env_name_z);
                 if (c.getenv(env_name_z.ptr)) |env_value| {
                     try output.appendSlice(allocator, std.mem.span(env_value));
@@ -1345,7 +1341,7 @@ pub const TxnConfig = struct {
             if (std.mem.startsWith(u8, expression, "getenv:")) {
                 const env_name = expression["getenv:".len..];
                 if (!isValidMacroName(env_name)) return error.InvalidMacroExpression;
-                const env_name_z = try allocator.dupeZ(u8, env_name);
+                const env_name_z = try allocator.dupeSentinel(u8, env_name, 0);
                 defer allocator.free(env_name_z);
                 if (c.getenv(env_name_z.ptr)) |env_value| {
                     try output.appendSlice(allocator, std.mem.span(env_value));
@@ -1377,15 +1373,15 @@ pub fn buildInstallRootedPath(
     if (relative.len == 0) {
         if (root_prefix.len == 0) {
             if (buf.len < 2) return error.PathTooLong;
-            return std.fmt.bufPrintZ(buf, "/", .{}) catch return error.PathTooLong;
+            return std.fmt.bufPrintSentinel(buf, "/", .{}, 0) catch return error.PathTooLong;
         }
         if (root_prefix.len + 1 > buf.len) return error.PathTooLong;
-        return std.fmt.bufPrintZ(buf, "{s}", .{root_prefix}) catch return error.PathTooLong;
+        return std.fmt.bufPrintSentinel(buf, "{s}", .{root_prefix}, 0) catch return error.PathTooLong;
     }
 
     const needed = root_prefix.len + 1 + relative.len + 1;
     if (needed > buf.len) return error.PathTooLong;
-    return std.fmt.bufPrintZ(buf, "{s}/{s}", .{ root_prefix, relative }) catch return error.PathTooLong;
+    return std.fmt.bufPrintSentinel(buf, "{s}/{s}", .{ root_prefix, relative }, 0) catch return error.PathTooLong;
 }
 
 /// Builds the rooted path to the sqlite rpmdb file.
@@ -1400,15 +1396,16 @@ pub fn buildRpmDbSqlitePath(
     if (relative.len == 0) {
         const needed = root_prefix.len + 1 + DEFAULT_RPMDB_BASENAME.len + 1;
         if (needed > buf.len) return error.PathTooLong;
-        return std.fmt.bufPrintZ(buf, "{s}/{s}", .{ root_prefix, DEFAULT_RPMDB_BASENAME }) catch return error.PathTooLong;
+        return std.fmt.bufPrintSentinel(buf, "{s}/{s}", .{ root_prefix, DEFAULT_RPMDB_BASENAME }, 0) catch return error.PathTooLong;
     }
 
     const needed = root_prefix.len + 1 + relative.len + 1 + DEFAULT_RPMDB_BASENAME.len + 1;
     if (needed > buf.len) return error.PathTooLong;
-    return std.fmt.bufPrintZ(
+    return std.fmt.bufPrintSentinel(
         buf,
         "{s}/{s}/{s}",
         .{ root_prefix, relative, DEFAULT_RPMDB_BASENAME },
+        0,
     ) catch return error.PathTooLong;
 }
 
@@ -1638,7 +1635,7 @@ test "pinned config descriptors are CLOEXEC and identity is read-only" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1700,7 +1697,7 @@ test "literal rpmdb pin selects the exact supplied path bytes" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1778,7 +1775,7 @@ test "deferred rpmdb pin uses the final macro and then freezes it" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1831,7 +1828,7 @@ test "authoritative rpmdb absence is freshly revalidated" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -1909,7 +1906,7 @@ test "rpmdb main FIFO type check is bounded and nonblocking" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const fifo_path = try std.fmt.allocPrintSentinel(
         std.testing.allocator,
@@ -1980,7 +1977,7 @@ test "pinned cachedir comparisons normalize trailing separators" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2041,7 +2038,7 @@ test "failed rpmdb finalization never adopts a closed descriptor" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2109,7 +2106,7 @@ test "rpmdb symlinks resolve only within the pinned install root" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,

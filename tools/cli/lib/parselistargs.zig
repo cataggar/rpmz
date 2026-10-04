@@ -6,12 +6,7 @@
 
 const std = @import("std");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("nodes.h");
-});
+const c = @import("c.tools.cli.lib.parselistargs");
 const choice_parse = @import("choice_parse.zig");
 
 const ScopeChoice = choice_parse.NamedValue(abi.TDNF_SCOPE);

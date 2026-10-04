@@ -9,14 +9,7 @@ const std = @import("std");
 const jsondump = @import("jsondump_abi");
 const common = @import("rpmz_common");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-    @cInclude("string.h");
-    @cInclude("strings.h");
-    @cInclude("time.h");
-    @cInclude("unistd.h");
-});
+const c = @import("c.tools.cli.lib.apimisc");
 const jsonfmt = @import("jsonfmt.zig");
 const output = @import("output.zig");
 
@@ -585,7 +578,7 @@ pub export fn TDNFCliRepoQueryCommand(
                     dwError = checkJsonResult(jsondump.jd_map_start(jd_entry));
                     if (dwError != 0) return dwError;
 
-                    var szTime = [_]u8{0} ** 20;
+                    var szTime: [20]u8 = @splat(0);
                     if (abi.strftime(&szTime, szTime.len, "%a %b %d %Y", abi.localtime(&entry[0].timeTime)) != 0) {
                         dwError = checkJsonResult(jsondump.jd_map_add_string(
                             jd_entry,
@@ -652,7 +645,7 @@ pub export fn TDNFCliRepoQueryCommand(
                 var pEntry = pPkgInfo.pChangeLogEntries;
                 while (pEntry != null) : (pEntry = pEntry[0].pNext) {
                     const entry = pEntry.?;
-                    var szTime = [_]u8{0} ** 20;
+                    var szTime: [20]u8 = @splat(0);
                     if (abi.strftime(&szTime, szTime.len, "%a %b %d %Y", abi.localtime(&entry[0].timeTime)) != 0) {
                         common.log(LOG_CRIT, "%s %s\n%s\n", .{ @as([*:0]const u8, @ptrCast(&szTime)), entry[0].pszAuthor, entry[0].pszText });
                     } else {
@@ -672,7 +665,7 @@ pub export fn TDNFCliRepoQueryCommand(
             var pEntry = pPkgInfo.pChangeLogEntries;
             while (pEntry != null) : (pEntry = pEntry[0].pNext) {
                 const entry = pEntry.?;
-                var szTime = [_]u8{0} ** 20;
+                var szTime: [20]u8 = @splat(0);
                 if (abi.strftime(&szTime, szTime.len, "%a %b %d %Y", abi.localtime(&entry[0].timeTime)) != 0) {
                     common.log(LOG_CRIT, "%s %s\n%s\n", .{ @as([*:0]const u8, @ptrCast(&szTime)), entry[0].pszAuthor, entry[0].pszText });
                 } else {
@@ -900,7 +893,7 @@ fn TDNFCliHistoryList(
         const item_count: usize = @intCast(history_info.nItemCount);
         while (i < item_count) : (i += 1) {
             const item = &pItems[@intCast(i)];
-            var szTime = [_]u8{0} ** 22;
+            var szTime: [22]u8 = @splat(0);
             _ = abi.strftime(&szTime, szTime.len, "%a %b %d %Y %H:%M", abi.localtime(&item.timeStamp));
             common.log(LOG_CRIT, "%4d %-*s %-21s +%-4d / -%-4d\n", .{ item.nId, nCmdWidth, item.pszCmdLine, @as([*:0]const u8, @ptrCast(&szTime)), item.nAddedCount, item.nRemovedCount });
 

@@ -175,7 +175,7 @@ pub const Universe = struct {
                 }
 
                 const repository_id: RepositoryId =
-                    @enumFromInt(@as(u32, @intCast(repository_cursor)));
+                    @fromBackingInt(@intCast(@as(u32, @intCast(repository_cursor))));
                 input_to_repository[input_index] = repository_id;
                 repositories[repository_cursor] = .{
                     .id = repository_id,
@@ -193,7 +193,7 @@ pub const Universe = struct {
 
                 for (input.model.packages, 0..) |*source_package, package_index| {
                     const package_id: PackageId =
-                        @enumFromInt(@as(u32, @intCast(package_cursor)));
+                        @fromBackingInt(@intCast(@as(u32, @intCast(package_cursor))));
                     packages[package_cursor] = .{
                         .id = package_id,
                         .repository = repository_id,
@@ -233,7 +233,7 @@ pub const Universe = struct {
         self: *const Universe,
         id: RepositoryId,
     ) ?*const UniverseRepository {
-        const index: usize = @intFromEnum(id);
+        const index: usize = @backingInt(id);
         if (index >= self.repositories.len) {
             return null;
         }
@@ -254,7 +254,7 @@ pub const Universe = struct {
         self: *const Universe,
         id: PackageId,
     ) ?*const UniversePackage {
-        const index: usize = @intFromEnum(id);
+        const index: usize = @backingInt(id);
         if (index >= self.packages.len) {
             return null;
         }
@@ -468,9 +468,9 @@ test "universe assigns installed packages first and preserves repository order" 
     try std.testing.expectEqualStrings("installed", universe.repositories[0].name);
     try std.testing.expectEqualStrings("available", universe.repositories[1].name);
     try std.testing.expectEqualStrings("command-line", universe.repositories[2].name);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(universe.repositories[0].id));
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(universe.repositories[1].id));
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(universe.repositories[2].id));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(universe.repositories[0].id));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(universe.repositories[1].id));
+    try std.testing.expectEqual(@as(u32, 2), @backingInt(universe.repositories[2].id));
     try std.testing.expectEqual(@as(u32, 1), universe.repositories[0].input_index);
     try std.testing.expectEqual(@as(u32, 0), universe.repositories[1].input_index);
     try std.testing.expectEqual(@as(u32, 2), universe.repositories[2].input_index);
@@ -498,7 +498,7 @@ test "universe assigns installed packages first and preserves repository order" 
     for (universe.packages, 0..) |package, package_index| {
         try std.testing.expectEqual(
             @as(u32, @intCast(package_index)),
-            @intFromEnum(package.id),
+            @backingInt(package.id),
         );
     }
     try std.testing.expectEqual(
@@ -575,8 +575,8 @@ test "universe packages borrow metadata from their own repositories" {
     });
     defer universe.deinit();
 
-    const first_package = universe.package(@enumFromInt(0)).?.*;
-    const second_package = universe.package(@enumFromInt(1)).?.*;
+    const first_package = universe.package(@fromBackingInt(@intCast(0))).?.*;
+    const second_package = universe.package(@fromBackingInt(@intCast(1))).?.*;
     try std.testing.expectEqualStrings(
         "first-capability",
         first_package.relationEntries(&universe, .provides)[0].name,
@@ -593,8 +593,8 @@ test "universe packages borrow metadata from their own repositories" {
         "/usr/bin/second-tool",
         second_package.fileEntries(&universe)[0].path,
     );
-    try std.testing.expect(universe.package(@enumFromInt(99)) == null);
-    try std.testing.expect(universe.repository(@enumFromInt(99)) == null);
+    try std.testing.expect(universe.package(@fromBackingInt(@intCast(99))) == null);
+    try std.testing.expect(universe.repository(@fromBackingInt(@intCast(99))) == null);
 }
 
 test "universe rejects ambiguous repository and installed annotations" {

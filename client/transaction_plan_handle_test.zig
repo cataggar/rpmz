@@ -72,7 +72,7 @@ const SackSnapshot = extern struct {
     indexes_identity: usize = 0,
     solvable_count: u32 = 0,
     repository_count: u32 = 0,
-    digest: [32]u8 = [_]u8{0} ** 32,
+    digest: [32]u8 = @splat(0),
 };
 
 const alter_install: c_int = 5;
@@ -1651,7 +1651,7 @@ test "public transaction plan API returns versioned JSON and stable digest" {
     const repoopts = create_cnfnode("(repoopts)") orelse
         return error.OutOfMemory;
     defer destroy_cnftree(repoopts);
-    const upgrade = try std.testing.allocator.dupeZ(u8, "upgrade");
+    const upgrade = try std.testing.allocator.dupeSentinel(u8, "upgrade", 0);
     defer std.testing.allocator.free(upgrade);
     var commands = [_]?[*:0]u8{ upgrade.ptr, null };
     var args = CmdArgs{};
@@ -1721,9 +1721,9 @@ test "public transaction plan API returns versioned JSON and stable digest" {
     try std.testing.expectEqualStrings(first_json, repeated_json);
     try std.testing.expectEqualSlices(u8, &first_digest, &repeated_digest);
 
-    const install = try std.testing.allocator.dupeZ(u8, "install");
+    const install = try std.testing.allocator.dupeSentinel(u8, "install", 0);
     defer std.testing.allocator.free(install);
-    const app = try std.testing.allocator.dupeZ(u8, "app");
+    const app = try std.testing.allocator.dupeSentinel(u8, "app", 0);
     defer std.testing.allocator.free(app);
     var install_commands = [_]?[*:0]u8{ install.ptr, app.ptr, null };
     args.ppszCmds = &install_commands;
@@ -2049,7 +2049,7 @@ test "private handle capture follows production resolve lifecycle" {
     const repoopts = create_cnfnode("(repoopts)") orelse
         return error.OutOfMemory;
     defer destroy_cnftree(repoopts);
-    const upgrade = try std.testing.allocator.dupeZ(u8, "upgrade");
+    const upgrade = try std.testing.allocator.dupeSentinel(u8, "upgrade", 0);
     defer std.testing.allocator.free(upgrade);
     var commands = [_]?[*:0]u8{ upgrade.ptr, null };
     var args = CmdArgs{};
@@ -2934,11 +2934,12 @@ test "private handle capture follows production resolve lifecycle" {
         @as(u32, 0),
         TDNFTransactionPlanCaptureSetEnabled(protected_handle, 1),
     );
-    const erase_command = try std.testing.allocator.dupeZ(u8, "erase");
+    const erase_command = try std.testing.allocator.dupeSentinel(u8, "erase", 0);
     defer std.testing.allocator.free(erase_command);
-    const protected_name = try std.testing.allocator.dupeZ(
+    const protected_name = try std.testing.allocator.dupeSentinel(
         u8,
         "installed-file-provider",
+        0,
     );
     defer std.testing.allocator.free(protected_name);
     var erase_commands = [_]?[*:0]u8{
@@ -3066,14 +3067,16 @@ test "private handle capture follows production resolve lifecycle" {
         mixed_protected_object.get("skipped").?.array.items.len,
     );
     protected_args.nSkipBroken = 0;
-    const install_replacement = try std.testing.allocator.dupeZ(
+    const install_replacement = try std.testing.allocator.dupeSentinel(
         u8,
         "install",
+        0,
     );
     defer std.testing.allocator.free(install_replacement);
-    const replacement_name = try std.testing.allocator.dupeZ(
+    const replacement_name = try std.testing.allocator.dupeSentinel(
         u8,
         "replacement-provider",
+        0,
     );
     defer std.testing.allocator.free(replacement_name);
     var replacement_commands = [_]?[*:0]u8{
@@ -3208,12 +3211,13 @@ test "private handle capture follows production resolve lifecycle" {
         &failed_plan,
         &failed_plan_length,
     ) != 0);
-    const install_problem = try std.testing.allocator.dupeZ(
+    const install_problem = try std.testing.allocator.dupeSentinel(
         u8,
         "install",
+        0,
     );
     defer std.testing.allocator.free(install_problem);
-    const conflict = try std.testing.allocator.dupeZ(u8, "conflict-a");
+    const conflict = try std.testing.allocator.dupeSentinel(u8, "conflict-a", 0);
     defer std.testing.allocator.free(conflict);
     var problem_commands = [_]?[*:0]u8{
         install_problem.ptr,
@@ -3308,9 +3312,9 @@ test "failed skip-if-unavailable refresh retires stale solver repo" {
     const repoopts = create_cnfnode("(repoopts)") orelse
         return error.OutOfMemory;
     defer destroy_cnftree(repoopts);
-    const install = try std.testing.allocator.dupeZ(u8, "install");
+    const install = try std.testing.allocator.dupeSentinel(u8, "install", 0);
     defer std.testing.allocator.free(install);
-    const app = try std.testing.allocator.dupeZ(u8, "app");
+    const app = try std.testing.allocator.dupeSentinel(u8, "app", 0);
     defer std.testing.allocator.free(app);
     var commands = [_]?[*:0]u8{ install.ptr, app.ptr, null };
     var args = CmdArgs{};

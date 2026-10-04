@@ -525,7 +525,7 @@ pub fn prepare(
         const hidden_ids = try arena.alloc(solver_model.PackageId, hidden.len);
         for (hidden, hidden_ids) |item, *hidden_id| {
             const package = try identity.resolveAvailable(item.selector);
-            const package_index: usize = @intFromEnum(package);
+            const package_index: usize = @backingInt(package);
             if (!considered[package_index]) return error.InvalidInput;
             considered[package_index] = false;
             hidden_id.* = package;
@@ -712,7 +712,7 @@ fn resolveJobPackage(
         )) continue;
         if (package_index >= repository.packages.len)
             return error.InvalidInput;
-        found = @enumFromInt(repository.packages.start + package_index);
+        found = @fromBackingInt(@intCast(repository.packages.start + package_index));
         break;
     }
     const package_id = found orelse return error.PackageNotFound;
@@ -805,7 +805,7 @@ fn installedPackagesNamed(
     for (universe.packages, 0..) |package, index| {
         if (package.installed == null) continue;
         if (!std.mem.eql(u8, package.source.nevra.name, name)) continue;
-        try found.append(arena, @enumFromInt(index));
+        try found.append(arena, @fromBackingInt(@intCast(index)));
     }
     return found.items;
 }
@@ -994,10 +994,11 @@ const Fixture = struct {
         buffer: *[std.Io.Dir.max_path_bytes]u8,
         suffix: []const u8,
     ) [:0]const u8 {
-        return std.fmt.bufPrintZ(
+        return std.fmt.bufPrintSentinel(
             buffer,
             ".zig-cache/tmp/{s}/{s}",
             .{ &self.tmp.sub_path, suffix },
+            0,
         ) catch @panic("fixture path too long");
     }
 };
@@ -1861,7 +1862,7 @@ test "live producer records broken exact jobs under skip-broken policy" {
         solved.solved.result.outcome.skipped_jobs.len,
     );
     try std.testing.expectEqual(
-        @as(solver_model.JobId, @enumFromInt(1)),
+        @as(solver_model.JobId, @fromBackingInt(@intCast(1))),
         solved.solved.result.outcome.skipped_jobs[0],
     );
     try std.testing.expectEqual(

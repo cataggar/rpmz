@@ -21,6 +21,7 @@ way this has ever gone wrong. Symlinked directories are not descended;
 symlinked files are read like any other.
 """
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -35,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # scope. Keeping this a file list also makes it fail loudly rather than
 # silently when the oracle bridge is renamed or deleted.
 ALLOWED = {
-    # The test-only pinned Zig @cImport; carries the comptime assert.
+    # The test-only private translated binding; carries the comptime assert.
     "repomd/solver_oracle_bridge.zig",
 }
 
@@ -62,9 +63,58 @@ PATTERNS = (
 # The macro build.zig defines alongside the include paths. A file that
 # names it is compiling its own version assert.
 ASSERT_TOKEN = "TDNF_VENDORED_LIBSOLV_VERSION_PATCH"
+REGISTRY = "build/c_bindings.zig"
+HEADER_RECORD = re.compile(
+    r'\.\{\s*\.source\s*=\s*"([^"]+)",\s*\.text\s*=\s*("(?:\\.|[^"\\])*")\s*\}'
+)
 
 # __has_include(<solv/pool.h>) is deliberately NOT matched: it is a
 # predicate and brings no declaration into the translation unit.
+
+def source_units(rel, text):
+    if rel != REGISTRY:
+        return [(rel, text)]
+    units = []
+    owners = set()
+
+    def extract(match):
+        owner = match.group(1)
+        if owner in owners:
+            raise ValueError(f"duplicate generated header owner: {owner}")
+        owners.add(owner)
+        units.append((owner, json.loads(match.group(2))))
+        return "\n" * match.group(0).count("\n")
+
+    remaining = HEADER_RECORD.sub(extract, text)
+    return units + [(rel, remaining)]
+
+
+def header_hits(rel, text):
+    hits = []
+    for owner, unit in source_units(rel, text):
+        for lineno, line in enumerate(unit.splitlines(), 1):
+            for pattern in PATTERNS:
+                match = pattern.search(line)
+                if match:
+                    hits.append((owner, lineno, match.group(1)))
+                    break
+    return hits
+
+
+def self_test():
+    allowed = '.{ .source = "repomd/solver_oracle_bridge.zig", .text = "#include <solv/pool.h>\\n" }'
+    forbidden = allowed.replace("repomd/solver_oracle_bridge.zig", "client/unpinned.zig")
+    assert header_hits(REGISTRY, allowed) == [
+        ("repomd/solver_oracle_bridge.zig", 1, "solv/pool.h")
+    ]
+    assert header_hits(REGISTRY, forbidden)[0][0] not in ALLOWED
+    assert header_hits(REGISTRY, allowed + '\n#include <solv/solver.h>')[-1][0] == REGISTRY
+    try:
+        source_units(REGISTRY, allowed + allowed)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("duplicate generated owners must be rejected")
 
 
 def sources():
@@ -85,6 +135,7 @@ def sources():
 
 
 def main() -> int:
+    self_test()
     client_c_sources = sorted(
         path.relative_to(ROOT).as_posix()
         for path in (ROOT / "client").glob("*.c")
@@ -108,16 +159,16 @@ def main() -> int:
         except OSError as exc:
             print(f"error: cannot read {rel}: {exc}", file=sys.stderr)
             return 1
-        for lineno, line in enumerate(text.splitlines(), 1):
-            for pattern in PATTERNS:
-                match = pattern.search(line)
-                if not match:
-                    continue
-                if rel in ALLOWED:
-                    seen_allowed.add(rel)
-                else:
-                    violations.append((rel, lineno, match.group(1)))
-                break
+        try:
+            hits = header_hits(rel, text)
+        except ValueError as exc:
+            print(f"error: invalid private C binding registry: {exc}", file=sys.stderr)
+            return 1
+        for owner, lineno, header in hits:
+            if owner in ALLOWED:
+                seen_allowed.add(owner)
+            else:
+                violations.append((owner, lineno, header))
 
     stale = sorted(ALLOWED - seen_allowed)
 

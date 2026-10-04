@@ -77,9 +77,10 @@ pub const Database = struct {
             {
                 return error.UnsafePath;
             }
-            const component_z = try std.heap.c_allocator.dupeZ(
+            const component_z = try std.heap.c_allocator.dupeSentinel(
                 u8,
                 component,
+                0,
             );
             defer std.heap.c_allocator.free(component_z);
             const next_fd = std.c.openat(dir_fd, component_z.ptr, .{
@@ -288,9 +289,10 @@ fn openDirectoryTree(
         {
             return error.UnsafePath;
         }
-        const component_z = std.heap.c_allocator.dupeZ(
+        const component_z = std.heap.c_allocator.dupeSentinel(
             u8,
             component,
+            0,
         ) catch return error.OutOfMemory;
         defer std.heap.c_allocator.free(component_z);
         var next = std.c.openat(current, component_z.ptr, .{
@@ -300,10 +302,10 @@ fn openDirectoryTree(
             .NOFOLLOW = true,
         });
         if (next < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.NOENT) and create)
+            std.c._errno().* == @backingInt(std.posix.E.NOENT) and create)
         {
             if (mkdirat(current, component_z.ptr, 0o755) != 0 and
-                std.c._errno().* != @intFromEnum(std.posix.E.EXIST))
+                std.c._errno().* != @backingInt(std.posix.E.EXIST))
             {
                 return error.SyscallFailed;
             }
@@ -315,7 +317,7 @@ fn openDirectoryTree(
             });
         }
         if (next < 0) {
-            if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT)) {
+            if (std.c._errno().* == @backingInt(std.posix.E.NOENT)) {
                 _ = std.c.close(current);
                 return null;
             }
@@ -328,7 +330,7 @@ fn openDirectoryTree(
 }
 
 pub fn dupeZ(bytes: []const u8) ![*:0]u8 {
-    return (try std.heap.c_allocator.dupeZ(u8, bytes)).ptr;
+    return (try std.heap.c_allocator.dupeSentinel(u8, bytes, 0)).ptr;
 }
 
 pub fn freeZ(value: ?[*:0]u8) void {
@@ -372,7 +374,7 @@ test "history init transfers its directory before a later timeout failure" {
         0,
     );
     defer std.testing.allocator.free(path);
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const source_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -459,11 +461,11 @@ test "history database stays in pinned no-follow parent" {
     );
     defer allocator.free(db_path);
     var database = try Database.init(db_path.ptr);
-    const db_dir_z = try allocator.dupeZ(u8, db_dir);
+    const db_dir_z = try allocator.dupeSentinel(u8, db_dir, 0);
     defer allocator.free(db_dir_z);
-    const parked_z = try allocator.dupeZ(u8, parked);
+    const parked_z = try allocator.dupeSentinel(u8, parked, 0);
     defer allocator.free(parked_z);
-    const outside_z = try allocator.dupeZ(u8, outside);
+    const outside_z = try allocator.dupeSentinel(u8, outside, 0);
     defer allocator.free(outside_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
@@ -518,11 +520,11 @@ test "history config stays under pinned root and rejects database symlinks" {
     defer allocator.free(parked);
     const outside = try std.fs.path.join(allocator, &.{ base, "outside" });
     defer allocator.free(outside);
-    const root_z = try allocator.dupeZ(u8, root);
+    const root_z = try allocator.dupeSentinel(u8, root, 0);
     defer allocator.free(root_z);
-    const parked_z = try allocator.dupeZ(u8, parked);
+    const parked_z = try allocator.dupeSentinel(u8, parked, 0);
     defer allocator.free(parked_z);
-    const outside_z = try allocator.dupeZ(u8, outside);
+    const outside_z = try allocator.dupeSentinel(u8, outside, 0);
     defer allocator.free(outside_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -594,7 +596,7 @@ test "history config stays under pinned root and rejects database symlinks" {
         std.c.fcntl(retained_dir_fd, std.c.F.GETFD),
     );
     try std.testing.expectEqual(
-        @intFromEnum(std.posix.E.BADF),
+        @backingInt(std.posix.E.BADF),
         std.c._errno().*,
     );
     try tmp.dir.access(

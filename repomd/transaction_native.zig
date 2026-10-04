@@ -1,12 +1,6 @@
 const std = @import("std");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("rpmdb.h");
-});
+const c = @import("c.repomd.transaction_native");
 
 const model = @import("model.zig");
 const installed_repository = @import("installed_repository.zig");
@@ -850,7 +844,7 @@ fn createOwnedPlan(
     }
     for (result.problems, 0..) |problem, index| {
         const out = &plan.pProblems[index];
-        out.nType = @intFromEnum(problem.kind);
+        out.nType = @backingInt(problem.kind);
         out.dwInputIndex = std.math.cast(u32, problem.input_index) orelse
             std.math.maxInt(u32);
         out.pszPackage = try dupCString(problem.package);
@@ -1111,7 +1105,7 @@ fn parseTransaction(
                         setError("transaction item {d} missing rpm path", .{input_index});
                         return error.InvalidParameter;
                     }
-                    const path_z = std.heap.c_allocator.dupeZ(u8, path_text) catch
+                    const path_z = std.heap.c_allocator.dupeSentinel(u8, path_text, 0) catch
                         return error.OutOfMemory;
                     defer std.heap.c_allocator.free(path_z);
 
@@ -1564,7 +1558,7 @@ fn canonicalPathForTransaction(
     path: []const u8,
 ) TransactionError![]const u8 {
     const cfg = config orelse return path;
-    const path_z = try arena.dupeZ(u8, path);
+    const path_z = try arena.dupeSentinel(u8, path, 0);
     var output: [4096]u8 = undefined;
     if (abi.rpmz_rpm_canonical_path_config(
         cfg,
@@ -2078,7 +2072,7 @@ fn tryBuildCStringArray(items: []const []const u8) !?[*c][*c]u8 {
 }
 
 fn dupCString(text: []const u8) ![*:0]u8 {
-    return try std.heap.c_allocator.dupeZ(u8, text);
+    return try std.heap.c_allocator.dupeSentinel(u8, text, 0);
 }
 
 fn parseEraseQuery(

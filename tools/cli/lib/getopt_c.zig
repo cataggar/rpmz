@@ -4,6 +4,4 @@
 // you may not use this file except in compliance with the License. The terms
 // of the License are located in the COPYING file of this distribution.
 
-pub const c = @cImport({
-    @cInclude("getopt.h");
-});
+pub const c = @import("c.tools.cli.lib.getopt_c");

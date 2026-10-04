@@ -262,9 +262,9 @@ fn containsPackage(items: []const PackageItem, id: []const u8) bool {
 
 const testing = std.testing;
 
-const test_sha_a = "1" ** 64;
-const test_sha_b = "2" ** 64;
-const test_sha_c = "3" ** 64;
+const test_sha_a = &@as([64]u8, @splat('1'));
+const test_sha_b = &@as([64]u8, @splat('2'));
+const test_sha_c = &@as([64]u8, @splat('3'));
 
 const Builder = struct {
     packages: std.ArrayList(transaction_plan.Package) = .empty,

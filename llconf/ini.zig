@@ -6,18 +6,7 @@
 
 const std = @import("std");
 
-const c = @cImport({
-    @cDefine("_GNU_SOURCE", "1");
-    @cInclude("ctype.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("nodes.h");
-    @cInclude("lines.h");
-    @cInclude("modules.h");
-    @cInclude("strutils.h");
-    @cInclude("ini.h");
-});
+const c = @import("c.llconf.ini");
 
 var this_module = c.struct_cnfmodule{
     .next = null,
@@ -60,7 +49,7 @@ fn parseIniOptions(opt_root: [*c]c.struct_cnfnode, cmt_char: *c_int) c_int {
 
 fn appendFullLineNode(parent: [*c]c.struct_cnfnode, name: [*:0]const u8, line: [*c]u8) void {
     var p: [*c]const u8 = @ptrCast(line);
-    var buf = [_:0]u8{0} ** 1024;
+    var buf: [1024:0]u8 = @splat(0);
     const cn = c.create_cnfnode(name);
     c.cnfnode_setval(cn, c.dup_next_line_b(&p, @ptrCast(&buf), @as(c_int, @intCast(buf.len - 1))));
     c.append_node(parent, cn);
@@ -85,7 +74,7 @@ fn parseIniSubsection(cl_root: [*c]c.struct_confline, cn: [*c]c.struct_cnfnode, 
         } else if (p[0] == comment_char) {
             appendFullLineNode(cn, ".comment", cl[0].line);
         } else {
-            var buf = [_:0]u8{0} ** 1024;
+            var buf: [1024:0]u8 = @splat(0);
             var key_len: usize = 0;
 
             while (p[0] != 0 and (!isSpace(p[0]) and p[0] != '=') and key_len < buf.len - 1) {
@@ -148,7 +137,7 @@ fn parseIniSection(cl_root: [*c]c.struct_confline, cn_root: [*c]c.struct_cnfnode
         }
 
         if (p[0] != 0) {
-            var buf = [_:0]u8{0} ** 1024;
+            var buf: [1024:0]u8 = @splat(0);
 
             if (p[0] == '[') {
                 return cl;
@@ -223,7 +212,7 @@ export fn parse_ini(cm: [*c]c.struct_cnfmodule, fptr: ?*c.FILE) [*c]c.struct_cnf
     var cl = cl_root;
     while (cl != null) {
         var p: [*c]const u8 = @ptrCast(cl[0].line);
-        var buf = [_:0]u8{0} ** 1024;
+        var buf: [1024:0]u8 = @splat(0);
 
         while (p[0] != 0 and isSpace(p[0])) {
             p += 1;
@@ -269,8 +258,8 @@ fn isSyntheticLine(name: [*c]const u8) bool {
 }
 
 fn unparseIniSubsection(cn: [*c]c.struct_cnfnode, cl_list: [*c]c.struct_confline, level: c_uint) [*c]c.struct_confline {
-    var buf = [_:0]u8{0} ** 1024;
-    var ident = [_:0]u8{0} ** 256;
+    var buf: [1024:0]u8 = @splat(0);
+    var ident: [256:0]u8 = @splat(0);
     var i: usize = 0;
     const indent = @as(usize, level) * 8;
     var out_list = cl_list;
@@ -305,7 +294,7 @@ fn unparseIniSubsection(cn: [*c]c.struct_cnfnode, cl_list: [*c]c.struct_confline
 export fn unparse_ini(_: [*c]c.struct_cnfmodule, fptr: ?*c.FILE, cn_root: [*c]c.struct_cnfnode) c_int {
     var cl_list: [*c]c.struct_confline = null;
     var cn_section = cn_root[0].first_child;
-    var buf = [_:0]u8{0} ** 1024;
+    var buf: [1024:0]u8 = @splat(0);
 
     while (cn_section != null) : (cn_section = cn_section[0].next) {
         if (cn_section[0].name[0] == '.') {

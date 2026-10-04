@@ -1319,7 +1319,7 @@ fn readMetadataFdBudget(
             raw.len - offset,
         );
         if (got < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+            std.c._errno().* == @backingInt(std.posix.E.INTR))
         {
             continue;
         }
@@ -1591,6 +1591,9 @@ fn decompressMetadataAlloc(
     max_output_bytes: usize,
 ) DecompressError![]u8 {
     var input = std.Io.Reader.fixed(bytes);
+    if (max_output_bytes == 0) return error.StreamTooLong;
+    // The reader's limit is inclusive; repository output bounds are exclusive.
+    const output_limit: std.Io.Limit = .limited(max_output_bytes - 1);
 
     if (std.mem.endsWith(u8, path, ".gz")) {
         var decoder: std.compress.flate.Decompress = .init(
@@ -1600,7 +1603,7 @@ fn decompressMetadataAlloc(
         );
         return decoder.reader.allocRemaining(
             allocator,
-            .limited(max_output_bytes),
+            output_limit,
         ) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.StreamTooLong => error.StreamTooLong,
@@ -1622,7 +1625,7 @@ fn decompressMetadataAlloc(
         );
         return decoder.reader.allocRemaining(
             allocator,
-            .limited(max_output_bytes),
+            output_limit,
         ) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.StreamTooLong => error.StreamTooLong,
@@ -1732,7 +1735,10 @@ fn decompressXzStream(
             &output.writer,
             .limited(remaining),
         ) catch |err| switch (err) {
-            error.EndOfStream => return input.seek,
+            error.EndOfStream => {
+                if (output.writer.end >= max_output_bytes) return error.StreamTooLong;
+                return input.seek;
+            },
             error.WriteFailed => return error.OutOfMemory,
             error.ReadFailed => return decoderAllocatorError(
                 decoder_allocator,
@@ -2273,7 +2279,7 @@ fn validateXzBlockCheck(
             }
         },
         .crc64 => {
-            var hash: std.hash.crc.Crc64Xz = .init();
+            var hash: std.hash.crc.@"CRC-64/XZ" = .init();
             hash.update(output);
             if (expected.len != 8 or
                 std.mem.readInt(u64, expected[0..8], .little) !=
@@ -2807,10 +2813,11 @@ const Fixture = struct {
         buffer: *[std.Io.Dir.max_path_bytes]u8,
         name: []const u8,
     ) [:0]const u8 {
-        return std.fmt.bufPrintZ(
+        return std.fmt.bufPrintSentinel(
             buffer,
             ".zig-cache/tmp/{s}/{s}",
             .{ &self.tmp.sub_path, name },
+            0,
         ) catch @panic("fixture path too long");
     }
 };
@@ -3060,7 +3067,8 @@ test "zstd metadata decodes under a window-sized frame descriptor" {
     // window available, so the decoder must own it -- otherwise the destination
     // writer is forced to hold it and the temporary output budget, which is
     // sized from the advertised open-size, reports StreamTooLong.
-    const payload = "metadata-payload " ** 128;
+    const repeated: [128][17]u8 = @splat("metadata-payload "[0..17].*);
+    const payload = std.mem.asBytes(&repeated);
     const zstd_window_frame = [_]u8{
         40,  181, 47,  253, 4,   88,  205, 0,   0,  136, 109, 101,
         116, 97,  100, 97,  116, 97,  45,  112, 97, 121, 108, 111,
@@ -3195,7 +3203,7 @@ fn rewriteXzTestCrc64(
     output: []const u8,
     checksum_offset: usize,
 ) void {
-    var hash: std.hash.crc.Crc64Xz = .init();
+    var hash: std.hash.crc.@"CRC-64/XZ" = .init();
     hash.update(output);
     std.mem.writeInt(
         u64,
@@ -3239,7 +3247,7 @@ fn makeRepeatedXzBlocks(
         std.hash.Crc32.hash(block_header[0..8]),
         .little,
     );
-    var output_hash: std.hash.crc.Crc64Xz = .init();
+    var output_hash: std.hash.crc.@"CRC-64/XZ" = .init();
     output_hash.update(block_output);
     var output_check: [8]u8 = undefined;
     std.mem.writeInt(u64, &output_check, output_hash.final(), .little);
@@ -3277,7 +3285,7 @@ fn makeRepeatedXzBlocks(
     try bytes.appendSlice(allocator, &index_crc);
 
     const index_size = bytes.items.len - index_offset;
-    var footer = [_]u8{0} ** 12;
+    var footer: [12]u8 = @splat(0);
     std.mem.writeInt(
         u32,
         footer[4..8],
@@ -3603,11 +3611,17 @@ fn xzAllocationFailureCase(allocator: std.mem.Allocator) !void {
 }
 
 test "xz validation preserves backing allocation OOM" {
-    try std.testing.checkAllAllocationFailures(
-        std.testing.allocator,
-        xzAllocationFailureCase,
-        .{},
-    );
+    try checkXzAllocationFailures(xzAllocationFailureCase);
+}
+
+fn checkXzAllocationFailures(comptime case: anytype) !void {
+    // SafeAllocator remapping depends on heap state. Force allocation-backed
+    // growth so every injected allocation index is reproducible.
+    var vtable = std.testing.allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = std.testing.allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, .{});
 }
 
 fn xzPropertyResetAllocationFailureCase(
@@ -3626,11 +3640,7 @@ fn xzPropertyResetAllocationFailureCase(
 }
 
 test "xz property reset cleans every backing allocation failure" {
-    try std.testing.checkAllAllocationFailures(
-        std.testing.allocator,
-        xzPropertyResetAllocationFailureCase,
-        .{},
-    );
+    try checkXzAllocationFailures(xzPropertyResetAllocationFailureCase);
 }
 
 test "xz supports concatenated streams and exact stream padding" {

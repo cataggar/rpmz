@@ -495,7 +495,7 @@ test "projected solve materializes and deep copies an exact install" {
         &visibility,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         testPolicy(),
     );
@@ -554,7 +554,7 @@ test "projected refute derives native problems for an unsatisfiable request" {
         problems.problems[0].kind,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(0)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(0))),
         problems.problems[0].job,
     );
     try std.testing.expectEqualStrings(
@@ -621,7 +621,7 @@ test "projected refute with installonly uses coordinated effective jobs" {
     const problem = refutation.problems.problems[0];
     try std.testing.expectEqual(solver_model.ProblemKind.no_candidate, problem.kind);
     try std.testing.expect(problem.job != null);
-    try std.testing.expect(@intFromEnum(problem.job.?) < refutation.jobs.len);
+    try std.testing.expect(@backingInt(problem.job.?) < refutation.jobs.len);
 }
 
 test "projected solve rejects an exact hidden available install" {
@@ -651,7 +651,7 @@ test "projected solve rejects an exact hidden available install" {
             &hidden,
             .{ .jobs = &.{.{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             }} },
             testPolicy(),
         ),
@@ -723,7 +723,7 @@ test "projected solve keeps a hidden installed package" {
     defer solved.deinit();
     try std.testing.expectEqualSlices(
         solver_model.PackageId,
-        &.{@enumFromInt(0)},
+        &.{@fromBackingInt(@intCast(0))},
         solved.result.selected,
     );
 
@@ -735,7 +735,7 @@ test "projected solve keeps a hidden installed package" {
         &hidden,
         .{ .jobs = &.{.{
             .action = .erase,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         erase_policy,
     );
@@ -769,11 +769,11 @@ test "native solve reports an unsatisfiable exact job conflict" {
             .{ .jobs = &.{
                 .{
                     .action = .install,
-                    .selection = .{ .package = @enumFromInt(0) },
+                    .selection = .{ .package = @fromBackingInt(@intCast(0)) },
                 },
                 .{
                     .action = .erase,
-                    .selection = .{ .package = @enumFromInt(0) },
+                    .selection = .{ .package = @fromBackingInt(@intCast(0)) },
                 },
             } },
             testPolicy(),
@@ -808,11 +808,11 @@ test "skip broken solve explains every job it drops" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
         } },
         policy,
@@ -821,7 +821,7 @@ test "skip broken solve explains every job it drops" {
 
     try std.testing.expectEqualSlices(
         solver_model.JobId,
-        &.{@enumFromInt(1)},
+        &.{@fromBackingInt(@intCast(1))},
         solved.result.outcome.skipped_jobs,
     );
     try std.testing.expectEqual(
@@ -836,11 +836,11 @@ test "skip broken solve explains every job it drops" {
         problem.kind,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.PackageId, @enumFromInt(1)),
+        @as(?solver_model.PackageId, @fromBackingInt(@intCast(1))),
         problem.package,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(1)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(1))),
         problem.job,
     );
     try std.testing.expectEqualStrings(
@@ -885,15 +885,15 @@ test "skip broken solve explains each dropped job independently" {
         .{ .jobs = &.{
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(0) },
+                .selection = .{ .package = @fromBackingInt(@intCast(0)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(1) },
+                .selection = .{ .package = @fromBackingInt(@intCast(1)) },
             },
             .{
                 .action = .install,
-                .selection = .{ .package = @enumFromInt(2) },
+                .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             },
         } },
         policy,
@@ -902,7 +902,7 @@ test "skip broken solve explains each dropped job independently" {
 
     try std.testing.expectEqualSlices(
         solver_model.JobId,
-        &.{ @enumFromInt(1), @enumFromInt(2) },
+        &.{ @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(2)) },
         solved.result.outcome.skipped_jobs,
     );
     const problems = solved.result.outcome.problems;
@@ -912,7 +912,7 @@ test "skip broken solve explains each dropped job independently" {
         problems[0].capability.?.name,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(1)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(1))),
         problems[0].job,
     );
     try std.testing.expectEqualStrings(
@@ -920,7 +920,7 @@ test "skip broken solve explains each dropped job independently" {
         problems[1].capability.?.name,
     );
     try std.testing.expectEqual(
-        @as(?solver_model.JobId, @enumFromInt(2)),
+        @as(?solver_model.JobId, @fromBackingInt(@intCast(2))),
         problems[1].job,
     );
 }
@@ -961,7 +961,7 @@ test "installonly solve retains effective synthetic job count" {
         &universe,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(1) },
+            .selection = .{ .package = @fromBackingInt(@intCast(1)) },
         }} },
         policy,
     );
@@ -990,7 +990,7 @@ fn allocationFailureCase(
         visibility,
         .{ .jobs = &.{.{
             .action = .install,
-            .selection = .{ .package = @enumFromInt(0) },
+            .selection = .{ .package = @fromBackingInt(@intCast(0)) },
         }} },
         testPolicy(),
     );

@@ -342,7 +342,7 @@ pub const Header = struct {
         expected: RegionTag,
         full_coverage: bool,
     ) Error!Header {
-        return parseInternal(blob, @intFromEnum(expected), full_coverage);
+        return parseInternal(blob, @backingInt(expected), full_coverage);
     }
 
     /// Parses a header with the 8-byte "standalone" magic prefix
@@ -373,7 +373,7 @@ pub const Header = struct {
     ) Error!Standalone {
         return parseStandaloneInternal(
             blob,
-            @intFromEnum(expected),
+            @backingInt(expected),
             full_coverage,
         );
     }
@@ -413,7 +413,7 @@ pub const Header = struct {
 
     /// Find the index entry for `tag`. Skips region tags (61/62/63).
     pub fn find(self: Header, tag: TagId) ?IndexEntry {
-        return self.findRaw(@intFromEnum(tag));
+        return self.findRaw(@backingInt(tag));
     }
 
     /// Variant of `find` that accepts a raw u32 tag value, used by
@@ -473,7 +473,7 @@ pub const Header = struct {
     /// incompatible type/count is `error.Malformed`. I18N strings explicitly
     /// select their first locale, but STRING_ARRAY is never treated as scalar.
     pub fn getStringChecked(self: Header, tag: TagId) AccessError!?[]const u8 {
-        return self.getStringRawChecked(@intFromEnum(tag));
+        return self.getStringRawChecked(@backingInt(tag));
     }
 
     pub fn getStringRawChecked(self: Header, tag: u32) AccessError!?[]const u8 {
@@ -482,7 +482,7 @@ pub const Header = struct {
     }
 
     fn readScalarStringChecked(self: Header, e: IndexEntry) AccessError![]const u8 {
-        switch (@as(TypeId, @enumFromInt(e.typ))) {
+        switch (@as(TypeId, @fromBackingInt(@intCast(e.typ)))) {
             .string => if (e.count != 1) return error.Malformed,
             .i18n_string => {},
             else => return error.Malformed,
@@ -507,12 +507,12 @@ pub const Header = struct {
     }
 
     pub fn getU32Checked(self: Header, tag: TagId) AccessError!?u32 {
-        return self.getU32RawChecked(@intFromEnum(tag));
+        return self.getU32RawChecked(@backingInt(tag));
     }
 
     pub fn getU32RawChecked(self: Header, tag: u32) AccessError!?u32 {
         const e = self.findRaw(tag) orelse return null;
-        if (@as(TypeId, @enumFromInt(e.typ)) != .int32 or e.count != 1)
+        if (@as(TypeId, @fromBackingInt(@intCast(e.typ))) != .int32 or e.count != 1)
             return error.Malformed;
         const start = self.dataOffset(e.offset) orelse return error.Malformed;
         if (!rangeFits(start, 4, self.dataEnd())) return error.Malformed;
@@ -522,7 +522,7 @@ pub const Header = struct {
     /// Get an INT64-typed tag.
     pub fn getU64(self: Header, tag: TagId) ?u64 {
         const e = self.find(tag) orelse return null;
-        if (@as(TypeId, @enumFromInt(e.typ)) != .int64) return null;
+        if (@as(TypeId, @fromBackingInt(@intCast(e.typ))) != .int64) return null;
         const start = self.dataOffset(e.offset) orelse return null;
         if (!rangeFits(start, 8, self.dataEnd())) return null;
         return readU64(self.bytes, start);
@@ -530,7 +530,7 @@ pub const Header = struct {
 
     pub fn getU64Checked(self: Header, tag: TagId) AccessError!?u64 {
         const e = self.find(tag) orelse return null;
-        if (@as(TypeId, @enumFromInt(e.typ)) != .int64 or e.count != 1)
+        if (@as(TypeId, @fromBackingInt(@intCast(e.typ))) != .int64 or e.count != 1)
             return error.Malformed;
         const start = self.dataOffset(e.offset) orelse return error.Malformed;
         if (!rangeFits(start, 8, self.dataEnd())) return error.Malformed;
@@ -542,7 +542,7 @@ pub const Header = struct {
     /// sig_dsa, sig_rsa, …) and stored digests (sig_sha1,
     /// sig_sha256).
     pub fn getBinary(self: Header, tag: TagId) ?[]const u8 {
-        return self.getBinaryRaw(@intFromEnum(tag));
+        return self.getBinaryRaw(@backingInt(tag));
     }
 
     /// Raw-tag variant of `getBinary`, used by the signature-header
@@ -552,12 +552,12 @@ pub const Header = struct {
     }
 
     pub fn getBinaryChecked(self: Header, tag: TagId) AccessError!?[]const u8 {
-        return self.getBinaryRawChecked(@intFromEnum(tag));
+        return self.getBinaryRawChecked(@backingInt(tag));
     }
 
     pub fn getBinaryRawChecked(self: Header, tag: u32) AccessError!?[]const u8 {
         const e = self.findRaw(tag) orelse return null;
-        if (@as(TypeId, @enumFromInt(e.typ)) != .bin) return error.Malformed;
+        if (@as(TypeId, @fromBackingInt(@intCast(e.typ))) != .bin) return error.Malformed;
         const start = self.dataOffset(e.offset) orelse return error.Malformed;
         const len = std.math.cast(usize, e.count) orelse return error.Malformed;
         if (!rangeFits(start, len, self.dataEnd())) return error.Malformed;
@@ -576,12 +576,12 @@ pub const Header = struct {
     }
 
     pub fn stringArrayCountChecked(self: Header, tag: TagId) AccessError!?usize {
-        return self.stringArrayCountRawChecked(@intFromEnum(tag));
+        return self.stringArrayCountRawChecked(@backingInt(tag));
     }
 
     pub fn stringArrayCountRawChecked(self: Header, tag: u32) AccessError!?usize {
         const e = self.findRaw(tag) orelse return null;
-        switch (@as(TypeId, @enumFromInt(e.typ))) {
+        switch (@as(TypeId, @fromBackingInt(@intCast(e.typ)))) {
             .string_array, .i18n_string => return std.math.cast(usize, e.count) orelse
                 error.Malformed,
             else => return error.Malformed,
@@ -592,7 +592,7 @@ pub const Header = struct {
         self: Header,
         tag: TagId,
     ) AccessError!?StringArrayIterator {
-        return self.stringArrayIteratorRawChecked(@intFromEnum(tag));
+        return self.stringArrayIteratorRawChecked(@backingInt(tag));
     }
 
     pub fn stringArrayIterator(
@@ -607,7 +607,7 @@ pub const Header = struct {
         tag: u32,
     ) AccessError!?StringArrayIterator {
         const e = self.findRaw(tag) orelse return null;
-        switch (@as(TypeId, @enumFromInt(e.typ))) {
+        switch (@as(TypeId, @fromBackingInt(@intCast(e.typ)))) {
             .string_array, .i18n_string => {},
             else => return error.Malformed,
         }
@@ -623,7 +623,7 @@ pub const Header = struct {
     /// Count of entries in an INT32 array tag.
     pub fn u32ArrayCountChecked(self: Header, tag: TagId) AccessError!?usize {
         const e = self.find(tag) orelse return null;
-        if (@as(TypeId, @enumFromInt(e.typ)) != .int32) return error.Malformed;
+        if (@as(TypeId, @fromBackingInt(@intCast(e.typ))) != .int32) return error.Malformed;
         return std.math.cast(usize, e.count) orelse error.Malformed;
     }
 
@@ -644,7 +644,7 @@ pub const Header = struct {
         tag: TagId,
         i: usize,
     ) AccessError!?[]const u8 {
-        return self.stringArrayItemRawChecked(@intFromEnum(tag), i);
+        return self.stringArrayItemRawChecked(@backingInt(tag), i);
     }
 
     pub fn stringArrayItemRawChecked(
@@ -653,7 +653,7 @@ pub const Header = struct {
         i: usize,
     ) AccessError!?[]const u8 {
         const e = self.findRaw(tag) orelse return null;
-        switch (@as(TypeId, @enumFromInt(e.typ))) {
+        switch (@as(TypeId, @fromBackingInt(@intCast(e.typ)))) {
             .string_array, .i18n_string => {},
             else => return error.Malformed,
         }
@@ -690,7 +690,7 @@ pub const Header = struct {
     }
 
     pub fn u32ArrayItemChecked(self: Header, tag: TagId, i: usize) AccessError!?u32 {
-        return self.u32ArrayItemRawChecked(@intFromEnum(tag), i);
+        return self.u32ArrayItemRawChecked(@backingInt(tag), i);
     }
 
     pub fn u32ArrayItemRawChecked(self: Header, tag: u32, i: usize) AccessError!?u32 {
@@ -703,7 +703,7 @@ pub const Header = struct {
     /// over an array must look the tag up once and come here, rather than
     /// calling `u32ArrayItem` per item and rescanning the whole index.
     pub fn entryU32Item(self: Header, e: IndexEntry, i: usize) AccessError!?u32 {
-        if (@as(TypeId, @enumFromInt(e.typ)) != .int32) return error.Malformed;
+        if (@as(TypeId, @fromBackingInt(@intCast(e.typ))) != .int32) return error.Malformed;
         const count = std.math.cast(usize, e.count) orelse return error.Malformed;
         if (i >= count) return null;
         const item_off = std.math.mul(usize, i, 4) catch return error.Malformed;
@@ -729,7 +729,7 @@ pub const Header = struct {
 
     /// INT16 counterpart of `entryU32Item`.
     pub fn entryU16Item(self: Header, e: IndexEntry, i: usize) AccessError!?u16 {
-        if (@as(TypeId, @enumFromInt(e.typ)) != .int16) return error.Malformed;
+        if (@as(TypeId, @fromBackingInt(@intCast(e.typ))) != .int16) return error.Malformed;
         const count = std.math.cast(usize, e.count) orelse return error.Malformed;
         if (i >= count) return null;
         const item_off = std.math.mul(usize, i, 2) catch return error.Malformed;
@@ -747,7 +747,7 @@ pub const Header = struct {
         const start = self.dataOffset(e.offset) orelse return null;
         const data_end = self.dataEnd();
 
-        const len: usize = switch (@as(TypeId, @enumFromInt(e.typ))) {
+        const len: usize = switch (@as(TypeId, @fromBackingInt(@intCast(e.typ)))) {
             .char_type, .int8, .bin => std.math.cast(usize, e.count) orelse return null,
             .int16 => std.math.mul(usize, e.count, 2) catch return null,
             .int32 => std.math.mul(usize, e.count, 4) catch return null,
@@ -932,14 +932,14 @@ fn isRegionTag(tag: u32) bool {
 }
 
 fn validateEntry(h: Header, e: IndexEntry) Error!usize {
-    if (e.typ < @intFromEnum(TypeId.char_type) or
-        e.typ > @intFromEnum(TypeId.i18n_string))
+    if (e.typ < @backingInt(TypeId.char_type) or
+        e.typ > @backingInt(TypeId.i18n_string))
     {
         return error.InvalidType;
     }
     if (e.count == 0 or e.count > h.data_size) return error.InvalidCount;
 
-    const typ: TypeId = @enumFromInt(e.typ);
+    const typ: TypeId = @fromBackingInt(@intCast(e.typ));
     const alignment: u32 = switch (typ) {
         .int16 => 2,
         .int32 => 4,
@@ -1004,7 +1004,7 @@ fn validateRegion(
     if (expected_region) |expected| {
         if (marker.tag != expected) return error.InvalidRegion;
     }
-    if (marker.typ != @intFromEnum(TypeId.bin) or marker.count != @sizeOf(IndexEntry))
+    if (marker.typ != @backingInt(TypeId.bin) or marker.count != @sizeOf(IndexEntry))
         return error.InvalidRegion;
 
     const trailer_off = std.math.cast(usize, marker.offset) orelse
@@ -1285,15 +1285,15 @@ test "parseProbe reads a tag from a header a full parse rejects" {
     // Two entries: a well-formed NAME, and a SUMMARY whose string runs past
     // the declared data section. `parse` has to reject the header because it
     // proves every entry; a probe that only reads NAME still answers.
-    var blob = [_]u8{0} ** 48;
+    var blob: [48]u8 = @splat(0);
     writeTestU32(&blob, 0, 2);
     writeTestU32(&blob, 4, 8);
-    writeTestU32(&blob, 8, @intFromEnum(TagId.name));
-    writeTestU32(&blob, 12, @intFromEnum(TypeId.string));
+    writeTestU32(&blob, 8, @backingInt(TagId.name));
+    writeTestU32(&blob, 12, @backingInt(TypeId.string));
     writeTestU32(&blob, 16, 0);
     writeTestU32(&blob, 20, 1);
-    writeTestU32(&blob, 24, @intFromEnum(TagId.summary));
-    writeTestU32(&blob, 28, @intFromEnum(TypeId.string));
+    writeTestU32(&blob, 24, @backingInt(TagId.summary));
+    writeTestU32(&blob, 28, @backingInt(TypeId.string));
     writeTestU32(&blob, 32, 4);
     writeTestU32(&blob, 36, 1);
     const data = blob[40..48];
@@ -1312,7 +1312,7 @@ test "parseProbe reads a tag from a header a full parse rejects" {
 }
 
 test "parseProbe keeps the framing checks that make accessors safe" {
-    var intro = [_]u8{0} ** 8;
+    var intro: [8]u8 = @splat(0);
     writeTestU32(&intro, 0, 0);
     try std.testing.expectError(error.BadIndexCount, Header.parseProbe(&intro));
     writeTestU32(&intro, 0, 1);
@@ -1321,7 +1321,7 @@ test "parseProbe keeps the framing checks that make accessors safe" {
 
     // A header whose declared data section runs past the blob is truncated,
     // which is what stops accessors from reading beyond it.
-    var blob = [_]u8{0} ** 28;
+    var blob: [28]u8 = @splat(0);
     writeTestU32(&blob, 0, 1);
     writeTestU32(&blob, 4, 16);
     try std.testing.expectError(error.Truncated, Header.parseProbe(&blob));
@@ -1329,7 +1329,7 @@ test "parseProbe keeps the framing checks that make accessors safe" {
 
 test "entry array accessors agree with the tag lookups" {
     const blob = [_]u8{
-        0,    0,    0,    2, // nindex = 2
+        0, 0, 0, 2, // nindex = 2
         0,    0,    0,    14, // hsize = 14
         // FILEFLAGS tag=1037 type=4 (int32) offset=0 count=2
         0,    0,    0x04, 0x0d,
@@ -1385,26 +1385,26 @@ test "parse rejects malformed entries table" {
         expected: Error,
     };
     const cases = [_]Case{
-        .{ .typ = 0, .offset = 0, .count = 1, .data_size = 1, .data = .{0} ** 8, .expected = error.InvalidType },
-        .{ .typ = 10, .offset = 0, .count = 1, .data_size = 1, .data = .{0} ** 8, .expected = error.InvalidType },
-        .{ .typ = 2, .offset = 0, .count = 0, .data_size = 1, .data = .{0} ** 8, .expected = error.InvalidCount },
-        .{ .typ = 4, .offset = 1, .count = 1, .data_size = 8, .data = .{0} ** 8, .expected = error.MisalignedOffset },
-        .{ .typ = 3, .offset = 1, .count = 1, .data_size = 8, .data = .{0} ** 8, .expected = error.MisalignedOffset },
-        .{ .typ = 5, .offset = 4, .count = 1, .data_size = 8, .data = .{0} ** 8, .expected = error.MisalignedOffset },
-        .{ .typ = 4, .offset = 8, .count = 1, .data_size = 8, .data = .{0} ** 8, .expected = error.OffsetOutOfRange },
-        .{ .typ = 7, .offset = 7, .count = 2, .data_size = 8, .data = .{0} ** 8, .expected = error.OffsetOutOfRange },
+        .{ .typ = 0, .offset = 0, .count = 1, .data_size = 1, .data = @splat(0), .expected = error.InvalidType },
+        .{ .typ = 10, .offset = 0, .count = 1, .data_size = 1, .data = @splat(0), .expected = error.InvalidType },
+        .{ .typ = 2, .offset = 0, .count = 0, .data_size = 1, .data = @splat(0), .expected = error.InvalidCount },
+        .{ .typ = 4, .offset = 1, .count = 1, .data_size = 8, .data = @splat(0), .expected = error.MisalignedOffset },
+        .{ .typ = 3, .offset = 1, .count = 1, .data_size = 8, .data = @splat(0), .expected = error.MisalignedOffset },
+        .{ .typ = 5, .offset = 4, .count = 1, .data_size = 8, .data = @splat(0), .expected = error.MisalignedOffset },
+        .{ .typ = 4, .offset = 8, .count = 1, .data_size = 8, .data = @splat(0), .expected = error.OffsetOutOfRange },
+        .{ .typ = 7, .offset = 7, .count = 2, .data_size = 8, .data = @splat(0), .expected = error.OffsetOutOfRange },
         .{ .typ = 6, .offset = 0, .count = 2, .data_size = 2, .data = .{ 'x', 0, 0, 0, 0, 0, 0, 0 }, .expected = error.InvalidCount },
         .{ .typ = 6, .offset = 0, .count = 1, .data_size = 2, .data = .{ 'x', 'y', 0, 0, 0, 0, 0, 0 }, .expected = error.UnterminatedString },
         .{ .typ = 8, .offset = 0, .count = 2, .data_size = 3, .data = .{ 'x', 0, 'y', 0, 0, 0, 0, 0 }, .expected = error.UnterminatedString },
         .{ .typ = 9, .offset = 0, .count = 2, .data_size = 3, .data = .{ 'x', 0, 'y', 0, 0, 0, 0, 0 }, .expected = error.UnterminatedString },
-        .{ .typ = 4, .offset = 0, .count = 0xffffffff, .data_size = 8, .data = .{0} ** 8, .expected = error.InvalidCount },
+        .{ .typ = 4, .offset = 0, .count = 0xffffffff, .data_size = 8, .data = @splat(0), .expected = error.InvalidCount },
     };
 
     for (cases) |case| {
-        var blob = [_]u8{0} ** 32;
+        var blob: [32]u8 = @splat(0);
         writeTestU32(&blob, 0, 1);
         writeTestU32(&blob, 4, case.data_size);
-        writeTestU32(&blob, 8, @intFromEnum(TagId.name));
+        writeTestU32(&blob, 8, @backingInt(TagId.name));
         writeTestU32(&blob, 12, case.typ);
         writeTestU32(&blob, 16, case.offset);
         writeTestU32(&blob, 20, case.count);
@@ -1414,7 +1414,7 @@ test "parse rejects malformed entries table" {
 }
 
 test "parse checks intro arithmetic and declared end" {
-    var intro = [_]u8{0} ** 8;
+    var intro: [8]u8 = @splat(0);
     writeTestU32(&intro, 0, 0xffffffff);
     try std.testing.expectError(error.BadIndexCount, Header.parse(&intro));
     writeTestU32(&intro, 0, 1);
@@ -1422,11 +1422,11 @@ test "parse checks intro arithmetic and declared end" {
     try std.testing.expectError(error.BadDataSize, Header.parse(&intro));
 
     // The NUL in trailing bytes is not part of the declared data section.
-    var blob = [_]u8{0} ** 26;
+    var blob: [26]u8 = @splat(0);
     writeTestU32(&blob, 0, 1);
     writeTestU32(&blob, 4, 1);
-    writeTestU32(&blob, 8, @intFromEnum(TagId.name));
-    writeTestU32(&blob, 12, @intFromEnum(TypeId.string));
+    writeTestU32(&blob, 8, @backingInt(TagId.name));
+    writeTestU32(&blob, 12, @backingInt(TypeId.string));
     writeTestU32(&blob, 20, 1);
     blob[24] = 'x';
     blob[25] = 0;
@@ -1438,21 +1438,21 @@ fn makeRegionHeader(
     trailer_tag: u32,
     trailer_offset: i32,
 ) [58]u8 {
-    var blob = [_]u8{0} ** 58;
+    var blob: [58]u8 = @splat(0);
     writeTestU32(&blob, 0, 2);
     writeTestU32(&blob, 4, 18);
     writeTestU32(&blob, 8, region_tag);
-    writeTestU32(&blob, 12, @intFromEnum(TypeId.bin));
+    writeTestU32(&blob, 12, @backingInt(TypeId.bin));
     writeTestU32(&blob, 16, 2);
     writeTestU32(&blob, 20, 16);
-    writeTestU32(&blob, 24, @intFromEnum(TagId.name));
-    writeTestU32(&blob, 28, @intFromEnum(TypeId.string));
+    writeTestU32(&blob, 24, @backingInt(TagId.name));
+    writeTestU32(&blob, 28, @backingInt(TypeId.string));
     writeTestU32(&blob, 32, 0);
     writeTestU32(&blob, 36, 1);
     blob[40] = 'x';
     blob[41] = 0;
     writeTestU32(&blob, 42, trailer_tag);
-    writeTestU32(&blob, 46, @intFromEnum(TypeId.bin));
+    writeTestU32(&blob, 46, @backingInt(TypeId.bin));
     writeTestU32(&blob, 50, @bitCast(trailer_offset));
     writeTestU32(&blob, 54, 16);
     return blob;
@@ -1484,10 +1484,10 @@ test "immutable region validation is upstream compatible" {
     for (cases) |case| {
         var bad = makeRegionHeader(63, 63, -32);
         switch (case.mutate) {
-            .marker_type => writeTestU32(&bad, 12, @intFromEnum(TypeId.string)),
+            .marker_type => writeTestU32(&bad, 12, @backingInt(TypeId.string)),
             .marker_count => writeTestU32(&bad, 20, 15),
             .trailer_tag => writeTestU32(&bad, 42, 62),
-            .trailer_type => writeTestU32(&bad, 46, @intFromEnum(TypeId.string)),
+            .trailer_type => writeTestU32(&bad, 46, @backingInt(TypeId.string)),
             .trailer_count => writeTestU32(&bad, 54, 15),
             .trailer_positive => writeTestU32(&bad, 50, 32),
             .trailer_unaligned => writeTestU32(&bad, 50, @bitCast(@as(i32, -31))),

@@ -334,10 +334,10 @@ test "there is no way to obtain a capture without an expectation" {
     // that opts out of verification. This test exists to fail loudly if that
     // field is ever given a default or made optional.
     const info = @typeInfo(Expectation).@"struct";
-    inline for (info.fields) |field| {
-        if (comptime std.mem.eql(u8, field.name, "checksum")) {
-            try testing.expect(field.default_value_ptr == null);
-            try testing.expectEqual(Checksum, field.type);
+    inline for (info.field_names, info.field_types, info.field_attrs) |name, field_type, attrs| {
+        if (comptime std.mem.eql(u8, name, "checksum")) {
+            try testing.expect(attrs.default_value_ptr == null);
+            try testing.expectEqual(Checksum, field_type);
         }
     }
 }

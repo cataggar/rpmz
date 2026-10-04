@@ -120,7 +120,7 @@ fn collectDirectory(root: *CnfNode, dir_path: [*:0]const u8) bool {
     const dir = opendir(dir_path) orelse {
         // A varsdir that does not exist is not a configuration error;
         // rpmz ships defaults that are frequently absent.
-        return std.c._errno().* == @intFromEnum(std.c.E.NOENT);
+        return std.c._errno().* == @backingInt(std.c.E.NOENT);
     };
     defer _ = closedir(dir);
 
@@ -130,7 +130,7 @@ fn collectDirectory(root: *CnfNode, dir_path: [*:0]const u8) bool {
         if (!isVariableName(name)) continue;
 
         if (dir_len + 1 + name.len > MAX_PATH_LEN) {
-            setErrno(@intFromEnum(std.c.E.NAMETOOLONG));
+            setErrno(@backingInt(std.c.E.NAMETOOLONG));
             return false;
         }
 
@@ -147,7 +147,7 @@ fn collectDirectory(root: *CnfNode, dir_path: [*:0]const u8) bool {
         value_buf[value_len] = 0;
 
         const node = create_cnfnode(@ptrCast(&entry.name)) orelse {
-            setErrno(@intFromEnum(std.c.E.NOMEM));
+            setErrno(@backingInt(std.c.E.NOMEM));
             return false;
         };
         cnfnode_setval(node, @ptrCast(&value_buf));
@@ -158,7 +158,7 @@ fn collectDirectory(root: *CnfNode, dir_path: [*:0]const u8) bool {
 
 fn openDirectoryAtRoot(root_fd: c_int, raw_path: []const u8) ?c_int {
     if (raw_path.len == 0 or raw_path[0] != '/') {
-        setErrno(@intFromEnum(std.c.E.INVAL));
+        setErrno(@backingInt(std.c.E.INVAL));
         return null;
     }
     var current = std.c.fcntl(
@@ -181,7 +181,7 @@ fn openDirectoryAtRoot(root_fd: c_int, raw_path: []const u8) ?c_int {
             std.mem.eql(u8, component, ".") or
             std.mem.eql(u8, component, ".."))
         {
-            setErrno(@intFromEnum(std.c.E.INVAL));
+            setErrno(@backingInt(std.c.E.INVAL));
             return null;
         }
         var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
@@ -210,7 +210,7 @@ fn collectDirectoryAt(
     const directory_fd = openDirectoryAtRoot(
         root_fd,
         std.mem.span(dir_path),
-    ) orelse return std.c._errno().* == @intFromEnum(std.c.E.NOENT);
+    ) orelse return std.c._errno().* == @backingInt(std.c.E.NOENT);
     const scan_fd = std.c.fcntl(
         directory_fd,
         std.c.F.DUPFD_CLOEXEC,
@@ -233,7 +233,7 @@ fn collectDirectoryAt(
         const name = std.mem.sliceTo(&entry.name, 0);
         if (!isVariableName(name)) continue;
         if (dir_len + 1 + name.len > MAX_PATH_LEN) {
-            setErrno(@intFromEnum(std.c.E.NAMETOOLONG));
+            setErrno(@backingInt(std.c.E.NAMETOOLONG));
             return false;
         }
         const fd = std.c.openat(
@@ -255,7 +255,7 @@ fn collectDirectoryAt(
             &stat,
         ) != 0 or (stat.mode & 0o170000) != 0o100000 or stat.nlink != 1) {
             _ = close(fd);
-            setErrno(@intFromEnum(std.c.E.LOOP));
+            setErrno(@backingInt(std.c.E.LOOP));
             return false;
         }
         var value_buf: [MAX_VALUE_LEN + 1]u8 = undefined;
@@ -282,7 +282,7 @@ fn collectDirectoryAt(
         ).len;
         value_buf[value_len] = 0;
         const node = create_cnfnode(@ptrCast(&entry.name)) orelse {
-            setErrno(@intFromEnum(std.c.E.NOMEM));
+            setErrno(@backingInt(std.c.E.NOMEM));
             return false;
         };
         cnfnode_setval(node, @ptrCast(&value_buf));
@@ -295,7 +295,7 @@ fn collectDirectoryAt(
 /// of directory paths. Returns NULL with errno set on failure.
 pub export fn parse_varsdirs(dirs: ?[*:null]const ?[*:0]const u8) ?*CnfNode {
     const root = create_cnfnode("(root)") orelse {
-        setErrno(@intFromEnum(std.c.E.NOMEM));
+        setErrno(@backingInt(std.c.E.NOMEM));
         return null;
     };
 
@@ -316,7 +316,7 @@ pub export fn parse_varsdirs_at(
     dirs: ?[*:null]const ?[*:0]const u8,
 ) ?*CnfNode {
     const root = create_cnfnode("(root)") orelse {
-        setErrno(@intFromEnum(std.c.E.NOMEM));
+        setErrno(@backingInt(std.c.E.NOMEM));
         return null;
     };
     if (dirs) |list| {
@@ -569,14 +569,14 @@ test "unknown variables and bare dollars expand to nothing" {
 test "values and expansions truncate at the historical buffer limits" {
     var vars = try VarsDir.init();
     defer vars.deinit();
-    try vars.addFile("long", "L" ** 400);
+    try vars.addFile("long", &@as([400]u8, @splat('L')));
 
     const root = vars.parse() orelse return error.ParseFailed;
     defer destroy_cnftree(root);
 
-    try expectExpansion(root, "$long", "L" ** MAX_VALUE_LEN);
+    try expectExpansion(root, "$long", &@as([MAX_VALUE_LEN]u8, @splat('L')));
     // The trailing marker is dropped: the result is capped too.
-    try expectExpansion(root, "$long|", "L" ** MAX_EXPANSION_LEN);
+    try expectExpansion(root, "$long|", &@as([MAX_EXPANSION_LEN]u8, @splat('L')));
 }
 
 test "missing varsdirs are skipped but unusable ones fail" {
@@ -586,7 +586,7 @@ test "missing varsdirs are skipped but unusable ones fail" {
 
     var not_a_dir = [_:null]?[*:0]const u8{"/proc/self/cmdline"};
     try testing.expect(parse_varsdirs(&not_a_dir) == null);
-    try testing.expectEqual(std.c.E.NOTDIR, @as(std.c.E, @enumFromInt(std.c._errno().*)));
+    try testing.expectEqual(std.c.E.NOTDIR, @as(std.c.E, @fromBackingInt(@intCast(std.c._errno().*))));
 }
 
 test "an over-long variable path fails with ENAMETOOLONG" {
@@ -604,7 +604,7 @@ test "an over-long variable path fails with ENAMETOOLONG" {
     try testing.expect(vars.parse() == null);
     try testing.expectEqual(
         std.c.E.NAMETOOLONG,
-        @as(std.c.E, @enumFromInt(std.c._errno().*)),
+        @as(std.c.E, @fromBackingInt(@intCast(std.c._errno().*))),
     );
 }
 

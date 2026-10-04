@@ -6,13 +6,7 @@
 
 const std = @import("std");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("string.h");
-    @cInclude("strings.h");
-    @cInclude("stdlib.h");
-    @cInclude("nodes.h");
-});
+const c = @import("c.tools.cli.lib.parsereposyncargs");
 
 fn equalsIgnoreCase(pszValue: [*c]const u8, comptime pszExpected: [*:0]const u8) bool {
     return pszValue != null and c.strcasecmp(pszValue, pszExpected) == 0;

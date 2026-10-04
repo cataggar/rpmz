@@ -332,10 +332,10 @@ const Fixture = struct {
     root: [:0]u8,
     directory: []u8,
 
-    const plan_digest = "6" ** 64;
-    const other_digest = "7" ** 64;
+    const plan_digest = &@as([64]u8, @splat('6'));
+    const other_digest = &@as([64]u8, @splat('7'));
     const fingerprint = "abcdef0123456789abcdef0123456789abcdef01";
-    const repomd_sha = "5" ** 64;
+    const repomd_sha = &@as([64]u8, @splat('5'));
 
     /// Shaped exactly like a real canonical plan: the digest is an object
     /// naming its algorithm and domain, not a bare string.

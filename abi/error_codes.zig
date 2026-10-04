@@ -44,7 +44,7 @@ pub const ERROR_TDNF_HISTORY_ERROR: u32 = 1801;
 pub const ERROR_TDNF_HISTORY_NODB: u32 = 1802;
 
 pub fn fromErrno(value: std.posix.E) u32 {
-    return ERROR_TDNF_SYSTEM_BASE + @intFromEnum(value);
+    return ERROR_TDNF_SYSTEM_BASE + @backingInt(value);
 }
 
 test "system error values match the public Linux ABI" {

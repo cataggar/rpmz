@@ -6,21 +6,7 @@
 
 const std = @import("std");
 const jsondump = @import("jsondump_abi");
-const c = @cImport({
-    @cInclude("ctype.h");
-    @cInclude("errno.h");
-    @cInclude("getopt.h");
-    @cInclude("glob.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("unistd.h");
-
-    @cInclude("llconf/nodes.h");
-    @cInclude("llconf/modules.h");
-    @cInclude("llconf/entry.h");
-    @cInclude("llconf/ini.h");
-});
+const c = @import("c.tools.config.main");
 
 const ERR_CMDLINE: u8 = 1;
 const ERR_SYSTEM: u8 = 2;
@@ -73,7 +59,7 @@ fn failf(rc: u8, comptime fmt: []const u8, args: anytype) u8 {
 
 fn setKeyValue(cn_repo: [*c]c.struct_cnfnode, psz_keyval: [*:0]const u8) ?u8 {
     var p: [*c]const u8 = psz_keyval;
-    var key = [_]u8{0} ** 256;
+    var key: [256]u8 = @splat(0);
     var key_len: usize = 0;
 
     while (p[0] != 0 and c.isspace(@as(c_int, p[0])) == 0 and p[0] != '=' and key_len < key.len - 1) : (p += 1) {
@@ -183,7 +169,7 @@ fn getRepodir(psz_main_config: [*c]const u8) [*c]u8 {
 
 fn findRepo(psz_repodir: [*c]const u8, psz_repo: [*c]const u8, ppsz_filename: ?*[*c]u8) [*c]c.struct_cnfnode {
     var cn_root: [*c]c.struct_cnfnode = null;
-    var pattern = [_]u8{0} ** 256;
+    var pattern: [256]u8 = @splat(0);
     var globbuf = std.mem.zeroes(c.glob_t);
 
     defer c.globfree(&globbuf);
@@ -222,7 +208,7 @@ fn findRepo(psz_repodir: [*c]const u8, psz_repo: [*c]const u8, ppsz_filename: ?*
 }
 
 fn writeFile(cn_root: [*c]c.struct_cnfnode, psz_filename: [*c]const u8) c_int {
-    var buf = [_]u8{0} ** 256;
+    var buf: [256]u8 = @splat(0);
 
     const rc_fmt = c.snprintf(&buf, buf.len, "%s.tmp", psz_filename);
     if (rc_fmt < 0 or rc_fmt >= buf.len) {
@@ -398,7 +384,7 @@ pub fn run(argv: []const [*:0]const u8) u8 {
             return failf(ERR_CMDLINE, "invalid repo name 'main'\n", .{});
         }
 
-        var buf = [_]u8{0} ** 256;
+        var buf: [256]u8 = @splat(0);
         var psz_repodir = getRepodir(psz_main_config);
         defer freeCString(&psz_repodir);
 

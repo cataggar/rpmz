@@ -16,7 +16,7 @@ README_REQUIRED = (
     "# rpmz",
     "Zig dnf/yum-compatible RPM package manager",
     "ghr install cataggar/rpmz@v0.1.0",
-    "zig build -Doptimize=ReleaseSafe install --prefix ./out",
+    "zig build -Doptimize=safe install --prefix ./out",
     "(doc/configuration.md)",
     "(doc/transaction-plan-api.md)",
     "(doc/transaction-bundle.md)",
@@ -319,7 +319,7 @@ def audit(readme: str, migration: str) -> list[str]:
         errors.append("README.md describes the published v0.1.0 release as upcoming")
     for command in (
         "ghr install cataggar/rpmz@v0.1.0",
-        "zig build -Doptimize=ReleaseSafe install --prefix ./out",
+        "zig build -Doptimize=safe install --prefix ./out",
     ):
         if readme.count(command) != 1:
             errors.append(

@@ -6,13 +6,7 @@
 
 const std = @import("std");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("string.h");
-    @cInclude("strings.h");
-    @cInclude("stdlib.h");
-    @cInclude("nodes.h");
-});
+const c = @import("c.tools.cli.lib.parserepoqueryargs");
 
 const dep_keys = [_][*:0]const u8{
     "provides",

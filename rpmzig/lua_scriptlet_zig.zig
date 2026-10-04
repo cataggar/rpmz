@@ -2,20 +2,7 @@ const std = @import("std");
 const zlua = @import("zlua");
 const txn_config = @import("txn_config.zig");
 
-const c = @cImport({
-    @cInclude("dirent.h");
-    @cInclude("errno.h");
-    @cInclude("glob.h");
-    @cInclude("spawn.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("sys/stat.h");
-    @cInclude("sys/time.h");
-    @cInclude("sys/utsname.h");
-    @cInclude("sys/wait.h");
-    @cInclude("unistd.h");
-});
+const c = @import("c.rpmzig.lua_scriptlet_zig");
 
 const Allocator = std.mem.Allocator;
 const linux = std.os.linux;
@@ -271,7 +258,7 @@ fn filesystemReadFile(
     allocator: Allocator,
     path: []const u8,
 ) ![]const u8 {
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
 
     const open_rc = linux.openat(
@@ -307,7 +294,7 @@ fn filesystemWriteFile(
     contents: []const u8,
 ) !void {
     const allocator = std.heap.c_allocator;
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
 
     const open_rc = linux.openat(
@@ -341,7 +328,7 @@ fn filesystemWriteFile(
 
 fn filesystemRemoveFile(_: ?*anyopaque, path: []const u8) !void {
     const allocator = std.heap.c_allocator;
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     if (c.remove(path_z.ptr) != 0) return error.RemoveFailed;
 }
@@ -352,9 +339,9 @@ fn filesystemRenameFile(
     new_path: []const u8,
 ) !void {
     const allocator = std.heap.c_allocator;
-    const old_z = try allocator.dupeZ(u8, old_path);
+    const old_z = try allocator.dupeSentinel(u8, old_path, 0);
     defer allocator.free(old_z);
-    const new_z = try allocator.dupeZ(u8, new_path);
+    const new_z = try allocator.dupeSentinel(u8, new_path, 0);
     defer allocator.free(new_z);
     if (c.rename(old_z.ptr, new_z.ptr) != 0) return error.RenameFailed;
 }
@@ -445,7 +432,7 @@ fn executeShell(context: ?*anyopaque, command: []const u8) !zlua.ProcessResult {
     const stdin_bridge: *StdinBridge = @ptrCast(@alignCast(context orelse
         return error.MissingStdinBridge));
     const allocator = std.heap.c_allocator;
-    const command_z = try allocator.dupeZ(u8, command);
+    const command_z = try allocator.dupeSentinel(u8, command, 0);
     defer allocator.free(command_z);
 
     var argv = [_]?[*:0]const u8{
@@ -475,7 +462,7 @@ fn executeShell(context: ?*anyopaque, command: []const u8) !zlua.ProcessResult {
     if (std.posix.W.IFSIGNALED(@bitCast(status))) {
         return .{
             .status = .signal,
-            .code = @intFromEnum(std.posix.W.TERMSIG(@bitCast(status))),
+            .code = @backingInt(std.posix.W.TERMSIG(@bitCast(status))),
         };
     }
     return .{
@@ -491,7 +478,7 @@ fn rpmExecute(ctx: *zlua.Context) !void {
 
     for (0..ctx.argCount()) |index| {
         const value = try ctx.arg(index, []const u8);
-        try args.append(allocator, try allocator.dupeZ(u8, value));
+        try args.append(allocator, try allocator.dupeSentinel(u8, value, 0));
     }
     if (args.items.len == 0) return ctx.raise("command not supplied");
     try spawnAndReturn(ctx, args.items, null);
@@ -511,7 +498,7 @@ fn rpmSpawn(ctx: *zlua.Context) !void {
         switch (value) {
             .nil => break,
             .string => |text| {
-                try args.append(allocator, try allocator.dupeZ(u8, text));
+                try args.append(allocator, try allocator.dupeSentinel(u8, text, 0));
             },
             else => return ctx.raise("command argument must be a string"),
         }
@@ -572,7 +559,7 @@ fn spawnAndReturn(
         };
         for (specs) |spec| {
             const path = try table.get(spec.name, ?[]const u8) orelse continue;
-            const path_z = try allocator.dupeZ(u8, path);
+            const path_z = try allocator.dupeSentinel(u8, path, 0);
             try action_paths.append(allocator, path_z);
             const action_rc = c.posix_spawn_file_actions_addopen(
                 &actions,
@@ -614,7 +601,7 @@ fn spawnAndReturn(
     if (std.posix.W.IFSIGNALED(@bitCast(status))) {
         try pushError(
             ctx,
-            @intCast(@intFromEnum(std.posix.W.TERMSIG(@bitCast(status)))),
+            @intCast(@backingInt(std.posix.W.TERMSIG(@bitCast(status)))),
             "exit signal",
         );
         return;
@@ -630,7 +617,7 @@ fn spawnAndReturn(
 fn rpmGlob(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const pattern = try ctx.arg(0, []const u8);
-    const pattern_z = try allocator.dupeZ(u8, pattern);
+    const pattern_z = try allocator.dupeSentinel(u8, pattern, 0);
     defer allocator.free(pattern_z);
 
     var matches: c.glob_t = std.mem.zeroes(c.glob_t);
@@ -663,7 +650,7 @@ fn posixAccess(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const path = try ctx.arg(0, []const u8);
     const mode_text = try ctx.optionalArg(1, []const u8);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
 
     var mode: c_int = c.F_OK;
@@ -684,7 +671,7 @@ fn posixAccess(ctx: *zlua.Context) !void {
 fn posixChmod(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const path = try ctx.arg(0, []const u8);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     var stat: c.struct_stat = std.mem.zeroes(c.struct_stat);
     if (c.stat(path_z.ptr, &stat) != 0) {
@@ -703,7 +690,7 @@ fn posixMkdir(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const path = try ctx.arg(0, []const u8);
     const mode = (try ctx.optionalArg(1, i64)) orelse 0o777;
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     if (c.mkdir(path_z.ptr, @intCast(mode)) != 0) {
         try pushError(ctx, errnoValue(), null);
@@ -715,13 +702,13 @@ fn posixMkdir(ctx: *zlua.Context) !void {
 fn posixReadlink(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const path = try ctx.arg(0, []const u8);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     var buffer: [4096]u8 = undefined;
     const length = linux.readlink(path_z.ptr, &buffer, buffer.len);
     const readlink_error = linux.errno(length);
     if (readlink_error != .SUCCESS) {
-        try pushError(ctx, @intCast(@intFromEnum(readlink_error)), null);
+        try pushError(ctx, @intCast(@backingInt(readlink_error)), null);
         return;
     }
     try ctx.returnValues(buffer[0..length]);
@@ -731,9 +718,9 @@ fn posixLink(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const old_path = try ctx.arg(0, []const u8);
     const new_path = try ctx.arg(1, []const u8);
-    const old_z = try allocator.dupeZ(u8, old_path);
+    const old_z = try allocator.dupeSentinel(u8, old_path, 0);
     defer allocator.free(old_z);
-    const new_z = try allocator.dupeZ(u8, new_path);
+    const new_z = try allocator.dupeSentinel(u8, new_path, 0);
     defer allocator.free(new_z);
     if (c.link(old_z.ptr, new_z.ptr) != 0) {
         try pushError(ctx, errnoValue(), null);
@@ -745,7 +732,7 @@ fn posixLink(ctx: *zlua.Context) !void {
 fn posixRmdir(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const path = try ctx.arg(0, []const u8);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     if (c.rmdir(path_z.ptr) != 0) {
         try pushError(ctx, errnoValue(), null);
@@ -757,7 +744,7 @@ fn posixRmdir(ctx: *zlua.Context) !void {
 fn posixStat(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const path = try ctx.arg(0, []const u8);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     var stat: c.struct_stat = std.mem.zeroes(c.struct_stat);
     if (c.lstat(path_z.ptr, &stat) != 0) {
@@ -819,9 +806,9 @@ fn posixSymlink(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const target = try ctx.arg(0, []const u8);
     const path = try ctx.arg(1, []const u8);
-    const target_z = try allocator.dupeZ(u8, target);
+    const target_z = try allocator.dupeSentinel(u8, target, 0);
     defer allocator.free(target_z);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     if (c.symlink(target_z.ptr, path_z.ptr) != 0) {
         try pushError(ctx, errnoValue(), null);
@@ -886,7 +873,7 @@ fn posixUname(ctx: *zlua.Context) !void {
 fn posixUnlink(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const path = try ctx.arg(0, []const u8);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     if (c.unlink(path_z.ptr) != 0) {
         try pushError(ctx, errnoValue(), null);
@@ -898,7 +885,7 @@ fn posixUnlink(ctx: *zlua.Context) !void {
 fn posixUtime(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const path = try ctx.arg(0, []const u8);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     if (c.utimes(path_z.ptr, null) != 0) {
         try pushError(ctx, errnoValue(), null);
@@ -910,7 +897,7 @@ fn posixUtime(ctx: *zlua.Context) !void {
 fn posixFilesEntries(ctx: *zlua.Context) !void {
     const allocator = ctx.state().allocator();
     const path = try ctx.arg(0, []const u8);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     const dir = c.opendir(path_z.ptr) orelse {
         try pushError(ctx, errnoValue(), null);

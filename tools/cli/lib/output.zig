@@ -6,11 +6,7 @@
 
 const std = @import("std");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("sys/ioctl.h");
-    @cInclude("unistd.h");
-});
+const c = @import("c.tools.cli.lib.output");
 
 pub export fn GetConsoleWidth(pnConsoleWidth: ?*c_int) u32 {
     const out = pnConsoleWidth orelse return abi.ERROR_TDNF_INVALID_PARAMETER;
@@ -52,7 +48,7 @@ pub export fn GetColumnWidths(
 }
 
 test "GetColumnWidths validates arguments" {
-    var nWidths = [_]c_int{0} ** 2;
+    var nWidths: [2]c_int = @splat(0);
     try std.testing.expectEqual(
         @as(u32, abi.ERROR_TDNF_INVALID_PARAMETER),
         GetColumnWidths(2, null, &nWidths),

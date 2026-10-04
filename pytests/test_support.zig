@@ -3,9 +3,7 @@ const abi = @import("tdnf_internal_abi");
 const client = @import("client");
 const repomd = @import("repomd");
 
-const c = @cImport({
-    @cInclude("stdio.h");
-});
+const c = @import("c.pytests.test_support");
 
 extern fn TDNFGetReleaseVersion(
     [*c]const u8,
@@ -59,7 +57,7 @@ fn runTransactionV2(
     );
     defer parsed.deinit();
 
-    const root_z = try allocator.dupeZ(u8, root);
+    const root_z = try allocator.dupeSentinel(u8, root, 0);
     defer allocator.free(root_z);
     const raw = try allocator.alloc(
         abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM_V2,
@@ -152,7 +150,7 @@ fn runTransactionLegacy(
     );
     defer parsed.deinit();
 
-    const root_z = try allocator.dupeZ(u8, root);
+    const root_z = try allocator.dupeSentinel(u8, root, 0);
     defer allocator.free(root_z);
     const raw = try allocator.alloc(
         abi.TDNF_REPOMD_NATIVE_TRANSACTION_ITEM,
@@ -220,7 +218,7 @@ fn optionalZ(
     value: ?[]const u8,
 ) ![*c]const u8 {
     const text = value orelse return null;
-    const copy = try allocator.dupeZ(u8, text);
+    const copy = try allocator.dupeSentinel(u8, text, 0);
     try owned.append(copy);
     return copy.ptr;
 }
@@ -231,9 +229,9 @@ fn runReleaseVersion(
     root: []const u8,
     provide: []const u8,
 ) !void {
-    const root_z = try allocator.dupeZ(u8, root);
+    const root_z = try allocator.dupeSentinel(u8, root, 0);
     defer allocator.free(root_z);
-    const provide_z = try allocator.dupeZ(u8, provide);
+    const provide_z = try allocator.dupeSentinel(u8, provide, 0);
     defer allocator.free(provide_z);
 
     var value: [*c]u8 = null;
@@ -250,7 +248,7 @@ fn runRetainedSource(
     path: []const u8,
     target: []const u8,
 ) !u8 {
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     const parked_z = try std.fmt.allocPrintSentinel(
         allocator,

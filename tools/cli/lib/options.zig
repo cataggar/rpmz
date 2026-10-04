@@ -7,10 +7,7 @@
 const std = @import("std");
 const getopt = @import("getopt_c.zig").c;
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("string.h");
-});
+const c = @import("c.tools.cli.lib.options");
 
 fn isNullOrEmpty(pszValue: [*c]const u8) bool {
     return pszValue == null or pszValue[0] == 0;

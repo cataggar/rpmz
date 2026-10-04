@@ -52,7 +52,7 @@ fn buildFlatMap() !*JsonDump {
     try expectSuccess(jsondump.jd_map_add_string(jd, "goo", "car"));
     try expectSuccess(jsondump.jd_map_add_string(jd, "hoo", "\tdar\n"));
     var ears_buf: [16]u8 = undefined;
-    const ears = try std.fmt.bufPrintZ(&ears_buf, "{d} ears", .{2});
+    const ears = try std.fmt.bufPrintSentinel(&ears_buf, "{d} ears", .{2}, 0);
     try expectSuccess(jsondump.jd_map_add_string(jd, "ioo", ears));
     try expectSuccess(jsondump.jd_map_add_null(jd, "nothing"));
     try expectSuccess(jsondump.jd_map_add_bool(jd, "yes", 1));
@@ -79,7 +79,7 @@ fn buildStringList() !*JsonDump {
 
     for (0..10) |i| {
         var item: [3]u8 = undefined;
-        const value = try std.fmt.bufPrintZ(&item, "{d}", .{i});
+        const value = try std.fmt.bufPrintSentinel(&item, "{d}", .{i}, 0);
         try expectSuccess(jsondump.jd_list_add_string(jd, value));
     }
     try expectSuccess(jsondump.jd_list_add_null(jd));
@@ -93,7 +93,7 @@ fn buildFormatList() !*JsonDump {
 
     for (0..10) |i| {
         var item: [5]u8 = undefined;
-        const value = try std.fmt.bufPrintZ(&item, "i={d}", .{i});
+        const value = try std.fmt.bufPrintSentinel(&item, "i={d}", .{i}, 0);
         try expectSuccess(jsondump.jd_list_add_string(jd, value));
     }
     return jd;

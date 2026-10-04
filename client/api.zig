@@ -107,9 +107,10 @@ fn bindTransactionTarget(handle: *Tdnf) u32 {
         return errors.ERROR_TDNF_OUT_OF_MEMORY;
     };
     guard.* = acquired;
-    const pinned_root = std.heap.c_allocator.dupeZ(
+    const pinned_root = std.heap.c_allocator.dupeSentinel(
         u8,
         guard.config().installRoot(),
+        0,
     ) catch {
         guard.deinit();
         std.heap.c_allocator.destroy(guard);
@@ -1163,7 +1164,7 @@ fn removeUnkeptRpm(
 
     var marker_stat = std.mem.zeroes(std.c.Stat);
     if (stat(marker.?, &marker_stat) != 0) {
-        if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT)) {
+        if (std.c._errno().* == @backingInt(std.posix.E.NOENT)) {
             common.log(LOG_INFO, "deleting %s\n", .{path});
             if (remove(path) < 0) {
                 common.log(LOG_CRIT, "unable to remove %s: %s\n", .{ path, strerror(std.c._errno().*) });
@@ -2437,7 +2438,7 @@ test "normal handle target lock spans the handle lifetime" {
         &.{ base, "root" },
     );
     defer std.testing.allocator.free(root);
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
     var args = CmdArgs{ .pszInstallRoot = root_z.ptr };
     const original_root = args.pszInstallRoot;

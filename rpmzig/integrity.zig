@@ -300,8 +300,8 @@ pub const Error = std.mem.Allocator.Error || error{
 pub fn rpm6SuppressesLegacySignatureHeader(
     rpm: *const pkgfile.RpmFile,
 ) bool {
-    return rpm.sig.findRaw(@intFromEnum(header.SigTagId.reserved)) != null and
-        rpm.sig.findRaw(@intFromEnum(header.SigTagId.sha3_256)) != null;
+    return rpm.sig.findRaw(@backingInt(header.SigTagId.reserved)) != null and
+        rpm.sig.findRaw(@backingInt(header.SigTagId.sha3_256)) != null;
 }
 
 const PendingSignature = struct {
@@ -338,7 +338,7 @@ pub fn verifySignatures(
         &pending,
         allocator,
         rpm.sig,
-        @intFromEnum(header.SigTagId.pgp),
+        @backingInt(header.SigTagId.pgp),
         .legacy_pgp,
         .header_payload,
         policy.legacy_pgp,
@@ -347,7 +347,7 @@ pub fn verifySignatures(
         &pending,
         allocator,
         rpm.sig,
-        @intFromEnum(header.SigTagId.gpg),
+        @backingInt(header.SigTagId.gpg),
         .legacy_gpg,
         .header_payload,
         policy.legacy_gpg,
@@ -356,7 +356,7 @@ pub fn verifySignatures(
         &pending,
         allocator,
         rpm.sig,
-        @intFromEnum(header.SigTagId.rsa),
+        @backingInt(header.SigTagId.rsa),
         .header_rsa,
         .header,
         policy.header_rsa,
@@ -365,7 +365,7 @@ pub fn verifySignatures(
         &pending,
         allocator,
         rpm.sig,
-        @intFromEnum(header.SigTagId.dsa),
+        @backingInt(header.SigTagId.dsa),
         .header_dsa,
         .header,
         policy.header_dsa,
@@ -505,9 +505,9 @@ fn inspectPendingSignature(item: *PendingSignature) void {
         return;
     };
     item.candidate.signature_version = sig.version;
-    item.candidate.signature_type = @intFromEnum(sig.sig_type);
-    item.candidate.public_key_algorithm = @intFromEnum(sig.pk_algo);
-    item.candidate.hash_algorithm = @intFromEnum(sig.hash_algo);
+    item.candidate.signature_type = @backingInt(sig.sig_type);
+    item.candidate.public_key_algorithm = @backingInt(sig.pk_algo);
+    item.candidate.hash_algorithm = @backingInt(sig.hash_algo);
     item.candidate.raw_outcome = .unchecked;
     item.candidate.outcome = .unchecked;
     item.syntax_valid = true;
@@ -538,7 +538,7 @@ fn appendLegacySignatureCandidates(
                 .malformed_tag,
             ),
         };
-        if (entry.typ == @intFromEnum(header.TypeId.bin)) {
+        if (entry.typ == @backingInt(header.TypeId.bin)) {
             if (source.rawEntryBytes(entry)) |bytes| {
                 item.packet = bytes;
                 inspectPendingSignature(&item);
@@ -566,14 +566,14 @@ fn appendOpenPgpCandidates(
     source: header.Header,
     enabled: bool,
 ) std.mem.Allocator.Error!void {
-    const tag = @intFromEnum(header.SigTagId.openpgp);
+    const tag = @backingInt(header.SigTagId.openpgp);
     var found = false;
     var entry_index: u32 = 0;
     while (entry_index < source.index_count) : (entry_index += 1) {
         const entry = source.entry(entry_index);
         if (entry.tag != tag) continue;
         found = true;
-        if (entry.typ != @intFromEnum(header.TypeId.string_array)) {
+        if (entry.typ != @backingInt(header.TypeId.string_array)) {
             try pending.append(allocator, .{
                 .candidate = makeSignatureCandidate(
                     .openpgp,
@@ -747,7 +747,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.sig,
-        @intFromEnum(header.SigTagId.md5),
+        @backingInt(header.SigTagId.md5),
         .legacy_md5,
         .header_payload,
         .md5,
@@ -760,7 +760,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.sig,
-        @intFromEnum(header.SigTagId.sha1),
+        @backingInt(header.SigTagId.sha1),
         .header_sha1,
         .header,
         .sha1,
@@ -773,7 +773,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.sig,
-        @intFromEnum(header.SigTagId.sha256),
+        @backingInt(header.SigTagId.sha256),
         .header_sha256,
         .header,
         .sha256,
@@ -786,7 +786,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.sig,
-        @intFromEnum(header.SigTagId.sha3_256),
+        @backingInt(header.SigTagId.sha3_256),
         .header_sha3_256,
         .header,
         .sha3_256,
@@ -801,7 +801,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.main,
-        @intFromEnum(header.TagId.payloadsha256),
+        @backingInt(header.TagId.payloadsha256),
         .payload_sha256,
         .compressed_payload,
         .sha256,
@@ -815,7 +815,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.main,
-        @intFromEnum(header.TagId.payloadsha256alt),
+        @backingInt(header.TagId.payloadsha256alt),
         .payload_sha256_alt,
         .uncompressed_payload,
         .sha256,
@@ -829,7 +829,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.main,
-        @intFromEnum(header.TagId.payloadsha512),
+        @backingInt(header.TagId.payloadsha512),
         .payload_sha512,
         .compressed_payload,
         .sha512,
@@ -842,7 +842,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.main,
-        @intFromEnum(header.TagId.payloadsha512alt),
+        @backingInt(header.TagId.payloadsha512alt),
         .payload_sha512_alt,
         .uncompressed_payload,
         .sha512,
@@ -855,7 +855,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.main,
-        @intFromEnum(header.TagId.payloadsha3_256),
+        @backingInt(header.TagId.payloadsha3_256),
         .payload_sha3_256,
         .compressed_payload,
         .sha3_256,
@@ -868,7 +868,7 @@ pub fn verifyPackage(
         &candidates,
         allocator,
         rpm.main,
-        @intFromEnum(header.TagId.payloadsha3_256alt),
+        @backingInt(header.TagId.payloadsha3_256alt),
         .payload_sha3_256_alt,
         .uncompressed_payload,
         .sha3_256,
@@ -954,7 +954,7 @@ fn appendBinaryCandidate(
         try appendCandidate(candidates, allocator, kind, range, algorithm, tag, null, disabler, alternative_group, .absent, null, false);
         return;
     };
-    if (entry.typ != @intFromEnum(header.TypeId.bin) or entry.count != expected_len) {
+    if (entry.typ != @backingInt(header.TypeId.bin) or entry.count != expected_len) {
         try appendCandidate(candidates, allocator, kind, range, algorithm, tag, null, disabler, alternative_group, .malformed_tag, null, true);
         return;
     }
@@ -1002,7 +1002,7 @@ fn appendScalarHexCandidate(
         try appendCandidate(candidates, allocator, kind, range, algorithm, tag, null, disabler, alternative_group, .absent, null, false);
         return;
     };
-    if (entry.typ != @intFromEnum(header.TypeId.string) or entry.count != 1) {
+    if (entry.typ != @backingInt(header.TypeId.string) or entry.count != 1) {
         try appendCandidate(candidates, allocator, kind, range, algorithm, tag, null, disabler, alternative_group, .malformed_tag, null, false);
         return;
     }
@@ -1063,7 +1063,7 @@ fn appendArrayHexCandidates(
         );
         return;
     };
-    if (entry.typ != @intFromEnum(header.TypeId.string_array) or entry.count == 0) {
+    if (entry.typ != @backingInt(header.TypeId.string_array) or entry.count == 0) {
         try appendCandidate(candidates, allocator, kind, range, algorithm, tag, null, disabler, alternative_group, .malformed_tag, null, false);
         return;
     }
@@ -1125,7 +1125,7 @@ fn appendCandidate(
 
 fn payloadSha256AlgorithmValid(main: header.Header) bool {
     const entry = main.find(.payloadsha256algo) orelse return true;
-    if (entry.typ != @intFromEnum(header.TypeId.int32) or entry.count != 1)
+    if (entry.typ != @backingInt(header.TypeId.int32) or entry.count != 1)
         return false;
     const algorithm = main.getU32Checked(.payloadsha256algo) catch return false;
     return algorithm != null and algorithm.? == rpm_hash_sha256;
@@ -1297,9 +1297,9 @@ fn buildRegionHeader(
     }
     const trailer_offset: u32 = @intCast(data.items.len);
     const index_count: u32 = @intCast(entries.len + 1);
-    const region_tag = @intFromEnum(region);
+    const region_tag = @backingInt(region);
     try appendU32(&data, allocator, region_tag);
-    try appendU32(&data, allocator, @intFromEnum(header.TypeId.bin));
+    try appendU32(&data, allocator, @backingInt(header.TypeId.bin));
     try appendU32(&data, allocator, @bitCast(-@as(i32, @intCast(index_count * 16))));
     try appendU32(&data, allocator, 16);
 
@@ -1309,12 +1309,12 @@ fn buildRegionHeader(
     try appendU32(&out, allocator, index_count);
     try appendU32(&out, allocator, @intCast(data.items.len));
     try appendU32(&out, allocator, region_tag);
-    try appendU32(&out, allocator, @intFromEnum(header.TypeId.bin));
+    try appendU32(&out, allocator, @backingInt(header.TypeId.bin));
     try appendU32(&out, allocator, trailer_offset);
     try appendU32(&out, allocator, 16);
     for (entries, offsets.items) |entry, offset| {
         try appendU32(&out, allocator, entry.tag);
-        try appendU32(&out, allocator, @intFromEnum(entry.typ));
+        try appendU32(&out, allocator, @backingInt(entry.typ));
         try appendU32(&out, allocator, offset);
         try appendU32(&out, allocator, entry.count);
     }
@@ -1369,31 +1369,31 @@ fn makeFixture(allocator: std.mem.Allocator, options: FixtureOptions) !pkgfile.R
     var main_data = std.ArrayList(u8).empty;
     defer main_data.deinit(allocator);
     try main_data.ensureTotalCapacity(allocator, 1024);
-    try main_entries.append(allocator, .{ .tag = @intFromEnum(header.TagId.name), .typ = .string, .count = 1, .data = "pkg\x00" });
-    try main_entries.append(allocator, .{ .tag = @intFromEnum(header.TagId.version), .typ = .string, .count = 1, .data = "1\x00" });
-    try main_entries.append(allocator, .{ .tag = @intFromEnum(header.TagId.release), .typ = .string, .count = 1, .data = "1\x00" });
-    try main_entries.append(allocator, .{ .tag = @intFromEnum(header.TagId.arch), .typ = .string, .count = 1, .data = "noarch\x00" });
+    try main_entries.append(allocator, .{ .tag = @backingInt(header.TagId.name), .typ = .string, .count = 1, .data = "pkg\x00" });
+    try main_entries.append(allocator, .{ .tag = @backingInt(header.TagId.version), .typ = .string, .count = 1, .data = "1\x00" });
+    try main_entries.append(allocator, .{ .tag = @backingInt(header.TagId.release), .typ = .string, .count = 1, .data = "1\x00" });
+    try main_entries.append(allocator, .{ .tag = @backingInt(header.TagId.arch), .typ = .string, .count = 1, .data = "noarch\x00" });
     try main_data.appendSlice(allocator, options.compressor);
     try main_data.append(allocator, 0);
     try main_entries.append(allocator, .{
-        .tag = @intFromEnum(header.TagId.payload_compressor),
+        .tag = @backingInt(header.TagId.payload_compressor),
         .typ = .string,
         .count = 1,
         .data = main_data.items[0..],
     });
     if (options.include_all) {
-        try appendHexEntry(&main_entries, &main_data, allocator, @intFromEnum(header.TagId.payloadsha256), .string_array, &sha256);
+        try appendHexEntry(&main_entries, &main_data, allocator, @backingInt(header.TagId.payloadsha256), .string_array, &sha256);
         try main_entries.append(allocator, .{
-            .tag = @intFromEnum(header.TagId.payloadsha256algo),
+            .tag = @backingInt(header.TagId.payloadsha256algo),
             .typ = .int32,
             .count = 1,
             .data = "\x00\x00\x00\x08",
         });
-        try appendHexEntry(&main_entries, &main_data, allocator, @intFromEnum(header.TagId.payloadsha256alt), .string_array, &alt_sha256);
-        try appendHexEntry(&main_entries, &main_data, allocator, @intFromEnum(header.TagId.payloadsha512), .string, &sha512);
-        try appendHexEntry(&main_entries, &main_data, allocator, @intFromEnum(header.TagId.payloadsha512alt), .string, &alt_sha512);
-        try appendHexEntry(&main_entries, &main_data, allocator, @intFromEnum(header.TagId.payloadsha3_256), .string, &sha3);
-        try appendHexEntry(&main_entries, &main_data, allocator, @intFromEnum(header.TagId.payloadsha3_256alt), .string, &alt_sha3);
+        try appendHexEntry(&main_entries, &main_data, allocator, @backingInt(header.TagId.payloadsha256alt), .string_array, &alt_sha256);
+        try appendHexEntry(&main_entries, &main_data, allocator, @backingInt(header.TagId.payloadsha512), .string, &sha512);
+        try appendHexEntry(&main_entries, &main_data, allocator, @backingInt(header.TagId.payloadsha512alt), .string, &alt_sha512);
+        try appendHexEntry(&main_entries, &main_data, allocator, @backingInt(header.TagId.payloadsha3_256), .string, &sha3);
+        try appendHexEntry(&main_entries, &main_data, allocator, @backingInt(header.TagId.payloadsha3_256alt), .string, &alt_sha3);
     }
     const main = try buildRegionHeader(allocator, .immutable, main_entries.items);
     defer allocator.free(main);
@@ -1415,25 +1415,25 @@ fn makeFixture(allocator: std.mem.Allocator, options: FixtureOptions) !pkgfile.R
     defer sig_data.deinit(allocator);
     try sig_data.ensureTotalCapacity(allocator, 256);
     try sig_entries.append(allocator, .{
-        .tag = @intFromEnum(header.SigTagId.size),
+        .tag = @backingInt(header.SigTagId.size),
         .typ = .int32,
         .count = 1,
         .data = "\x00\x00\x00\x01",
     });
     if (options.include_all) {
         try sig_entries.append(allocator, .{
-            .tag = @intFromEnum(header.SigTagId.md5),
+            .tag = @backingInt(header.SigTagId.md5),
             .typ = .bin,
             .count = md5.len,
             .data = &md5,
         });
-        try appendHexEntry(&sig_entries, &sig_data, allocator, @intFromEnum(header.SigTagId.sha1), .string, &sha1_header);
-        try appendHexEntry(&sig_entries, &sig_data, allocator, @intFromEnum(header.SigTagId.sha256), .string, &sha256_header);
-        try appendHexEntry(&sig_entries, &sig_data, allocator, @intFromEnum(header.SigTagId.sha3_256), .string, &sha3_header);
+        try appendHexEntry(&sig_entries, &sig_data, allocator, @backingInt(header.SigTagId.sha1), .string, &sha1_header);
+        try appendHexEntry(&sig_entries, &sig_data, allocator, @backingInt(header.SigTagId.sha256), .string, &sha256_header);
+        try appendHexEntry(&sig_entries, &sig_data, allocator, @backingInt(header.SigTagId.sha3_256), .string, &sha3_header);
     }
     if (options.rpm6_reserved) {
         try sig_entries.append(allocator, .{
-            .tag = @intFromEnum(header.SigTagId.reserved),
+            .tag = @backingInt(header.SigTagId.reserved),
             .typ = .bin,
             .count = 1,
             .data = "\x00",
@@ -1489,7 +1489,7 @@ pub fn makeSignedFixtureForTest(
     return .{
         .rpm = try assembleSignatureFixture(allocator, main, &.{
             .{
-                .tag = @intFromEnum(header.SigTagId.openpgp),
+                .tag = @backingInt(header.SigTagId.openpgp),
                 .typ = .string_array,
                 .count = 1,
                 .data = encoded,
@@ -1508,11 +1508,11 @@ pub fn makeLz4AlternateDigestFixtureForTest(
 
 fn makeMinimalMain(allocator: std.mem.Allocator) ![]u8 {
     return buildRegionHeader(allocator, .immutable, &.{
-        .{ .tag = @intFromEnum(header.TagId.name), .typ = .string, .count = 1, .data = "pkg\x00" },
-        .{ .tag = @intFromEnum(header.TagId.version), .typ = .string, .count = 1, .data = "1\x00" },
-        .{ .tag = @intFromEnum(header.TagId.release), .typ = .string, .count = 1, .data = "1\x00" },
-        .{ .tag = @intFromEnum(header.TagId.arch), .typ = .string, .count = 1, .data = "noarch\x00" },
-        .{ .tag = @intFromEnum(header.TagId.payload_compressor), .typ = .string, .count = 1, .data = "none\x00" },
+        .{ .tag = @backingInt(header.TagId.name), .typ = .string, .count = 1, .data = "pkg\x00" },
+        .{ .tag = @backingInt(header.TagId.version), .typ = .string, .count = 1, .data = "1\x00" },
+        .{ .tag = @backingInt(header.TagId.release), .typ = .string, .count = 1, .data = "1\x00" },
+        .{ .tag = @backingInt(header.TagId.arch), .typ = .string, .count = 1, .data = "noarch\x00" },
+        .{ .tag = @backingInt(header.TagId.payload_compressor), .typ = .string, .count = 1, .data = "none\x00" },
     });
 }
 
@@ -1704,7 +1704,7 @@ test "digest verifier reports absent candidates and policy disablement" {
 test "header raw payload and expected digest mutations stay independent" {
     var header_mutated = try makeFixture(std.testing.allocator, .{});
     defer header_mutated.close(std.testing.allocator);
-    const name_offset = tagDataOffset(&header_mutated, header_mutated.main, @intFromEnum(header.TagId.name));
+    const name_offset = tagDataOffset(&header_mutated, header_mutated.main, @backingInt(header.TagId.name));
     header_mutated.bytes[name_offset] = 'q';
     var header_report = try verifyPackage(std.testing.allocator, &header_mutated, .{});
     defer header_report.deinit(std.testing.allocator);
@@ -1725,7 +1725,7 @@ test "header raw payload and expected digest mutations stay independent" {
 
     var expected_mutated = try makeFixture(std.testing.allocator, .{});
     defer expected_mutated.close(std.testing.allocator);
-    const expected_offset = tagDataOffset(&expected_mutated, expected_mutated.sig, @intFromEnum(header.SigTagId.sha256));
+    const expected_offset = tagDataOffset(&expected_mutated, expected_mutated.sig, @backingInt(header.SigTagId.sha256));
     expected_mutated.bytes[expected_offset] = if (expected_mutated.bytes[expected_offset] == '0') '1' else '0';
     var expected_report = try verifyPackage(std.testing.allocator, &expected_mutated, .{});
     defer expected_report.deinit(std.testing.allocator);
@@ -1737,15 +1737,15 @@ test "header raw payload and expected digest mutations stay independent" {
 test "digest tag type count length hex and algorithm malformations are typed" {
     var type_mutated = try makeFixture(std.testing.allocator, .{});
     defer type_mutated.close(std.testing.allocator);
-    const sha1_entry = tagEntryOffset(&type_mutated, type_mutated.sig, @intFromEnum(header.SigTagId.sha1));
-    setU32(type_mutated.bytes, sha1_entry + 4, @intFromEnum(header.TypeId.bin));
+    const sha1_entry = tagEntryOffset(&type_mutated, type_mutated.sig, @backingInt(header.SigTagId.sha1));
+    setU32(type_mutated.bytes, sha1_entry + 4, @backingInt(header.TypeId.bin));
     var type_report = try verifyPackage(std.testing.allocator, &type_mutated, .{});
     defer type_report.deinit(std.testing.allocator);
     try std.testing.expectEqual(Outcome.malformed_tag, findCandidate(type_report, .header_sha1).outcome);
 
     var count_mutated = try makeFixture(std.testing.allocator, .{});
     defer count_mutated.close(std.testing.allocator);
-    const sha256_entry = tagEntryOffset(&count_mutated, count_mutated.sig, @intFromEnum(header.SigTagId.sha256));
+    const sha256_entry = tagEntryOffset(&count_mutated, count_mutated.sig, @backingInt(header.SigTagId.sha256));
     setU32(count_mutated.bytes, sha256_entry + 12, 2);
     var count_report = try verifyPackage(std.testing.allocator, &count_mutated, .{});
     defer count_report.deinit(std.testing.allocator);
@@ -1753,7 +1753,7 @@ test "digest tag type count length hex and algorithm malformations are typed" {
 
     var length_mutated = try makeFixture(std.testing.allocator, .{});
     defer length_mutated.close(std.testing.allocator);
-    const sha3_offset = tagDataOffset(&length_mutated, length_mutated.sig, @intFromEnum(header.SigTagId.sha3_256));
+    const sha3_offset = tagDataOffset(&length_mutated, length_mutated.sig, @backingInt(header.SigTagId.sha3_256));
     length_mutated.bytes[sha3_offset + 4] = 0;
     var length_report = try verifyPackage(std.testing.allocator, &length_mutated, .{});
     defer length_report.deinit(std.testing.allocator);
@@ -1761,7 +1761,7 @@ test "digest tag type count length hex and algorithm malformations are typed" {
 
     var hex_mutated = try makeFixture(std.testing.allocator, .{});
     defer hex_mutated.close(std.testing.allocator);
-    const sha512_offset = tagDataOffset(&hex_mutated, hex_mutated.main, @intFromEnum(header.TagId.payloadsha512));
+    const sha512_offset = tagDataOffset(&hex_mutated, hex_mutated.main, @backingInt(header.TagId.payloadsha512));
     hex_mutated.bytes[sha512_offset] = 'g';
     var hex_report = try verifyPackage(std.testing.allocator, &hex_mutated, .{});
     defer hex_report.deinit(std.testing.allocator);
@@ -1769,7 +1769,7 @@ test "digest tag type count length hex and algorithm malformations are typed" {
 
     var algorithm_mutated = try makeFixture(std.testing.allocator, .{});
     defer algorithm_mutated.close(std.testing.allocator);
-    const algo_offset = tagDataOffset(&algorithm_mutated, algorithm_mutated.main, @intFromEnum(header.TagId.payloadsha256algo));
+    const algo_offset = tagDataOffset(&algorithm_mutated, algorithm_mutated.main, @backingInt(header.TagId.payloadsha256algo));
     setU32(algorithm_mutated.bytes, algo_offset, 7);
     var algorithm_report = try verifyPackage(std.testing.allocator, &algorithm_mutated, .{});
     defer algorithm_report.deinit(std.testing.allocator);
@@ -1844,10 +1844,10 @@ test "legacy signature candidates preserve standalone header ranges" {
     const main = try makeMinimalMain(std.testing.allocator);
     defer std.testing.allocator.free(main);
     var rpm = try assembleSignatureFixture(std.testing.allocator, main, &.{
-        .{ .tag = @intFromEnum(header.SigTagId.pgp), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
-        .{ .tag = @intFromEnum(header.SigTagId.gpg), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
-        .{ .tag = @intFromEnum(header.SigTagId.rsa), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
-        .{ .tag = @intFromEnum(header.SigTagId.dsa), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
+        .{ .tag = @backingInt(header.SigTagId.pgp), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
+        .{ .tag = @backingInt(header.SigTagId.gpg), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
+        .{ .tag = @backingInt(header.SigTagId.rsa), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
+        .{ .tag = @backingInt(header.SigTagId.dsa), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
     }, "payload");
     defer rpm.close(std.testing.allocator);
 
@@ -1899,12 +1899,12 @@ test "OPENPGP base64 arrays enumerate every entry and suppress legacy" {
     defer std.testing.allocator.free(main);
     var rpm = try assembleSignatureFixture(std.testing.allocator, main, &.{
         .{
-            .tag = @intFromEnum(header.SigTagId.openpgp),
+            .tag = @backingInt(header.SigTagId.openpgp),
             .typ = .string_array,
             .count = 2,
             .data = encoded,
         },
-        .{ .tag = @intFromEnum(header.SigTagId.pgp), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
+        .{ .tag = @backingInt(header.SigTagId.pgp), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
     }, "");
     defer rpm.close(std.testing.allocator);
 
@@ -1955,12 +1955,12 @@ test "malformed OPENPGP base64 and tag type do not suppress legacy" {
     defer std.testing.allocator.free(main);
     var malformed_base64 = try assembleSignatureFixture(std.testing.allocator, main, &.{
         .{
-            .tag = @intFromEnum(header.SigTagId.openpgp),
+            .tag = @backingInt(header.SigTagId.openpgp),
             .typ = .string_array,
             .count = 1,
             .data = "!!!\x00",
         },
-        .{ .tag = @intFromEnum(header.SigTagId.pgp), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
+        .{ .tag = @backingInt(header.SigTagId.pgp), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
     }, "");
     defer malformed_base64.close(std.testing.allocator);
     var base64_report = try verifySignatures(
@@ -1989,7 +1989,7 @@ test "malformed OPENPGP base64 and tag type do not suppress legacy" {
     defer std.testing.allocator.free(malformed_encoded);
     var malformed_openpgp = try assembleSignatureFixture(std.testing.allocator, main, &.{
         .{
-            .tag = @intFromEnum(header.SigTagId.openpgp),
+            .tag = @backingInt(header.SigTagId.openpgp),
             .typ = .string_array,
             .count = 1,
             .data = malformed_encoded,
@@ -2014,7 +2014,7 @@ test "malformed OPENPGP base64 and tag type do not suppress legacy" {
     defer std.testing.allocator.free(encoded);
     var wrong_type = try assembleSignatureFixture(std.testing.allocator, main, &.{
         .{
-            .tag = @intFromEnum(header.SigTagId.openpgp),
+            .tag = @backingInt(header.SigTagId.openpgp),
             .typ = .bin,
             .count = @intCast(encoded.len),
             .data = encoded,
@@ -2036,12 +2036,12 @@ test "RPM6 RESERVED and SHA3 suppress tags at legacy signature base" {
     defer std.testing.allocator.free(main);
     const md5: [16]u8 = @splat(0);
     var rpm = try assembleSignatureFixture(std.testing.allocator, main, &.{
-        .{ .tag = @intFromEnum(header.SigTagId.rsa), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
-        .{ .tag = @intFromEnum(header.SigTagId.sha3_256), .typ = .string, .count = 1, .data = "0000000000000000000000000000000000000000000000000000000000000000\x00" },
-        .{ .tag = @intFromEnum(header.SigTagId.reserved), .typ = .bin, .count = 1, .data = "\x00" },
-        .{ .tag = @intFromEnum(header.SigTagId.pgp), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
-        .{ .tag = @intFromEnum(header.SigTagId.md5), .typ = .bin, .count = md5.len, .data = &md5 },
-        .{ .tag = @intFromEnum(header.SigTagId.gpg), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
+        .{ .tag = @backingInt(header.SigTagId.rsa), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
+        .{ .tag = @backingInt(header.SigTagId.sha3_256), .typ = .string, .count = 1, .data = "0000000000000000000000000000000000000000000000000000000000000000\x00" },
+        .{ .tag = @backingInt(header.SigTagId.reserved), .typ = .bin, .count = 1, .data = "\x00" },
+        .{ .tag = @backingInt(header.SigTagId.pgp), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
+        .{ .tag = @backingInt(header.SigTagId.md5), .typ = .bin, .count = md5.len, .data = &md5 },
+        .{ .tag = @backingInt(header.SigTagId.gpg), .typ = .bin, .count = signature_packet.len, .data = signature_packet },
     }, "payload");
     defer rpm.close(std.testing.allocator);
 
@@ -2081,7 +2081,7 @@ test "mixed RPM6 signatures retain no-key bad and verified outcomes" {
     defer std.testing.allocator.free(encoded);
     var rpm = try assembleSignatureFixture(std.testing.allocator, main, &.{
         .{
-            .tag = @intFromEnum(header.SigTagId.openpgp),
+            .tag = @backingInt(header.SigTagId.openpgp),
             .typ = .string_array,
             .count = 3,
             .data = encoded,
@@ -2135,7 +2135,7 @@ test "a verified candidate names the key that validated it" {
     defer std.testing.allocator.free(encoded);
     var rpm = try assembleSignatureFixture(std.testing.allocator, main, &.{
         .{
-            .tag = @intFromEnum(header.SigTagId.openpgp),
+            .tag = @backingInt(header.SigTagId.openpgp),
             .typ = .string_array,
             .count = 2,
             .data = encoded,
@@ -2145,7 +2145,7 @@ test "a verified candidate names the key that validated it" {
 
     // A decoy blob sits first so a reported index of 1 can only come from
     // actually matching, not from defaulting to the first entry.
-    const decoy = [_]u8{0xff} ** 8;
+    const decoy: [8]u8 = @splat(0xff);
     const keys = [_][]const u8{ &decoy, &generated.key_packet };
     var report = try verifySignatures(std.testing.allocator, &rpm, .{}, &keys);
     defer report.deinit(std.testing.allocator);
@@ -2186,7 +2186,7 @@ test "an unmatched key set yields no signer at all" {
     defer std.testing.allocator.free(encoded);
     var rpm = try assembleSignatureFixture(std.testing.allocator, main, &.{
         .{
-            .tag = @intFromEnum(header.SigTagId.openpgp),
+            .tag = @backingInt(header.SigTagId.openpgp),
             .typ = .string_array,
             .count = 1,
             .data = encoded,
@@ -2207,7 +2207,7 @@ test "verifiedSigner refuses to pick between disagreeing keys" {
     var first: SignatureCandidate = makeSignatureCandidate(
         .openpgp,
         .header_payload,
-        @intFromEnum(header.SigTagId.openpgp),
+        @backingInt(header.SigTagId.openpgp),
         0,
         true,
         .verified,

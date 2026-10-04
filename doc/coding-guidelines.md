@@ -14,8 +14,10 @@ The public package boundary is the `rpmz` module registered with
 - `abi/internal.zig` is a private transitional cross-module ABI. It may use
   `callconv(.c)` or `extern` declarations for internal linkage, but it is not
   installed, documented, or part of the public Zig package.
-- Component-private headers are permitted only for remaining `@cImport`
-  shims. Prefer replacing those imports with canonical Zig declarations.
+- Component-private headers are permitted only for narrow translated C
+  bindings. `build/c_bindings.zig` retains each source's separate translation
+  unit and macros using the pinned `translate-c` dependency; generated headers
+  stay private. Prefer replacing bindings with canonical Zig declarations.
 
 The remaining tracked headers are private and intentionally narrow:
 

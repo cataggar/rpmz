@@ -132,7 +132,7 @@ var injected_reset_failure: ?ResetFailure = null;
 var injected_partial_download_failure: ?PartialDownloadFailure = null;
 var injected_download_error_failure: ?DownloadErrorFailure = null;
 var suppress_test_info_logs = false;
-var sync_stage_counts = [_]usize{0} ** 3;
+var sync_stage_counts: [3]usize = @splat(0);
 
 const repomd_primary = "primary";
 const repomd_filelists = "filelists";
@@ -153,7 +153,7 @@ const default_skip_updateinfo = 0;
 const default_skip_other = 0;
 
 const DownloadProgressData = struct {
-    text: [1024]u8 = [_]u8{0} ** 1024,
+    text: [1024]u8 = @splat(0),
     previous_time: std.c.time_t = 0,
 };
 
@@ -255,7 +255,7 @@ fn injectScanFailure(stage: ScanFailureStage) bool {
 
 fn syncFd(fd: c_int, stage: SyncFailureStage) u32 {
     if (builtin.is_test) {
-        sync_stage_counts[@intFromEnum(stage)] += 1;
+        sync_stage_counts[@backingInt(stage)] += 1;
         if (injected_sync_failure) |*failure| {
             if (!failure.triggered and failure.stage == stage) {
                 failure.triggered = true;
@@ -295,7 +295,7 @@ fn injectPartialDownloadFailure(url: []const u8, fd: c_int) ?u32 {
         const written = std.c.write(fd, failure.bytes.ptr, failure.bytes.len);
         if (written < 0) return systemError();
         if (written != failure.bytes.len)
-            return systemErrorFrom(@intFromEnum(std.c.E.IO));
+            return systemErrorFrom(@backingInt(std.c.E.IO));
         failure.remaining -= 1;
         failure.triggered += 1;
         return errors.ERROR_TDNF_REPO_PERFORM;
@@ -612,7 +612,7 @@ fn pinPath(path_z: [*:0]const u8, output: *PinnedPath) u32 {
         if (index == 0) "/" else trimmed[0..index]
     else
         ".";
-    const parent_z = std.heap.c_allocator.dupeZ(u8, parent) catch
+    const parent_z = std.heap.c_allocator.dupeSentinel(u8, parent, 0) catch
         return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer std.heap.c_allocator.free(parent_z);
     var parent_fd: c_int = -1;
@@ -761,7 +761,7 @@ fn statPinned(path_z: [*:0]const u8, output: *Stat) u32 {
         return systemError();
     }
     if (output.mode & mode_type_mask != mode_regular)
-        return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+        return systemErrorFrom(@backingInt(std.c.E.LOOP));
     return 0;
 }
 
@@ -782,7 +782,7 @@ fn statPinnedForHandle(
         output,
     ) != 0) return systemError();
     if (output.mode & mode_type_mask != mode_regular)
-        return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+        return systemErrorFrom(@backingInt(std.c.E.LOOP));
     return 0;
 }
 
@@ -793,7 +793,7 @@ fn regularPathExistsForHandle(
 ) u32 {
     var stat_buf = std.mem.zeroes(Stat);
     const result = statPinnedForHandle(handle, path_z, &stat_buf);
-    if (result == systemErrorFrom(@intFromEnum(std.c.E.NOENT))) {
+    if (result == systemErrorFrom(@backingInt(std.c.E.NOENT))) {
         exists.* = false;
         return 0;
     }
@@ -886,8 +886,8 @@ fn statRegularFd(fd: c_int, output: *Stat) u32 {
 }
 
 fn repoOpenError(errno_value: c_int) ?u32 {
-    if (errno_value == @intFromEnum(std.c.E.NOENT) or
-        errno_value == @intFromEnum(std.c.E.LOOP))
+    if (errno_value == @backingInt(std.c.E.NOENT) or
+        errno_value == @backingInt(std.c.E.LOOP))
     {
         return null;
     }
@@ -1375,7 +1375,7 @@ fn readPinnedRegularAlloc(
     while (offset < bytes.len) {
         const got = std.c.read(fd, bytes.ptr + offset, bytes.len - offset);
         if (got < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+            std.c._errno().* == @backingInt(std.posix.E.INTR))
         {
             continue;
         }
@@ -1397,7 +1397,7 @@ fn readFdToStringArray(fd: c_int, output: *?[*]?[*:0]u8) u32 {
     while (getline(&line, &capacity, stream) >= 0) {
         const raw = std.mem.sliceTo(line.?, 0);
         const value = std.mem.trimEnd(u8, raw, "\r\n");
-        const value_z = std.heap.c_allocator.dupeZ(u8, value) catch
+        const value_z = std.heap.c_allocator.dupeSentinel(u8, value, 0) catch
             return errors.ERROR_TDNF_OUT_OF_MEMORY;
         defer std.heap.c_allocator.free(value_z);
         const result = TDNFAddStringArray(output, value_z.ptr);
@@ -1717,7 +1717,7 @@ fn downloadUrlToFd(
         &no_output,
     );
     if (result != 0) return result;
-    result = systemErrorFrom(@intFromEnum(std.c.E.NOENT));
+    result = systemErrorFrom(@backingInt(std.c.E.NOENT));
     if (repo.nRetries < 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
 
     var attempt: c_int = 0;
@@ -1825,17 +1825,18 @@ fn randomTempName(buffer: *[96]u8) u32 {
             0,
         );
         if (count < 0) {
-            if (std.c._errno().* == @intFromEnum(std.c.E.INTR)) continue;
+            if (std.c._errno().* == @backingInt(std.c.E.INTR)) continue;
             return systemError();
         }
-        if (count == 0) return systemErrorFrom(@intFromEnum(std.c.E.IO));
+        if (count == 0) return systemErrorFrom(@backingInt(std.c.E.IO));
         offset += @intCast(count);
     }
     const encoded = std.fmt.bytesToHex(random_bytes, .lower);
-    _ = std.fmt.bufPrintZ(
+    _ = std.fmt.bufPrintSentinel(
         buffer,
         ".rpmz-repository-{s}.tmp",
         .{&encoded},
+        0,
     ) catch return errors.ERROR_TDNF_INVALID_PARAMETER;
     return 0;
 }
@@ -1887,9 +1888,9 @@ fn secureDownloadAt(
         if (destination_stat.mode & mode_type_mask != mode_regular or
             destination_stat.nlink != 1)
         {
-            return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+            return systemErrorFrom(@backingInt(std.c.E.LOOP));
         }
-    } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
+    } else if (std.c._errno().* != @backingInt(std.c.E.NOENT)) {
         return systemError();
     }
 
@@ -1913,10 +1914,10 @@ fn secureDownloadAt(
             temp_named = true;
             break;
         }
-        if (std.c._errno().* != @intFromEnum(std.c.E.EXIST))
+        if (std.c._errno().* != @backingInt(std.c.E.EXIST))
             return systemError();
     }
-    if (temp_fd < 0) return systemErrorFrom(@intFromEnum(std.c.E.EXIST));
+    if (temp_fd < 0) return systemErrorFrom(@backingInt(std.c.E.EXIST));
     const temp_name_z: [*:0]const u8 = @ptrCast(&temp_name);
     defer {
         if (temp_fd >= 0) _ = std.c.close(temp_fd);
@@ -1943,9 +1944,9 @@ fn secureDownloadAt(
         if (destination_stat.mode & mode_type_mask != mode_regular or
             destination_stat.nlink != 1)
         {
-            return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+            return systemErrorFrom(@backingInt(std.c.E.LOOP));
         }
-    } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
+    } else if (std.c._errno().* != @backingInt(std.c.E.NOENT)) {
         return systemError();
     }
     if (std.c.renameat(
@@ -2142,8 +2143,8 @@ fn replacePinnedFileForHandle(
         &destination_stat,
     ) == 0) {
         if (destination_stat.mode & mode_type_mask != mode_regular)
-            return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
-    } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
+            return systemErrorFrom(@backingInt(std.c.E.LOOP));
+    } else if (std.c._errno().* != @backingInt(std.c.E.NOENT)) {
         return systemError();
     }
     if (std.c.renameat(
@@ -2185,7 +2186,7 @@ fn replaceFileForHandle(
         &source_stat,
     ) != 0) return systemError();
     if (source_stat.mode & mode_type_mask != mode_regular)
-        return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
+        return systemErrorFrom(@backingInt(std.c.E.LOOP));
     var destination_stat = std.mem.zeroes(Stat);
     if (std.c.statx(
         destination_path.parent_fd,
@@ -2195,8 +2196,8 @@ fn replaceFileForHandle(
         &destination_stat,
     ) == 0) {
         if (destination_stat.mode & mode_type_mask != mode_regular)
-            return systemErrorFrom(@intFromEnum(std.c.E.LOOP));
-    } else if (std.c._errno().* != @intFromEnum(std.c.E.NOENT)) {
+            return systemErrorFrom(@backingInt(std.c.E.LOOP));
+    } else if (std.c._errno().* != @backingInt(std.c.E.NOENT)) {
         return systemError();
     }
     if (std.c.renameat(
@@ -2243,7 +2244,7 @@ fn statChanged(
     var stat_buf = std.mem.zeroes(Stat);
     const result = statPinnedForHandle(handle, path, &stat_buf);
     if (result != 0) {
-        if (result == systemErrorFrom(@intFromEnum(std.c.E.NOENT))) {
+        if (result == systemErrorFrom(@backingInt(std.c.E.NOENT))) {
             needs_download.* = true;
             return 0;
         }
@@ -2276,7 +2277,7 @@ fn validateLocalSnapshot(
             }
             const fd = config.openPinnedRegular(value) catch |err| return switch (err) {
                 error.NotFound => systemErrorFrom(
-                    @intFromEnum(std.c.E.NOENT),
+                    @backingInt(std.c.E.NOENT),
                 ),
                 error.InvalidTargetPath,
                 error.UnsafeTargetPath,
@@ -2463,7 +2464,7 @@ fn getRepoMD(
     );
     if (result != 0) return result;
     var need_download = !repomd_exists;
-    var old_cookie = [_]u8{0} ** cookie_len;
+    var old_cookie: [cookie_len]u8 = @splat(0);
     if (handle.pArgs.?.nRefresh != 0) {
         if (repomd_exists) {
             result = calculateCookieForPath(
@@ -2515,7 +2516,7 @@ fn getRepoMD(
         if (result != 0) return result;
         replace_repomd = true;
         if (old_cookie[0] != 0) {
-            var new_cookie = [_]u8{0} ** cookie_len;
+            var new_cookie: [cookie_len]u8 = @splat(0);
             result = TDNFRepoMdCalculateCookieForFd(
                 temp_repomd_file.fd,
                 &new_cookie,
@@ -2717,11 +2718,11 @@ test "repositories production: alternate-root mirror stats and snapshots stay pi
     try cwd.createDirPath(io, cache);
     try cwd.createDirPath(io, repos);
 
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
-    const cache_z = try std.testing.allocator.dupeZ(u8, cache);
+    const cache_z = try std.testing.allocator.dupeSentinel(u8, cache, 0);
     defer std.testing.allocator.free(cache_z);
-    const repos_z = try std.testing.allocator.dupeZ(u8, repos);
+    const repos_z = try std.testing.allocator.dupeSentinel(u8, repos, 0);
     defer std.testing.allocator.free(repos_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2903,7 +2904,7 @@ fn encodeSignatureArmor(
     const encoded = try allocator.alloc(u8, encoded_len);
     defer allocator.free(encoded);
     _ = std.base64.standard.Encoder.encode(encoded, bytes);
-    var crc = std.hash.crc.Crc24Openpgp.init();
+    var crc = std.hash.crc.@"CRC-24/OPENPGP".init();
     crc.update(bytes);
     const value = crc.final();
     const crc_bytes = [_]u8{
@@ -3045,9 +3046,9 @@ test "repositories production: alternate-root metalink validates pinned target m
         .data = target_metalink,
     });
 
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
-    const cache_z = try std.testing.allocator.dupeZ(u8, cache);
+    const cache_z = try std.testing.allocator.dupeSentinel(u8, cache, 0);
     defer std.testing.allocator.free(cache_z);
     const remote_metalink_url = try std.fmt.allocPrintSentinel(
         std.testing.allocator,
@@ -3301,7 +3302,7 @@ test "repositories production: alternate-root repo GPG validates and removes onl
     try cwd.writeFile(io, .{ .sub_path = pubring, .data = key });
 
     const original_home = if (getenv("GNUPGHOME")) |value|
-        try std.testing.allocator.dupeZ(u8, std.mem.span(value))
+        try std.testing.allocator.dupeSentinel(u8, std.mem.span(value), 0)
     else
         null;
     defer {
@@ -3312,16 +3313,16 @@ test "repositories production: alternate-root repo GPG validates and removes onl
             _ = unsetenv("GNUPGHOME");
         }
     }
-    const gnupg_home_z = try std.testing.allocator.dupeZ(u8, gnupg_home);
+    const gnupg_home_z = try std.testing.allocator.dupeSentinel(u8, gnupg_home, 0);
     defer std.testing.allocator.free(gnupg_home_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
         setenv("GNUPGHOME", gnupg_home_z.ptr, 1),
     );
 
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
-    const cache_z = try std.testing.allocator.dupeZ(u8, cache);
+    const cache_z = try std.testing.allocator.dupeSentinel(u8, cache, 0);
     defer std.testing.allocator.free(cache_z);
     const remote_url = try std.fmt.allocPrintSentinel(
         std.testing.allocator,
@@ -3537,43 +3538,43 @@ test "repositories production: scan propagates syscall failures" {
         root.ptr,
         &setopts,
         .directory_open,
-        @intFromEnum(std.c.E.ACCES),
+        @backingInt(std.c.E.ACCES),
     );
     try expectProductionScanFailure(
         root.ptr,
         &setopts,
         .duplicate,
-        @intFromEnum(std.c.E.MFILE),
+        @backingInt(std.c.E.MFILE),
     );
     try expectProductionScanFailure(
         root.ptr,
         &setopts,
         .fdopendir,
-        @intFromEnum(std.c.E.MFILE),
+        @backingInt(std.c.E.MFILE),
     );
     try expectProductionScanFailure(
         root.ptr,
         &setopts,
         .readdir,
-        @intFromEnum(std.c.E.IO),
+        @backingInt(std.c.E.IO),
     );
     try expectProductionScanFailure(
         root.ptr,
         &setopts,
         .pre_stat,
-        @intFromEnum(std.c.E.IO),
+        @backingInt(std.c.E.IO),
     );
     try expectProductionScanFailure(
         root.ptr,
         &setopts,
         .entry_open,
-        @intFromEnum(std.c.E.ACCES),
+        @backingInt(std.c.E.ACCES),
     );
     try expectProductionScanFailure(
         root.ptr,
         &setopts,
         .post_stat,
-        @intFromEnum(std.c.E.IO),
+        @backingInt(std.c.E.IO),
     );
 }
 
@@ -3594,24 +3595,24 @@ test "repositories production: fdopendir error survives cleanup close failure" {
     var setopts = CnfNode{};
     injected_scan_failure = .{
         .stage = .fdopendir,
-        .errno_value = @intFromEnum(std.c.E.MFILE),
+        .errno_value = @backingInt(std.c.E.MFILE),
     };
     defer injected_scan_failure = null;
     injected_close_failure = .{
-        .errno_value = @intFromEnum(std.c.E.IO),
+        .errno_value = @backingInt(std.c.E.IO),
     };
     defer injected_close_failure = null;
     var fixture = testRepoHandle(root.ptr, &setopts);
     fixture.handle = .{ .pArgs = &fixture.args, .pConf = &fixture.conf };
     var repos: ?*RepoData = @ptrFromInt(@alignOf(RepoData));
     try std.testing.expectEqual(
-        systemErrorFrom(@intFromEnum(std.c.E.MFILE)),
+        systemErrorFrom(@backingInt(std.c.E.MFILE)),
         TDNFLoadRepoData(&fixture.handle, &repos),
     );
     try std.testing.expect(injected_scan_failure.?.triggered);
     try std.testing.expect(injected_close_failure.?.triggered);
     try std.testing.expectEqual(
-        @intFromEnum(std.c.E.MFILE),
+        @backingInt(std.c.E.MFILE),
         std.c._errno().*,
     );
     try std.testing.expectEqual(@as(?*RepoData, null), repos);
@@ -3681,8 +3682,8 @@ test "repositories production: scan skips fifo socket device and symlink promptl
         @as(std.c.dev_t, 0x103),
     ) != 0) {
         try std.testing.expect(
-            std.c._errno().* == @intFromEnum(std.c.E.PERM) or
-                std.c._errno().* == @intFromEnum(std.c.E.ACCES),
+            std.c._errno().* == @backingInt(std.c.E.PERM) or
+                std.c._errno().* == @backingInt(std.c.E.ACCES),
         );
     }
 
@@ -3906,7 +3907,7 @@ test "repositories production: metadata and snapshot downloads reject symlinks a
         try cwd.deleteFile(io, destination);
         try cwd.symLink(io, sentinel_absolute, destination, .{});
         try std.testing.expectEqual(
-            systemErrorFrom(@intFromEnum(std.c.E.LOOP)),
+            systemErrorFrom(@backingInt(std.c.E.LOOP)),
             secureDownload(
                 &handle,
                 &repo,
@@ -3951,8 +3952,8 @@ test "repositories production: metadata and snapshot downloads reject symlinks a
         false,
     );
     try std.testing.expect(
-        ancestor_result == systemErrorFrom(@intFromEnum(std.c.E.LOOP)) or
-            ancestor_result == systemErrorFrom(@intFromEnum(std.c.E.NOTDIR)),
+        ancestor_result == systemErrorFrom(@backingInt(std.c.E.LOOP)) or
+            ancestor_result == systemErrorFrom(@backingInt(std.c.E.NOTDIR)),
     );
     try std.testing.expectError(
         error.FileNotFound,
@@ -3977,9 +3978,10 @@ test "repositories production: metadata and snapshot downloads reject symlinks a
         );
         defer std.testing.allocator.free(destination);
 
-        const partial_url = try std.testing.allocator.dupeZ(
+        const partial_url = try std.testing.allocator.dupeSentinel(
             u8,
             "file:///injected-partial",
+            0,
         );
         defer std.testing.allocator.free(partial_url);
         var retry_urls = [_]?[*:0]u8{
@@ -4090,9 +4092,10 @@ test "repositories production: metadata and snapshot downloads reject symlinks a
         );
         defer std.testing.allocator.free(destination);
 
-        const failing_url = try std.testing.allocator.dupeZ(
+        const failing_url = try std.testing.allocator.dupeSentinel(
             u8,
             "file:///remote-write-failure",
+            0,
         );
         defer std.testing.allocator.free(failing_url);
         var retry_urls = [_]?[*:0]u8{
@@ -4185,9 +4188,10 @@ test "repositories production: metadata local fd and fsync failures never fall t
         .nSSLVerify = 1,
     };
 
-    const reset_failure_url = try std.testing.allocator.dupeZ(
+    const reset_failure_url = try std.testing.allocator.dupeSentinel(
         u8,
         "file:///reset-failure",
+        0,
     );
     defer std.testing.allocator.free(reset_failure_url);
     const fallback_url = try std.fmt.allocPrint(
@@ -4269,7 +4273,7 @@ test "repositories production: metadata local fd and fsync failures never fall t
         defer std.testing.allocator.free(destination);
         injected_reset_failure = .{
             .stage = stage,
-            .errno_value = @intFromEnum(std.c.E.IO),
+            .errno_value = @backingInt(std.c.E.IO),
         };
         defer injected_reset_failure = null;
         injected_partial_download_failure = .{
@@ -4285,7 +4289,7 @@ test "repositories production: metadata local fd and fsync failures never fall t
         };
         repo.ppszBaseUrls = &reset_base_urls;
         try std.testing.expectEqual(
-            systemErrorFrom(@intFromEnum(std.c.E.IO)),
+            systemErrorFrom(@backingInt(std.c.E.IO)),
             TDNFDownloadMetadata(&handle, &repo, destination.ptr, 0),
         );
         try std.testing.expect(injected_reset_failure.?.triggered);
@@ -4341,11 +4345,11 @@ test "repositories production: metadata local fd and fsync failures never fall t
         defer std.testing.allocator.free(destination);
         injected_sync_failure = .{
             .stage = entry.stage,
-            .errno_value = @intFromEnum(std.c.E.IO),
+            .errno_value = @backingInt(std.c.E.IO),
         };
         defer injected_sync_failure = null;
         try std.testing.expectEqual(
-            systemErrorFrom(@intFromEnum(std.c.E.IO)),
+            systemErrorFrom(@backingInt(std.c.E.IO)),
             TDNFDownloadMetadata(&handle, &repo, destination.ptr, 0),
         );
         try std.testing.expect(injected_sync_failure.?.triggered);
@@ -4417,24 +4421,24 @@ test "repositories production: cross-directory rename syncs both parents and nev
         defer std.testing.allocator.free(destination);
         try cwd.writeFile(io, .{ .sub_path = source, .data = "committed" });
 
-        sync_stage_counts = [_]usize{0} ** 3;
+        sync_stage_counts = @splat(0);
         injected_sync_failure = .{
             .stage = stage,
-            .errno_value = @intFromEnum(std.c.E.IO),
+            .errno_value = @backingInt(std.c.E.IO),
         };
         defer injected_sync_failure = null;
         try std.testing.expectEqual(
-            systemErrorFrom(@intFromEnum(std.c.E.IO)),
+            systemErrorFrom(@backingInt(std.c.E.IO)),
             replaceFile(source.ptr, destination.ptr),
         );
         try std.testing.expect(injected_sync_failure.?.triggered);
         try std.testing.expectEqual(
             @as(usize, 1),
-            sync_stage_counts[@intFromEnum(SyncFailureStage.source_directory)],
+            sync_stage_counts[@backingInt(SyncFailureStage.source_directory)],
         );
         try std.testing.expectEqual(
             @as(usize, 1),
-            sync_stage_counts[@intFromEnum(SyncFailureStage.destination_directory)],
+            sync_stage_counts[@backingInt(SyncFailureStage.destination_directory)],
         );
         try std.testing.expectError(
             error.FileNotFound,

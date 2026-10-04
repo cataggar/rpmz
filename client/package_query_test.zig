@@ -60,10 +60,11 @@ fn tmpPath(
     buffer: *[std.Io.Dir.max_path_bytes]u8,
     suffix: []const u8,
 ) [:0]const u8 {
-    return std.fmt.bufPrintZ(
+    return std.fmt.bufPrintSentinel(
         buffer,
         ".zig-cache/tmp/{s}/{s}",
         .{ &tmp.sub_path, suffix },
+        0,
     ) catch @panic("temporary path too long");
 }
 

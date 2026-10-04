@@ -1,14 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("time.h");
-    @cInclude("rpmdb.h");
-});
+const c = @import("c.repomd.query_native");
 
 const available_loader = @import("available_loader.zig");
 const directory_repository = @import("directory_repository.zig");
@@ -2826,7 +2819,7 @@ fn readSmallFd(
             @intCast(offset),
         );
         if (count < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+            std.c._errno().* == @backingInt(std.posix.E.INTR))
         {
             continue;
         }

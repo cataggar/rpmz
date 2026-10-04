@@ -5,9 +5,7 @@
 // of the License are located in the COPYING file of this distribution.
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("getopt.h");
-});
+const c = @import("c.tools.cli.lib.root");
 const argparse = @import("argparse.zig");
 const api = @import("api.zig");
 const apimisc = @import("apimisc.zig");

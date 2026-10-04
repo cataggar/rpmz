@@ -256,13 +256,13 @@ pub export fn jd_map_add_string(jd_opt: ?*JsonDump, key: [*:0]const u8, value_op
 
 pub export fn jd_map_add_int(jd_opt: ?*JsonDump, key: [*:0]const u8, value: c_int) c_int {
     var buf: [22]u8 = undefined;
-    const formatted = std.fmt.bufPrintZ(&buf, "{d}", .{value}) catch return -1;
+    const formatted = std.fmt.bufPrintSentinel(&buf, "{d}", .{value}, 0) catch return -1;
     return mapAddRaw(jd_opt, key, formatted);
 }
 
 pub export fn jd_map_add_int64(jd_opt: ?*JsonDump, key: [*:0]const u8, value: i64) c_int {
     var buf: [22]u8 = undefined;
-    const formatted = std.fmt.bufPrintZ(&buf, "{d}", .{value}) catch return -1;
+    const formatted = std.fmt.bufPrintSentinel(&buf, "{d}", .{value}, 0) catch return -1;
     return mapAddRaw(jd_opt, key, formatted);
 }
 
@@ -308,13 +308,13 @@ pub export fn jd_list_add_string(jd_opt: ?*JsonDump, value_opt: ?[*:0]const u8) 
 
 pub export fn jd_list_add_int(jd_opt: ?*JsonDump, value: c_int) c_int {
     var buf: [22]u8 = undefined;
-    const formatted = std.fmt.bufPrintZ(&buf, "{d}", .{value}) catch return -1;
+    const formatted = std.fmt.bufPrintSentinel(&buf, "{d}", .{value}, 0) catch return -1;
     return listAddRaw(jd_opt, formatted);
 }
 
 pub export fn jd_list_add_int64(jd_opt: ?*JsonDump, value: i64) c_int {
     var buf: [22]u8 = undefined;
-    const formatted = std.fmt.bufPrintZ(&buf, "{d}", .{value}) catch return -1;
+    const formatted = std.fmt.bufPrintSentinel(&buf, "{d}", .{value}, 0) catch return -1;
     return listAddRaw(jd_opt, formatted);
 }
 

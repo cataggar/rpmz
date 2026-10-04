@@ -142,8 +142,9 @@ normalization conventions that the old layer applied silently.
   `sudo chown -R "$(id -u):$(id -g)" .zig-cache out` first, and check the
   build actually ran.
 - `rm -rf out` destroys the `ztest` repo seed; reinstall before `ztest`.
-- Editing a remaining private `@cImport` shim may not invalidate a cached
-  translation; use a fresh cache when validating declaration changes.
+- Private C bindings are translated by the pinned `translate-c` dependency.
+  Their source-tagged headers and original macros live in
+  `build/c_bindings.zig`; preserve per-source and oracle-only include scope.
 - `zig build ztest` requires root and a prior `zig build install --prefix
   ./out`. It reports `33/33 steps` — the install steps in that graph are what
   guarantee the tested binary is freshly built (#250). A much smaller step

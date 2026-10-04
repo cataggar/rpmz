@@ -285,10 +285,11 @@ fn duplicateFdCloexec(fd: c_int) c_int {
 
 fn reopenPinnedFd(fd: c_int, mode: Mode) c_int {
     var path_buffer: [64]u8 = undefined;
-    const path = std.fmt.bufPrintZ(
+    const path = std.fmt.bufPrintSentinel(
         &path_buffer,
         "/proc/self/fd/{d}",
         .{fd},
+        0,
     ) catch return -1;
     return openat(
         linux.AT.FDCWD,
@@ -312,7 +313,7 @@ pub fn openAt(
         return error.InvalidPath;
     }
     const base = try installHooks();
-    const basename_z = allocator.dupeZ(u8, basename) catch
+    const basename_z = allocator.dupeSentinel(u8, basename, 0) catch
         return error.OutOfMemory;
     defer allocator.free(basename_z);
     const directory = try acquireDirectoryPin(allocator, dir_fd);
@@ -403,7 +404,7 @@ pub fn createExclusiveMainPinAt(
 ) Error!MainFdPin {
     if (!validBasename(basename)) return error.InvalidPath;
     _ = try installHooks();
-    const basename_z = allocator.dupeZ(u8, basename) catch
+    const basename_z = allocator.dupeSentinel(u8, basename, 0) catch
         return error.OutOfMemory;
     defer allocator.free(basename_z);
     const directory = try acquireDirectoryPin(allocator, dir_fd);
@@ -434,7 +435,7 @@ fn acquireDatabaseState(
 ) Error!*DatabaseState {
     var owns_directory = true;
     errdefer if (owns_directory) releaseDirectoryPin(directory);
-    const owned_basename = allocator.dupeZ(u8, basename) catch
+    const owned_basename = allocator.dupeSentinel(u8, basename, 0) catch
         return error.OutOfMemory;
     var owns_basename = true;
     defer if (owns_basename) allocator.free(owned_basename);
@@ -587,8 +588,8 @@ fn openVerifiedMainFd(
             break :blk reopenPinnedFd(probe, mode);
         }
         const probe_errno = std.c._errno().*;
-        if (probe_errno != @intFromEnum(std.posix.E.NOENT))
-            return if (probe_errno == @intFromEnum(std.posix.E.LOOP))
+        if (probe_errno != @backingInt(std.posix.E.NOENT))
+            return if (probe_errno == @backingInt(std.posix.E.LOOP))
                 error.UnsafeFile
             else
                 error.SyscallFailed;
@@ -601,7 +602,7 @@ fn openVerifiedMainFd(
         );
         if (created >= 0) break :blk created;
         if (!exclusive_create and
-            std.c._errno().* == @intFromEnum(std.posix.E.EXIST))
+            std.c._errno().* == @backingInt(std.posix.E.EXIST))
         {
             const raced_probe = openat(
                 directory_fd,
@@ -614,17 +615,17 @@ fn openVerifiedMainFd(
             _ = try regularSingleLinkStat(raced_probe);
             break :blk reopenPinnedFd(raced_probe, mode);
         }
-        return if (std.c._errno().* == @intFromEnum(std.posix.E.EXIST))
+        return if (std.c._errno().* == @backingInt(std.posix.E.EXIST))
             error.PathChanged
-        else if (std.c._errno().* == @intFromEnum(std.posix.E.LOOP))
+        else if (std.c._errno().* == @backingInt(std.posix.E.LOOP))
             error.UnsafeFile
         else
             error.SyscallFailed;
     };
     if (fd < 0) {
-        if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+        if (std.c._errno().* == @backingInt(std.posix.E.NOENT))
             return error.NotFound;
-        if (std.c._errno().* == @intFromEnum(std.posix.E.LOOP))
+        if (std.c._errno().* == @backingInt(std.posix.E.LOOP))
             return error.UnsafeFile;
         return error.SyscallFailed;
     }
@@ -1019,10 +1020,11 @@ fn verifyWalSidecarsAbsent(
 ) Error!void {
     inline for (.{ SidecarKind.wal, .shm }) |kind| {
         var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
-        const name = std.fmt.bufPrintZ(
+        const name = std.fmt.bufPrintSentinel(
             &name_buffer,
             "{s}-{s}",
             .{ basename, @tagName(kind) },
+            0,
         ) catch return error.InvalidPath;
         if (try statRelativeFdChecked(directory_fd, name.ptr) != null)
             return error.PathChanged;
@@ -1199,7 +1201,7 @@ fn sidecarKind(route: *const Route, relative: []const u8) ?SidecarKind {
 }
 
 fn sidecarIndex(kind: SidecarKind) usize {
-    return @intFromEnum(kind);
+    return @backingInt(kind);
 }
 
 fn trackedWalSidecar(
@@ -1260,9 +1262,9 @@ fn statRelativeFdChecked(
         &st,
     ) != 0) {
         return switch (std.c._errno().*) {
-            @intFromEnum(std.posix.E.NOENT) => null,
-            @intFromEnum(std.posix.E.LOOP),
-            @intFromEnum(std.posix.E.NOTDIR),
+            @backingInt(std.posix.E.NOENT) => null,
+            @backingInt(std.posix.E.LOOP),
+            @backingInt(std.posix.E.NOTDIR),
             => error.UnsafeFile,
             else => error.SyscallFailed,
         };
@@ -1400,7 +1402,7 @@ fn confinedOpen(
     const match = switch (classifyPathLocked(std.mem.span(raw_path))) {
         .match => |value| value,
         .rejected => {
-            setErrno(@intFromEnum(std.posix.E.ACCES));
+            setErrno(@backingInt(std.posix.E.ACCES));
             return -1;
         },
         .unrelated => return original(OpenFn, original_open)(
@@ -1412,7 +1414,7 @@ fn confinedOpen(
     const route = match.route;
     const kind = sidecarKind(route, match.relative);
     if (!routeActive(route) and !contextMatches(route)) {
-        setErrno(@intFromEnum(std.posix.E.ACCES));
+        setErrno(@backingInt(std.posix.E.ACCES));
         return -1;
     }
     // SQLite's process-shared unixShmNode requests O_RDWR|O_CREAT even when
@@ -1429,20 +1431,20 @@ fn confinedOpen(
         !routeCanWrite(route) and
         !read_only_shared_shm)
     {
-        setErrno(@intFromEnum(std.posix.E.ACCES));
+        setErrno(@backingInt(std.posix.E.ACCES));
         return -1;
     }
     const database = route.database;
     if (std.mem.eql(u8, match.relative, database.basename)) {
         const current = statRelative(route, database.basename) orelse {
-            setErrno(@intFromEnum(std.posix.E.STALE));
+            setErrno(@backingInt(std.posix.E.STALE));
             return -1;
         };
         if ((current.mode & s_ifmt) != s_ifreg or
             current.nlink != 1 or
             !Identity.fromStat(current).eql(database.main_identity))
         {
-            setErrno(@intFromEnum(std.posix.E.STALE));
+            setErrno(@backingInt(std.posix.E.STALE));
             return -1;
         }
         const owns_route = if (context) |call_context|
@@ -1452,7 +1454,7 @@ fn confinedOpen(
         if (!owns_route or
             ((flags & o_accmode) != o_rdonly and !routeCanWrite(route)))
         {
-            setErrno(@intFromEnum(std.posix.E.ACCES));
+            setErrno(@backingInt(std.posix.E.ACCES));
             return -1;
         }
         const source_fd = if ((flags & o_accmode) == o_rdonly)
@@ -1463,7 +1465,7 @@ fn confinedOpen(
         else
             route.write_main_fd;
         if (source_fd < 0) {
-            setErrno(@intFromEnum(std.posix.E.ACCES));
+            setErrno(@backingInt(std.posix.E.ACCES));
             return -1;
         }
         return duplicateFdCloexec(source_fd);
@@ -1471,7 +1473,7 @@ fn confinedOpen(
 
     var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
     if (match.relative.len >= name_buffer.len) {
-        setErrno(@intFromEnum(std.posix.E.NAMETOOLONG));
+        setErrno(@backingInt(std.posix.E.NAMETOOLONG));
         return -1;
     }
     @memcpy(name_buffer[0..match.relative.len], match.relative);
@@ -1488,7 +1490,7 @@ fn confinedOpen(
         switch (state.*) {
             .absent => {
                 if ((open_flags & o_creat) == 0) {
-                    setErrno(@intFromEnum(std.posix.E.NOENT));
+                    setErrno(@backingInt(std.posix.E.NOENT));
                     return -1;
                 }
                 open_flags |= o_excl;
@@ -1506,9 +1508,9 @@ fn confinedOpen(
         if (tracked) |state| {
             switch (state.*) {
                 .absent => if (std.c._errno().* ==
-                    @intFromEnum(std.posix.E.EXIST))
+                    @backingInt(std.posix.E.EXIST))
                 {
-                    setErrno(@intFromEnum(std.posix.E.STALE));
+                    setErrno(@backingInt(std.posix.E.STALE));
                 },
                 .untracked, .present => {},
             }
@@ -1517,7 +1519,7 @@ fn confinedOpen(
     }
     const st = regularSingleLinkStat(fd) catch {
         _ = std.c.close(fd);
-        setErrno(@intFromEnum(std.posix.E.LOOP));
+        setErrno(@backingInt(std.posix.E.LOOP));
         return -1;
     };
     const status_flags = std.c.fcntl(
@@ -1541,7 +1543,7 @@ fn confinedOpen(
             .present => |expected| {
                 if (expected.eql(identity)) return fd;
                 _ = std.c.close(fd);
-                setErrno(@intFromEnum(std.posix.E.STALE));
+                setErrno(@backingInt(std.posix.E.STALE));
                 return -1;
             },
         }
@@ -1561,13 +1563,13 @@ fn confinedAccess(
             if ((!routeActive(route) and !contextMatches(route)) or
                 (mode == w_ok and !routeCanWrite(route)))
             {
-                setErrno(@intFromEnum(std.posix.E.ACCES));
+                setErrno(@backingInt(std.posix.E.ACCES));
                 return -1;
             }
             return 0;
         },
         .rejected => {
-            setErrno(@intFromEnum(std.posix.E.ACCES));
+            setErrno(@backingInt(std.posix.E.ACCES));
             return -1;
         },
         .unrelated => {},
@@ -1575,7 +1577,7 @@ fn confinedAccess(
     const match = switch (classifyPathLocked(path)) {
         .match => |value| value,
         .rejected => {
-            setErrno(@intFromEnum(std.posix.E.ACCES));
+            setErrno(@backingInt(std.posix.E.ACCES));
             return -1;
         },
         .unrelated => return original(AccessFn, original_access)(
@@ -1584,12 +1586,12 @@ fn confinedAccess(
         ),
     };
     if (!routeActive(match.route) and !contextMatches(match.route)) {
-        setErrno(@intFromEnum(std.posix.E.ACCES));
+        setErrno(@backingInt(std.posix.E.ACCES));
         return -1;
     }
     const st = statRelative(match.route, match.relative) orelse return -1;
     if ((st.mode & s_ifmt) != s_ifreg or st.nlink != 1) {
-        setErrno(@intFromEnum(std.posix.E.LOOP));
+        setErrno(@backingInt(std.posix.E.LOOP));
         return -1;
     }
     if (mode == w_ok and !routeCanWrite(match.route)) {
@@ -1600,7 +1602,7 @@ fn confinedAccess(
             !context.?.handle.writable and kind == .shm and
             trackedWalSidecar(match.route, kind);
         if (!shared_reader) {
-            setErrno(@intFromEnum(std.posix.E.ACCES));
+            setErrno(@backingInt(std.posix.E.ACCES));
             return -1;
         }
     }
@@ -1613,7 +1615,7 @@ fn confinedUnlink(raw_path: [*:0]const u8) callconv(.c) c_int {
     const match = switch (classifyPathLocked(std.mem.span(raw_path))) {
         .match => |value| value,
         .rejected => {
-            setErrno(@intFromEnum(std.posix.E.ACCES));
+            setErrno(@backingInt(std.posix.E.ACCES));
             return -1;
         },
         .unrelated => return original(UnlinkFn, original_unlink)(raw_path),
@@ -1621,7 +1623,7 @@ fn confinedUnlink(raw_path: [*:0]const u8) callconv(.c) c_int {
     if ((!routeActive(match.route) and !contextMatches(match.route)) or
         !routeCanWrite(match.route))
     {
-        setErrno(@intFromEnum(std.posix.E.ACCES));
+        setErrno(@backingInt(std.posix.E.ACCES));
         return -1;
     }
     if (std.mem.eql(
@@ -1629,18 +1631,18 @@ fn confinedUnlink(raw_path: [*:0]const u8) callconv(.c) c_int {
         match.relative,
         match.route.database.basename,
     )) {
-        setErrno(@intFromEnum(std.posix.E.PERM));
+        setErrno(@backingInt(std.posix.E.PERM));
         return -1;
     }
     if (statRelative(match.route, match.relative)) |st| {
         if ((st.mode & s_ifmt) != s_ifreg or st.nlink != 1) {
-            setErrno(@intFromEnum(std.posix.E.LOOP));
+            setErrno(@backingInt(std.posix.E.LOOP));
             return -1;
         }
     }
     var name_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
     if (match.relative.len >= name_buffer.len) {
-        setErrno(@intFromEnum(std.posix.E.NAMETOOLONG));
+        setErrno(@backingInt(std.posix.E.NAMETOOLONG));
         return -1;
     }
     @memcpy(name_buffer[0..match.relative.len], match.relative);
@@ -1672,7 +1674,7 @@ fn confinedOpenDirectory(
     const route = switch (classifyDirectoryLocked(std.mem.span(raw_path))) {
         .match => |value| value,
         .rejected => {
-            setErrno(@intFromEnum(std.posix.E.ACCES));
+            setErrno(@backingInt(std.posix.E.ACCES));
             return -1;
         },
         .unrelated => return original(OpenDirectoryFn, original_open_directory)(
@@ -1681,7 +1683,7 @@ fn confinedOpenDirectory(
         ),
     };
     if (!routeActive(route) and !contextMatches(route)) {
-        setErrno(@intFromEnum(std.posix.E.ACCES));
+        setErrno(@backingInt(std.posix.E.ACCES));
         return -1;
     }
     const fd = duplicateFdCloexec(route.database.directory.fd);
@@ -1854,7 +1856,7 @@ fn vfsDelete(
     vfs_context = .{ .handle = handle, .shared_node = false };
     defer vfs_context = previous;
     if (confinedUnlink(@ptrCast(name)) != 0) {
-        if (std.c._errno().* == @intFromEnum(std.posix.E.NOENT))
+        if (std.c._errno().* == @backingInt(std.posix.E.NOENT))
             return c.SQLITE_OK;
         return c.SQLITE_IOERR_DELETE;
     }
@@ -2104,7 +2106,7 @@ test "confined SQLite rejects main replacement between pin and VFS open" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const dir_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2153,7 +2155,7 @@ test "pinned writable main disappearance never creates a replacement" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const dir_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2201,7 +2203,7 @@ test "failed concurrent open cannot release a live POSIX database lock" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const dir_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2270,8 +2272,8 @@ test "failed concurrent open cannot release a live POSIX database lock" {
         if (fd < 0) _exit(2);
         const rc = lockf(fd, 2, 0);
         const blocked = rc < 0 and
-            (std.c._errno().* == @intFromEnum(std.posix.E.AGAIN) or
-                std.c._errno().* == @intFromEnum(std.posix.E.ACCES));
+            (std.c._errno().* == @backingInt(std.posix.E.AGAIN) or
+                std.c._errno().* == @backingInt(std.posix.E.ACCES));
         _exit(if (blocked) 0 else 3);
     }
     var status: c_int = 0;
@@ -2287,7 +2289,7 @@ test "confined SQLite keeps WAL and journal sidecars no-follow" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const dir_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2398,7 +2400,7 @@ test "confined VFS rejects every non-allowlisted synthetic path" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const dir_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2437,7 +2439,7 @@ test "confined VFS rejects every non-allowlisted synthetic path" {
             confinedOpen(path.ptr, o_rdonly, 0),
         );
         try std.testing.expectEqual(
-            @intFromEnum(std.posix.E.ACCES),
+            @backingInt(std.posix.E.ACCES),
             std.c._errno().*,
         );
         try std.testing.expectEqual(
@@ -2445,7 +2447,7 @@ test "confined VFS rejects every non-allowlisted synthetic path" {
             confinedAccess(path.ptr, f_ok),
         );
         try std.testing.expectEqual(
-            @intFromEnum(std.posix.E.ACCES),
+            @backingInt(std.posix.E.ACCES),
             std.c._errno().*,
         );
         try std.testing.expectEqual(
@@ -2453,7 +2455,7 @@ test "confined VFS rejects every non-allowlisted synthetic path" {
             confinedUnlink(path.ptr),
         );
         try std.testing.expectEqual(
-            @intFromEnum(std.posix.E.ACCES),
+            @backingInt(std.posix.E.ACCES),
             std.c._errno().*,
         );
 
@@ -2503,7 +2505,7 @@ test "WAL connections share a stable CLOEXEC directory pin" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const dir_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2569,7 +2571,7 @@ test "WAL connections share a stable CLOEXEC directory pin" {
         std.c.F.GETFD,
     ));
     try std.testing.expectEqual(
-        @intFromEnum(std.posix.E.BADF),
+        @backingInt(std.posix.E.BADF),
         std.c._errno().*,
     );
 
@@ -2650,7 +2652,7 @@ test "WAL connections share a stable CLOEXEC directory pin" {
             confinedOpen(reader.handle.synthetic_path.ptr, o_rdwr, 0),
         );
         try std.testing.expectEqual(
-            @intFromEnum(std.posix.E.ACCES),
+            @backingInt(std.posix.E.ACCES),
             std.c._errno().*,
         );
         try std.testing.expectEqual(
@@ -2658,7 +2660,7 @@ test "WAL connections share a stable CLOEXEC directory pin" {
             confinedOpen(reader_journal.ptr, o_rdwr | o_creat, 0o644),
         );
         try std.testing.expectEqual(
-            @intFromEnum(std.posix.E.ACCES),
+            @backingInt(std.posix.E.ACCES),
             std.c._errno().*,
         );
     }
@@ -2727,7 +2729,7 @@ test "package-style writer churn stays bounded under RLIMIT_NOFILE" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const dir_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -2785,10 +2787,11 @@ test "package-style writer churn stays bounded under RLIMIT_NOFILE" {
         );
         defer writer.close();
         var sql_buffer: [96]u8 = undefined;
-        const sql = try std.fmt.bufPrintZ(
+        const sql = try std.fmt.bufPrintSentinel(
             &sql_buffer,
             "INSERT INTO packages VALUES ({d});",
             .{value},
+            0,
         );
         try std.testing.expectEqual(
             c.SQLITE_OK,
@@ -2808,7 +2811,7 @@ test "read-only WAL opens existing sidecars before and after a writer" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const db_path = try std.fmt.allocPrintSentinel(
         std.testing.allocator,
@@ -2848,7 +2851,7 @@ test "read-only WAL opens existing sidecars before and after a writer" {
             confinedOpen(reader_shm.ptr, flags, 0o644),
         );
         try std.testing.expectEqual(
-            @intFromEnum(std.posix.E.ACCES),
+            @backingInt(std.posix.E.ACCES),
             std.c._errno().*,
         );
     }
@@ -2857,7 +2860,7 @@ test "read-only WAL opens existing sidecars before and after a writer" {
         confinedUnlink(reader_shm.ptr),
     );
     try std.testing.expectEqual(
-        @intFromEnum(std.posix.E.ACCES),
+        @backingInt(std.posix.E.ACCES),
         std.c._errno().*,
     );
     try std.testing.expect(sidecarExists(dir_fd, "db.sqlite-shm"));
@@ -2955,7 +2958,7 @@ test "exclusive main lease rejects WAL and SHM that appear first" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const dir_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -3031,7 +3034,7 @@ test "read-only WAL identity-checks existing sidecars" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const db_path = try std.fmt.allocPrintSentinel(
         std.testing.allocator,
@@ -3080,7 +3083,7 @@ test "read-only WAL never creates absent sidecars" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const db_path = try std.fmt.allocPrintSentinel(
         std.testing.allocator,
@@ -3130,7 +3133,7 @@ test "read-only WAL never creates absent sidecars" {
             confinedOpen(path.ptr, o_rdwr | o_creat, 0o644),
         );
         try std.testing.expectEqual(
-            @intFromEnum(std.posix.E.ACCES),
+            @backingInt(std.posix.E.ACCES),
             std.c._errno().*,
         );
         try std.testing.expect(!sidecarExists(dir_fd, name));
@@ -3295,7 +3298,7 @@ test "outstanding statements retain VFS state until a successful close" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const dir_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -3353,7 +3356,7 @@ test "outstanding statements retain VFS state until a successful close" {
         std.c.fcntl(route_fd, std.c.F.GETFD),
     );
     try std.testing.expectEqual(
-        @intFromEnum(std.posix.E.BADF),
+        @backingInt(std.posix.E.BADF),
         std.c._errno().*,
     );
     const reused = std.c.fcntl(

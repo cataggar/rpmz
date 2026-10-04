@@ -61,7 +61,7 @@ pub const DecodedBlocks = struct {
     }
 };
 
-const Crc24 = std.hash.crc.Crc24Openpgp;
+const Crc24 = std.hash.crc.@"CRC-24/OPENPGP";
 
 /// Decode an ASCII-armored OpenPGP blob into raw packet bytes.
 ///

@@ -155,7 +155,7 @@ pub const Projection = struct {
         self: *const Projection,
         package: solver_model.PackageId,
     ) ?bool {
-        const index: usize = @intFromEnum(package);
+        const index: usize = @backingInt(package);
         if (index >= self.visible.len) return null;
         return self.visible[index];
     }
@@ -164,7 +164,7 @@ pub const Projection = struct {
         self: *const Projection,
         package: solver_model.PackageId,
     ) ?HiddenReason {
-        const index: usize = @intFromEnum(package);
+        const index: usize = @backingInt(package);
         if (index >= self.hidden_reasons.len) return null;
         return self.hidden_reasons[index];
     }
@@ -551,13 +551,13 @@ test "visibility copies an authoritative considered mask" {
     defer projection.deinit();
     considered[1] = true;
 
-    try std.testing.expect(projection.isVisible(@enumFromInt(0)).?);
-    try std.testing.expect(!projection.isVisible(@enumFromInt(1)).?);
+    try std.testing.expect(projection.isVisible(@fromBackingInt(@intCast(0))).?);
+    try std.testing.expect(!projection.isVisible(@fromBackingInt(@intCast(1))).?);
     try std.testing.expect(
-        projection.hiddenReason(@enumFromInt(1)).?.considered,
+        projection.hiddenReason(@fromBackingInt(@intCast(1))).?.considered,
     );
     try std.testing.expect(
-        !projection.hiddenReason(@enumFromInt(1)).?.snapshot,
+        !projection.hiddenReason(@fromBackingInt(@intCast(1))).?.snapshot,
     );
 }
 

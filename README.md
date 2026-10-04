@@ -12,7 +12,7 @@ ghr install cataggar/rpmz@v0.1.0
 ## Build from source
 
 ```sh
-zig build -Doptimize=ReleaseSafe install --prefix ./out
+zig build -Doptimize=safe install --prefix ./out
 ```
 
 ## Command model

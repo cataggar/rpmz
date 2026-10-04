@@ -48,7 +48,7 @@ const libc = struct {
 const ProgressData = struct {
     current_time: std.c.time_t = 0,
     previous_time: std.c.time_t = 0,
-    text: [64]u8 = [_]u8{0} ** 64,
+    text: [64]u8 = @splat(0),
 };
 
 const PinnedParent = struct {
@@ -89,7 +89,7 @@ fn freeCString(value: ?[*:0]u8) void {
 }
 
 fn allocateCString(value: []const u8, output: *?[*:0]u8) u32 {
-    const temporary = std.heap.c_allocator.dupeZ(u8, value) catch
+    const temporary = std.heap.c_allocator.dupeSentinel(u8, value, 0) catch
         return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer std.heap.c_allocator.free(temporary);
     return TDNFAllocateString(temporary.ptr, output);
@@ -148,11 +148,11 @@ fn openRegularFileAt(
     }
     if (!isRegular(stat)) {
         _ = c.close(fd);
-        return systemError(@intFromEnum(std.posix.E.LOOP));
+        return systemError(@backingInt(std.posix.E.LOOP));
     }
     if (stat.size == 0) {
         _ = c.close(fd);
-        return systemError(@intFromEnum(std.posix.E.IO));
+        return systemError(@backingInt(std.posix.E.IO));
     }
     output.* = fd;
     return 0;
@@ -186,7 +186,7 @@ fn openDirectoryPathNoFollow(
             return errors.ERROR_TDNF_INVALID_PARAMETER;
         }
         if (component.len > std.fs.max_name_bytes) {
-            return systemError(@intFromEnum(std.posix.E.NAMETOOLONG));
+            return systemError(@backingInt(std.posix.E.NAMETOOLONG));
         }
 
         var component_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
@@ -201,10 +201,10 @@ fn openDirectoryPathNoFollow(
             .NOFOLLOW = true,
         });
         if (next_fd < 0 and create and
-            errnoValue() == @intFromEnum(std.posix.E.NOENT))
+            errnoValue() == @backingInt(std.posix.E.NOENT))
         {
             if (std.c.mkdirat(current_fd, component_z, 0o755) != 0 and
-                errnoValue() != @intFromEnum(std.posix.E.EXIST))
+                errnoValue() != @backingInt(std.posix.E.EXIST))
             {
                 return systemError(errnoValue());
             }
@@ -231,7 +231,7 @@ fn openDirectoryPathTrusted(
     output: *c_int,
 ) u32 {
     if (path.len == 0) return errors.ERROR_TDNF_INVALID_PARAMETER;
-    const path_z = std.heap.c_allocator.dupeZ(u8, path) catch
+    const path_z = std.heap.c_allocator.dupeSentinel(u8, path, 0) catch
         return errors.ERROR_TDNF_OUT_OF_MEMORY;
     defer std.heap.c_allocator.free(path_z);
 
@@ -244,7 +244,7 @@ fn openDirectoryPathTrusted(
         output.* = fd;
         return 0;
     }
-    if (!create or errnoValue() != @intFromEnum(std.posix.E.NOENT)) {
+    if (!create or errnoValue() != @backingInt(std.posix.E.NOENT)) {
         return systemError(errnoValue());
     }
 
@@ -265,7 +265,7 @@ fn openDirectoryPathTrusted(
     while (components.next()) |component| {
         if (component.len == 0 or std.mem.eql(u8, component, ".")) continue;
         if (component.len > std.fs.max_name_bytes) {
-            return systemError(@intFromEnum(std.posix.E.NAMETOOLONG));
+            return systemError(@backingInt(std.posix.E.NAMETOOLONG));
         }
         var component_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
         @memcpy(component_buffer[0..component.len], component);
@@ -277,9 +277,9 @@ fn openDirectoryPathTrusted(
             .DIRECTORY = true,
             .CLOEXEC = true,
         });
-        if (next_fd < 0 and errnoValue() == @intFromEnum(std.posix.E.NOENT)) {
+        if (next_fd < 0 and errnoValue() == @backingInt(std.posix.E.NOENT)) {
             if (std.c.mkdirat(current_fd, component_z, 0o755) != 0 and
-                errnoValue() != @intFromEnum(std.posix.E.EXIST))
+                errnoValue() != @backingInt(std.posix.E.EXIST))
             {
                 return systemError(errnoValue());
             }
@@ -322,7 +322,7 @@ fn openDirectoryComponents(
             return errors.ERROR_TDNF_URL_INVALID;
         }
         if (component.len > std.fs.max_name_bytes) {
-            return systemError(@intFromEnum(std.posix.E.NAMETOOLONG));
+            return systemError(@backingInt(std.posix.E.NAMETOOLONG));
         }
         var component_buffer: [std.fs.max_name_bytes + 1]u8 = undefined;
         @memcpy(component_buffer[0..component.len], component);
@@ -337,10 +337,10 @@ fn openDirectoryComponents(
         });
         if (create and
             next_fd < 0 and
-            errnoValue() == @intFromEnum(std.posix.E.NOENT))
+            errnoValue() == @backingInt(std.posix.E.NOENT))
         {
             if (std.c.mkdirat(current_fd, component_z, 0o755) != 0 and
-                errnoValue() != @intFromEnum(std.posix.E.EXIST))
+                errnoValue() != @backingInt(std.posix.E.EXIST))
             {
                 return systemError(errnoValue());
             }
@@ -473,7 +473,7 @@ fn pinParent(path: []const u8, create: bool, output: *PinnedParent) u32 {
     const filename = if (slash) |index| trimmed[index + 1 ..] else trimmed;
     if (!isSafeComponent(filename)) return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (filename.len > std.fs.max_name_bytes) {
-        return systemError(@intFromEnum(std.posix.E.NAMETOOLONG));
+        return systemError(@backingInt(std.posix.E.NAMETOOLONG));
     }
     const parent = if (slash) |index|
         if (index == 0) "/" else trimmed[0..index]
@@ -515,7 +515,7 @@ fn pinParentUnderTrustedRoot(
     const filename = if (slash) |index| relative[index + 1 ..] else relative;
     if (!isSafeComponent(filename)) return errors.ERROR_TDNF_INVALID_PARAMETER;
     if (filename.len > std.fs.max_name_bytes) {
-        return systemError(@intFromEnum(std.posix.E.NAMETOOLONG));
+        return systemError(@backingInt(std.posix.E.NAMETOOLONG));
     }
 
     var root_fd: c_int = -1;
@@ -870,14 +870,14 @@ fn downloadPackage(
         else
             errors.ERROR_TDNF_URL_INVALID;
     if (filename.len > std.fs.max_name_bytes) {
-        return systemError(@intFromEnum(std.posix.E.NAMETOOLONG));
+        return systemError(@backingInt(std.posix.E.NAMETOOLONG));
     }
-    const filename_z = allocator.dupeZ(u8, filename) catch
+    const filename_z = allocator.dupeSentinel(u8, filename, 0) catch
         return errors.ERROR_TDNF_OUT_OF_MEMORY;
 
     var stat: Stat = undefined;
     if (statAt(directory_fd, filename_z, &stat) == 0) {
-        if (!isRegular(stat)) return systemError(@intFromEnum(std.posix.E.LOOP));
+        if (!isRegular(stat)) return systemError(@backingInt(std.posix.E.LOOP));
         if (stat.size != 0) {
             if (!builtin.is_test) {
                 common.log(LOG_INFO, "%s package already downloaded\n", .{package_name});
@@ -887,7 +887,7 @@ fn downloadPackage(
             }
             return 0;
         }
-    } else if (errnoValue() != @intFromEnum(std.posix.E.NOENT)) {
+    } else if (errnoValue() != @backingInt(std.posix.E.NOENT)) {
         return systemError(errnoValue());
     }
 
@@ -938,7 +938,7 @@ fn downloadFileFromRepoPinned(
                     errors.ERROR_TDNF_OUT_OF_MEMORY
                 else
                     errors.ERROR_TDNF_INVALID_PARAMETER;
-                const url_z = allocator.dupeZ(u8, url) catch
+                const url_z = allocator.dupeSentinel(u8, url, 0) catch
                     return errors.ERROR_TDNF_OUT_OF_MEMORY;
                 const result = downloadToPinnedParent(
                     handle,
@@ -1002,7 +1002,7 @@ pub export fn TDNFDownloadFileAt(
     defer parent.deinit();
     const name_bytes = std.mem.span(name);
     if (name_bytes.len > std.fs.max_name_bytes)
-        return systemError(@intFromEnum(std.posix.E.NAMETOOLONG));
+        return systemError(@backingInt(std.posix.E.NAMETOOLONG));
     @memcpy(parent.name[0..name_bytes.len], name_bytes);
     parent.name[name_bytes.len] = 0;
     return downloadToPinnedParent(
@@ -1476,7 +1476,7 @@ fn readTestFile(path: []const u8) ![]u8 {
 }
 
 fn zString(value: []const u8) ![:0]u8 {
-    return std.testing.allocator.dupeZ(u8, value);
+    return std.testing.allocator.dupeSentinel(u8, value, 0);
 }
 
 const RetryServer = struct {

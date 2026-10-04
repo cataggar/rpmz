@@ -30,7 +30,7 @@ jobs:
         with:
           ghr-version: v0.8.1
           tools: >-
-            cataggar/zig@v0.16.0
+            cataggar/zig@v0.17.0
             RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
       - uses: ./.github/actions/zig-cache
       - name: Get version
@@ -40,7 +40,7 @@ jobs:
             >> "$GITHUB_OUTPUT"
       - name: Build normal install layout
         run: |
-          zig build -Doptimize=ReleaseSafe \
+          zig build -j2 -Doptimize=safe \
             "-Dversion=${{ steps.version.outputs.version }}" \
             install --prefix ./release-install
       - name: Package binary archive, checksum, and SBOM

@@ -2,10 +2,7 @@ const std = @import("std");
 const metalink_xml = @import("metalink_xml");
 const plugin_metadata = @import("plugin_metadata");
 
-const c = @cImport({
-    @cInclude("stddef.h");
-    @cInclude("nodes.h");
-});
+const c = @import("c.plugins.builtin");
 
 extern fn TDNFAllocateMemory(usize, usize, [*c]?*anyopaque) u32;
 extern fn TDNFAllocateString([*c]const u8, [*c][*c]u8) u32;
@@ -216,7 +213,7 @@ fn readPinnedFd(fd: c_int, limit: usize) ![]u8 {
             @intCast(offset),
         );
         if (count < 0 and
-            std.c._errno().* == @intFromEnum(std.posix.E.INTR))
+            std.c._errno().* == @backingInt(std.posix.E.INTR))
         {
             continue;
         }
@@ -384,7 +381,7 @@ pub export fn BuiltinMetalinkRepoMDDownloadStart(
         } else |err| {
             switch (err) {
                 error.OpenFailed => {
-                    if (std.c._errno().* != @intFromEnum(std.posix.E.NOENT))
+                    if (std.c._errno().* != @backingInt(std.posix.E.NOENT))
                         return ERROR_TDNF_INVALID_REPO_FILE;
                     need_download = true;
                 },
@@ -567,7 +564,7 @@ fn installBaseUrls(repo: ?*anyopaque, urls: []const MetalinkUrl) u32 {
             return ERROR_TDNF_INVALID_REPO_FILE;
         }
         const base = url.value[0 .. url.value.len - repomd_path.len];
-        const base_z = allocator.dupeZ(u8, base) catch {
+        const base_z = allocator.dupeSentinel(u8, base, 0) catch {
             TDNFFreeStringArray(@ptrCast(array));
             return ERROR_TDNF_OUT_OF_MEMORY;
         };
@@ -612,7 +609,7 @@ fn checkMetalinkHashes(fd: c_int, hashes: []const MetalinkHash) u32 {
     for (hashes) |hash| {
         const kind = hashKind(hash.kind) orelse continue;
         if (kind.rank != best_rank) continue;
-        const value_z = allocator.dupeZ(u8, hash.value) catch
+        const value_z = allocator.dupeSentinel(u8, hash.value, 0) catch
             return ERROR_TDNF_OUT_OF_MEMORY;
         defer allocator.free(value_z);
         if (TDNFCheckHexDigest(value_z.ptr, @intCast(kind.len)) == 0) continue;

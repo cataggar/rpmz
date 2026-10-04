@@ -326,7 +326,7 @@ const RepositoryLoadRecord = struct {
 
 const LoadedRepository = struct {
     has_metadata: bool = false,
-    cookie_sha256: [32]u8 = [_]u8{0} ** 32,
+    cookie_sha256: [32]u8 = @splat(0),
     options: repository_metadata.available_repository_loader.CacheOptions = .{},
 };
 
@@ -449,7 +449,7 @@ fn mapDirectoryLoadError(err: anyerror) u32 {
     return switch (err) {
         error.OutOfMemory => error_codes.ERROR_TDNF_OUT_OF_MEMORY,
         error.DirectoryOpenFailed => error_codes.fromErrno(
-            @enumFromInt(repository_metadata.directory_repository.last_open_errno),
+            @fromBackingInt(@intCast(repository_metadata.directory_repository.last_open_errno)),
         ),
         error.RpmFileOpenFailed => error_codes.ERROR_TDNF_FILE_NOT_FOUND,
         else => error_codes.ERROR_TDNF_INVALID_REPO_FILE,
@@ -568,7 +568,7 @@ test "metadata cache boundaries normalize trailing separators and root" {
         std.testing.io,
         &base_buffer,
     )];
-    const base_z = try std.testing.allocator.dupeZ(u8, base);
+    const base_z = try std.testing.allocator.dupeSentinel(u8, base, 0);
     defer std.testing.allocator.free(base_z);
     const root_fd = std.c.open(base_z.ptr, .{
         .ACCMODE = .RDONLY,
@@ -717,7 +717,7 @@ fn loadRepository(
                 @ptrCast(@alignCast(raw_config))
             else
                 return error_codes.ERROR_TDNF_INVALID_PARAMETER;
-        var content_cookie = [_]u8{0} ** 32;
+        var content_cookie: [32]u8 = @splat(0);
         result = if (config != null and
             config.?.pinnedCacheDirFd() != null)
         blk: {
@@ -1843,7 +1843,7 @@ test "legacy repository visibility domain remains canonical" {
         "tdnf.test-sack-snapshot/v1",
         test_sack_snapshot_domain,
     );
-    const captured_id = "snapshot-v2-" ++ "0" ** 64;
+    const captured_id = "snapshot-v2-" ++ @as([64]u8, @splat('0'));
     var facts: [0]VisibilityFact = .{};
     const id = try visibilitySnapshotId(
         std.testing.allocator,
@@ -3391,7 +3391,7 @@ const TestSackSnapshot = extern struct {
     indexes_identity: usize = 0,
     solvable_count: u32 = 0,
     repository_count: u32 = 0,
-    digest: [32]u8 = [_]u8{0} ** 32,
+    digest: [32]u8 = @splat(0),
 };
 
 fn testSackSnapshot(
@@ -3728,7 +3728,7 @@ comptime {
 }
 
 fn testPlanData(architecture: []const u8) transaction_plan.Data {
-    const zero_sha = "0" ** 64;
+    const zero_sha = &@as([64]u8, @splat('0'));
     return .{
         .actions = &.{},
         .environment = .{

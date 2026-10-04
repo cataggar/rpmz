@@ -75,7 +75,7 @@ pub fn redactAlloc(allocator: Allocator, value: []const u8) Allocator.Error![]u8
     errdefer out.deinit(allocator);
 
     const body_start = if (parts.userinfo_end) |at| blk: {
-        try out.appendSlice(allocator, value[0 .. parts.authority_start.?]);
+        try out.appendSlice(allocator, value[0..parts.authority_start.?]);
         try out.appendSlice(allocator, marker);
         try out.append(allocator, '@');
         break :blk at + 1;
@@ -107,7 +107,7 @@ pub fn recordableAlloc(allocator: Allocator, value: []const u8) Allocator.Error!
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     if (parts.userinfo_end != null) {
-        try out.appendSlice(allocator, value[0 .. parts.authority_start.?]);
+        try out.appendSlice(allocator, value[0..parts.authority_start.?]);
     }
     try out.appendSlice(allocator, value[body_start..body_end]);
     return out.toOwnedSlice(allocator);

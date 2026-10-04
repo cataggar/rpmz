@@ -186,7 +186,7 @@ const PathList = struct {
             .source_len = source_len,
         };
         if (self.seen.contains(lookup)) return 0;
-        const owned = allocator.dupeZ(u8, path) catch
+        const owned = allocator.dupeSentinel(u8, path, 0) catch
             return errors.ERROR_TDNF_OUT_OF_MEMORY;
         const key = PathKey{
             .path = owned,
@@ -1021,7 +1021,7 @@ fn addInstallPackage(
     if (info.pbChecksum != null) {
         const len = digestLength(info.nChecksumType) orelse
             return ERROR_TDNF_CHECKSUM_MISMATCH;
-        var digest = [_]u8{0} ** 64;
+        var digest: [64]u8 = @splat(0);
         if (c.rpmz_rpm_file_digest(
             rpm_file,
             info.nChecksumType,
@@ -1360,12 +1360,12 @@ pub fn executeFixedOrderObserved(
     for (transaction.items) |item| {
         if (item == .erase) {
             const row = item.erase;
-            const name = allocator.dupeZ(u8, row.identity.name) catch
+            const name = allocator.dupeSentinel(u8, row.identity.name, 0) catch
                 return error.OutOfMemory;
             defer allocator.free(name);
             const evr = try fixedEvrAlloc(row.identity);
             defer allocator.free(evr);
-            const arch = allocator.dupeZ(u8, row.identity.arch) catch
+            const arch = allocator.dupeSentinel(u8, row.identity.arch, 0) catch
                 return error.OutOfMemory;
             defer allocator.free(arch);
             const rc = recordItem(
@@ -2415,13 +2415,13 @@ fn removedPackageArguments(
         return error.InvalidHeader;
     const name = (header.getStringChecked(.name) catch
         return error.InvalidHeader) orelse return error.InvalidHeader;
-    const owned_name = allocator.dupeZ(u8, name) catch
+    const owned_name = allocator.dupeSentinel(u8, name, 0) catch
         return error.OutOfMemory;
     errdefer allocator.free(owned_name);
     const nevra = (header.allocNevra(allocator) catch
         return error.OutOfMemory) orelse return error.InvalidHeader;
     defer allocator.free(nevra);
-    const owned_nevra = allocator.dupeZ(u8, nevra) catch
+    const owned_nevra = allocator.dupeSentinel(u8, nevra, 0) catch
         return error.OutOfMemory;
     return .{
         .name = owned_name,
@@ -3444,9 +3444,10 @@ const PinnedTransactionTarget = struct {
         var guard = acquired_guard;
         errdefer guard.deinit();
         const args = rpmz.pArgs orelse return error.InvalidTarget;
-        const pinned_root = allocator.dupeZ(
+        const pinned_root = allocator.dupeSentinel(
             u8,
             guard.config().installRoot(),
+            0,
         ) catch return error.OutOfMemory;
         errdefer allocator.free(pinned_root);
         const original_config = rpmz.pRpmConfig;
@@ -3852,15 +3853,15 @@ fn transactionViewAllocationFailureCase(test_allocator: std.mem.Allocator) !void
 test "transaction ABI entry points retain C calling convention" {
     try std.testing.expectEqual(
         std.builtin.CallingConvention.c,
-        @typeInfo(@TypeOf(rpmExecTransaction)).@"fn".calling_convention,
+        @typeInfo(@TypeOf(rpmExecTransaction)).@"fn".attrs.@"callconv",
     );
     try std.testing.expectEqual(
         std.builtin.CallingConvention.c,
-        @typeInfo(@TypeOf(rpmExecHistoryTransaction)).@"fn".calling_convention,
+        @typeInfo(@TypeOf(rpmExecHistoryTransaction)).@"fn".attrs.@"callconv",
     );
     try std.testing.expectEqual(
         std.builtin.CallingConvention.c,
-        @typeInfo(@TypeOf(runTransactionNative)).@"fn".calling_convention,
+        @typeInfo(@TypeOf(runTransactionNative)).@"fn".attrs.@"callconv",
     );
 }
 
@@ -4681,16 +4682,17 @@ test "normal preparation mutation probes hold the replay target lock" {
         &.{ base, "locks" },
     );
     defer std.testing.allocator.free(lock_directory);
-    const lock_directory_z = try std.testing.allocator.dupeZ(
+    const lock_directory_z = try std.testing.allocator.dupeSentinel(
         u8,
         lock_directory,
+        0,
     );
     defer std.testing.allocator.free(lock_directory_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
         std.c.chmod(lock_directory_z.ptr, 0o700),
     );
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
 
     var normal_config = try txn_config.TxnConfig.init(
@@ -4761,16 +4763,17 @@ test "normal target binds config only from stable caller storage" {
         &.{ base, "locks" },
     );
     defer std.testing.allocator.free(lock_directory);
-    const lock_directory_z = try std.testing.allocator.dupeZ(
+    const lock_directory_z = try std.testing.allocator.dupeSentinel(
         u8,
         lock_directory,
+        0,
     );
     defer std.testing.allocator.free(lock_directory_z);
     try std.testing.expectEqual(
         @as(c_int, 0),
         std.c.chmod(lock_directory_z.ptr, 0o700),
     );
-    const root_z = try std.testing.allocator.dupeZ(u8, root);
+    const root_z = try std.testing.allocator.dupeSentinel(u8, root, 0);
     defer std.testing.allocator.free(root_z);
 
     var config = try txn_config.TxnConfig.init(std.testing.allocator, root);

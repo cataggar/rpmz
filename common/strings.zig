@@ -6,11 +6,7 @@
 
 const std = @import("std");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("string.h");
-    @cInclude("stdlib.h");
-});
+const c = @import("c.common.strings");
 
 extern fn TDNFAllocateMemory(nNumElements: usize, nSize: usize, ppMemory: ?*?*anyopaque) u32;
 extern fn TDNFReAllocateMemory(nSize: usize, ppMemory: ?*?*anyopaque) u32;

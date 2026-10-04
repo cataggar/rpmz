@@ -98,9 +98,9 @@ def provide_system_packages(source_root: Path, destination: Path) -> set[str]:
 
     `zig-pkg/` is where the root build extracts what it resolved, so it is the
     closure this checkout actually built against, transitive entries included.
-    Every entry must be pinned by a manifest somewhere in that closure: an
-    unpinned package would mean the consumer's build depends on something no
-    manifest records.
+    Traverse manifest pins rather than every cached revision: updating a pin
+    leaves older extracted packages behind. Only the declared closure is
+    supplied, so an unpinned package cannot become a consumer dependency.
 
     Not every pinned dependency has to be present. `libsolv` is lazy and only
     the opt-in parity oracle asks for it, which is the point of the separate
@@ -111,24 +111,21 @@ def provide_system_packages(source_root: Path, destination: Path) -> set[str]:
         raise RuntimeError(
             "zig-pkg/ is missing; run a root build before the audit"
         )
-    entries = sorted(
-        entry for entry in extracted.iterdir() if entry.is_dir()
-    )
-    pinned = pinned_hashes(source_root / "build.zig.zon")
-    for entry in entries:
-        pinned |= pinned_hashes(entry / "build.zig.zon")
-
     provided = set()
-    for entry in entries:
-        shutil.copytree(entry, destination / entry.name, symlinks=True)
-        provided.add(entry.name)
-
-    unpinned = sorted(provided - pinned)
-    if unpinned:
-        raise RuntimeError(
-            "extracted closure contains unpinned packages: "
-            + ", ".join(unpinned)
-        )
+    pending = list(pinned_hashes(source_root / "build.zig.zon"))
+    while pending:
+        package_hash = pending.pop()
+        if package_hash in provided:
+            continue
+        entry = extracted / package_hash
+        if not entry.is_dir():
+            # Lazy oracle dependencies need not have been extracted.
+            if package_hash.startswith("libsolv-"):
+                continue
+            raise RuntimeError(f"pinned closure is missing {package_hash}")
+        shutil.copytree(entry, destination / package_hash, symlinks=True)
+        provided.add(package_hash)
+        pending.extend(pinned_hashes(entry / "build.zig.zon") - provided)
     for name in REQUIRED_DEPENDENCY_NAMES:
         if not any(entry.startswith(name + "-") for entry in provided):
             raise RuntimeError(
@@ -395,7 +392,7 @@ def main() -> None:
         environment = os.environ.copy()
         environment["ZIG_GLOBAL_CACHE_DIR"] = str(global_cache)
         environment.pop("ZIG_LOCAL_CACHE_DIR", None)
-        # Zig 0.16's --system disables fetching and resolves every dependency
+        # Zig 0.17's --system disables fetching and resolves every dependency
         # from this directory alone. It holds exactly the closure pinned in the
         # project manifest, so a build that reached for anything else -- an
         # unpinned package, or a transitive dependency nobody declared --
@@ -404,6 +401,7 @@ def main() -> None:
             [
                 args.zig,
                 "build",
+                "-j2",
                 "check",
                 f"-Doptimize={args.optimize}",
                 "--system",
@@ -422,6 +420,7 @@ def main() -> None:
                 [
                     args.zig,
                     "build",
+                    "-j2",
                     "replay-export",
                     f"-Doptimize={args.optimize}",
                     "--prefix",

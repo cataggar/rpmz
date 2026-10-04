@@ -10,7 +10,7 @@ import subprocess
 import tarfile
 
 
-PRODUCT_DEPENDENCIES = ("sqlite", "tls", "zlua")
+PRODUCT_DEPENDENCIES = ("sqlite", "tls", "zlua", "translate_c")
 
 
 def dependency_hashes(manifest):
@@ -109,16 +109,15 @@ def main():
             [
                 args.zig,
                 "build",
+                "-j2",
                 "--system",
                 str(system_packages),
-                "-Doptimize=ReleaseSafe",
+                "-Doptimize=safe",
                 "install",
                 "--prefix",
                 str(scratch / "out"),
                 "--cache-dir",
                 str(scratch / "local-cache"),
-                "--global-cache-dir",
-                str(scratch / "global-cache"),
             ],
             cwd=root,
             env=environment,

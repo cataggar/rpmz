@@ -14,20 +14,20 @@ pub const Literal = enum(u64) {
     _,
 
     pub fn init(package_id: solver_model.PackageId, positive_value: bool) Literal {
-        const package_value: u64 = @intFromEnum(package_id);
-        return @enumFromInt((package_value << 1) | @intFromBool(!positive_value));
+        const package_value: u64 = @backingInt(package_id);
+        return @fromBackingInt(@intCast((package_value << 1) | @intFromBool(!positive_value)));
     }
 
     pub fn package(self: Literal) solver_model.PackageId {
-        return @enumFromInt(@as(u32, @intCast(@intFromEnum(self) >> 1)));
+        return @fromBackingInt(@intCast(@as(u32, @intCast(@backingInt(self) >> 1))));
     }
 
     pub fn positive(self: Literal) bool {
-        return @intFromEnum(self) & 1 == 0;
+        return @backingInt(self) & 1 == 0;
     }
 
     pub fn negated(self: Literal) Literal {
-        return @enumFromInt(@intFromEnum(self) ^ 1);
+        return @fromBackingInt(@intCast(@backingInt(self) ^ 1));
     }
 };
 
@@ -120,7 +120,7 @@ pub const ReplacementKind = enum {
 
 pub const ReplacementState = struct {
     kind: ReplacementKind = .none,
-    job: solver_model.JobId = @enumFromInt(0),
+    job: solver_model.JobId = @fromBackingInt(@intCast(0)),
     force_best: bool = false,
 };
 
@@ -151,7 +151,7 @@ pub const OwnedFormula = struct {
         self: *const OwnedFormula,
         package_id: solver_model.PackageId,
     ) ?PackageState {
-        const package_index: usize = @intFromEnum(package_id);
+        const package_index: usize = @backingInt(package_id);
         if (package_index >= self.package_states.len) return null;
         return self.package_states[package_index];
     }
@@ -708,7 +708,7 @@ fn collectPackageStates(
                     }
                     state.replacement = .{
                         .kind = kind,
-                        .job = @enumFromInt(@as(u32, @intCast(job_index))),
+                        .job = @fromBackingInt(@intCast(@as(u32, @intCast(job_index)))),
                         .force_best = state.replacement.force_best or
                             job.flags.force_best,
                     };
@@ -730,7 +730,7 @@ fn collectPackageStates(
         var selected = try index.selection(allocator, job.selection);
         defer selected.deinit();
         for (selected.packages) |package_id| {
-            const package_index: usize = @intFromEnum(package_id);
+            const package_index: usize = @backingInt(package_id);
             if (state_kind != .multiversion and
                 index.universe.packages[package_index].installed == null)
             {
@@ -766,7 +766,7 @@ fn collectInstallCandidates(
         var selected = try index.selection(allocator, job.selection);
         defer selected.deinit();
         for (selected.packages) |package_id| {
-            install_candidates[@intFromEnum(package_id)] = true;
+            install_candidates[@backingInt(package_id)] = true;
         }
     }
 }
@@ -939,7 +939,7 @@ fn generateSameName(
             left.source.nevra.name,
         ) orelse continue;
         for (same_name_packages.items) |right_id| {
-            if (@intFromEnum(right_id) <= @intFromEnum(left.id)) continue;
+            if (@backingInt(right_id) <= @backingInt(left.id)) continue;
             const right = index.universe.package(right_id).?.*;
             if (isSource(right.source.nevra.arch) or
                 !std.mem.eql(u8, left.source.nevra.name, right.source.nevra.name))
@@ -949,8 +949,8 @@ fn generateSameName(
             if (left.installed != null and right.installed != null) continue;
             if (!index.canProvide(left) and !index.canProvide(right)) continue;
 
-            const left_state = package_states[@intFromEnum(left.id)];
-            const right_state = package_states[@intFromEnum(right.id)];
+            const left_state = package_states[@backingInt(left.id)];
+            const right_state = package_states[@backingInt(right.id)];
             if (left_state.multiversion and right_state.multiversion and
                 !sameEvra(left.source.*, right.source.*))
             {
@@ -984,9 +984,9 @@ fn generateJobs(
     defer literals.deinit();
 
     for (goal.jobs, 0..) |job, job_index| {
-        const job_id: solver_model.JobId = @enumFromInt(
+        const job_id: solver_model.JobId = @fromBackingInt(@intCast(
             @as(u32, @intCast(job_index)),
-        );
+        ));
         const disposition: ClauseDisposition = if (job.flags.weak)
             .relaxable_job
         else
@@ -1050,7 +1050,7 @@ fn generateJobs(
                     // job selects a newer same-name instance.
                     const installonly_eviction =
                         job.reason == .installonly_limit and
-                        package_states[@intFromEnum(erased.id)].multiversion;
+                        package_states[@backingInt(erased.id)].multiversion;
                     if (erased.installed != null and !installonly_eviction) {
                         var replacements = try index.matchingNames(
                             allocator,
@@ -1062,7 +1062,7 @@ fn generateJobs(
                                 replacement_id,
                             ) orelse unreachable;
                             if (replacement.installed != null or
-                                install_candidates[@intFromEnum(replacement_id)])
+                                install_candidates[@backingInt(replacement_id)])
                             {
                                 continue;
                             }
@@ -1439,11 +1439,11 @@ fn packageIdLessThan(
     left: solver_model.PackageId,
     right: solver_model.PackageId,
 ) bool {
-    return @intFromEnum(left) < @intFromEnum(right);
+    return @backingInt(left) < @backingInt(right);
 }
 
 fn literalLessThan(_: void, left: Literal, right: Literal) bool {
-    return @intFromEnum(left) < @intFromEnum(right);
+    return @backingInt(left) < @backingInt(right);
 }
 
 const checksum = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -1558,9 +1558,9 @@ const TestGraphBuilder = struct {
                 .install_order = repository.installed_states.items.len + 1,
             });
         }
-        return @enumFromInt(@as(u32, @intCast(
+        return @fromBackingInt(@intCast(@as(u32, @intCast(
             totalPackages(self.repositories.items) - 1,
-        )));
+        ))));
     }
 
     fn finish(
@@ -1728,7 +1728,7 @@ fn assignmentSatisfies(
         var satisfied = false;
         for (formula.clauseLiterals(clause)) |literal| {
             const selected = assignment &
-                (@as(usize, 1) << @as(u6, @intCast(@intFromEnum(literal.package())))) != 0;
+                (@as(usize, 1) << @as(u6, @intCast(@backingInt(literal.package())))) != 0;
             if (selected == literal.positive()) {
                 satisfied = true;
                 break;
@@ -1740,7 +1740,7 @@ fn assignmentSatisfies(
 }
 
 test "literal round trips package and polarity" {
-    const package_id: solver_model.PackageId = @enumFromInt(42);
+    const package_id: solver_model.PackageId = @fromBackingInt(@intCast(42));
     const positive = Literal.init(package_id, true);
     try std.testing.expectEqual(package_id, positive.package());
     try std.testing.expect(positive.positive());
@@ -1800,7 +1800,7 @@ test "global providers include explicit self and file capabilities" {
     );
     defer formula.deinit();
 
-    const consumer_id: solver_model.PackageId = @enumFromInt(3);
+    const consumer_id: solver_model.PackageId = @fromBackingInt(@intCast(3));
     var requirement_count: usize = 0;
     for (formula.clauses) |clause| {
         const dependency = switch (clause.origin) {
@@ -1821,7 +1821,7 @@ test "global providers include explicit self and file capabilities" {
             .job => |value| value,
             else => continue,
         };
-        if (@intFromEnum(job_id) <= 1) {
+        if (@backingInt(job_id) <= 1) {
             const job_literals = formula.clauseLiterals(clause);
             if (job_literals.len == 0) missing_file_job_count += 1;
         }
@@ -1863,9 +1863,9 @@ test "installed broken state and bad architecture match base boundaries" {
     );
     defer formula.deinit();
 
-    const installed_id: solver_model.PackageId = @enumFromInt(0);
-    const bad_available_id: solver_model.PackageId = @enumFromInt(1);
-    const consumer_id: solver_model.PackageId = @enumFromInt(2);
+    const installed_id: solver_model.PackageId = @fromBackingInt(@intCast(0));
+    const bad_available_id: solver_model.PackageId = @fromBackingInt(@intCast(1));
+    const consumer_id: solver_model.PackageId = @fromBackingInt(@intCast(2));
     try std.testing.expect(
         findClause(&formula, .requirement, installed_id) == null,
     );
@@ -1926,7 +1926,7 @@ test "only versioned unknown rpmlib dependencies use the system provider" {
     );
     defer formula.deinit();
 
-    const unversioned_id: solver_model.PackageId = @enumFromInt(0);
+    const unversioned_id: solver_model.PackageId = @fromBackingInt(@intCast(0));
     const missing_requirement = findClause(
         &formula,
         .requirement,
@@ -1937,7 +1937,7 @@ test "only versioned unknown rpmlib dependencies use the system provider" {
         formula.clauseLiterals(missing_requirement).len,
     );
     try std.testing.expect(
-        findClause(&formula, .requirement, @enumFromInt(1)) == null,
+        findClause(&formula, .requirement, @fromBackingInt(@intCast(1))) == null,
     );
 }
 
@@ -1965,8 +1965,8 @@ test "conflicts obsoletes and multiversion same-name rules retain origins" {
     defer graph.deinit();
 
     const jobs = [_]solver_model.Job{
-        .{ .action = .multiversion, .selection = .{ .package = @enumFromInt(3) } },
-        .{ .action = .multiversion, .selection = .{ .package = @enumFromInt(4) } },
+        .{ .action = .multiversion, .selection = .{ .package = @fromBackingInt(@intCast(3)) } },
+        .{ .action = .multiversion, .selection = .{ .package = @fromBackingInt(@intCast(4)) } },
     };
     var formula = try generateBase(
         std.testing.allocator,
@@ -1976,7 +1976,7 @@ test "conflicts obsoletes and multiversion same-name rules retain origins" {
     );
     defer formula.deinit();
 
-    const replacement_id: solver_model.PackageId = @enumFromInt(1);
+    const replacement_id: solver_model.PackageId = @fromBackingInt(@intCast(1));
     try std.testing.expect(findClause(
         &formula,
         .conflict,
@@ -1991,10 +1991,10 @@ test "conflicts obsoletes and multiversion same-name rules retain origins" {
         if (std.meta.activeTag(clause.origin) != .same_name) continue;
         const origin = clause.origin.same_name;
         try std.testing.expect(
-            !((origin.left == @as(solver_model.PackageId, @enumFromInt(3)) and
-                origin.right == @as(solver_model.PackageId, @enumFromInt(4))) or
-                (origin.left == @as(solver_model.PackageId, @enumFromInt(4)) and
-                    origin.right == @as(solver_model.PackageId, @enumFromInt(3)))),
+            !((origin.left == @as(solver_model.PackageId, @fromBackingInt(@intCast(3))) and
+                origin.right == @as(solver_model.PackageId, @fromBackingInt(@intCast(4)))) or
+                (origin.left == @as(solver_model.PackageId, @fromBackingInt(@intCast(4))) and
+                    origin.right == @as(solver_model.PackageId, @fromBackingInt(@intCast(3))))),
         );
     }
 }
@@ -2067,14 +2067,14 @@ test "mechanical jobs emit clauses and preserve package policy state" {
 
     const jobs = [_]solver_model.Job{
         .{ .action = .install, .selection = .{ .name = "requested" } },
-        .{ .action = .erase, .selection = .{ .package = @enumFromInt(0) } },
+        .{ .action = .erase, .selection = .{ .package = @fromBackingInt(@intCast(0)) } },
         .{
             .action = .lock,
-            .selection = .{ .package = @enumFromInt(2) },
+            .selection = .{ .package = @fromBackingInt(@intCast(2)) },
             .flags = .{ .weak = true },
         },
-        .{ .action = .user_installed, .selection = .{ .package = @enumFromInt(0) } },
-        .{ .action = .allow_uninstall, .selection = .{ .package = @enumFromInt(0) } },
+        .{ .action = .user_installed, .selection = .{ .package = @fromBackingInt(@intCast(0)) } },
+        .{ .action = .allow_uninstall, .selection = .{ .package = @fromBackingInt(@intCast(0)) } },
         .{
             .action = .erase,
             .selection = .{
@@ -2104,8 +2104,8 @@ test "mechanical jobs emit clauses and preserve package policy state" {
     );
     defer formula.deinit();
 
-    try std.testing.expect(formula.packageState(@enumFromInt(0)).?.user_installed);
-    try std.testing.expect(formula.packageState(@enumFromInt(0)).?.allow_uninstall);
+    try std.testing.expect(formula.packageState(@fromBackingInt(@intCast(0))).?.user_installed);
+    try std.testing.expect(formula.packageState(@fromBackingInt(@intCast(0))).?.allow_uninstall);
     var saw_requested = false;
     var saw_erased = false;
     var saw_replacement_block = false;
@@ -2113,20 +2113,20 @@ test "mechanical jobs emit clauses and preserve package policy state" {
     var system_job_failures: usize = 0;
     for (formula.clauses) |clause| {
         const job_id = switch (clause.origin) {
-            .job => |value| @intFromEnum(value),
+            .job => |value| @backingInt(value),
             else => continue,
         };
         const clause_literals = formula.clauseLiterals(clause);
         if (job_id == 0 and clause_literals.len == 1 and
-            clause_literals[0] == Literal.init(@enumFromInt(2), true))
+            clause_literals[0] == Literal.init(@fromBackingInt(@intCast(2)), true))
         {
             saw_requested = true;
         }
         if (job_id == 1 and clause_literals.len == 1) {
-            if (clause_literals[0] == Literal.init(@enumFromInt(0), false)) {
+            if (clause_literals[0] == Literal.init(@fromBackingInt(@intCast(0)), false)) {
                 saw_erased = true;
             }
-            if (clause_literals[0] == Literal.init(@enumFromInt(1), false)) {
+            if (clause_literals[0] == Literal.init(@fromBackingInt(@intCast(1)), false)) {
                 saw_replacement_block = true;
             }
         }

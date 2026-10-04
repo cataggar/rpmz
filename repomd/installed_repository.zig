@@ -206,10 +206,11 @@ pub const TestFixture = struct {
         buffer: *[std.Io.Dir.max_path_bytes]u8,
         name: []const u8,
     ) [:0]const u8 {
-        return std.fmt.bufPrintZ(
+        return std.fmt.bufPrintSentinel(
             buffer,
             ".zig-cache/tmp/{s}/{s}",
             .{ &self.tmp.sub_path, name },
+            0,
         ) catch @panic("fixture path too long");
     }
 };

@@ -358,7 +358,7 @@ const Transport = struct {
             return;
         }
 
-        const url = try self.allocator.dupeZ(u8, location);
+        const url = try self.allocator.dupeSentinel(u8, location, 0);
         defer self.allocator.free(url);
         const status = try download.client_download_to_fd(
             self.allocator,

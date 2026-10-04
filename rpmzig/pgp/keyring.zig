@@ -349,14 +349,14 @@ fn verifyRsaSig(
             const verdict = switch (hash_kind) {
                 .sha256 => stdrsa.PKCS1v1_5Signature.concatVerify(
                     comptime_mod_len,
-                    sig_buf,
+                    &sig_buf,
                     msg_parts,
                     pkey,
                     std.crypto.hash.sha2.Sha256,
                 ),
                 .sha512 => stdrsa.PKCS1v1_5Signature.concatVerify(
                     comptime_mod_len,
-                    sig_buf,
+                    &sig_buf,
                     msg_parts,
                     pkey,
                     std.crypto.hash.sha2.Sha512,

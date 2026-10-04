@@ -27,15 +27,15 @@ const MockRpmdb = struct {
 
     pub fn setState(cookie_bytes: []const u8, nevras: []const []const u8) !void {
         reset();
-        cookie_value = try allocator.dupeZ(u8, cookie_bytes);
+        cookie_value = try allocator.dupeSentinel(u8, cookie_bytes, 0);
         for (nevras) |nevra| {
-            try packages.append(allocator, try allocator.dupeZ(u8, nevra));
+            try packages.append(allocator, try allocator.dupeSentinel(u8, nevra, 0));
         }
     }
 
     pub fn cookie(root: ?[*:0]const u8) ![:0]u8 {
         _ = root;
-        return try allocator.dupeZ(u8, cookie_value orelse return error.NoCookie);
+        return try allocator.dupeSentinel(u8, cookie_value orelse return error.NoCookie, 0);
     }
 
     pub fn collectNevras(alloc: std.mem.Allocator, root: ?[*:0]const u8) ![][:0]u8 {
@@ -50,7 +50,7 @@ const MockRpmdb = struct {
         }
 
         for (packages.items) |pkg| {
-            try nevras.append(alloc, try alloc.dupeZ(u8, pkg));
+            try nevras.append(alloc, try alloc.dupeSentinel(u8, pkg, 0));
         }
         return try nevras.toOwnedSlice(alloc);
     }
@@ -59,7 +59,7 @@ const MockRpmdb = struct {
 const HistoryApi = api.Api(MockRpmdb);
 
 fn dbPath(tmp: *std.testing.TmpDir, path_buf: *[std.Io.Dir.max_path_bytes]u8) [:0]u8 {
-    return std.fmt.bufPrintZ(path_buf, ".zig-cache/tmp/{s}/history.db", .{&tmp.sub_path}) catch @panic("path too long");
+    return std.fmt.bufPrintSentinel(path_buf, ".zig-cache/tmp/{s}/history.db", .{&tmp.sub_path}, 0) catch @panic("path too long");
 }
 
 fn openDbFromCtx(ctx: *api.HistoryCtx) history_db.Database {

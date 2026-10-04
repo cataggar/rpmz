@@ -6,12 +6,7 @@
 
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("nodes.h");
-});
+const c = @import("c.llconf.nodes");
 
 fn duplicateBytes(bytes: []const u8) [*c]u8 {
     const raw = c.malloc(bytes.len + 1) orelse return null;

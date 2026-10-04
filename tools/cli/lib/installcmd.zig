@@ -8,10 +8,7 @@ const std = @import("std");
 const jsondump = @import("jsondump_abi");
 const common = @import("rpmz_common");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-});
+const c = @import("c.tools.cli.lib.installcmd");
 const jsonfmt = @import("jsonfmt.zig");
 const output = @import("output.zig");
 
@@ -697,7 +694,7 @@ pub export fn PrintAction(
     }
 
     var nColPercents = [_]c_int{ 20, 15, 20, 15, 10, 10 };
-    var nColWidths = [_]c_int{0} ** COL_COUNT;
+    var nColWidths: [COL_COUNT]c_int = @splat(0);
     dwError = output.GetColumnWidths(COL_COUNT, &nColPercents, &nColWidths);
     if (dwError != 0) {
         return dwError;
@@ -711,7 +708,7 @@ pub export fn PrintAction(
     defer freeOwnedString(&pszTotalDownloadSize);
 
     while (true) {
-        var szEpochVersionRelease = [_]u8{0} ** MAX_COL_LEN;
+        var szEpochVersionRelease: [MAX_COL_LEN]u8 = @splat(0);
 
         nTotalInstallSize += pPkgInfo.dwInstallSizeBytes;
         nTotalDownloadSize += pPkgInfo.dwDownloadSizeBytes;

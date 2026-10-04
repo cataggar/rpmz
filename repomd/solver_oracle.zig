@@ -364,7 +364,7 @@ fn buildPool(
             return error.InvalidModel;
         }
         for (packages, 0..) |package, index| {
-            package_solvids[@intFromEnum(package.id)] =
+            package_solvids[@backingInt(package.id)] =
                 repo.*.start + @as(c.Id, @intCast(index));
         }
         if (repository.kind == .installed) {
@@ -411,7 +411,7 @@ fn encodeJobs(
         how |= encoded_selection.flags;
         how |= jobFlags(job.flags);
         c.queue_push2(jobs, how, encoded_selection.what);
-        try state.job_ids.append(@enumFromInt(@as(u32, @intCast(index))));
+        try state.job_ids.append(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
     }
     const installonly_job_start = state.job_ids.items.len;
     for (policy.installonly_names, 0..) |name, name_index| {
@@ -435,7 +435,7 @@ fn encodeJobs(
             c.queue_push2(
                 jobs,
                 c.SOLVER_SOLVABLE | c.SOLVER_USERINSTALLED,
-                state.package_solvids[@intFromEnum(package.id)],
+                state.package_solvids[@backingInt(package.id)],
             );
             try state.job_ids.append(null);
         }
@@ -452,7 +452,7 @@ fn encodeJobs(
                 c.queue_push2(
                     jobs,
                     c.SOLVER_SOLVABLE | action,
-                    state.package_solvids[@intFromEnum(package.id)],
+                    state.package_solvids[@backingInt(package.id)],
                 );
                 try state.job_ids.append(null);
             }
@@ -486,7 +486,7 @@ fn collectEffectiveJobs(
         const how = jobs.elements[index * 2];
         const job_id = state.job_ids.items[index];
         const input_job = if (job_id) |id|
-            goal.jobs[@intFromEnum(id)]
+            goal.jobs[@backingInt(id)]
         else
             null;
         effective.* = .{
@@ -574,7 +574,7 @@ fn checkInstallonlyLimit(
                 count += 1;
             } else if (raw_type == c.SOLVER_TRANSACTION_ERASE) {
                 if (count == 0) return error.UnsupportedResult;
-                removed[@intFromEnum(package_id)] = true;
+                removed[@backingInt(package_id)] = true;
                 count -= 1;
             }
         }
@@ -594,7 +594,7 @@ fn checkInstallonlyLimit(
         ).init(arena);
         for (universe.packages) |package| {
             if (package.installed == null or
-                removed[@intFromEnum(package.id)] or
+                removed[@backingInt(package.id)] or
                 !std.mem.eql(u8, package.source.nevra.name, name))
             {
                 continue;
@@ -609,7 +609,7 @@ fn checkInstallonlyLimit(
         );
         for (candidates.items) |package_id| {
             if (excess == 0) break;
-            const package_index: usize = @intFromEnum(package_id);
+            const package_index: usize = @backingInt(package_id);
             removed[package_index] = true;
             installonly_evictions[package_index] = true;
             c.queue_push2(
@@ -645,7 +645,7 @@ fn installedOrderLessThan(
     if (left.rpmdb_hnum != right.rpmdb_hnum) {
         return left.rpmdb_hnum < right.rpmdb_hnum;
     }
-    return @intFromEnum(left_id) < @intFromEnum(right_id);
+    return @backingInt(left_id) < @backingInt(right_id);
 }
 
 fn hasInstalledName(
@@ -682,7 +682,7 @@ fn encodeSelection(
     return switch (selection) {
         .all => .{ .flags = c.SOLVER_SOLVABLE_ALL, .what = 0 },
         .package => |package_id| blk: {
-            const index: usize = @intFromEnum(package_id);
+            const index: usize = @backingInt(package_id);
             if (index >= state.package_solvids.len) return error.InvalidModel;
             break :blk .{
                 .flags = c.SOLVER_SOLVABLE,
@@ -958,7 +958,7 @@ fn collectActions(
 
         const decision = decisionReason(state, goal, solver, solvid);
         const installonly_eviction = kind == .erase and
-            installonly_evictions[@intFromEnum(package_id)];
+            installonly_evictions[@backingInt(package_id)];
         try actions.append(.{
             .package = package_id,
             .priors = try priors.toOwnedSlice(),
@@ -1027,7 +1027,7 @@ fn decisionReason(
             const job_index: usize = @intCast(@divTrunc(from, 2));
             if (job_index < state.job_ids.items.len) {
                 if (state.job_ids.items[job_index]) |job_id| {
-                    const input_index: usize = @intFromEnum(job_id);
+                    const input_index: usize = @backingInt(job_id);
                     if (input_index < goal.jobs.len) {
                         return .{
                             .reason = requestReason(goal.jobs[input_index].reason),
@@ -1164,7 +1164,7 @@ fn collectSkippedJobs(
                 return error.UnsupportedResult;
             }
             const job_id = state.job_ids.items[queue_index] orelse continue;
-            const job_index: usize = @intFromEnum(job_id);
+            const job_index: usize = @backingInt(job_id);
             if (job_index >= skipped.len) return error.UnsupportedResult;
             skipped[job_index] = true;
         }
@@ -1173,7 +1173,7 @@ fn collectSkippedJobs(
     var skipped_jobs = std.array_list.Managed(solver_model.JobId).init(arena);
     for (skipped, 0..) |is_skipped, job_index| {
         if (!is_skipped) continue;
-        try skipped_jobs.append(@enumFromInt(@as(u32, @intCast(job_index))));
+        try skipped_jobs.append(@fromBackingInt(@intCast(@as(u32, @intCast(job_index)))));
     }
     if (skipped_jobs.items.len == 0) return error.UnsupportedResult;
     return skipped_jobs.toOwnedSlice();
@@ -1282,7 +1282,7 @@ fn findProblemRelation(
 
     if (isJobRule(rule_type)) {
         const id = job_id orelse return null;
-        const index: usize = @intFromEnum(id);
+        const index: usize = @backingInt(id);
         if (index >= goal.jobs.len) return error.InvalidModel;
         const relation = switch (goal.jobs[index].selection) {
             .name => |name| metadata.Relation{ .name = name },
@@ -1337,7 +1337,7 @@ fn packageIdForSolvid(
 ) ?solver_model.PackageId {
     for (state.package_solvids, 0..) |candidate, index| {
         if (candidate == solvid) {
-            return @enumFromInt(@as(u32, @intCast(index)));
+            return @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         }
     }
     return null;
@@ -1438,7 +1438,7 @@ fn cloneOptionalString(
 }
 
 fn dupZ(arena: std.mem.Allocator, value: []const u8) SolveError![:0]const u8 {
-    return arena.dupeZ(u8, value) catch return error.OutOfMemory;
+    return arena.dupeSentinel(u8, value, 0) catch return error.OutOfMemory;
 }
 
 fn packageIdLessThan(
@@ -1446,31 +1446,31 @@ fn packageIdLessThan(
     left: solver_model.PackageId,
     right: solver_model.PackageId,
 ) bool {
-    return @intFromEnum(left) < @intFromEnum(right);
+    return @backingInt(left) < @backingInt(right);
 }
 
 fn solverFlagLessThan(_: void, left: SolverFlag, right: SolverFlag) bool {
-    return @intFromEnum(left) < @intFromEnum(right);
+    return @backingInt(left) < @backingInt(right);
 }
 
 fn actionLessThan(_: void, left: solver_model.Action, right: solver_model.Action) bool {
-    return @intFromEnum(left.package) < @intFromEnum(right.package);
+    return @backingInt(left.package) < @backingInt(right.package);
 }
 
 fn problemLessThan(_: void, left: solver_model.Problem, right: solver_model.Problem) bool {
-    if (@intFromEnum(left.kind) != @intFromEnum(right.kind)) {
-        return @intFromEnum(left.kind) < @intFromEnum(right.kind);
+    if (@backingInt(left.kind) != @backingInt(right.kind)) {
+        return @backingInt(left.kind) < @backingInt(right.kind);
     }
-    const left_package = if (left.package) |value| @intFromEnum(value) else std.math.maxInt(u32);
-    const right_package = if (right.package) |value| @intFromEnum(value) else std.math.maxInt(u32);
+    const left_package = if (left.package) |value| @backingInt(value) else std.math.maxInt(u32);
+    const right_package = if (right.package) |value| @backingInt(value) else std.math.maxInt(u32);
     if (left_package != right_package) return left_package < right_package;
-    const left_related = if (left.related_package) |value| @intFromEnum(value) else std.math.maxInt(u32);
-    const right_related = if (right.related_package) |value| @intFromEnum(value) else std.math.maxInt(u32);
+    const left_related = if (left.related_package) |value| @backingInt(value) else std.math.maxInt(u32);
+    const right_related = if (right.related_package) |value| @backingInt(value) else std.math.maxInt(u32);
     if (left_related != right_related) return left_related < right_related;
     const capability_order = optionalRelationOrder(left.capability, right.capability);
     if (capability_order != .eq) return capability_order == .lt;
-    const left_job = if (left.job) |value| @intFromEnum(value) else std.math.maxInt(u32);
-    const right_job = if (right.job) |value| @intFromEnum(value) else std.math.maxInt(u32);
+    const left_job = if (left.job) |value| @backingInt(value) else std.math.maxInt(u32);
+    const right_job = if (right.job) |value| @backingInt(value) else std.math.maxInt(u32);
     return left_job < right_job;
 }
 
@@ -1504,7 +1504,7 @@ fn optionalRelationOrder(
 fn relationOrder(left: metadata.Relation, right: metadata.Relation) std.math.Order {
     var order = std.mem.order(u8, left.name, right.name);
     if (order != .eq) return order;
-    order = std.math.order(@intFromEnum(left.comparison), @intFromEnum(right.comparison));
+    order = std.math.order(@backingInt(left.comparison), @backingInt(right.comparison));
     if (order != .eq) return order;
     order = optionalU32Order(left.epoch, right.epoch);
     if (order != .eq) return order;

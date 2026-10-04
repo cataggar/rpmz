@@ -138,7 +138,7 @@ fn setAmbientGpgHome(root: *harness.Root, import_repo_key: bool) !void {
     try root.tmp.dir.createDirPath(io, "gnupg");
     const home = try std.fs.path.join(root.allocator, &.{ root.path, "gnupg" });
     defer root.allocator.free(home);
-    const home_z = try root.allocator.dupeZ(u8, home);
+    const home_z = try root.allocator.dupeSentinel(u8, home, 0);
     defer root.allocator.free(home_z);
     try std.testing.expectEqual(
         @as(c_int, 0),

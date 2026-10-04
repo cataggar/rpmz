@@ -14,12 +14,7 @@ const replay_options = @import("replay_options.zig");
 const repo_config = @import("repo_config");
 const abi = @import("tdnf_internal_abi");
 const dispatcher = @import("dispatcher.zig");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-    @cInclude("string.h");
-    @cInclude("unistd.h");
-});
+const c = @import("c.tools.cli.main");
 
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
 extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, replace: c_int) c_int;
@@ -1071,10 +1066,11 @@ fn runAutomatic(argv: []const [*:0]const u8) u8 {
     };
 
     var helper_path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const helper_path = std.fmt.bufPrintZ(
+    const helper_path = std.fmt.bufPrintSentinel(
         &helper_path_buffer,
         "{s}/../libexec/rpmz/rpmz-auto",
         .{executable_directory},
+        0,
     ) catch {
         common.log(LOG_CRIT, "rpmz auto helper path is too long\n", .{});
         return 1;

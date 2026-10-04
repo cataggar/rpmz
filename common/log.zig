@@ -324,9 +324,7 @@ test "typed logging holds the stream lock across complete messages" {
         thread.* = null;
     }
 
-    var seen = [_][message_count]bool{
-        [_]bool{false} ** message_count,
-    } ** thread_count;
+    var seen: [thread_count][message_count]bool = @splat(@splat(false));
     var line_count: usize = 0;
     var lines = std.mem.splitScalar(u8, buffer.?[0..size], '\n');
     while (lines.next()) |line| {

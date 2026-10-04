@@ -17,12 +17,12 @@ const Tdnf = abi.Tdnf;
 
 const c = std.c;
 
-const EACCES: c_int = @intFromEnum(std.posix.E.ACCES);
-const EISDIR: c_int = @intFromEnum(std.posix.E.ISDIR);
-const ELOOP: c_int = @intFromEnum(std.posix.E.LOOP);
-const ENAMETOOLONG: c_int = @intFromEnum(std.posix.E.NAMETOOLONG);
-const ENOENT: c_int = @intFromEnum(std.posix.E.NOENT);
-const ENOTDIR: c_int = @intFromEnum(std.posix.E.NOTDIR);
+const EACCES: c_int = @backingInt(std.posix.E.ACCES);
+const EISDIR: c_int = @backingInt(std.posix.E.ISDIR);
+const ELOOP: c_int = @backingInt(std.posix.E.LOOP);
+const ENAMETOOLONG: c_int = @backingInt(std.posix.E.NAMETOOLONG);
+const ENOENT: c_int = @backingInt(std.posix.E.NOENT);
+const ENOTDIR: c_int = @backingInt(std.posix.E.NOTDIR);
 const LOG_CRIT: c_int = 2;
 
 const UtimeBuf = extern struct {
@@ -274,7 +274,7 @@ fn ensureDirectoryPathNoFollow(path_z: [*:0]const u8) u32 {
         name_buffer[component.len] = 0;
         const name: [*:0]const u8 = @ptrCast(&name_buffer);
         if (std.c.mkdirat(current, name, 0o755) != 0 and
-            errnoValue() != @intFromEnum(std.posix.E.EXIST))
+            errnoValue() != @backingInt(std.posix.E.EXIST))
         {
             return systemError(errnoValue());
         }
@@ -390,7 +390,7 @@ fn ensurePinnedCacheDirectory(
             name_buffer[name_bytes.len] = 0;
             const name: [*:0]const u8 = @ptrCast(&name_buffer);
             if (std.c.mkdirat(current, name, 0o755) != 0 and
-                errnoValue() != @intFromEnum(std.posix.E.EXIST))
+                errnoValue() != @backingInt(std.posix.E.EXIST))
             {
                 return systemError(errnoValue());
             }
@@ -1352,9 +1352,9 @@ test "alternate-root recursive cleanup never deletes conflicting host cache" {
         });
     }
 
-    const root_z = try testing.allocator.dupeZ(u8, root);
+    const root_z = try testing.allocator.dupeSentinel(u8, root, 0);
     defer testing.allocator.free(root_z);
-    const cache_z = try testing.allocator.dupeZ(u8, cache);
+    const cache_z = try testing.allocator.dupeSentinel(u8, cache, 0);
     defer testing.allocator.free(cache_z);
     const root_fd = std.c.open(root_z.ptr, .{
         .ACCMODE = .RDONLY,

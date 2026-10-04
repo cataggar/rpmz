@@ -349,9 +349,9 @@ pub fn parseBody(body: []const u8) SignatureParseError!Signature {
     const fixed_prefix_len = 4 + length_width;
     if (body.len < fixed_prefix_len) return error.TruncatedPacket;
 
-    const sig_type: SigType = @enumFromInt(body[1]);
-    const pk_algo: PkAlgorithm = @enumFromInt(body[2]);
-    const hash_algo: HashAlgorithm = @enumFromInt(body[3]);
+    const sig_type: SigType = @fromBackingInt(@intCast(body[1]));
+    const pk_algo: PkAlgorithm = @fromBackingInt(@intCast(body[2]));
+    const hash_algo: HashAlgorithm = @fromBackingInt(@intCast(body[3]));
     const hashed_sub_len = try readLength(body, 4, length_width);
 
     const hashed_end = std.math.add(usize, fixed_prefix_len, hashed_sub_len) catch
@@ -546,10 +546,10 @@ test "hashed wins over unhashed for keyId" {
 }
 
 test "v6 signature MPIs require canonical bit lengths" {
-    var body = [_]u8{0} ** 34;
+    var body: [34]u8 = @splat(0);
     body[0] = 6;
-    body[2] = @intFromEnum(PkAlgorithm.rsa_sign_and_encrypt);
-    body[3] = @intFromEnum(HashAlgorithm.sha256);
+    body[2] = @backingInt(PkAlgorithm.rsa_sign_and_encrypt);
+    body[3] = @backingInt(HashAlgorithm.sha256);
     body[14] = 16;
     body[32] = 8;
     body[33] = 0x80;
@@ -561,10 +561,10 @@ test "v6 signature MPIs require canonical bit lengths" {
         parseBody(&body),
     );
 
-    var v4_body = [_]u8{0} ** 13;
+    var v4_body: [13]u8 = @splat(0);
     v4_body[0] = 4;
-    v4_body[2] = @intFromEnum(PkAlgorithm.rsa_sign_and_encrypt);
-    v4_body[3] = @intFromEnum(HashAlgorithm.sha256);
+    v4_body[2] = @backingInt(PkAlgorithm.rsa_sign_and_encrypt);
+    v4_body[3] = @backingInt(HashAlgorithm.sha256);
     v4_body[11] = 7;
     v4_body[12] = 0x80;
     _ = try parseBody(&v4_body);

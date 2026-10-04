@@ -996,8 +996,8 @@ fn parseRepositories(scratch: Allocator, value: ?std.json.Value) ParseError![]co
 
 fn parseOutcome(value: ?std.json.Value) ParseError!SignatureOutcome {
     const text = try expectString(value);
-    inline for (@typeInfo(SignatureOutcome).@"enum".fields) |field| {
-        const outcome: SignatureOutcome = @enumFromInt(field.value);
+    inline for (@typeInfo(SignatureOutcome).@"enum".field_values) |field_value| {
+        const outcome: SignatureOutcome = @fromBackingInt(@intCast(field_value));
         if (std.mem.eql(u8, outcome.text(), text)) return outcome;
     }
     return error.InvalidSignature;
@@ -1071,12 +1071,12 @@ fn expectOptionalUint(comptime T: type, value: ?std.json.Value) ParseError!?T {
 
 const testing = std.testing;
 
-const test_sha_a = "1" ** 64;
-const test_sha_b = "2" ** 64;
-const test_sha_c = "3" ** 64;
-const test_sha_d = "4" ** 64;
-const test_sha_e = "5" ** 64;
-const test_plan_digest = "6" ** 64;
+const test_sha_a = &@as([64]u8, @splat('1'));
+const test_sha_b = &@as([64]u8, @splat('2'));
+const test_sha_c = &@as([64]u8, @splat('3'));
+const test_sha_d = &@as([64]u8, @splat('4'));
+const test_sha_e = &@as([64]u8, @splat('5'));
+const test_plan_digest = &@as([64]u8, @splat('6'));
 const test_fingerprint = "abcdef0123456789abcdef0123456789abcdef01";
 
 fn testData() Data {
@@ -1308,7 +1308,7 @@ test "validate rejects a plan reference that is not this schema" {
     }.f);
     try expectInvalid(error.InvalidChecksum, struct {
         fn f(data: *Data) void {
-            data.plan.digest = "A" ** 64;
+            data.plan.digest = &@as([64]u8, @splat('A'));
         }
     }.f);
 }
@@ -1424,7 +1424,7 @@ test "validate rejects signatures that claim more than the key set supports" {
             };
             packages.storage[0] = data.packages[0];
             packages.storage[1] = data.packages[1];
-            packages.storage[1].signature.key_fingerprint = "0" ** 40;
+            packages.storage[1].signature.key_fingerprint = &@as([40]u8, @splat('0'));
             data.packages = &packages.storage;
         }
     }.f);

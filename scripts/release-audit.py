@@ -27,7 +27,7 @@ ZIG_INSTALL_ENV = {"GH_TOKEN": "${{ github.token }}"}
 ZIG_INSTALL_INPUTS = {
     "ghr-version": "v0.8.1",
     "tools": (
-        "cataggar/zig@v0.16.0 "
+        "cataggar/zig@v0.17.0 "
         "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
     ),
 }
@@ -263,7 +263,7 @@ def audit_zig_install(errors, job, context):
             "env": ZIG_INSTALL_ENV,
             "with": ZIG_INSTALL_INPUTS,
         },
-        f"{context} must install Zig 0.16.0 with the pinned ghr action",
+        f"{context} must install Zig 0.17.0 with the pinned ghr action",
     )
     return step
 
@@ -982,7 +982,7 @@ def audit_release_workflow(errors, document):
         errors,
         build_step is not None
         and shell_lines(build_step.get("run")) == [
-            "zig build -Doptimize=ReleaseSafe \\",
+            "zig build -j2 -Doptimize=safe \\",
             '"-Dversion=${{ steps.version.outputs.version }}" \\',
             "install --prefix ./release-install",
         ],
@@ -1227,7 +1227,7 @@ def audit_ci_workflow(errors, document):
         errors,
         step is not None
         and shell_lines(step.get("run")) == [
-            "zig build -Doptimize=ReleaseSafe -Dversion=0.1.0 \\",
+            "zig build -j2 -Doptimize=safe -Dversion=0.1.0 \\",
             "release-dry-run --prefix ./release-install",
         ],
         "CI release dry-run command changed",
@@ -1383,7 +1383,7 @@ def self_test(
         1,
     )
     wrong_zig_version = ci_source.replace(
-        "cataggar/zig@v0.16.0",
+        "cataggar/zig@v0.17.0",
         "cataggar/zig@v0.15.2",
         1,
     )

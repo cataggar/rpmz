@@ -55,7 +55,7 @@ runs:
           echo "[zig-cache] refusing to put local cache inside GITHUB_WORKSPACE: $LOCAL" >&2
           exit 1 ;;
         esac
-        # Zig 0.16.0's package fetcher fails with
+        # Zig's package fetcher fails with
         # "failed to create temporary zip file: FileNotFound" the first
         # time it fetches a .zip-based dependency into a brand-new global
         # cache dir, because it expects `<global-cache-dir>/tmp` to

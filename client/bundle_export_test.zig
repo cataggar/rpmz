@@ -385,9 +385,10 @@ const Fixture = struct {
             .sub_path = relative_path,
             .data = payload,
         });
-        const root_z = try self.arena.allocator().dupeZ(
+        const root_z = try self.arena.allocator().dupeSentinel(
             u8,
             request.resolve.installed.install_root,
+            0,
         );
         var hnum: u32 = 0;
         if (rpmz_rpmdb_write_install(
@@ -592,9 +593,10 @@ test "replay initializes a clean absent rpmdb before execution" {
         database,
         "SQLite format 3\x00",
     ));
-    const root_z = try allocator.dupeZ(
+    const root_z = try allocator.dupeSentinel(
         u8,
         input.resolve.installed.install_root,
+        0,
     );
     defer allocator.free(root_z);
     try std.testing.expectEqual(
@@ -1254,7 +1256,7 @@ test "v2 package facts are bound exactly to the plan" {
         };
         switch (mutation) {
             .identity => packages[0].identity.name = "tampered",
-            .checksum => packages[0].checksum.value = "0" ** 64,
+            .checksum => packages[0].checksum.value = &@as([64]u8, @splat('0')),
             .href => packages[0].href = "packages/tampered.rpm",
             .xml_base => packages[0].xml_base = "tampered-base",
             .size => packages[0].size = (packages[0].size orelse 0) + 1,

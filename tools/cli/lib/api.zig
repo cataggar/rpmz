@@ -7,10 +7,7 @@
 const common = @import("rpmz_common");
 const abi = @import("tdnf_internal_abi");
 const jsondump = @import("jsondump_abi");
-const c = @cImport({
-    @cInclude("errno.h");
-    @cInclude("stdio.h");
-});
+const c = @import("c.tools.cli.lib.api");
 const output = @import("output.zig");
 
 extern fn TDNFFreeMemory(pMemory: ?*anyopaque) void;
@@ -112,7 +109,7 @@ fn TDNFCliListPackagesPrint(
     }
 
     var nColPercents = [_]c_int{ 55, 25, 15 };
-    var nColWidths = [_]c_int{0} ** LIST_COL_COUNT;
+    var nColWidths: [LIST_COL_COUNT]c_int = @splat(0);
 
     const dwError = output.GetColumnWidths(LIST_COL_COUNT, &nColPercents, &nColWidths);
     if (dwError != 0) {
@@ -122,8 +119,8 @@ fn TDNFCliListPackagesPrint(
     var dwIndex: u32 = 0;
     while (dwIndex < dwCount) : (dwIndex += 1) {
         const pPkg = &pPkgInfo[@intCast(dwIndex)];
-        var szNameAndArch = [_]u8{0} ** MAX_COL_LEN;
-        var szVersionAndRelease = [_]u8{0} ** MAX_COL_LEN;
+        var szNameAndArch: [MAX_COL_LEN]u8 = @splat(0);
+        var szVersionAndRelease: [MAX_COL_LEN]u8 = @splat(0);
 
         if (c.snprintf(&szNameAndArch, szNameAndArch.len, "%s.%s ", pPkg.pszName, pPkg.pszArch) < 0) {
             return @as(u32, @intCast(getErrno()));

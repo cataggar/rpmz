@@ -8,24 +8,7 @@ const std = @import("std");
 const common = @import("api.zig");
 const variadic = @import("variadic.zig");
 const abi = @import("tdnf_internal_abi");
-const c = @cImport({
-    @cDefine("_XOPEN_SOURCE", "500");
-    @cDefine("_DEFAULT_SOURCE", "1");
-    @cInclude("ctype.h");
-    @cInclude("errno.h");
-    @cInclude("ftw.h");
-    @cInclude("libgen.h");
-    @cInclude("limits.h");
-    @cInclude("stdbool.h");
-    @cInclude("stdint.h");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("strings.h");
-    @cInclude("sys/stat.h");
-    @cInclude("unistd.h");
-    @cInclude("../llconf/nodes.h");
-});
+const c = @import("c.common.utils");
 
 extern fn TDNFAllocateMemory(nNumElements: usize, nSize: usize, ppMemory: ?*?*anyopaque) u32;
 extern fn TDNFAllocateString(pszSrc: ?[*:0]const u8, ppszDst: ?*?[*:0]u8) u32;
@@ -221,7 +204,7 @@ fn rpmzGetDigestForFileRpmzig(
 ) u32 {
     var fp: ?*c.FILE = null;
     var ctx: ?*DigestContext = null;
-    var buf = [_]u8{0} ** c.BUFSIZ;
+    var buf: [c.BUFSIZ]u8 = @splat(0);
 
     if (isNullOrEmptyString(filenameOpt) or digest == null or !isSupportedHashType(hash_type)) {
         return abi.ERROR_TDNF_INVALID_PARAMETER;
@@ -674,7 +657,7 @@ export fn TDNFYesOrNo(pArgs: abi.PTDNF_CMD_ARGS, pszQuestionOpt: ?[*:0]const u8,
 
     if (pArgs[0].nAssumeYes == 0 and pArgs[0].nAssumeNo == 0) {
         while (true) {
-            var buf = [_]u8{0} ** 256;
+            var buf: [256]u8 = @splat(0);
             common.log(abi.LOG_CRIT, "%s", .{pszQuestionOpt.?});
 
             const ret = fgets(@ptrCast(&buf[0]), @intCast(buf.len - 1), c.stdin);
@@ -1249,7 +1232,7 @@ export fn TDNFCheckHash(
     digest: ?[*]const u8,
     hash_type: c_int,
 ) u32 {
-    var digest_from_file = [_]u8{0} ** max_digest_len;
+    var digest_from_file: [max_digest_len]u8 = @splat(0);
 
     if (isNullOrEmptyString(filenameOpt) or digest == null or !isSupportedHashType(hash_type)) {
         return abi.ERROR_TDNF_INVALID_PARAMETER;
@@ -1277,7 +1260,7 @@ export fn TDNFCheckHashFd(
     digest: ?[*]const u8,
     hash_type: c_int,
 ) u32 {
-    var digest_from_file = [_]u8{0} ** max_digest_len;
+    var digest_from_file: [max_digest_len]u8 = @splat(0);
     if (fd < 0 or digest == null or !isSupportedHashType(hash_type)) {
         return abi.ERROR_TDNF_INVALID_PARAMETER;
     }
@@ -1381,7 +1364,7 @@ export fn TDNFChecksumFromHexDigest(
 }
 
 fn expectedDigestBytes(comptime expected_hex: []const u8) [max_digest_len]u8 {
-    var expected = [_]u8{0} ** max_digest_len;
+    var expected: [max_digest_len]u8 = @splat(0);
     _ = std.fmt.hexToBytes(expected[0 .. expected_hex.len / 2], expected_hex) catch unreachable;
     return expected;
 }
@@ -1480,7 +1463,7 @@ test "path joining preserves compatibility ABI and clears outputs on errors" {
 }
 
 fn expectFileDigest(filename: [*:0]const u8, hash_type: c_int, comptime expected_hex: []const u8) !void {
-    var actual = [_]u8{0} ** max_digest_len;
+    var actual: [max_digest_len]u8 = @splat(0);
     const expected = expectedDigestBytes(expected_hex);
     const hash_len: usize = @intCast(getHashOp(hash_type).length);
 
@@ -1498,7 +1481,7 @@ test "checksum helpers validate hex digests and byte conversion" {
     try std.testing.expectEqual(@as(u32, 0), TDNFHexToUint("0f", &byte));
     try std.testing.expectEqual(@as(u8, 0x0f), byte);
 
-    var digest = [_]u8{0} ** max_digest_len;
+    var digest: [max_digest_len]u8 = @splat(0);
     try std.testing.expectEqual(@as(u32, 0), TDNFChecksumFromHexDigest("0011aaff", digest[0..].ptr));
     try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x11, 0xaa, 0xff }, digest[0..4]);
 }
@@ -1510,7 +1493,7 @@ test "TDNFGetDigestForFile and TDNFCheckHash use the checksum ABI" {
     var rel_path_buf: [128]u8 = undefined;
     const rel_path = try std.fmt.bufPrint(&rel_path_buf, ".zig-cache/tmp/{s}/input.txt", .{tmp_dir.sub_path});
 
-    var filename_buf: [129:0]u8 = [_:0]u8{0} ** 129;
+    var filename_buf: [129:0]u8 = @splat(0);
     @memcpy(filename_buf[0..rel_path.len], rel_path);
     const filename: [*:0]const u8 = @ptrCast(&filename_buf);
 
@@ -1532,7 +1515,7 @@ test "TDNFGetDigestForFile and TDNFCheckHash use the checksum ABI" {
     );
 
     if (rpmzIsFipsModeEnabled() != 0) {
-        var digest = [_]u8{0} ** max_digest_len;
+        var digest: [max_digest_len]u8 = @splat(0);
         try std.testing.expectEqual(
             @as(u32, abi.ERROR_TDNF_FIPS_MODE_FORBIDDEN),
             TDNFGetDigestForFile(filename, hash_md5, digest[0..].ptr),

@@ -6,13 +6,7 @@
 
 const std = @import("std");
 
-const c = @cImport({
-    @cDefine("_GNU_SOURCE", "1");
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("lines.h");
-});
+const c = @import("c.llconf.lines");
 
 fn duplicateBytes(bytes: []const u8) [*c]u8 {
     const raw = c.malloc(bytes.len + 1) orelse return null;
@@ -74,7 +68,7 @@ export fn append_confline(cl_list: [*c]c.struct_confline, cl: [*c]c.struct_confl
 }
 
 export fn read_conflines(fptr: ?*c.FILE) [*c]c.struct_confline {
-    var line = [_:0]u8{0} ** c.MAX_CONFLINE;
+    var line: [c.MAX_CONFLINE:0]u8 = @splat(0);
     const max_chars = @as(usize, @intCast(c.MAX_CONFLINE - 2));
     var cl: [*c]c.struct_confline = null;
     var cl_root: [*c]c.struct_confline = null;
