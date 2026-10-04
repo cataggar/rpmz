@@ -1,4 +1,17 @@
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const builtin = @import("builtin");
 const model = @import("model.zig");
 const repository_builder = @import("repository_builder.zig");
@@ -342,7 +355,7 @@ test "owning loader cleans every allocation failure" {
         .root_dir = fixture.rootPath(&root_buffer),
     };
 
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         loaderAllocationFailureCase,
         .{source},

@@ -23,6 +23,20 @@ const canonical_json = @import("canonical_json");
 const secret_shape = @import("secret_shape");
 const transaction_plan = @import("transaction_plan");
 
+fn checkAllocationFailures(
+    allocator: Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Keep this test helper local to preserve the public module's pure closure.
+    // SafeAllocator remapping otherwise makes injected indices heap-dependent.
+    var vtable = allocator.vtable.*;
+    vtable.resize = Allocator.noResize;
+    vtable.remap = Allocator.noRemap;
+    const backing: Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
+
 pub const schema_v1 = "tdnf.transaction-bundle/v1";
 pub const schema_v2 = "tdnf.transaction-bundle/v2";
 pub const schema = schema_v1;
@@ -1604,7 +1618,7 @@ test "validate rejects key entries outside the key tree" {
 }
 
 test "bundle construction releases everything on allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, struct {
+    try checkAllocationFailures(testing.allocator, struct {
         fn run(allocator: Allocator) !void {
             const bundle = try Bundle.create(allocator, testData());
             defer bundle.destroy();
@@ -1621,7 +1635,7 @@ test "parsing releases everything on allocation failure" {
     const json = try bundle.canonicalJsonAlloc(allocator);
     defer allocator.free(json);
 
-    try testing.checkAllAllocationFailures(allocator, struct {
+    try checkAllocationFailures(allocator, struct {
         fn run(inner: Allocator, bytes: []const u8) !void {
             const reparsed = try parse(inner, bytes);
             reparsed.destroy();

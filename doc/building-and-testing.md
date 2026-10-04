@@ -51,6 +51,12 @@ zig build test
 zig build -Doptimize=safe test
 ```
 
+Allocation-failure sweeps use test-only allocation-backed growth. Zig 0.17's
+SafeAllocator can otherwise remap in place depending on heap state, making
+failure indices nondeterministic. Every allocation-failure index and leak check
+remains covered; production allocator behavior is unchanged. The helpers stay
+module-local so standalone tests and the pure public module closure are retained.
+
 Cross-check the private variadic bridge without running a foreign executable:
 
 ```sh

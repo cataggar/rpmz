@@ -5,6 +5,19 @@
 //! them longer must copy them.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const uri = @import("uri.zig");
 
 pub const XML_NS = "http://www.w3.org/XML/1998/namespace";
@@ -1079,7 +1092,7 @@ test "walker does not apply the XML Base ceiling to other attributes" {
 }
 
 test "walker releases temporary XML Base resolutions on allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         xmlBaseAllocationFailureCase,
         .{},

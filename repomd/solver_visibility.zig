@@ -1,4 +1,17 @@
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const model = @import("model.zig");
 const query_index = @import("index.zig");
 const solver_model = @import("solver_model.zig");
@@ -601,7 +614,7 @@ test "visibility projection cleans every allocation failure" {
     );
     defer universe.deinit();
 
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         allocationFailureCase,
         .{&universe},

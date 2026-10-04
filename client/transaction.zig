@@ -3,6 +3,19 @@
 // Licensed under the GNU Lesser General Public License v2.1.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    backing_allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = backing_allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = backing_allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const common = @import("rpmz_common");
 const abi = @import("client_abi");
 const transaction_options = @import("client_transaction_options");
@@ -3912,7 +3925,7 @@ test "transaction view grows during rpmdb iteration then reserves execution appe
 }
 
 test "transaction view maps every initialization allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         transactionViewAllocationFailureCase,
         .{},

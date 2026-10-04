@@ -1,4 +1,17 @@
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const filelists_xml = @import("filelists.zig");
 const metadata_integrity = @import("metadata_integrity.zig");
 const model = @import("model.zig");
@@ -2928,7 +2941,7 @@ test "owning loader cleans every allocation failure" {
         .primary = fixture.path(&primary_path_buffer, "primary.xml"),
     };
 
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         loaderAllocationFailureCase,
         .{paths},
@@ -3615,13 +3628,11 @@ test "xz validation preserves backing allocation OOM" {
 }
 
 fn checkXzAllocationFailures(comptime case: anytype) !void {
-    // SafeAllocator remapping depends on heap state. Force allocation-backed
-    // growth so every injected allocation index is reproducible.
-    var vtable = std.testing.allocator.vtable.*;
-    vtable.resize = std.mem.Allocator.noResize;
-    vtable.remap = std.mem.Allocator.noRemap;
-    const backing: std.mem.Allocator = .{ .ptr = std.testing.allocator.ptr, .vtable = &vtable };
-    try std.testing.checkAllAllocationFailures(backing, case, .{});
+    try checkAllocationFailures(
+        std.testing.allocator,
+        case,
+        .{},
+    );
 }
 
 fn xzPropertyResetAllocationFailureCase(

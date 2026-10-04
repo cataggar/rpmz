@@ -1,6 +1,19 @@
 //! Canonical result materialization for completed native solver models.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const query_index = @import("index.zig");
 const metadata = @import("model.zig");
 const solver_model = @import("solver_model.zig");
@@ -1821,7 +1834,7 @@ fn materializerAllocationFailureCase(
 }
 
 test "materializer cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         materializerAllocationFailureCase,
         .{},
@@ -2045,7 +2058,7 @@ test "problem derivation scales with the proof, not the repository" {
 }
 
 test "problem derivation cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         problemDerivationAllocationFailureCase,
         .{},

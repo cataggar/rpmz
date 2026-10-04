@@ -1,6 +1,19 @@
 //! Owning live-input adapter for native live solves.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const builtin = @import("builtin");
 const available_loader = @import("available_loader.zig");
 const cmdline_repository = @import("cmdline_repository.zig");
@@ -2056,7 +2069,7 @@ test "live producer cleans every allocation failure" {
         &jobs,
     );
     input.hidden_available = &.{};
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         allocationFailureCase,
         .{input},
@@ -2078,7 +2091,7 @@ test "preparing a request cleans every allocation failure" {
         &jobs,
     );
     input.hidden_available = &.{};
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         prepareAllocationFailureCase,
         .{input},
@@ -2101,7 +2114,7 @@ test "live legacy projection cleans every allocation failure" {
     );
     input.hidden_available = &.{};
 
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         legacyResultAllocationFailureCase,
         .{input},

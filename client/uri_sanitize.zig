@@ -9,6 +9,19 @@
 //! Everything that prints, logs, or records a URI goes through here.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const Allocator = std.mem.Allocator;
 
 /// The text substituted for each removed part. It is deliberately visible so
@@ -230,7 +243,7 @@ test "redaction never leaks any byte of a removed part" {
 }
 
 test "redaction releases everything on allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, struct {
+    try checkAllocationFailures(testing.allocator, struct {
         fn run(allocator: Allocator) !void {
             const redacted = try redactAlloc(
                 allocator,

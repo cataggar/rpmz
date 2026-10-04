@@ -1,5 +1,18 @@
 const std = @import("std");
 
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
+
 const available_loader = @import("available_loader.zig");
 const cmdline_repository = @import("cmdline_repository.zig");
 const directory_repository = @import("directory_repository.zig");
@@ -2271,7 +2284,7 @@ test "context creation releases every allocation on installed load failures" {
     defer populated.cleanup();
     var populated_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const populated_root = populated.rootPath(&populated_buffer);
-    try testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         testing.allocator,
         contextCreationAllocationFailureCase,
         .{populated_root},

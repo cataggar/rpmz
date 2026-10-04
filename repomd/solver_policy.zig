@@ -8,6 +8,19 @@
 //! cleanup, and rule-class-aware skipping of broken exact install jobs.
 
 const std = @import("std");
+
+fn checkAllocationFailures(
+    allocator: std.mem.Allocator,
+    comptime case: anytype,
+    extra_args: anytype,
+) !void {
+    // Preserve module boundaries while making SafeAllocator growth deterministic.
+    var vtable = allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = allocator.ptr, .vtable = &vtable };
+    try std.testing.checkAllAllocationFailures(backing, case, extra_args);
+}
 const query_index = @import("index.zig");
 const metadata = @import("model.zig");
 const solver_model = @import("solver_model.zig");
@@ -9604,12 +9617,12 @@ fn cleanupAllocationFailureCase(allocator: std.mem.Allocator) !void {
 }
 
 test "policy preparation cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         allocationFailureCase,
         .{},
     );
-    try std.testing.checkAllAllocationFailures(
+    try checkAllocationFailures(
         std.testing.allocator,
         cleanupAllocationFailureCase,
         .{},
