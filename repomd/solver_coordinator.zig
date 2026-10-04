@@ -1166,8 +1166,14 @@ fn coordinatorAllocationFailureCase(allocator: std.mem.Allocator) !void {
 }
 
 test "install-only coordinator cleans up every allocation failure" {
+    // SafeAllocator's in-place growth depends on heap state. Force all growth
+    // through allocations so failure indices cover the same paths each time.
+    var vtable = std.testing.allocator.vtable.*;
+    vtable.resize = std.mem.Allocator.noResize;
+    vtable.remap = std.mem.Allocator.noRemap;
+    const backing: std.mem.Allocator = .{ .ptr = std.testing.allocator.ptr, .vtable = &vtable };
     try std.testing.checkAllAllocationFailures(
-        std.testing.allocator,
+        backing,
         coordinatorAllocationFailureCase,
         .{},
     );
