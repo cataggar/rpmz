@@ -21,11 +21,11 @@ PLATFORMS = [
 ]
 GHR_INSTALL_ACTION = (
     "cataggar/ghr/actions/install@"
-    "c4be68b52d67d7acd2a7fe6c1e5f126e1754176e"
+    "a3be8c61b9d5c2bd6d38e6d067c69d70434a6db9"
 )
 ZIG_INSTALL_ENV = {"GH_TOKEN": "${{ github.token }}"}
 ZIG_INSTALL_INPUTS = {
-    "ghr-version": "v0.8.1",
+    "ghr-version": "v0.9.1",
     "tools": (
         "cataggar/zig@v0.17.0 "
         "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
@@ -1112,9 +1112,9 @@ def audit_release_workflow(errors, document):
         errors,
         pinned_ghr is not None
         and shell_lines(pinned_ghr.get("run")) == [
-            "pipx install ghr-bin==0.7.0"
+            "pipx install ghr-bin==0.9.1"
         ],
-        "smoke must install exactly ghr-bin 0.7.0",
+        "smoke must install exactly ghr-bin 0.9.1",
     )
     smoke_run = named_step(smoke, "Install and audit published release")
     expect(
